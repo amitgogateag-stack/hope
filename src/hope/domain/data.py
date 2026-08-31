@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from datetime import datetime
+from math import isfinite
 
 
 class DataQualityError(ValueError):
@@ -22,8 +23,13 @@ class MarketBar:
             raise DataQualityError("bar timestamps must be timezone-aware")
         if decision_time.tzinfo is None:
             raise DataQualityError("decision_time must be timezone-aware")
+        if self.event_time > decision_time:
+            raise DataQualityError("future event cannot enter evaluation")
         if self.available_time > decision_time:
             raise DataQualityError("future/unavailable bar cannot enter evaluation")
+        values = (self.open, self.high, self.low, self.close, self.volume)
+        if not all(isfinite(value) for value in values):
+            raise DataQualityError("OHLCV values must be finite")
         if min(self.open, self.high, self.low, self.close) <= 0:
             raise DataQualityError("OHLC prices must be positive")
         if self.high < max(self.open, self.close, self.low):
