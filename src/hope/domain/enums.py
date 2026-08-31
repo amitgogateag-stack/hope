@@ -1,0 +1,33 @@
+from enum import StrEnum
+
+
+class Environment(StrEnum):
+    RESEARCH = "RESEARCH"
+    BACKTEST = "BACKTEST"
+    WALK_FORWARD = "WALK_FORWARD"
+    PAPER = "PAPER"
+    SHADOW = "SHADOW"
+    LIVE_READINESS = "LIVE_READINESS"
+    LIVE = "LIVE"
+
+
+class IdentityStatus(StrEnum):
+    ACTIVE = "ACTIVE"
+    TERMINAL = "TERMINAL"
+    DUPLICATE = "DUPLICATE"
+    AMBIGUOUS = "AMBIGUOUS"
+    UNRESOLVED = "UNRESOLVED"
+    SUPERSEDED = "SUPERSEDED"
+
+
+class SignalState(StrEnum):
+    NO_SIGNAL = "NO_SIGNAL"
+    SIGNAL = "SIGNAL"
+    STALE = "STALE"
+    REJECTED = "REJECTED"
+
+
+class PITStatus(StrEnum):
+    CERTIFIED = "CERTIFIED"
+    NOT_CERTIFIED = "NOT_CERTIFIED"
+    UNKNOWN = "UNKNOWN"
