@@ -39,6 +39,21 @@ def test_future_bar_is_rejected():
         bar.validate(decision)
 
 
+def test_future_event_is_rejected_even_when_available():
+    decision = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    future_event = datetime(2026, 8, 31, 14, 1, tzinfo=timezone.utc)
+    bar = MarketBar("ABC", future_event, decision, 10, 11, 9, 10.5, 100)
+    with pytest.raises(DataQualityError):
+        bar.validate(decision)
+
+
+def test_non_finite_market_data_is_rejected():
+    ts = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
+    bar = MarketBar("ABC", ts, ts, float("nan"), 11, 9, 10.5, 100)
+    with pytest.raises(DataQualityError):
+        bar.validate(ts)
+
+
 def test_impossible_ohlc_is_rejected():
     ts = datetime(2026, 8, 31, 14, 0, tzinfo=timezone.utc)
     bar = MarketBar("ABC", ts, ts, 10, 9, 8, 10.5, 100)
