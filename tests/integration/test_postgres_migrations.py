@@ -1,0 +1,34 @@
+import os
+from pathlib import Path
+
+import pytest
+from sqlalchemy import create_engine, text
+
+from hope.infrastructure.postgres.migrations import apply_migrations
+
+
+@pytest.mark.integration
+def test_postgres_migrations_apply_and_are_idempotent() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        connection.exec_driver_sql("DROP SCHEMA public CASCADE")
+        connection.exec_driver_sql("CREATE SCHEMA public")
+        first = apply_migrations(connection, migrations_dir)
+        second = apply_migrations(connection, migrations_dir)
+        assert first == [
+            "001_initial.sql",
+            "002_integrity_constraints.sql",
+            "003_experiment_invalidation_events.sql",
+            "004_identity_universe_integrity.sql",
+            "005_trading_integrity_guards.sql",
+            "006_cross_entity_trading_integrity.sql",
+            "007_identity_namespace_integrity.sql",
+            "008_migration_checksums.sql",
+        ]
+        assert second == []
+        assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1

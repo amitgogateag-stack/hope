@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hope-trading-research-os"
+version = "0.1.0"
+description = "HOPE: Hypothesis-driven, Observable, Proven/reproducible, Execution-aware trading research operating system"
+requires-python = ">=3.13,<3.14"
+dependencies = [
+  "pydantic>=2.13,<3",
+  "SQLAlchemy>=2.0,<3",
+  "alembic>=1.18,<2",
+  "psycopg[binary]>=3.2,<4",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=9,<10", "pytest-cov>=7,<8"]
+research = ["numpy>=2.3,<3", "polars>=1.30,<2", "pyarrow>=20,<23"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"
+markers = ["integration: requires external service dependencies"]

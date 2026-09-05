@@ -1,0 +1,116 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+from datetime import datetime
+from decimal import Decimal
+from hashlib import sha256
+from uuid import UUID, uuid4
+
+from hope.domain.audit.models import AuditEvent, AuditEventType
+from hope.domain.audit.validator import validate_audit_sequence
+from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
+from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
+from hope.domain.risk.models import RiskAssessment
+from hope.domain.signal.models import Signal
+from hope.domain.trading.kernel import OrderIntent, create_order_intent, materialize_order
+
+
+@dataclass(frozen=True)
+class TradingKernelResult:
+    intent: OrderIntent | None
+    order_id: UUID | None
+    fill: Fill | None
+    portfolio_state: PortfolioState
+    audit_events: tuple[AuditEvent, ...]
+
+
+class TradingKernel:
+    """Deterministic orchestration of signal -> risk -> order -> fill -> ledger.
+
+    The service has no broker adapter and no LIVE environment. It can therefore
+    only produce simulated fills in v0.1.
+    """
+
+    def __init__(self, ledger: PortfolioLedger) -> None:
+        self._ledger = ledger
+
+    @staticmethod
+    def _hash_payload(*parts: object) -> str:
+        canonical = "|".join(str(part) for part in parts)
+        return sha256(canonical.encode("utf-8")).hexdigest()
+
+    def process(
+        self,
+        signal: Signal,
+        risk: RiskAssessment,
+        side: OrderSide,
+        environment: Environment,
+        quote: ExecutionQuote | None,
+        cost_model: CostModel | None,
+        *,
+        order_id: UUID | None = None,
+        fill_id: UUID | None = None,
+    ) -> TradingKernelResult:
+        events: list[AuditEvent] = []
+        now = signal.decision_time
+        events.append(AuditEvent(
+            event_id=uuid4(), event_type=AuditEventType.SIGNAL_ACCEPTED,
+            event_time=signal.decision_time, signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id, environment=environment.value,
+            payload_hash=self._hash_payload(signal.signal_id, signal.instrument_id, signal.inputs_hash),
+        ))
+
+        intent = create_order_intent(signal, risk, side, environment)
+        if intent is None:
+            events.append(AuditEvent(
+                event_id=uuid4(), event_type=AuditEventType.RISK_REJECTED,
+                event_time=now, signal_id=signal.signal_id,
+                instrument_id=signal.instrument_id, environment=environment.value,
+                payload_hash=self._hash_payload(signal.signal_id, risk.decision, risk.reason_code),
+            ))
+            validate_audit_sequence(events)
+            return TradingKernelResult(None, None, None, self._ledger.state, tuple(events))
+
+        if environment is Environment.PAPER and (quote is None or cost_model is None):
+            raise ValueError("PAPER_EXECUTION_REQUIRES_QUOTE_AND_COST_MODEL")
+        if quote is not None and quote.event_time < signal.decision_time:
+            raise ValueError("QUOTE_PRECEDES_SIGNAL_DECISION_TIME")
+
+        events.append(AuditEvent(
+            event_id=uuid4(), event_type=AuditEventType.RISK_APPROVED,
+            event_time=now, signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id, environment=environment.value,
+            payload_hash=self._hash_payload(signal.signal_id, risk.approved_quantity, risk.reason_code),
+        ))
+
+        actual_order_id = order_id or uuid4()
+        order = materialize_order(intent, actual_order_id)
+        events.append(AuditEvent(
+            event_id=uuid4(), event_type=AuditEventType.ORDER_CREATED,
+            event_time=now, signal_id=order.signal_id, order_id=order.order_id,
+            instrument_id=order.instrument_id, environment=order.environment.value,
+            payload_hash=self._hash_payload(order.order_id, order.quantity, order.side),
+        ))
+
+        if quote is None or cost_model is None:
+            return TradingKernelResult(intent, actual_order_id, None, self._ledger.state, tuple(events))
+
+        actual_fill_id = fill_id or uuid4()
+        fill = simulate_market_fill(order, quote, actual_fill_id, cost_model)
+        events.append(AuditEvent(
+            event_id=uuid4(), event_type=AuditEventType.FILL_CREATED,
+            event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
+            fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
+            payload_hash=self._hash_payload(fill.fill_id, fill.quantity, fill.price, fill.commission),
+        ))
+
+        state = self._ledger.apply_fill(fill)
+        events.append(AuditEvent(
+            event_id=uuid4(), event_type=AuditEventType.PORTFOLIO_UPDATED,
+            event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
+            fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
+            payload_hash=self._hash_payload(fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity),
+        ))
+        validate_audit_sequence(events)
+        return TradingKernelResult(intent, actual_order_id, fill, state, tuple(events))
