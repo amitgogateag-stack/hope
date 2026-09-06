@@ -31,8 +31,6 @@ class InvariantRunner:
 
     def __init__(self, checks: Iterable[InvariantCheck] = INITIAL_INVARIANT_CHECKS) -> None:
         self._checks = tuple(checks)
-        if len({check.__name__ for check in self._checks}) != len(self._checks):
-            raise ValueError("DUPLICATE_INVARIANT_CHECK")
 
     def run(self, context: InvariantContext) -> InvariantRun:
         results = tuple(check(context) for check in self._checks)
