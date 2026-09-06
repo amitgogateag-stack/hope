@@ -74,6 +74,8 @@ class TradingKernel:
             raise ValueError("PAPER_EXECUTION_REQUIRES_QUOTE_AND_COST_MODEL")
         if quote is not None and quote.event_time < signal.decision_time:
             raise ValueError("QUOTE_PRECEDES_SIGNAL_DECISION_TIME")
+        if quote is not None and timeline is None:
+            raise ValueError("QUOTE_EXECUTION_REQUIRES_TIMELINE")
 
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.RISK_APPROVED,
