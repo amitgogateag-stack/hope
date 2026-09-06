@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
@@ -82,33 +83,59 @@ class TradingKernel:
         ))
 
         actual_order_id = order_id or uuid4()
-        order = materialize_order(intent, actual_order_id)
+        materialize_order(intent, actual_order_id)
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.ORDER_CREATED,
-            event_time=now, signal_id=order.signal_id, order_id=order.order_id,
-            instrument_id=order.instrument_id, environment=order.environment.value,
-            payload_hash=self._hash_payload(order.order_id, order.quantity, order.side),
+            event_time=now, signal_id=intent.signal_id, order_id=actual_order_id,
+            instrument_id=intent.instrument_id, environment=intent.environment.value,
+            payload_hash=self._hash_payload(actual_order_id, intent.quantity, intent.side),
         ))
 
         if quote is None or cost_model is None:
+            validate_audit_sequence(events)
             return TradingKernelResult(intent, actual_order_id, None, self._ledger.state, tuple(events))
-        if timeline is None:
-            raise ValueError("QUOTE_EXECUTION_REQUIRES_TIMELINE")
-        if timeline.decision_time != signal.decision_time:
+        execution = self.execute_order(
+            intent,
+            actual_order_id,
+            quote,
+            cost_model,
+            decision_time=signal.decision_time,
+            fill_id=fill_id,
+            timeline=timeline,
+        )
+        combined = tuple(events) + execution.audit_events
+        validate_audit_sequence(combined)
+        return TradingKernelResult(
+            intent, actual_order_id, execution.fill, execution.portfolio_state, combined
+        )
+
+    def execute_order(
+        self,
+        intent: OrderIntent,
+        order_id: UUID,
+        quote: ExecutionQuote,
+        cost_model: CostModel,
+        *,
+        decision_time: datetime,
+        fill_id: UUID | None = None,
+        timeline: ExecutionTimeline,
+    ) -> TradingKernelResult:
+        if timeline.decision_time != decision_time:
             raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
-        if timeline.order_time < signal.decision_time:
+        if timeline.order_time < decision_time:
             raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
 
+        order = materialize_order(intent, order_id)
         actual_fill_id = fill_id or uuid4()
         fill = simulate_market_fill(
             order, quote, actual_fill_id, cost_model, timeline=timeline
         )
-        events.append(AuditEvent(
+        events = [AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.FILL_CREATED,
             event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
             fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
             payload_hash=self._hash_payload(fill.fill_id, fill.quantity, fill.price, fill.commission),
-        ))
+        )]
 
         state = self._ledger.apply_fill(fill)
         events.append(AuditEvent(
@@ -117,5 +144,4 @@ class TradingKernel:
             fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
             payload_hash=self._hash_payload(fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity),
         ))
-        validate_audit_sequence(events)
-        return TradingKernelResult(intent, actual_order_id, fill, state, tuple(events))
+        return TradingKernelResult(intent, order_id, fill, state, tuple(events))
