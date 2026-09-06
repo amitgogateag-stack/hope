@@ -15,6 +15,8 @@ from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.portfolio.valuation import PortfolioValuation, value_portfolio
 from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
+from hope.application.market_data.calendar import MarketSessionCalendar
+from hope.application.market_data.quality import DataQualityReport, validate_bars
 from hope.application.trading.service import TradingKernel, TradingKernelResult
 from hope.application.backtests.analytics import BacktestMetrics, calculate_metrics
 
@@ -48,6 +50,14 @@ StrategyFn = Callable[[PITMarketContext], Signal | None]
 RiskFn = Callable[[Signal], RiskAssessment]
 
 
+class BacktestDataQualityError(ValueError):
+    """Raised when market data fails the mandatory backtest safety gate."""
+
+    def __init__(self, report: DataQualityReport) -> None:
+        self.report = report
+        super().__init__("BACKTEST_MARKET_DATA_QUALITY_UNSAFE")
+
+
 class DeterministicBacktest:
     """Event-aware backtest with explicit PIT and future-quote execution boundaries.
 
@@ -77,8 +87,23 @@ class DeterministicBacktest:
         strategy: StrategyFn,
         risk: RiskFn,
         side: OrderSide,
+        *,
+        expected_latest_event_time: datetime | None = None,
+        expected_instrument_ids: tuple[str, ...] | None = None,
+        expected_interval: timedelta | None = None,
+        session_calendar: MarketSessionCalendar | None = None,
     ) -> BacktestResult:
         ordered: Sequence[MarketBar] = tuple(bars)
+        quality = validate_bars(
+            ordered,
+            expected_latest_event_time=expected_latest_event_time,
+            expected_instrument_ids=expected_instrument_ids,
+            expected_interval=expected_interval,
+            session_calendar=session_calendar,
+        )
+        if not quality.safe:
+            raise BacktestDataQualityError(quality)
+
         previous_time: datetime | None = None
         events: list[BacktestEvent] = []
         valuations: list[PortfolioValuation] = []
