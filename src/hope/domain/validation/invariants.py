@@ -45,11 +45,8 @@ def _result(invariant_id: str, passed: bool, message: str) -> InvariantResult:
 def check_invariant_001(context: InvariantContext) -> InvariantResult:
     if context.declared_member_count is None or context.evaluated_member_count is None:
         return _skip("INVARIANT-001", "member counts")
-    return _result(
-        "INVARIANT-001",
-        context.declared_member_count == context.evaluated_member_count,
-        f"declared={context.declared_member_count}, evaluated={context.evaluated_member_count}",
-    )
+    return _result("INVARIANT-001", context.declared_member_count == context.evaluated_member_count,
+                   f"declared={context.declared_member_count}, evaluated={context.evaluated_member_count}")
 
 
 def check_invariant_002(context: InvariantContext) -> InvariantResult:
@@ -62,32 +59,36 @@ def check_invariant_002(context: InvariantContext) -> InvariantResult:
 def check_invariant_003(context: InvariantContext) -> InvariantResult:
     if context.terminal_alias_generated_positions is None:
         return _skip("INVARIANT-003", "terminal-alias position evidence")
-    return _result("INVARIANT-003", not context.terminal_alias_generated_positions, "terminal aliases generated no positions")
+    return _result("INVARIANT-003", not context.terminal_alias_generated_positions,
+                   "terminal aliases generated no positions")
 
 
 def check_invariant_004(context: InvariantContext) -> InvariantResult:
     if context.terminal_alias_generated_pnl is None:
         return _skip("INVARIANT-004", "terminal-alias P&L evidence")
-    return _result("INVARIANT-004", not context.terminal_alias_generated_pnl, "terminal aliases generated no P&L")
+    return _result("INVARIANT-004", not context.terminal_alias_generated_pnl,
+                   "terminal aliases generated no P&L")
 
 
 def check_invariant_005(context: InvariantContext) -> InvariantResult:
     if context.terminal_alias_coverage_count is None:
         return _skip("INVARIANT-005", "terminal-alias coverage evidence")
-    return _result("INVARIANT-005", context.terminal_alias_coverage_count == 0, "terminal aliases do not count toward coverage")
+    return _result("INVARIANT-005", context.terminal_alias_coverage_count == 0,
+                   "terminal aliases do not count toward coverage")
 
 
 def check_invariant_006(context: InvariantContext) -> InvariantResult:
     if context.signal_outcomes is None:
-        return _skip("INVARIANT-006", "signal outcomes")
-    bad = [(signal_id, outcome) for signal_id, outcome in context.signal_outcomes if outcome == "NO_SIGNAL_STALE"]
+        return _skip("INVARIANT-006", "signal outcomes and data-quality classifications")
+    bad = [item for item in context.signal_outcomes if item[0] == "NO_SIGNAL" and item[1] == "STALE_SIGNAL"]
     return _result("INVARIANT-006", not bad, "NO_SIGNAL is not classified as STALE_SIGNAL")
 
 
 def check_invariant_007(context: InvariantContext) -> InvariantResult:
     if context.paper_live_order_submissions is None:
         return _skip("INVARIANT-007", "paper live-order submission count")
-    return _result("INVARIANT-007", context.paper_live_order_submissions == 0, "paper mode submitted no live orders")
+    return _result("INVARIANT-007", context.paper_live_order_submissions == 0,
+                   "paper mode submitted no live orders")
 
 
 def check_invariant_008(context: InvariantContext) -> InvariantResult:
