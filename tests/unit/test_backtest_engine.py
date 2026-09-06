@@ -21,17 +21,20 @@ def bar(instrument_id, event_time, available_time, close):
     )
 
 
-def test_deterministic_backtest_processes_current_bar_only():
+def test_backtest_strategy_receives_pit_context():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
-    bars = [bar(instrument, t0, t0, "100")]
+    t1 = t0 + timedelta(minutes=1)
+    bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "110")]
     seen = []
 
-    def strategy(current):
-        seen.append(current.event_time)
+    def strategy(context):
+        seen.append((context.as_of, tuple(b.event_time for b in context.bars)))
+        if context.latest_bar is None:
+            return None
         return Signal(
             signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-            decision_time=current.available_time, signal_type=SignalType.ENTRY,
+            decision_time=context.as_of, signal_type=SignalType.ENTRY,
             conviction=Decimal("1"), inputs_hash="a" * 64,
         )
 
@@ -42,11 +45,28 @@ def test_deterministic_backtest_processes_current_bar_only():
     result = DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(
         bars, strategy, risk, OrderSide.BUY
     )
-    assert seen == [t0]
-    assert result.final_state.positions[instrument].quantity == Decimal("2")
-    assert result.final_state.cash == Decimal("800")
-    assert len(result.valuations) == 1
-    assert result.valuations[0].equity == Decimal("1000")
+    assert seen[0] == (t0, (t0,))
+    assert seen[1] == (t1, (t0, t1))
+    assert result.final_state.positions[instrument].quantity == Decimal("4")
+
+
+def test_backtest_pit_context_excludes_future_event_bar():
+    instrument = uuid4()
+    t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    t1 = t0 + timedelta(minutes=1)
+    bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "999")]
+    contexts = []
+
+    def strategy(context):
+        contexts.append(context)
+        return None
+
+    result = DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(
+        bars, strategy, lambda _signal: None, OrderSide.BUY
+    )
+    assert len(result.events) == 0
+    assert len(contexts[0].bars) == 1
+    assert contexts[0].bars[0].close == Decimal("100")
 
 
 def test_backtest_rejects_signal_that_uses_unavailable_information():
@@ -55,10 +75,10 @@ def test_backtest_rejects_signal_that_uses_unavailable_information():
     available = event + timedelta(minutes=1)
     b = bar(instrument, event, available, "100")
 
-    def strategy(current):
+    def strategy(context):
         return Signal(
             signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-            decision_time=current.event_time, signal_type=SignalType.ENTRY,
+            decision_time=event, signal_type=SignalType.ENTRY,
             conviction=Decimal("1"), inputs_hash="b" * 64,
         )
 
@@ -76,22 +96,16 @@ def test_backtest_result_is_deterministic_for_same_inputs():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
     bars = [bar(instrument, t0, t0, "100")]
+    stable_signal_id = uuid4()
 
-    def strategy(current):
-        return Signal(signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-                      decision_time=current.available_time, signal_type=SignalType.ENTRY,
-                      conviction=Decimal("1"), inputs_hash="c" * 64)
+    def stable_strategy(context):
+        return Signal(signal_id=stable_signal_id, instrument_id=instrument, strategy_version="s1",
+                      decision_time=context.as_of, signal_type=SignalType.ENTRY,
+                      conviction=Decimal("1"), inputs_hash="d" * 64)
 
     def risk(signal):
         return RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
                               reason_code="TEST", approved_quantity=Decimal("2"))
-
-    # The signal ID is generated per invocation, so use a stable strategy fixture instead.
-    stable_signal_id = uuid4()
-    def stable_strategy(current):
-        return Signal(signal_id=stable_signal_id, instrument_id=instrument, strategy_version="s1",
-                      decision_time=current.available_time, signal_type=SignalType.ENTRY,
-                      conviction=Decimal("1"), inputs_hash="d" * 64)
 
     first = DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(bars, stable_strategy, risk, OrderSide.BUY)
     second = DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(bars, stable_strategy, risk, OrderSide.BUY)
@@ -105,9 +119,9 @@ def test_backtest_rejects_invalid_bar_instrument_id():
     b = MarketBar(instrument_id="not-a-uuid", event_time=t0, available_time=t0, ingestion_time=t0,
                   open=Decimal("100"), high=Decimal("100"), low=Decimal("100"), close=Decimal("100"), volume=Decimal("100"))
     instrument = uuid4()
-    def strategy(current):
+    def strategy(_context):
         return Signal(signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-                      decision_time=current.available_time, signal_type=SignalType.ENTRY,
+                      decision_time=t0, signal_type=SignalType.ENTRY,
                       conviction=Decimal("1"), inputs_hash="e" * 64)
     def risk(signal):
         return RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.REJECT,
@@ -122,7 +136,7 @@ def test_backtest_records_valuation_on_every_bar_without_signals():
     t1 = t0 + timedelta(minutes=1)
     bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "110")]
 
-    def no_signal(_current):
+    def no_signal(_context):
         return None
 
     def risk(_signal):
@@ -143,11 +157,13 @@ def test_backtest_marks_existing_position_with_latest_bar_price():
     bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "110")]
     seen = []
 
-    def strategy(current):
+    def strategy(context):
+        current = context.latest_bar
+        assert current is not None
         if current.event_time == t0:
             return Signal(
                 signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-                decision_time=current.available_time, signal_type=SignalType.ENTRY,
+                decision_time=context.as_of, signal_type=SignalType.ENTRY,
                 conviction=Decimal("1"), inputs_hash="f" * 64,
             )
         seen.append(current.event_time)
@@ -172,11 +188,12 @@ def test_backtest_result_contains_deterministic_performance_metrics():
     t1 = t0 + timedelta(minutes=1)
     bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "110")]
 
-    def strategy(current):
-        if current.event_time == t0:
+    def strategy(context):
+        current = context.latest_bar
+        if current is not None and current.event_time == t0:
             return Signal(
                 signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
-                decision_time=current.available_time, signal_type=SignalType.ENTRY,
+                decision_time=context.as_of, signal_type=SignalType.ENTRY,
                 conviction=Decimal("1"), inputs_hash="a" * 64,
             )
         return None
@@ -202,5 +219,5 @@ def test_backtest_rejects_out_of_order_bars():
 
     with pytest.raises(ValueError, match="BACKTEST_EVENTS_MUST_BE_NON_DECREASING"):
         DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(
-            bars, lambda _current: None, lambda _signal: None, OrderSide.BUY
+            bars, lambda _context: None, lambda _signal: None, OrderSide.BUY
         )
