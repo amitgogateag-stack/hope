@@ -1,23 +1,29 @@
 import pytest
 from decimal import Decimal
 from uuid import uuid4
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
+from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger
 
 
-def make_fill(instrument, side, qty, price, commission="0"):
+BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)
+
+
+def make_fill(instrument, side, qty, price, commission="0", minute=0):
     order = Order(order_id=uuid4(), signal_id=uuid4(), instrument_id=instrument, side=side, quantity=Decimal(qty), environment=Environment.PAPER)
-    quote = ExecutionQuote(instrument, datetime.now(timezone.utc), Decimal(price), Decimal(price))
-    return simulate_market_fill(order, quote, uuid4(), CostModel("test", Decimal(commission), Decimal("0")))
+    fill_time = BASE_TIME + timedelta(minutes=minute)
+    quote = ExecutionQuote(instrument, fill_time, Decimal(price), Decimal(price))
+    timeline = ExecutionTimeline.from_decision(fill_time, latency=timedelta(0))
+    return simulate_market_fill(order, quote, uuid4(), CostModel("test", Decimal(commission), Decimal("0")), timeline=timeline)
 
 
 def test_buy_then_sell_realizes_pnl_and_tracks_cash():
     instrument = uuid4()
     ledger = PortfolioLedger(Decimal("10000"))
     ledger.apply_fill(make_fill(instrument, OrderSide.BUY, "10", "100"))
-    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "10", "110"))
+    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "10", "110", minute=1))
 
     position = state.positions[instrument]
     assert position.quantity == Decimal("0")
@@ -30,7 +36,7 @@ def test_partial_sell_realizes_only_closed_quantity():
     instrument = uuid4()
     ledger = PortfolioLedger(Decimal("10000"))
     ledger.apply_fill(make_fill(instrument, OrderSide.BUY, "10", "100"))
-    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "4", "110"))
+    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "4", "110", minute=1))
 
     position = state.positions[instrument]
     assert position.quantity == Decimal("6")
@@ -42,7 +48,7 @@ def test_short_then_cover_realizes_pnl():
     instrument = uuid4()
     ledger = PortfolioLedger(Decimal("10000"))
     ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "10", "100"))
-    state = ledger.apply_fill(make_fill(instrument, OrderSide.BUY, "10", "90"))
+    state = ledger.apply_fill(make_fill(instrument, OrderSide.BUY, "10", "90", minute=1))
 
     assert state.positions[instrument].quantity == Decimal("0")
     assert state.positions[instrument].realized_pnl == Decimal("100")
@@ -53,7 +59,7 @@ def test_reversal_opens_excess_at_new_fill_price():
     instrument = uuid4()
     ledger = PortfolioLedger(Decimal("10000"))
     ledger.apply_fill(make_fill(instrument, OrderSide.BUY, "10", "100"))
-    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "15", "110"))
+    state = ledger.apply_fill(make_fill(instrument, OrderSide.SELL, "15", "110", minute=1))
 
     position = state.positions[instrument]
     assert position.quantity == Decimal("-5")
