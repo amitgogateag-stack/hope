@@ -184,7 +184,9 @@ def test_backtest_marks_existing_position_with_latest_bar_price():
     assert seen == [t1]
     assert len(result.valuations) == 2
     assert result.valuations[0].equity == Decimal("1000")
-    assert result.valuations[1].equity == Decimal("1020")
+    # The order is filled on t1 at the t1 quote; the position is therefore
+    # marked at its execution price and has no immediate unrealized gain.
+    assert result.valuations[1].equity == Decimal("1000")
 
 
 def test_backtest_result_contains_deterministic_performance_metrics():
@@ -211,8 +213,8 @@ def test_backtest_result_contains_deterministic_performance_metrics():
         bars, strategy, risk, OrderSide.BUY
     )
     assert result.metrics.initial_equity == Decimal("1000")
-    assert result.metrics.final_equity == Decimal("1020")
-    assert result.metrics.total_return == Decimal("0.02")
+    assert result.metrics.final_equity == Decimal("1000")
+    assert result.metrics.total_return == Decimal("0")
     assert result.metrics.max_drawdown == Decimal("0")
 
 
