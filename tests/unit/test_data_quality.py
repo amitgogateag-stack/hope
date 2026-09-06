@@ -1,7 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import pytest
-from hope.application.market_data.quality import validate_bar
+from hope.application.market_data.quality import validate_bar, validate_bars
 from hope.domain.market_data.models import MarketBar, DataQualityState
 
 
@@ -36,3 +36,27 @@ def test_bad_ohlc_is_rejected_at_domain_boundary():
 def test_naive_expected_timestamp_is_rejected():
     with pytest.raises(ValueError):
         validate_bar(bar(), expected_latest_event_time=datetime(2026, 8, 28, 10))
+
+
+def test_batch_detects_duplicate_instrument_event_key_and_is_unsafe():
+    duplicate = bar()
+    report = validate_bars((duplicate, duplicate))
+    assert report.states == (DataQualityState.VALID, DataQualityState.DUPLICATE)
+    assert report.duplicate_keys == (("X", duplicate.event_time),)
+    assert report.invalid_indices == (1,)
+    assert report.safe is False
+
+
+def test_batch_detects_missing_expected_instrument():
+    report = validate_bars((bar(),), expected_instrument_ids=("X", "Y"))
+    assert report.missing_instrument_ids == ("Y",)
+    assert report.states == (DataQualityState.VALID, DataQualityState.MISSING)
+    assert report.safe is False
+
+
+def test_batch_is_safe_only_with_valid_unique_complete_evidence():
+    first = bar(instrument_id="X")
+    second = bar(instrument_id="Y")
+    report = validate_bars((first, second), expected_instrument_ids=("X", "Y"))
+    assert report.states == (DataQualityState.VALID, DataQualityState.VALID)
+    assert report.safe is True
