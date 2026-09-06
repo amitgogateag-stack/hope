@@ -34,6 +34,7 @@ class BacktestResult:
     events: tuple[BacktestEvent, ...]
     valuations: tuple[PortfolioValuation, ...]
     metrics: BacktestMetrics
+    unfilled_order_ids: tuple[UUID, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -165,4 +166,5 @@ class DeterministicBacktest:
             tuple(events),
             tuple(valuations),
             calculate_metrics(tuple(valuations)),
+            tuple(item.result.order_id for item in pending),
         )
