@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 from typing import Callable, Iterable, Sequence
 from uuid import UUID, NAMESPACE_URL, uuid5
 
 from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import CostModel, ExecutionQuote
+from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.market_data.context import PITMarketContext, build_pit_market_context
 from hope.domain.market_data.models import MarketBar
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
@@ -40,17 +41,28 @@ RiskFn = Callable[[Signal], RiskAssessment]
 
 
 class DeterministicBacktest:
-    """Small, event-aware backtest core with an explicit PIT strategy boundary.
+    """Event-aware backtest core with explicit PIT and execution boundaries.
 
-    Strategies receive only a point-in-time market context. Execution remains
-    intentionally simple in this phase; P0-B will introduce the full order,
-    latency, eligibility, and fill timeline.
+    The current engine uses an explicit, configurable zero-latency execution
+    policy by default. A future execution quote must still satisfy the
+    ExecutionTimeline; a non-zero latency policy is supported without changing
+    the strategy boundary. The pending-order/event-queue model remains a P0-B
+    follow-up before claiming full execution realism.
     """
 
-    def __init__(self, initial_cash: Decimal, cost_model: CostModel) -> None:
+    def __init__(
+        self,
+        initial_cash: Decimal,
+        cost_model: CostModel,
+        *,
+        execution_latency: timedelta = timedelta(0),
+    ) -> None:
         self._ledger = PortfolioLedger(initial_cash)
         self._kernel = TradingKernel(self._ledger)
         self._cost_model = cost_model
+        self._execution_latency = execution_latency
+        if execution_latency < timedelta(0):
+            raise ValueError("EXECUTION_LATENCY_MUST_BE_NON_NEGATIVE")
 
     def run(
         self,
@@ -90,6 +102,10 @@ class DeterministicBacktest:
                     bid=bar.close,
                     ask=bar.close,
                 )
+                timeline = ExecutionTimeline.from_decision(
+                    signal.decision_time,
+                    latency=self._execution_latency,
+                ).with_fill_time(quote.event_time)
                 result = self._kernel.process(
                     signal,
                     assessment,
@@ -99,6 +115,7 @@ class DeterministicBacktest:
                     self._cost_model,
                     order_id=uuid5(NAMESPACE_URL, f"hope:backtest:{signal.signal_id}:order"),
                     fill_id=uuid5(NAMESPACE_URL, f"hope:backtest:{signal.signal_id}:fill"),
+                    timeline=timeline,
                 )
                 valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
                 events.append(BacktestEvent(bar.event_time, bar, result, valuation))
