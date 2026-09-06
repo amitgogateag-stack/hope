@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -6,6 +6,10 @@ import pytest
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
 from hope.domain.execution.replay import ExecutionReplayError, replay_order
+from hope.domain.execution.timeline import ExecutionTimeline
+
+
+BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)
 
 
 def make_order(quantity="10"):
@@ -14,8 +18,10 @@ def make_order(quantity="10"):
 
 
 def make_fill(order, qty, minute=0, fill_id=None):
-    quote = ExecutionQuote(order.instrument_id, datetime(2026, 1, 1, 14, minute, tzinfo=timezone.utc), Decimal("100"), Decimal("101"))
-    return simulate_market_fill(order, quote, fill_id or uuid4(), CostModel("test"), Decimal(qty))
+    fill_time = BASE_TIME + timedelta(minutes=minute)
+    quote = ExecutionQuote(order.instrument_id, fill_time, Decimal("100"), Decimal("101"))
+    timeline = ExecutionTimeline.from_decision(fill_time, latency=timedelta(0))
+    return simulate_market_fill(order, quote, fill_id or uuid4(), CostModel("test"), Decimal(qty), timeline=timeline)
 
 
 def test_replay_reconciles_multi_fill_order():
