@@ -45,14 +45,21 @@ def _result(invariant_id: str, passed: bool, message: str) -> InvariantResult:
 def check_invariant_001(context: InvariantContext) -> InvariantResult:
     if context.declared_member_count is None or context.evaluated_member_count is None:
         return _skip("INVARIANT-001", "member counts")
-    return _result("INVARIANT-001", context.declared_member_count == context.evaluated_member_count,
-                   f"declared={context.declared_member_count}, evaluated={context.evaluated_member_count}")
+    if context.declared_member_count < 0 or context.evaluated_member_count < 0:
+        return _result("INVARIANT-001", False, "member counts cannot be negative")
+    return _result(
+        "INVARIANT-001",
+        context.declared_member_count == context.evaluated_member_count,
+        f"declared={context.declared_member_count}, evaluated={context.evaluated_member_count}",
+    )
 
 
 def check_invariant_002(context: InvariantContext) -> InvariantResult:
     if context.evaluated_broker_instrument_ids is None:
         return _skip("INVARIANT-002", "evaluated broker instrument IDs")
     values = context.evaluated_broker_instrument_ids
+    if not values:
+        return _result("INVARIANT-002", False, "evaluated broker instrument IDs cannot be empty")
     return _result("INVARIANT-002", len(values) == len(set(values)), "broker identities are unique")
 
 
@@ -79,8 +86,8 @@ def check_invariant_005(context: InvariantContext) -> InvariantResult:
 
 def check_invariant_006(context: InvariantContext) -> InvariantResult:
     if context.signal_outcomes is None:
-        return _skip("INVARIANT-006", "signal outcomes and data-quality classifications")
-    bad = [item for item in context.signal_outcomes if item[0] == "NO_SIGNAL" and item[1] == "STALE_SIGNAL"]
+        return _skip("INVARIANT-006", "signal state and data-quality classifications")
+    bad = [item for item in context.signal_outcomes if item == ("NO_SIGNAL", "STALE_SIGNAL")]
     return _result("INVARIANT-006", not bad, "NO_SIGNAL is not classified as STALE_SIGNAL")
 
 
@@ -94,6 +101,8 @@ def check_invariant_007(context: InvariantContext) -> InvariantResult:
 def check_invariant_008(context: InvariantContext) -> InvariantResult:
     if context.trade_signal_ids is None:
         return _skip("INVARIANT-008", "trade signal references")
+    if not context.trade_signal_ids:
+        return _result("INVARIANT-008", False, "trade signal evidence cannot be empty")
     bad = [signal_id for signal_id in context.trade_signal_ids if not signal_id]
     return _result("INVARIANT-008", not bad, "every trade has a signal reference")
 
@@ -101,6 +110,8 @@ def check_invariant_008(context: InvariantContext) -> InvariantResult:
 def check_invariant_009(context: InvariantContext) -> InvariantResult:
     if context.position_canonical_identity_counts is None:
         return _skip("INVARIANT-009", "position canonical identity counts")
+    if not context.position_canonical_identity_counts:
+        return _result("INVARIANT-009", False, "position identity evidence cannot be empty")
     bad = [count for count in context.position_canonical_identity_counts if count != 1]
     return _result("INVARIANT-009", not bad, "every position has exactly one canonical identity")
 
@@ -108,6 +119,8 @@ def check_invariant_009(context: InvariantContext) -> InvariantResult:
 def check_invariant_010(context: InvariantContext) -> InvariantResult:
     if context.pnl_position_ids is None:
         return _skip("INVARIANT-010", "P&L position references")
+    if not context.pnl_position_ids:
+        return _result("INVARIANT-010", False, "P&L position-reference evidence cannot be empty")
     bad = [position_id for position_id in context.pnl_position_ids if not position_id]
     return _result("INVARIANT-010", not bad, "every P&L record has a position reference")
 
