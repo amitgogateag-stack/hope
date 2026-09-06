@@ -1,6 +1,7 @@
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 import pytest
+from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.application.market_data.quality import validate_bar, validate_bars
 from hope.domain.market_data.models import MarketBar, DataQualityState
 
@@ -87,4 +88,20 @@ def test_out_of_order_events_are_unsafe():
     earlier = bar()
     report = validate_bars((later, earlier))
     assert report.ordering_violations == (1,)
+    assert report.safe is False
+
+
+def test_session_calendar_does_not_flag_overnight_gap():
+    first = bar(event_time=datetime(2026, 8, 28, 15, 59, tzinfo=timezone.utc), available_time=datetime(2026, 8, 28, 15, 59, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 28, 15, 59, tzinfo=timezone.utc))
+    next_session = bar(event_time=datetime(2026, 8, 29, 10, tzinfo=timezone.utc), available_time=datetime(2026, 8, 29, 10, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 29, 10, tzinfo=timezone.utc))
+    calendar = MarketSessionCalendar(sessions=((datetime(2026, 8, 28, 10, tzinfo=timezone.utc), datetime(2026, 8, 28, 16, tzinfo=timezone.utc)), (datetime(2026, 8, 29, 10, tzinfo=timezone.utc), datetime(2026, 8, 29, 16, tzinfo=timezone.utc))))
+    report = validate_bars((first, next_session), expected_interval=timedelta(minutes=1), session_calendar=calendar)
+    assert report.gap_keys == ()
+    assert report.safe is True
+
+
+def test_session_calendar_rejects_bar_outside_declared_session():
+    calendar = MarketSessionCalendar(sessions=((datetime(2026, 8, 28, 10, tzinfo=timezone.utc), datetime(2026, 8, 28, 16, tzinfo=timezone.utc)),))
+    report = validate_bars((bar(event_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc), available_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc)),), session_calendar=calendar)
+    assert report.states == (DataQualityState.INCOMPLETE_SESSION,)
     assert report.safe is False
