@@ -60,3 +60,10 @@ def test_batch_is_safe_only_with_valid_unique_complete_evidence():
     report = validate_bars((first, second), expected_instrument_ids=("X", "Y"))
     assert report.states == (DataQualityState.VALID, DataQualityState.VALID)
     assert report.safe is True
+
+
+def test_empty_batch_is_unsafe_even_without_expected_universe():
+    report = validate_bars(())
+    assert report.empty_input is True
+    assert report.states == ()
+    assert report.safe is False
