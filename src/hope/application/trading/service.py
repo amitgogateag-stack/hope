@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
 from decimal import Decimal
 from hashlib import sha256
 from uuid import UUID, uuid4
@@ -10,6 +9,7 @@ from hope.domain.audit.models import AuditEvent, AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
 from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
+from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
@@ -26,11 +26,7 @@ class TradingKernelResult:
 
 
 class TradingKernel:
-    """Deterministic orchestration of signal -> risk -> order -> fill -> ledger.
-
-    The service has no broker adapter and no LIVE environment. It can therefore
-    only produce simulated fills in v0.1.
-    """
+    """Deterministic signal -> risk -> order -> timed fill -> ledger orchestration."""
 
     def __init__(self, ledger: PortfolioLedger) -> None:
         self._ledger = ledger
@@ -51,6 +47,7 @@ class TradingKernel:
         *,
         order_id: UUID | None = None,
         fill_id: UUID | None = None,
+        timeline: ExecutionTimeline | None = None,
     ) -> TradingKernelResult:
         events: list[AuditEvent] = []
         now = signal.decision_time
@@ -95,9 +92,17 @@ class TradingKernel:
 
         if quote is None or cost_model is None:
             return TradingKernelResult(intent, actual_order_id, None, self._ledger.state, tuple(events))
+        if timeline is None:
+            raise ValueError("QUOTE_EXECUTION_REQUIRES_TIMELINE")
+        if timeline.decision_time != signal.decision_time:
+            raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
+        if timeline.order_time < signal.decision_time:
+            raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
 
         actual_fill_id = fill_id or uuid4()
-        fill = simulate_market_fill(order, quote, actual_fill_id, cost_model)
+        fill = simulate_market_fill(
+            order, quote, actual_fill_id, cost_model, timeline=timeline
+        )
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.FILL_CREATED,
             event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
