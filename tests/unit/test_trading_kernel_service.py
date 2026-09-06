@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -7,6 +7,7 @@ import pytest
 from hope.application.trading import TradingKernel
 from hope.domain.audit import AuditEventType
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, OrderSide
+from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio import PortfolioLedger
 from hope.domain.risk import RiskAssessment, RiskDecision
 from hope.domain.signal import Signal, SignalType
@@ -25,12 +26,14 @@ def test_end_to_end_paper_kernel_preserves_attribution_and_updates_ledger():
     risk = RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
                           reason_code="OK", approved_quantity=Decimal("10"))
     instrument = signal.instrument_id
-    quote = ExecutionQuote(instrument, datetime(2026, 8, 29, 13, 31, tzinfo=timezone.utc),
-                           Decimal("99"), Decimal("100"))
+    quote_time = signal.decision_time + timedelta(minutes=1)
+    quote = ExecutionQuote(instrument, quote_time, Decimal("99"), Decimal("100"))
+    timeline = ExecutionTimeline.from_decision(signal.decision_time, latency=timedelta(minutes=1)).with_fill_time(quote_time)
     kernel = TradingKernel(PortfolioLedger(Decimal("10000")))
 
     result = kernel.process(signal, risk, OrderSide.BUY, Environment.PAPER, quote,
-                            CostModel("v1", Decimal("0.001"), Decimal("10")))
+                            CostModel("v1", Decimal("0.001"), Decimal("10")),
+                            timeline=timeline)
 
     assert result.fill is not None
     assert result.fill.signal_id == signal.signal_id
@@ -79,5 +82,19 @@ def test_kernel_rejects_quote_before_signal_decision_time():
                            Decimal("99"), Decimal("100"))
     kernel = TradingKernel(PortfolioLedger(Decimal("10000")))
     with pytest.raises(ValueError, match="QUOTE_PRECEDES_SIGNAL_DECISION_TIME"):
+        kernel.process(signal, risk, OrderSide.BUY, Environment.PAPER, quote,
+                       CostModel("v1", Decimal("0.001"), Decimal("10")),
+                       timeline=ExecutionTimeline.from_decision(signal.decision_time, latency=timedelta(0)))
+
+
+def test_kernel_requires_timeline_for_quote_backed_execution():
+    signal = make_signal()
+    risk = RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
+                          reason_code="OK", approved_quantity=Decimal("1"))
+    quote = ExecutionQuote(signal.instrument_id, signal.decision_time,
+                           Decimal("99"), Decimal("100"))
+    kernel = TradingKernel(PortfolioLedger(Decimal("10000")))
+
+    with pytest.raises(ValueError, match="QUOTE_EXECUTION_REQUIRES_TIMELINE"):
         kernel.process(signal, risk, OrderSide.BUY, Environment.PAPER, quote,
                        CostModel("v1", Decimal("0.001"), Decimal("10")))
