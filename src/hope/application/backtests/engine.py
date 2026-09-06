@@ -36,18 +36,24 @@ class BacktestResult:
     metrics: BacktestMetrics
 
 
+@dataclass(frozen=True)
+class _PendingOrder:
+    signal: Signal
+    result: TradingKernelResult
+    timeline: ExecutionTimeline
+
+
 StrategyFn = Callable[[PITMarketContext], Signal | None]
 RiskFn = Callable[[Signal], RiskAssessment]
 
 
 class DeterministicBacktest:
-    """Event-aware backtest core with explicit PIT and execution boundaries.
+    """Event-aware backtest with explicit PIT and future-quote execution boundaries.
 
-    The current engine uses an explicit, configurable zero-latency execution
-    policy by default. A future execution quote must still satisfy the
-    ExecutionTimeline; a non-zero latency policy is supported without changing
-    the strategy boundary. The pending-order/event-queue model remains a P0-B
-    follow-up before claiming full execution realism.
+    Signals are submitted at their decision time. Approved orders remain pending
+    until a later market event supplies an executable quote at or after the
+    timeline's fill-eligibility time. This deliberately prevents a strategy from
+    filling against the same market bar that generated its own decision.
     """
 
     def __init__(
@@ -76,6 +82,7 @@ class DeterministicBacktest:
         events: list[BacktestEvent] = []
         valuations: list[PortfolioValuation] = []
         latest_marks = {}
+        pending: list[_PendingOrder] = []
 
         for bar in ordered:
             if previous_time is not None and bar.event_time < previous_time:
@@ -88,6 +95,38 @@ class DeterministicBacktest:
                 raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
             latest_marks[bar_instrument_id] = bar.close
 
+            remaining: list[_PendingOrder] = []
+            for pending_order in pending:
+                timeline = pending_order.timeline
+                if (
+                    bar.instrument_id == str(pending_order.signal.instrument_id)
+                    and bar.event_time > pending_order.signal.decision_time
+                    and bar.event_time >= timeline.fill_eligible_time
+                ):
+                    quote = ExecutionQuote(
+                        instrument_id=bar_instrument_id,
+                        event_time=bar.event_time,
+                        bid=bar.close,
+                        ask=bar.close,
+                    )
+                    execution = self._kernel.execute_order(
+                        pending_order.result.intent,
+                        pending_order.result.order_id,
+                        quote,
+                        self._cost_model,
+                        decision_time=pending_order.signal.decision_time,
+                        fill_id=uuid5(
+                            NAMESPACE_URL,
+                            f"hope:backtest:{pending_order.signal.signal_id}:fill",
+                        ),
+                        timeline=timeline.with_fill_time(bar.event_time),
+                    )
+                    valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
+                    events.append(BacktestEvent(bar.event_time, bar, execution, valuation))
+                else:
+                    remaining.append(pending_order)
+            pending = remaining
+
             context = build_pit_market_context(tuple(ordered), bar.available_time)
             signal = strategy(context)
             if signal is not None:
@@ -96,32 +135,29 @@ class DeterministicBacktest:
                 signal.assert_point_in_time(context.as_of)
 
                 assessment = risk(signal)
-                quote = ExecutionQuote(
-                    instrument_id=signal.instrument_id,
-                    event_time=bar.event_time,
-                    bid=bar.close,
-                    ask=bar.close,
-                )
-                timeline = ExecutionTimeline.from_decision(
-                    signal.decision_time,
-                    latency=self._execution_latency,
-                ).with_fill_time(quote.event_time)
-                result = self._kernel.process(
+                submission = self._kernel.process(
                     signal,
                     assessment,
                     side,
                     Environment.BACKTEST,
-                    quote,
-                    self._cost_model,
-                    order_id=uuid5(NAMESPACE_URL, f"hope:backtest:{signal.signal_id}:order"),
-                    fill_id=uuid5(NAMESPACE_URL, f"hope:backtest:{signal.signal_id}:fill"),
-                    timeline=timeline,
+                    None,
+                    None,
+                    order_id=uuid5(
+                        NAMESPACE_URL,
+                        f"hope:backtest:{signal.signal_id}:order",
+                    ),
                 )
-                valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
-                events.append(BacktestEvent(bar.event_time, bar, result, valuation))
-            else:
-                valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
-            valuations.append(valuation)
+                if submission.intent is not None:
+                    pending.append(_PendingOrder(
+                        signal,
+                        submission,
+                        ExecutionTimeline.from_decision(
+                            signal.decision_time,
+                            latency=self._execution_latency,
+                        ),
+                    ))
+
+            valuations.append(value_portfolio(self._ledger, latest_marks, bar.event_time))
 
         return BacktestResult(
             self._ledger.initial_cash,
