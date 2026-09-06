@@ -67,3 +67,24 @@ def test_empty_batch_is_unsafe_even_without_expected_universe():
     assert report.empty_input is True
     assert report.states == ()
     assert report.safe is False
+
+
+def test_expected_interval_detects_missing_middle_bar():
+    first = bar(event_time=datetime(2026, 8, 28, 10, tzinfo=timezone.utc))
+    third = bar(event_time=datetime(2026, 8, 28, 10, 2, tzinfo=timezone.utc), available_time=datetime(2026, 8, 28, 10, 2, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 28, 10, 2, tzinfo=timezone.utc))
+    report = validate_bars((first, third), expected_interval=timedelta(minutes=1))
+    assert report.gap_keys == (("X", first.event_time, third.event_time),)
+    assert report.safe is False
+
+
+def test_non_positive_expected_interval_is_rejected():
+    with pytest.raises(ValueError, match="EXPECTED_INTERVAL_MUST_BE_POSITIVE"):
+        validate_bars((bar(),), expected_interval=timedelta(0))
+
+
+def test_out_of_order_events_are_unsafe():
+    later = bar(event_time=datetime(2026, 8, 28, 10, 1, tzinfo=timezone.utc), available_time=datetime(2026, 8, 28, 10, 1, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 28, 10, 1, tzinfo=timezone.utc))
+    earlier = bar()
+    report = validate_bars((later, earlier))
+    assert report.ordering_violations == (1,)
+    assert report.safe is False
