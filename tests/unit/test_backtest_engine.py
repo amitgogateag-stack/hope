@@ -256,3 +256,30 @@ def test_backtest_rejects_out_of_order_bars():
         DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(
             bars, lambda _context: None, lambda _signal: None, OrderSide.BUY
         )
+
+
+def test_backtest_preserves_pending_order_when_no_future_quote_exists():
+    instrument = uuid4()
+    t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    bars = [bar(instrument, t0, t0, "100")]
+    signal_id = uuid4()
+
+    def strategy(context):
+        return Signal(
+            signal_id=signal_id, instrument_id=instrument, strategy_version="s1",
+            decision_time=context.as_of, signal_type=SignalType.ENTRY,
+            conviction=Decimal("1"), inputs_hash="f" * 64,
+        )
+
+    def risk(signal):
+        return RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
+                              reason_code="TEST", approved_quantity=Decimal("1"))
+
+    result = DeterministicBacktest(Decimal("1000"), CostModel("c1")).run(
+        bars, strategy, risk, OrderSide.BUY
+    )
+    assert len(result.events) == 0
+    assert len(result.unfilled_order_ids) == 1
+    assert result.unfilled_order_ids[0] == uuid5(
+        NAMESPACE_URL, f"hope:backtest:{signal_id}:order"
+    )
