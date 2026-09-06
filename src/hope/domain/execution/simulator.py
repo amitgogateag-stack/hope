@@ -4,6 +4,7 @@ from decimal import Decimal
 from uuid import UUID
 
 from hope.domain.execution.models import Order, OrderSide
+from hope.domain.execution.timeline import ExecutionTimeline
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,7 @@ class Fill:
     commission: Decimal
     slippage: Decimal
     cost_model_version: str
+    fill_time: datetime | None = None
 
 
 def simulate_market_fill(
@@ -53,15 +55,19 @@ def simulate_market_fill(
     fill_id: UUID,
     cost_model: CostModel,
     quantity: Decimal | None = None,
+    *,
+    timeline: ExecutionTimeline | None = None,
 ) -> Fill:
     if order.instrument_id != quote.instrument_id:
         raise ValueError("ORDER_QUOTE_INSTRUMENT_MISMATCH")
+    if timeline is not None:
+        timeline.assert_quote_eligible(quote.event_time)
     fill_quantity = order.quantity if quantity is None else quantity
     if fill_quantity <= 0:
         raise ValueError("FILL_QUANTITY_MUST_BE_POSITIVE")
     if fill_quantity > order.quantity:
         raise ValueError("FILL_QUANTITY_EXCEEDS_ORDER_QUANTITY")
-    if order.environment.value == "PAPER" or order.environment.value in {"RESEARCH", "BACKTEST", "WALK_FORWARD"}:
+    if order.environment.value in {"PAPER", "RESEARCH", "BACKTEST", "WALK_FORWARD"}:
         base_price = quote.ask if order.side is OrderSide.BUY else quote.bid
         direction = Decimal("1") if order.side is OrderSide.BUY else Decimal("-1")
         slippage_per_unit = base_price * cost_model.slippage_bps / Decimal("10000")
@@ -70,5 +76,5 @@ def simulate_market_fill(
         commission = notional * cost_model.commission_rate
         return Fill(fill_id, order.order_id, order.signal_id, order.instrument_id, order.side,
                     fill_quantity, fill_price, commission, slippage_per_unit * fill_quantity,
-                    cost_model.version)
+                    cost_model.version, quote.event_time)
     raise ValueError("UNSUPPORTED_EXECUTION_ENVIRONMENT")
