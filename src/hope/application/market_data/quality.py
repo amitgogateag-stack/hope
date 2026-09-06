@@ -13,10 +13,16 @@ class DataQualityReport:
     invalid_indices: tuple[int, ...]
     missing_instrument_ids: tuple[str, ...]
     duplicate_keys: tuple[tuple[str, datetime], ...]
+    empty_input: bool
 
     @property
     def safe(self) -> bool:
-        return not self.invalid_indices and not self.missing_instrument_ids and not self.duplicate_keys
+        return (
+            not self.empty_input
+            and not self.invalid_indices
+            and not self.missing_instrument_ids
+            and not self.duplicate_keys
+        )
 
 
 def validate_bar(bar: MarketBar, *, expected_latest_event_time: datetime | None = None) -> DataQualityState:
@@ -73,6 +79,7 @@ def validate_bars(
         invalid_indices=invalid,
         missing_instrument_ids=missing,
         duplicate_keys=tuple(sorted(duplicate_keys)),
+        empty_input=not bars,
     )
 
 
