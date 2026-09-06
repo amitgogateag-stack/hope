@@ -20,6 +20,7 @@ class InvariantContext:
     terminal_alias_generated_pnl: bool | None = None
     terminal_alias_coverage_count: int | None = None
 
+    # (signal outcome, data-quality classification), e.g. ("NO_SIGNAL", "VALID").
     signal_outcomes: tuple[tuple[str, str], ...] | None = None
     paper_live_order_submissions: int | None = None
     trade_signal_ids: tuple[str | None, ...] | None = None
