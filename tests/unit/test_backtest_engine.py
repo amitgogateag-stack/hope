@@ -21,7 +21,7 @@ def bar(instrument_id, event_time, available_time, close):
     )
 
 
-def test_backtest_strategy_receives_pit_context():
+def test_backtest_strategy_receives_pit_context_and_fills_only_on_future_bar():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
     t1 = t0 + timedelta(minutes=1)
@@ -47,7 +47,9 @@ def test_backtest_strategy_receives_pit_context():
     )
     assert seen[0] == (t0, (t0,))
     assert seen[1] == (t1, (t0, t1))
-    assert result.final_state.positions[instrument].quantity == Decimal("4")
+    assert len(result.events) == 1
+    assert result.events[0].event_time == t1
+    assert result.final_state.positions[instrument].quantity == Decimal("2")
 
 
 def test_backtest_pit_context_excludes_future_event_bar():
@@ -95,13 +97,16 @@ def test_backtest_rejects_signal_that_uses_unavailable_information():
 def test_backtest_result_is_deterministic_for_same_inputs():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
-    bars = [bar(instrument, t0, t0, "100")]
+    t1 = t0 + timedelta(minutes=1)
+    bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "110")]
     stable_signal_id = uuid4()
 
     def stable_strategy(context):
-        return Signal(signal_id=stable_signal_id, instrument_id=instrument, strategy_version="s1",
-                      decision_time=context.as_of, signal_type=SignalType.ENTRY,
-                      conviction=Decimal("1"), inputs_hash="d" * 64)
+        if context.latest_bar is not None and context.latest_bar.event_time == t0:
+            return Signal(signal_id=stable_signal_id, instrument_id=instrument, strategy_version="s1",
+                          decision_time=context.as_of, signal_type=SignalType.ENTRY,
+                          conviction=Decimal("1"), inputs_hash="d" * 64)
+        return None
 
     def risk(signal):
         return RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
@@ -209,6 +214,34 @@ def test_backtest_result_contains_deterministic_performance_metrics():
     assert result.metrics.final_equity == Decimal("1020")
     assert result.metrics.total_return == Decimal("0.02")
     assert result.metrics.max_drawdown == Decimal("0")
+
+
+def test_backtest_latency_waits_for_future_eligible_quote():
+    instrument = uuid4()
+    t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    t1 = t0 + timedelta(minutes=1)
+    t2 = t0 + timedelta(minutes=2)
+    bars = [bar(instrument, t0, t0, "100"), bar(instrument, t1, t1, "105"), bar(instrument, t2, t2, "110")]
+
+    def strategy(context):
+        if context.latest_bar is not None and context.latest_bar.event_time == t0:
+            return Signal(
+                signal_id=uuid4(), instrument_id=instrument, strategy_version="s1",
+                decision_time=context.as_of, signal_type=SignalType.ENTRY,
+                conviction=Decimal("1"), inputs_hash="a" * 64,
+            )
+        return None
+
+    def risk(signal):
+        return RiskAssessment(signal_id=signal.signal_id, decision=RiskDecision.APPROVE,
+                              reason_code="TEST", approved_quantity=Decimal("1"))
+
+    result = DeterministicBacktest(
+        Decimal("1000"), CostModel("c1"), execution_latency=timedelta(minutes=2)
+    ).run(bars, strategy, risk, OrderSide.BUY)
+    assert len(result.events) == 1
+    assert result.events[0].event_time == t2
+    assert result.events[0].result.fill.price == Decimal("110")
 
 
 def test_backtest_rejects_out_of_order_bars():
