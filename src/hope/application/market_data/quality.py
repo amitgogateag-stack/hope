@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
+from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.market_data.models import DataQualityState, MarketBar
 
 
@@ -51,13 +52,16 @@ def validate_bars(
     expected_latest_event_time: datetime | None = None,
     expected_instrument_ids: tuple[str, ...] | None = None,
     expected_interval: timedelta | None = None,
+    session_calendar: MarketSessionCalendar | None = None,
 ) -> DataQualityReport:
     """Validate a deterministic batch and expose unsafe evidence explicitly.
 
     Duplicate identity is the same (instrument_id, event_time) key. Missing is
     asserted only when an expected instrument set is supplied. If an expected
-    interval is supplied, every consecutive bar for an instrument must advance
-    by exactly that interval; a mismatch is classified as incomplete data.
+    interval is supplied, every expected intraday timestamp must be present;
+    an explicit session calendar prevents overnight/weekend/holiday boundaries
+    from being misclassified as missing bars. Bars outside supplied sessions are
+    classified as incomplete-session evidence.
     """
     if expected_latest_event_time is not None:
         expected_latest_event_time = _aware(expected_latest_event_time)
@@ -85,10 +89,18 @@ def validate_bars(
             delta = event_time - previous
             if delta <= timedelta(0):
                 ordering_violations.append(index)
-            elif expected_interval is not None and delta != expected_interval:
-                gap_keys.add((bar.instrument_id, previous, event_time))
+            elif expected_interval is not None:
+                if session_calendar is None:
+                    if delta != expected_interval:
+                        gap_keys.add((bar.instrument_id, previous, event_time))
+                elif session_calendar.expected_intermediate_times(previous, event_time, expected_interval):
+                    gap_keys.add((bar.instrument_id, previous, event_time))
         last_by_instrument[bar.instrument_id] = event_time
-        states.append(validate_bar(bar, expected_latest_event_time=expected_latest_event_time))
+
+        state = validate_bar(bar, expected_latest_event_time=expected_latest_event_time)
+        if session_calendar is not None and not session_calendar.contains(event_time):
+            state = DataQualityState.INCOMPLETE_SESSION
+        states.append(state)
 
     present = {bar.instrument_id for bar in bars}
     missing = tuple(sorted(set(expected_instrument_ids or ()) - present))
@@ -96,11 +108,6 @@ def validate_bars(
         states.extend(DataQualityState.MISSING for _ in missing)
 
     invalid = tuple(i for i, state in enumerate(states[:len(bars)]) if state is not DataQualityState.VALID)
-    if gap_keys:
-        # A gap is a dataset-level incompleteness, even though the bars around it
-        # may individually be valid. Keep their per-bar states intact and expose
-        # the halt condition through report.safe.
-        pass
 
     return DataQualityReport(
         states=tuple(states),
