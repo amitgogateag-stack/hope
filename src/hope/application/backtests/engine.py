@@ -8,6 +8,7 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 
 from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import CostModel, ExecutionQuote
+from hope.domain.market_data.context import PITMarketContext, build_pit_market_context
 from hope.domain.market_data.models import MarketBar
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.portfolio.valuation import PortfolioValuation, value_portfolio
@@ -34,19 +35,16 @@ class BacktestResult:
     metrics: BacktestMetrics
 
 
-StrategyFn = Callable[[MarketBar], Signal | None]
+StrategyFn = Callable[[PITMarketContext], Signal | None]
 RiskFn = Callable[[Signal], RiskAssessment]
 
 
 class DeterministicBacktest:
-    """Small, event-aware backtest core.
+    """Small, event-aware backtest core with an explicit PIT strategy boundary.
 
-    The runner processes bars in event-time order and exposes only the current
-    bar to the strategy callback. A signal must prove that its decision time is
-    at or after the bar's available_time, preventing use of information that
-    was not yet available. Execution uses the current bar to construct a
-    synthetic bid/ask quote; richer market/execution models can replace this
-    adapter later without changing the orchestration contract.
+    Strategies receive only a point-in-time market context. Execution remains
+    intentionally simple in this phase; P0-B will introduce the full order,
+    latency, eligibility, and fill timeline.
     """
 
     def __init__(self, initial_cash: Decimal, cost_model: CostModel) -> None:
@@ -78,11 +76,12 @@ class DeterministicBacktest:
                 raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
             latest_marks[bar_instrument_id] = bar.close
 
-            signal = strategy(bar)
+            context = build_pit_market_context(tuple(ordered), bar.available_time)
+            signal = strategy(context)
             if signal is not None:
                 if signal.instrument_id != bar_instrument_id:
                     raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
-                signal.assert_point_in_time(bar.available_time)
+                signal.assert_point_in_time(context.as_of)
 
                 assessment = risk(signal)
                 quote = ExecutionQuote(
