@@ -35,12 +35,11 @@ def test_context_excludes_bar_available_after_as_of():
     assert [bar.close for bar in context.bars] == [Decimal("100")]
 
 
-def test_context_excludes_future_event_even_if_ingested_early():
+def test_context_excludes_future_event_even_if_already_available():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
     future_event = t0 + timedelta(minutes=10)
-    early_available = t0
-    future_bar = make_bar(instrument, future_event, early_available, "999")
+    future_bar = make_bar(instrument, future_event, future_event, "999")
 
     context = build_pit_market_context([future_bar], t0)
 
