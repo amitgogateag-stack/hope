@@ -15,6 +15,8 @@ class ExecutionQuote:
     ask: Decimal
 
     def __post_init__(self) -> None:
+        if self.event_time.tzinfo is None or self.event_time.utcoffset() is None:
+            raise ValueError("QUOTE_EVENT_TIME_MUST_BE_TIMEZONE_AWARE")
         if self.bid <= 0 or self.ask <= 0:
             raise ValueError("QUOTE_PRICES_MUST_BE_POSITIVE")
         if self.ask < self.bid:
@@ -56,12 +58,13 @@ def simulate_market_fill(
     cost_model: CostModel,
     quantity: Decimal | None = None,
     *,
-    timeline: ExecutionTimeline | None = None,
+    timeline: ExecutionTimeline,
 ) -> Fill:
     if order.instrument_id != quote.instrument_id:
         raise ValueError("ORDER_QUOTE_INSTRUMENT_MISMATCH")
-    if timeline is not None:
-        timeline.assert_quote_eligible(quote.event_time)
+    timeline.assert_quote_eligible(quote.event_time)
+    if fill_id is None:
+        raise ValueError("FILL_ID_REQUIRED")
     fill_quantity = order.quantity if quantity is None else quantity
     if fill_quantity <= 0:
         raise ValueError("FILL_QUANTITY_MUST_BE_POSITIVE")
