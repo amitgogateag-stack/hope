@@ -209,3 +209,31 @@ def test_backtest_does_not_fill_against_quote_before_quote_availability():
 
     assert result.events == ()
     assert len(result.unfilled_order_ids) == 1
+
+
+def test_backtest_context_does_not_advance_past_current_event_for_delayed_data():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=second,
+        available_time=second + timedelta(minutes=5),
+        ingestion_time=second + timedelta(minutes=5),
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=Decimal("1000"),
+    )
+    observed = []
+
+    def strategy(context):
+        observed.append((context.as_of, tuple(b.event_time for b in context.bars)))
+        return None
+
+    backtest().run((bar(first), delayed), strategy, no_risk, OrderSide.BUY)
+
+    assert observed == [
+        (first, (first,)),
+        (second, (first,)),
+    ]
