@@ -30,8 +30,11 @@ def valid_context() -> InvariantContext:
         signal_outcomes=(("NO_SIGNAL", "VALID"),),
         paper_live_order_submissions=0,
         trade_signal_ids=("s1",),
+        known_signal_ids=("s1",),
         position_canonical_identity_counts=(1, 1),
+        position_identity_records=(("p1", "A", 1), ("p2", "B", 1)),
         pnl_position_ids=("p1",),
+        known_position_ids=("p1", "p2"),
     )
 
 
@@ -75,3 +78,21 @@ def test_runner_rejects_duplicate_result_ids() -> None:
 
     with pytest.raises(ValueError, match="DUPLICATE_INVARIANT_RESULT"):
         InvariantRunner([duplicate_one, duplicate_two]).run(InvariantContext())
+
+
+def test_invariant_008_rejects_unknown_trade_signal_reference() -> None:
+    context = InvariantContext(trade_signal_ids=("missing",), known_signal_ids=("s1",))
+    result = InvariantRunner().run(context).results[7]
+    assert result.status is ValidationStatus.FAIL
+
+
+def test_invariant_009_rejects_blank_identity_record() -> None:
+    context = InvariantContext(position_identity_records=(("p1", None, 1),))
+    result = InvariantRunner().run(context).results[8]
+    assert result.status is ValidationStatus.FAIL
+
+
+def test_invariant_010_rejects_unknown_pnl_position_reference() -> None:
+    context = InvariantContext(pnl_position_ids=("missing",), known_position_ids=("p1",))
+    result = InvariantRunner().run(context).results[9]
+    assert result.status is ValidationStatus.FAIL
