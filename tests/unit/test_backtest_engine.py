@@ -346,3 +346,34 @@ def test_backtest_executes_delayed_quote_at_availability_without_later_market_ev
     assert result.events[0].result.fill is not None
     assert result.events[0].result.fill.fill_time == available
     assert result.unfilled_order_ids == ()
+
+
+def test_backtest_processes_same_time_bars_in_deterministic_instrument_order():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    instrument_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    instrument_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    bars = (
+        MarketBar(
+            instrument_id=instrument_b,
+            event_time=first,
+            available_time=first,
+            ingestion_time=first,
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100"), volume=Decimal("1000"),
+        ),
+        MarketBar(
+            instrument_id=instrument_a,
+            event_time=first,
+            available_time=first,
+            ingestion_time=first,
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100"), volume=Decimal("1000"),
+        ),
+    )
+    observed = []
+
+    def strategy(context):
+        observed.append(context.as_of)
+        return None
+
+    backtest().run(bars, strategy, no_risk, OrderSide.BUY)
+
+    assert observed == [first, first]
