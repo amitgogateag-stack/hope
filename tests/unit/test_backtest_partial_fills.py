@@ -5,6 +5,7 @@ from uuid import UUID
 import pytest
 
 from hope.application.backtests.engine import DeterministicBacktest
+from hope.domain.audit.validator import validate_audit_sequence
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
@@ -82,6 +83,34 @@ def test_backtest_accumulates_deterministic_partial_fills_until_order_is_complet
     assert len({event.result.fill.fill_id for event in result.events}) == 3
     assert result.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("10")
     assert result.unfilled_order_ids == ()
+
+
+def test_backtest_partial_fill_accumulates_a_valid_audit_lifecycle():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = make_signal(first)
+    assessment = make_assessment(signal)
+    result = DeterministicBacktest(
+        Decimal("10000"), CostModel(version="test"), max_fill_quantity=Decimal("4")
+    ).run(
+        (
+            bar(first),
+            bar(first + timedelta(minutes=1), "101"),
+            bar(first + timedelta(minutes=2), "102"),
+            bar(first + timedelta(minutes=3), "103"),
+        ),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
+
+    audit_events = result.events[-1].result.audit_events
+    validate_audit_sequence(audit_events)
+    fill_events = [event for event in audit_events if event.event_type.value == "FILL_CREATED"]
+    assert len(fill_events) == 3
+    assert len({event.fill_id for event in fill_events}) == 3
+    assert [event.event_time for event in fill_events] == sorted(
+        event.event_time for event in fill_events
+    )
 
 
 def test_backtest_does_not_reuse_the_same_quote_for_a_later_partial_fill():
