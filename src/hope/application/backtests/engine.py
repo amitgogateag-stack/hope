@@ -170,6 +170,8 @@ class DeterministicBacktest:
                     raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
                 if signal.decision_time > context.as_of:
                     raise ValueError("SIGNAL_DECISION_AFTER_CONTEXT")
+                if signal.decision_time != context.as_of:
+                    raise ValueError("SIGNAL_DECISION_MUST_MATCH_CONTEXT")
                 signal.assert_point_in_time(context.as_of)
 
                 assessment = risk(signal)
