@@ -121,9 +121,6 @@ class DeterministicBacktest:
             except ValueError as exc:
                 raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
 
-            if bar.available_time <= bar.event_time:
-                latest_marks[bar_instrument_id] = bar.close
-
             remaining: list[_PendingOrder] = []
             for pending_order in pending:
                 timeline = pending_order.timeline
@@ -159,6 +156,9 @@ class DeterministicBacktest:
                         portfolio_state=execution.portfolio_state,
                         audit_events=pending_order.result.audit_events + execution.audit_events,
                     )
+                    visible_context = build_pit_market_context(tuple(ordered), bar.event_time)
+                    for visible_bar in visible_context.bars:
+                        latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
                     valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
                     events.append(BacktestEvent(bar.event_time, bar, complete_result, valuation))
                 else:
@@ -166,6 +166,9 @@ class DeterministicBacktest:
             pending = remaining
 
             context = build_pit_market_context(tuple(ordered), bar.event_time)
+            for visible_bar in context.bars:
+                latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
+
             signal = strategy(context)
             if signal is not None:
                 if signal.signal_id in submitted_signal_ids:

@@ -237,3 +237,58 @@ def test_backtest_context_does_not_advance_past_current_event_for_delayed_data()
         (first, (first,)),
         (second, (first,)),
     ]
+
+
+def test_backtest_valuation_adopts_delayed_mark_when_it_becomes_available():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    third = second + timedelta(minutes=1)
+    fourth = third + timedelta(minutes=1)
+    other_instrument = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=third,
+        available_time=fourth,
+        ingestion_time=fourth,
+        open=Decimal("130"),
+        high=Decimal("131"),
+        low=Decimal("129"),
+        close=Decimal("130"),
+        volume=Decimal("1000"),
+    )
+    later_other = MarketBar(
+        instrument_id=other_instrument,
+        event_time=fourth,
+        available_time=fourth,
+        ingestion_time=fourth,
+        open=Decimal("50"),
+        high=Decimal("51"),
+        low=Decimal("49"),
+        close=Decimal("50"),
+        volume=Decimal("1000"),
+    )
+    signal = Signal(
+        signal_id=UUID("66666666-6666-6666-6666-666666666666"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="4" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = backtest().run(
+        (bar(first), bar(second), delayed, later_other),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
+
+    assert result.valuations[2].market_value == Decimal("100")
+    assert result.valuations[3].market_value == Decimal("130")
