@@ -219,7 +219,7 @@ class DeterministicBacktest:
                             ),
                         ))
 
-                valuations.append(value_portfolio(self._ledger, latest_marks, current_time))
+            valuations.append(value_portfolio(self._ledger, latest_marks, current_time))
 
         return BacktestResult(
             self._ledger.initial_cash,
