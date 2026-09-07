@@ -175,14 +175,15 @@ def test_backtest_rejects_duplicate_signal_id_before_second_submission():
         backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, lambda _signal: assessment, OrderSide.BUY)
 
 
-def test_backtest_does_not_fill_against_quote_before_quote_availability():
+def test_backtest_delays_fill_until_quote_availability():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     second = first + timedelta(minutes=1)
+    available = second + timedelta(minutes=5)
     delayed = MarketBar(
         instrument_id=INSTRUMENT,
         event_time=second,
-        available_time=second + timedelta(minutes=5),
-        ingestion_time=second + timedelta(minutes=5),
+        available_time=available,
+        ingestion_time=available,
         open=Decimal("100"),
         high=Decimal("101"),
         low=Decimal("99"),
@@ -205,10 +206,18 @@ def test_backtest_does_not_fill_against_quote_before_quote_availability():
         approved_quantity=Decimal("1"),
     )
 
-    result = backtest().run((bar(first), delayed), lambda _context: signal if _context.as_of == first else None, lambda _signal: assessment, OrderSide.BUY)
+    result = backtest().run(
+        (bar(first), delayed),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
 
-    assert result.events == ()
-    assert len(result.unfilled_order_ids) == 1
+    assert len(result.events) == 1
+    assert result.events[0].event_time == available
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.fill_time == available
+    assert result.unfilled_order_ids == ()
 
 
 def test_backtest_context_does_not_advance_past_current_event_for_delayed_data():
