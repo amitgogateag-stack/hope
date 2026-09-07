@@ -380,3 +380,44 @@ def test_backtest_processes_same_time_bars_in_deterministic_instrument_order():
     backtest().run(bars, strategy, no_risk, OrderSide.BUY)
 
     assert observed == [first, first]
+
+
+def test_backtest_emits_one_valuation_per_clock_time_for_same_time_multi_instrument_bars():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    instrument_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    instrument_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+    bars = (
+        MarketBar(
+            instrument_id=instrument_b,
+            event_time=first,
+            available_time=first,
+            ingestion_time=first,
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100"), volume=Decimal("1000"),
+        ),
+        MarketBar(
+            instrument_id=instrument_a,
+            event_time=first,
+            available_time=first,
+            ingestion_time=first,
+            open=Decimal("100"), high=Decimal("101"), low=Decimal("99"), close=Decimal("100"), volume=Decimal("1000"),
+        ),
+        MarketBar(
+            instrument_id=instrument_a,
+            event_time=second,
+            available_time=second,
+            ingestion_time=second,
+            open=Decimal("101"), high=Decimal("102"), low=Decimal("100"), close=Decimal("101"), volume=Decimal("1000"),
+        ),
+        MarketBar(
+            instrument_id=instrument_b,
+            event_time=second,
+            available_time=second,
+            ingestion_time=second,
+            open=Decimal("99"), high=Decimal("100"), low=Decimal("98"), close=Decimal("99"), volume=Decimal("1000"),
+        ),
+    )
+
+    result = backtest().run(bars, no_strategy, no_risk, OrderSide.BUY)
+
+    assert tuple(valuation.as_of for valuation in result.valuations) == (first, second)
