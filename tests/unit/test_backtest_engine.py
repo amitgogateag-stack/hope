@@ -292,3 +292,48 @@ def test_backtest_valuation_adopts_delayed_mark_when_it_becomes_available():
 
     assert result.valuations[2].market_value == Decimal("100")
     assert result.valuations[3].market_value == Decimal("130")
+
+
+def test_backtest_executes_delayed_quote_at_availability_without_later_market_event():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    available = second + timedelta(minutes=5)
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=second,
+        available_time=available,
+        ingestion_time=available,
+        open=Decimal("120"),
+        high=Decimal("121"),
+        low=Decimal("119"),
+        close=Decimal("120"),
+        volume=Decimal("1000"),
+    )
+    signal = Signal(
+        signal_id=UUID("77777777-7777-7777-7777-777777777777"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="5" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = backtest().run(
+        (bar(first), delayed),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
+
+    assert len(result.events) == 1
+    assert result.events[0].event_time == available
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.fill_time == available
+    assert result.unfilled_order_ids == ()
