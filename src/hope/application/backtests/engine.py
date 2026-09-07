@@ -116,26 +116,31 @@ class DeterministicBacktest:
                 raise ValueError("BACKTEST_EVENTS_MUST_BE_NON_DECREASING")
             previous_time = bar.event_time
 
-            try:
-                bar_instrument_id = UUID(bar.instrument_id)
-            except ValueError as exc:
-                raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
+            context = build_pit_market_context(tuple(ordered), bar.event_time)
+            for visible_bar in context.bars:
+                latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
 
             remaining: list[_PendingOrder] = []
             for pending_order in pending:
                 timeline = pending_order.timeline
-                if (
-                    bar.instrument_id == str(pending_order.signal.instrument_id)
-                    and bar.event_time > pending_order.signal.decision_time
-                    and bar.event_time >= timeline.fill_eligible_time
-                    and bar.available_time <= bar.event_time
-                ):
+                eligible_quotes = [
+                    visible_bar
+                    for visible_bar in context.bars
+                    if (
+                        visible_bar.instrument_id == str(pending_order.signal.instrument_id)
+                        and visible_bar.event_time > pending_order.signal.decision_time
+                        and visible_bar.event_time >= timeline.fill_eligible_time
+                        and visible_bar.available_time <= bar.event_time
+                    )
+                ]
+                quote_bar = max(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
+                if quote_bar is not None:
                     quote = ExecutionQuote(
-                        instrument_id=bar_instrument_id,
-                        event_time=bar.event_time,
-                        bid=bar.close,
-                        ask=bar.close,
-                        available_time=bar.available_time,
+                        instrument_id=UUID(quote_bar.instrument_id),
+                        event_time=quote_bar.event_time,
+                        bid=quote_bar.close,
+                        ask=quote_bar.close,
+                        available_time=quote_bar.available_time,
                     )
                     execution = self._kernel.execute_order(
                         pending_order.result.intent,
@@ -156,23 +161,20 @@ class DeterministicBacktest:
                         portfolio_state=execution.portfolio_state,
                         audit_events=pending_order.result.audit_events + execution.audit_events,
                     )
-                    visible_context = build_pit_market_context(tuple(ordered), bar.event_time)
-                    for visible_bar in visible_context.bars:
-                        latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
                     valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
                     events.append(BacktestEvent(bar.event_time, bar, complete_result, valuation))
                 else:
                     remaining.append(pending_order)
             pending = remaining
 
-            context = build_pit_market_context(tuple(ordered), bar.event_time)
-            for visible_bar in context.bars:
-                latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
-
             signal = strategy(context)
             if signal is not None:
                 if signal.signal_id in submitted_signal_ids:
                     raise ValueError("DUPLICATE_SIGNAL_ID")
+                try:
+                    bar_instrument_id = UUID(bar.instrument_id)
+                except ValueError as exc:
+                    raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
                 if signal.instrument_id != bar_instrument_id:
                     raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
                 if signal.decision_time > context.as_of:
