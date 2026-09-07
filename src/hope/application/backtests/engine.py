@@ -185,7 +185,7 @@ class DeterministicBacktest:
                         audit_events=pending_order.result.audit_events + execution.audit_events,
                     )
                     valuation = value_portfolio(self._ledger, latest_marks, current_time)
-                    event_bar = current_bars[0] if current_bars else quote_bar
+                    event_bar = quote_bar
                     events.append(BacktestEvent(current_time, event_bar, complete_result, valuation))
                 else:
                     remaining.append(pending_order)
