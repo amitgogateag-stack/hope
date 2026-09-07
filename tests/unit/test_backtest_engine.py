@@ -173,3 +173,39 @@ def test_backtest_rejects_duplicate_signal_id_before_second_submission():
 
     with pytest.raises(ValueError, match="DUPLICATE_SIGNAL_ID"):
         backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, lambda _signal: assessment, OrderSide.BUY)
+
+
+def test_backtest_does_not_fill_against_quote_before_quote_availability():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=second,
+        available_time=second + timedelta(minutes=5),
+        ingestion_time=second + timedelta(minutes=5),
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=Decimal("1000"),
+    )
+    signal = Signal(
+        signal_id=UUID("55555555-5555-5555-5555-555555555555"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="3" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = backtest().run((bar(first), delayed), lambda _context: signal if _context.as_of == first else None, lambda _signal: assessment, OrderSide.BUY)
+
+    assert result.events == ()
+    assert len(result.unfilled_order_ids) == 1
