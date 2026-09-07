@@ -194,6 +194,7 @@ class DeterministicBacktest:
                     if signal.decision_time != context.as_of:
                         raise ValueError("SIGNAL_DECISION_MUST_MATCH_CONTEXT")
                     signal.assert_point_in_time(context.as_of)
+                    submitted_signal_ids.add(signal.signal_id)
 
                     assessment = risk(signal)
                     submission = self._kernel.process(
@@ -209,7 +210,6 @@ class DeterministicBacktest:
                         ),
                     )
                     if submission.intent is not None:
-                        submitted_signal_ids.add(signal.signal_id)
                         pending.append(_PendingOrder(
                             signal,
                             submission,
