@@ -21,6 +21,8 @@ class ExecutionQuote:
         available_time = self.event_time if self.available_time is None else self.available_time
         if available_time.tzinfo is None or available_time.utcoffset() is None:
             raise ValueError("QUOTE_AVAILABLE_TIME_MUST_BE_TIMEZONE_AWARE")
+        if available_time < self.event_time:
+            raise ValueError("QUOTE_AVAILABLE_TIME_PRECEDES_EVENT_TIME")
         if self.bid <= 0 or self.ask <= 0:
             raise ValueError("QUOTE_PRICES_MUST_BE_POSITIVE")
         if self.ask < self.bid:
