@@ -160,8 +160,14 @@ class DeterministicBacktest:
                         and (
                             session_calendar is None
                             or (
-                                session_calendar.contains(visible_bar.event_time)
+                                session_calendar.contains(pending_order.signal.decision_time)
+                                and session_calendar.contains(visible_bar.event_time)
                                 and session_calendar.contains(visible_bar.available_time)
+                                and _same_session(
+                                    session_calendar,
+                                    pending_order.signal.decision_time,
+                                    current_time,
+                                )
                                 and _same_session(
                                     session_calendar,
                                     visible_bar.available_time,
