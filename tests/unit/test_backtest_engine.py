@@ -109,8 +109,12 @@ def test_backtest_fill_event_preserves_submission_audit_lifecycle():
         approved_quantity=Decimal("1"),
     )
 
+    calls = 0
+
     def strategy(_context):
-        return signal
+        nonlocal calls
+        calls += 1
+        return signal if calls == 1 else None
 
     def risk(_signal):
         return assessment
