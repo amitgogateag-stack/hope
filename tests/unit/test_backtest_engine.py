@@ -109,6 +109,7 @@ def test_backtest_rejects_signal_decision_before_context_availability():
 
 def test_backtest_fill_event_preserves_submission_audit_lifecycle():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    fill_time = first + timedelta(minutes=1)
     signal = Signal(
         signal_id=UUID("22222222-2222-2222-2222-222222222222"),
         instrument_id=UUID(INSTRUMENT),
@@ -135,7 +136,7 @@ def test_backtest_fill_event_preserves_submission_audit_lifecycle():
     def risk(_signal):
         return assessment
 
-    result = backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, risk, OrderSide.BUY)
+    result = backtest().run((bar(first), bar(fill_time)), strategy, risk, OrderSide.BUY)
 
     assert calls == 2
     assert len(result.events) == 1
@@ -147,7 +148,9 @@ def test_backtest_fill_event_preserves_submission_audit_lifecycle():
         AuditEventType.PORTFOLIO_UPDATED,
     )
     assert result.events[0].result.fill is not None
-    assert result.events[0].result.fill.fill_time == first + timedelta(minutes=1)
+    assert result.events[0].result.fill.fill_time == fill_time
+    assert result.events[0].result.audit_events[-2].event_time == fill_time
+    assert result.events[0].result.audit_events[-1].event_time == fill_time
 
 
 def test_backtest_rejects_duplicate_signal_id_before_second_submission():
