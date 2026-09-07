@@ -121,6 +121,7 @@ def test_backtest_fill_event_preserves_submission_audit_lifecycle():
 
     result = backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, risk, OrderSide.BUY)
 
+    assert calls == 2
     assert len(result.events) == 1
     assert tuple(event.event_type for event in result.events[0].result.audit_events) == (
         AuditEventType.SIGNAL_ACCEPTED,
