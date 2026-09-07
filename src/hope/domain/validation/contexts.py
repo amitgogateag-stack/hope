@@ -24,5 +24,8 @@ class InvariantContext:
     signal_outcomes: tuple[tuple[str, str], ...] | None = None
     paper_live_order_submissions: int | None = None
     trade_signal_ids: tuple[str | None, ...] | None = None
+    known_signal_ids: tuple[str, ...] | None = None
     position_canonical_identity_counts: tuple[int, ...] | None = None
+    position_identity_records: tuple[tuple[str | None, str | None, int], ...] | None = None
     pnl_position_ids: tuple[str | None, ...] | None = None
+    known_position_ids: tuple[str, ...] | None = None
