@@ -13,12 +13,13 @@ from hope.domain.signal.models import Signal, SignalType
 
 UTC = timezone.utc
 INSTRUMENT = "11111111-1111-1111-1111-111111111111"
+OTHER = "22222222-2222-2222-2222-222222222222"
 
 
-def make_bar(event_time: datetime, available_time: datetime | None = None) -> MarketBar:
+def make_bar(instrument_id: str, event_time: datetime, available_time: datetime | None = None) -> MarketBar:
     available = event_time if available_time is None else available_time
     return MarketBar(
-        instrument_id=INSTRUMENT,
+        instrument_id=instrument_id,
         event_time=event_time,
         available_time=available,
         ingestion_time=available,
@@ -30,12 +31,18 @@ def make_bar(event_time: datetime, available_time: datetime | None = None) -> Ma
     )
 
 
-def test_backtest_does_not_fill_delayed_quote_after_session_close():
+def test_backtest_does_not_carry_delayed_quote_after_session_close_into_next_session():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     quote_event = first + timedelta(minutes=1)
     quote_available = datetime(2026, 1, 5, 15, 5, tzinfo=UTC)
     session_close = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
-    session_calendar = MarketSessionCalendar(((first, session_close),))
+    next_session_open = datetime(2026, 1, 6, 14, 30, tzinfo=UTC)
+    session_calendar = MarketSessionCalendar(
+        (
+            (first, session_close),
+            (next_session_open, next_session_open + timedelta(minutes=30)),
+        )
+    )
     signal = Signal(
         signal_id=UUID("88888888-8888-8888-8888-888888888888"),
         instrument_id=UUID(INSTRUMENT),
@@ -55,7 +62,11 @@ def test_backtest_does_not_fill_delayed_quote_after_session_close():
     result = DeterministicBacktest(
         Decimal("10000"), CostModel(version="test")
     ).run(
-        (make_bar(first), make_bar(quote_event, quote_available)),
+        (
+            make_bar(INSTRUMENT, first),
+            make_bar(INSTRUMENT, quote_event, quote_available),
+            make_bar(OTHER, next_session_open),
+        ),
         lambda context: signal if context.as_of == first else None,
         lambda _signal: assessment,
         OrderSide.BUY,
