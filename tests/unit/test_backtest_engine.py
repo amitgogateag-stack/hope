@@ -132,3 +132,28 @@ def test_backtest_fill_event_preserves_submission_audit_lifecycle():
     )
     assert result.events[0].result.fill is not None
     assert result.events[0].result.fill.fill_time == first + timedelta(minutes=1)
+
+
+def test_backtest_rejects_duplicate_signal_id_before_second_submission():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = Signal(
+        signal_id=UUID("33333333-3333-3333-3333-333333333333"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="1" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    def strategy(_context):
+        return signal
+
+    with pytest.raises(ValueError, match="DUPLICATE_SIGNAL_ID"):
+        backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, lambda _signal: assessment, OrderSide.BUY)
