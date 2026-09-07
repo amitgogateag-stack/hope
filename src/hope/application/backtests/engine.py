@@ -142,6 +142,11 @@ class DeterministicBacktest:
                         and visible_bar.event_time > pending_order.signal.decision_time
                         and visible_bar.event_time >= timeline.fill_eligible_time
                         and visible_bar.available_time <= current_time
+                        and (
+                            session_calendar is None
+                            or session_calendar.contains(visible_bar.event_time)
+                            and session_calendar.contains(visible_bar.available_time)
+                        )
                     )
                 ]
                 quote_bar = max(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
