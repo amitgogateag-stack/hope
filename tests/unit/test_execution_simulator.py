@@ -100,3 +100,15 @@ def test_fill_rejects_quote_before_timeline_eligibility():
     timeline = ExecutionTimeline.from_decision(decision_time, latency=timedelta(minutes=2))
     with pytest.raises(ValueError, match="QUOTE_PRECEDES_FILL_ELIGIBILITY"):
         simulate_market_fill(order, quote, uuid4(), CostModel("v1"), timeline=timeline)
+
+
+def test_quote_available_time_must_not_follow_event_time():
+    quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="QUOTE_AVAILABLE_TIME_AFTER_EVENT_TIME"):
+        ExecutionQuote(
+            uuid4(),
+            quote_time,
+            Decimal("1"),
+            Decimal("1.01"),
+            available_time=quote_time + timedelta(minutes=1),
+        )
