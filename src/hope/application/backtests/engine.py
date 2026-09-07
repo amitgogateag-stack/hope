@@ -109,6 +109,7 @@ class DeterministicBacktest:
         valuations: list[PortfolioValuation] = []
         latest_marks = {}
         pending: list[_PendingOrder] = []
+        submitted_signal_ids: set[UUID] = set()
 
         for bar in ordered:
             if previous_time is not None and bar.event_time < previous_time:
@@ -163,6 +164,8 @@ class DeterministicBacktest:
             context = build_pit_market_context(tuple(ordered), bar.available_time)
             signal = strategy(context)
             if signal is not None:
+                if signal.signal_id in submitted_signal_ids:
+                    raise ValueError("DUPLICATE_SIGNAL_ID")
                 if signal.instrument_id != bar_instrument_id:
                     raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
                 if signal.decision_time > context.as_of:
@@ -183,6 +186,7 @@ class DeterministicBacktest:
                     ),
                 )
                 if submission.intent is not None:
+                    submitted_signal_ids.add(signal.signal_id)
                     pending.append(_PendingOrder(
                         signal,
                         submission,
