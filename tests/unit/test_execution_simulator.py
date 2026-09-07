@@ -8,6 +8,9 @@ from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order,
 from hope.domain.execution.timeline import ExecutionTimeline
 
 
+BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)
+
+
 def make_order():
     return Order(order_id=uuid4(), signal_id=uuid4(), instrument_id=uuid4(), side=OrderSide.BUY,
                  quantity=Decimal("10"), environment=Environment.PAPER)
@@ -88,6 +91,25 @@ def test_simulator_rejects_fill_quantity_above_order():
 def test_quote_event_time_must_be_timezone_aware():
     with pytest.raises(ValueError, match="QUOTE_EVENT_TIME_MUST_BE_TIMEZONE_AWARE"):
         ExecutionQuote(uuid4(), datetime(2026, 1, 1, 14, 1), Decimal("1"), Decimal("1"))
+
+
+def test_quote_available_time_must_be_timezone_aware():
+    quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="QUOTE_AVAILABLE_TIME_MUST_BE_TIMEZONE_AWARE"):
+        ExecutionQuote(
+            uuid4(), quote_time, Decimal("1"), Decimal("1"),
+            available_time=datetime(2026, 1, 1, 14, 2),
+        )
+
+
+def test_quote_available_time_cannot_precede_event_time():
+    quote_time = datetime(2026, 1, 1, 14, 2, tzinfo=timezone.utc)
+    available_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="QUOTE_AVAILABLE_TIME_PRECEDES_EVENT_TIME"):
+        ExecutionQuote(
+            uuid4(), quote_time, Decimal("1"), Decimal("1"),
+            available_time=available_time,
+        )
 
 
 def test_fill_rejects_quote_before_timeline_eligibility():
