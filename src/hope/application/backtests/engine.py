@@ -115,7 +115,12 @@ class DeterministicBacktest:
         clock_times = sorted(event_times | {bar.available_time for bar in ordered})
 
         for current_time in clock_times:
-            current_bars = tuple(bar for bar in ordered if bar.event_time == current_time)
+            current_bars = tuple(
+                sorted(
+                    (bar for bar in ordered if bar.event_time == current_time),
+                    key=lambda bar: (bar.instrument_id, bar.available_time, bar.ingestion_time),
+                )
+            )
             if current_bars:
                 if previous_time is not None and current_time < previous_time:
                     raise ValueError("BACKTEST_EVENTS_MUST_BE_NON_DECREASING")
