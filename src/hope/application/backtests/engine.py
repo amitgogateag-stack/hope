@@ -158,6 +158,8 @@ class DeterministicBacktest:
             if signal is not None:
                 if signal.instrument_id != bar_instrument_id:
                     raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
+                if signal.decision_time > context.as_of:
+                    raise ValueError("SIGNAL_DECISION_AFTER_CONTEXT")
                 signal.assert_point_in_time(context.as_of)
 
                 assessment = risk(signal)
