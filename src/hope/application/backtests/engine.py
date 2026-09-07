@@ -131,6 +131,7 @@ class DeterministicBacktest:
                 latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
 
             remaining: list[_PendingOrder] = []
+            session_open = session_calendar is None or session_calendar.contains(current_time)
             for pending_order in pending:
                 timeline = pending_order.timeline
                 eligible_quotes = [
@@ -144,7 +145,7 @@ class DeterministicBacktest:
                     )
                 ]
                 quote_bar = max(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
-                if quote_bar is not None:
+                if quote_bar is not None and session_open:
                     quote = ExecutionQuote(
                         instrument_id=UUID(quote_bar.instrument_id),
                         event_time=quote_bar.event_time,
