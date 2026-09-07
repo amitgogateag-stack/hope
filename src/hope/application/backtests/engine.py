@@ -46,6 +46,7 @@ class _PendingOrder:
     timeline: ExecutionTimeline
     remaining_quantity: Decimal
     fill_sequence: int = 0
+    last_fill_event_time: datetime | None = None
 
 
 StrategyFn = Callable[[PITMarketContext], Signal | None]
@@ -151,6 +152,10 @@ class DeterministicBacktest:
                         visible_bar.instrument_id == str(pending_order.signal.instrument_id)
                         and visible_bar.event_time > pending_order.signal.decision_time
                         and visible_bar.event_time >= timeline.fill_eligible_time
+                        and (
+                            pending_order.last_fill_event_time is None
+                            or visible_bar.event_time > pending_order.last_fill_event_time
+                        )
                         and visible_bar.available_time <= current_time
                         and (
                             session_calendar is None
@@ -208,6 +213,7 @@ class DeterministicBacktest:
                             pending_order.timeline,
                             remaining_quantity,
                             pending_order.fill_sequence + 1,
+                            quote_bar.event_time,
                         ))
                 else:
                     remaining.append(pending_order)

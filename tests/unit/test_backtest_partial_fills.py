@@ -14,12 +14,17 @@ from hope.domain.signal.models import Signal, SignalType
 
 UTC = timezone.utc
 INSTRUMENT = "11111111-1111-1111-1111-111111111111"
+OTHER_INSTRUMENT = "33333333-3333-3333-3333-333333333333"
 
 
-def bar(at: datetime, close: str = "100") -> MarketBar:
+def bar(
+    at: datetime,
+    close: str = "100",
+    instrument_id: str = INSTRUMENT,
+) -> MarketBar:
     price = Decimal(close)
     return MarketBar(
-        instrument_id=INSTRUMENT,
+        instrument_id=instrument_id,
         event_time=at,
         available_time=at,
         ingestion_time=at,
@@ -59,7 +64,12 @@ def test_backtest_accumulates_deterministic_partial_fills_until_order_is_complet
     result = DeterministicBacktest(
         Decimal("10000"), CostModel(version="test"), max_fill_quantity=Decimal("4")
     ).run(
-        (bar(first), bar(first + timedelta(minutes=1), "101"), bar(first + timedelta(minutes=2), "102"), bar(first + timedelta(minutes=3), "103")),
+        (
+            bar(first),
+            bar(first + timedelta(minutes=1), "101"),
+            bar(first + timedelta(minutes=2), "102"),
+            bar(first + timedelta(minutes=3), "103"),
+        ),
         lambda context: signal if context.as_of == first else None,
         lambda _signal: assessment,
         OrderSide.BUY,
@@ -72,6 +82,31 @@ def test_backtest_accumulates_deterministic_partial_fills_until_order_is_complet
     assert len({event.result.fill.fill_id for event in result.events}) == 3
     assert result.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("10")
     assert result.unfilled_order_ids == ()
+
+
+def test_backtest_does_not_reuse_the_same_quote_for_a_later_partial_fill():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    quote_time = first + timedelta(minutes=1)
+    later_clock_time = first + timedelta(minutes=2)
+    signal = make_signal(first)
+    assessment = make_assessment(signal)
+    result = DeterministicBacktest(
+        Decimal("10000"), CostModel(version="test"), max_fill_quantity=Decimal("4")
+    ).run(
+        (
+            bar(first),
+            bar(quote_time, "101"),
+            bar(later_clock_time, "201", OTHER_INSTRUMENT),
+        ),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
+
+    assert len(result.events) == 1
+    assert result.events[0].bar.event_time == quote_time
+    assert result.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("4")
+    assert result.unfilled_order_ids == (result.events[0].result.order_id,)
 
 
 def test_backtest_preserves_partially_filled_order_when_series_ends():
