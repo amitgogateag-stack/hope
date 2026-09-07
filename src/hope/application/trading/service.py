@@ -121,6 +121,7 @@ class TradingKernel:
         decision_time: datetime,
         fill_id: UUID | None = None,
         timeline: ExecutionTimeline,
+        quantity: Decimal | None = None,
     ) -> TradingKernelResult:
         if timeline.decision_time != decision_time:
             raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
@@ -130,7 +131,7 @@ class TradingKernel:
         order = materialize_order(intent, order_id)
         actual_fill_id = fill_id or uuid4()
         fill = simulate_market_fill(
-            order, quote, actual_fill_id, cost_model, timeline=timeline
+            order, quote, actual_fill_id, cost_model, quantity=quantity, timeline=timeline
         )
         execution_time = fill.fill_time or quote.event_time
         events = [AuditEvent(
