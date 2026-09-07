@@ -7,6 +7,9 @@ from hope.application.backtests.engine import BacktestDataQualityError, Determin
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
+from hope.domain.risk.models import RiskAssessment
+from hope.domain.signal.models import Signal, SignalType
+from uuid import UUID
 
 
 UTC = timezone.utc
@@ -66,3 +69,22 @@ def test_backtest_accepts_valid_ordered_market_data():
 
     assert len(result.valuations) == 2
     assert result.unfilled_order_ids == ()
+
+
+def test_backtest_rejects_signal_decision_after_context_availability():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = Signal(
+        signal_id=UUID("22222222-2222-2222-2222-222222222222"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first + timedelta(minutes=1),
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="0" * 64,
+    )
+
+    def future_decision(_context):
+        return signal
+
+    with pytest.raises(ValueError, match="SIGNAL_DECISION_AFTER_CONTEXT"):
+        backtest().run((bar(first),), future_decision, no_risk, OrderSide.BUY)
