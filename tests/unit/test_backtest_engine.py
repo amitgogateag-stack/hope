@@ -91,6 +91,22 @@ def test_backtest_rejects_signal_decision_after_context_availability():
         backtest().run((bar(first),), future_decision, no_risk, OrderSide.BUY)
 
 
+def test_backtest_rejects_signal_decision_before_context_availability():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = Signal(
+        signal_id=UUID("44444444-4444-4444-4444-444444444444"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first - timedelta(minutes=1),
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="2" * 64,
+    )
+
+    with pytest.raises(ValueError, match="SIGNAL_DECISION_MUST_MATCH_CONTEXT"):
+        backtest().run((bar(first),), lambda _context: signal, no_risk, OrderSide.BUY)
+
+
 def test_backtest_fill_event_preserves_submission_audit_lifecycle():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     signal = Signal(
