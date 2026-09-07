@@ -63,8 +63,8 @@ class DeterministicBacktest:
 
     Signals are submitted at their decision time. Approved orders remain pending
     until a later market event supplies an executable quote at or after the
-    timeline's fill-eligibility time. This deliberately prevents a strategy from
-    filling against the same market bar that generated its own decision.
+    timeline's fill-eligibility time. Availability-only clock points are also
+    processed so a delayed quote can execute when it actually becomes visible.
     """
 
     def __init__(
@@ -111,12 +111,17 @@ class DeterministicBacktest:
         pending: list[_PendingOrder] = []
         submitted_signal_ids: set[UUID] = set()
 
-        for bar in ordered:
-            if previous_time is not None and bar.event_time < previous_time:
-                raise ValueError("BACKTEST_EVENTS_MUST_BE_NON_DECREASING")
-            previous_time = bar.event_time
+        event_times = {bar.event_time for bar in ordered}
+        clock_times = sorted(event_times | {bar.available_time for bar in ordered})
 
-            context = build_pit_market_context(tuple(ordered), bar.event_time)
+        for current_time in clock_times:
+            current_bars = tuple(bar for bar in ordered if bar.event_time == current_time)
+            if current_bars:
+                if previous_time is not None and current_time < previous_time:
+                    raise ValueError("BACKTEST_EVENTS_MUST_BE_NON_DECREASING")
+                previous_time = current_time
+
+            context = build_pit_market_context(tuple(ordered), current_time)
             for visible_bar in context.bars:
                 latest_marks[UUID(visible_bar.instrument_id)] = visible_bar.close
 
@@ -130,7 +135,7 @@ class DeterministicBacktest:
                         visible_bar.instrument_id == str(pending_order.signal.instrument_id)
                         and visible_bar.event_time > pending_order.signal.decision_time
                         and visible_bar.event_time >= timeline.fill_eligible_time
-                        and visible_bar.available_time <= bar.event_time
+                        and visible_bar.available_time <= current_time
                     )
                 ]
                 quote_bar = max(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
@@ -152,7 +157,7 @@ class DeterministicBacktest:
                             NAMESPACE_URL,
                             f"hope:backtest:{pending_order.signal.signal_id}:fill",
                         ),
-                        timeline=timeline.with_fill_time(bar.event_time),
+                        timeline=timeline.with_fill_time(current_time),
                     )
                     complete_result = TradingKernelResult(
                         intent=execution.intent,
@@ -161,53 +166,55 @@ class DeterministicBacktest:
                         portfolio_state=execution.portfolio_state,
                         audit_events=pending_order.result.audit_events + execution.audit_events,
                     )
-                    valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
-                    events.append(BacktestEvent(bar.event_time, bar, complete_result, valuation))
+                    valuation = value_portfolio(self._ledger, latest_marks, current_time)
+                    event_bar = current_bars[0] if current_bars else quote_bar
+                    events.append(BacktestEvent(current_time, event_bar, complete_result, valuation))
                 else:
                     remaining.append(pending_order)
             pending = remaining
 
-            signal = strategy(context)
-            if signal is not None:
-                if signal.signal_id in submitted_signal_ids:
-                    raise ValueError("DUPLICATE_SIGNAL_ID")
-                try:
-                    bar_instrument_id = UUID(bar.instrument_id)
-                except ValueError as exc:
-                    raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
-                if signal.instrument_id != bar_instrument_id:
-                    raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
-                if signal.decision_time > context.as_of:
-                    raise ValueError("SIGNAL_DECISION_AFTER_CONTEXT")
-                if signal.decision_time != context.as_of:
-                    raise ValueError("SIGNAL_DECISION_MUST_MATCH_CONTEXT")
-                signal.assert_point_in_time(context.as_of)
+            for current_bar in current_bars:
+                signal = strategy(context)
+                if signal is not None:
+                    if signal.signal_id in submitted_signal_ids:
+                        raise ValueError("DUPLICATE_SIGNAL_ID")
+                    try:
+                        bar_instrument_id = UUID(current_bar.instrument_id)
+                    except ValueError as exc:
+                        raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
+                    if signal.instrument_id != bar_instrument_id:
+                        raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
+                    if signal.decision_time > context.as_of:
+                        raise ValueError("SIGNAL_DECISION_AFTER_CONTEXT")
+                    if signal.decision_time != context.as_of:
+                        raise ValueError("SIGNAL_DECISION_MUST_MATCH_CONTEXT")
+                    signal.assert_point_in_time(context.as_of)
 
-                assessment = risk(signal)
-                submission = self._kernel.process(
-                    signal,
-                    assessment,
-                    side,
-                    Environment.BACKTEST,
-                    None,
-                    None,
-                    order_id=uuid5(
-                        NAMESPACE_URL,
-                        f"hope:backtest:{signal.signal_id}:order",
-                    ),
-                )
-                if submission.intent is not None:
-                    submitted_signal_ids.add(signal.signal_id)
-                    pending.append(_PendingOrder(
+                    assessment = risk(signal)
+                    submission = self._kernel.process(
                         signal,
-                        submission,
-                        ExecutionTimeline.from_decision(
-                            signal.decision_time,
-                            latency=self._execution_latency,
+                        assessment,
+                        side,
+                        Environment.BACKTEST,
+                        None,
+                        None,
+                        order_id=uuid5(
+                            NAMESPACE_URL,
+                            f"hope:backtest:{signal.signal_id}:order",
                         ),
-                    ))
+                    )
+                    if submission.intent is not None:
+                        submitted_signal_ids.add(signal.signal_id)
+                        pending.append(_PendingOrder(
+                            signal,
+                            submission,
+                            ExecutionTimeline.from_decision(
+                                signal.decision_time,
+                                latency=self._execution_latency,
+                            ),
+                        ))
 
-            valuations.append(value_portfolio(self._ledger, latest_marks, bar.event_time))
+                valuations.append(value_portfolio(self._ledger, latest_marks, current_time))
 
         return BacktestResult(
             self._ledger.initial_cash,
