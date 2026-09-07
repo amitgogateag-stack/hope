@@ -44,6 +44,8 @@ class _PendingOrder:
     signal: Signal
     result: TradingKernelResult
     timeline: ExecutionTimeline
+    remaining_quantity: Decimal
+    fill_sequence: int = 0
 
 
 StrategyFn = Callable[[PITMarketContext], Signal | None]
@@ -65,6 +67,10 @@ class DeterministicBacktest:
     until a later market event supplies an executable quote at or after the
     timeline's fill-eligibility time. Availability-only clock points are also
     processed so a delayed quote can execute when it actually becomes visible.
+
+    ``max_fill_quantity`` is an explicit deterministic execution constraint. When
+    set, each eligible quote fills at most that quantity; otherwise the full
+    remaining order quantity is filled.
     """
 
     def __init__(
@@ -73,13 +79,17 @@ class DeterministicBacktest:
         cost_model: CostModel,
         *,
         execution_latency: timedelta = timedelta(0),
+        max_fill_quantity: Decimal | None = None,
     ) -> None:
         self._ledger = PortfolioLedger(initial_cash)
         self._kernel = TradingKernel(self._ledger)
         self._cost_model = cost_model
         self._execution_latency = execution_latency
+        self._max_fill_quantity = max_fill_quantity
         if execution_latency < timedelta(0):
             raise ValueError("EXECUTION_LATENCY_MUST_BE_NON_NEGATIVE")
+        if max_fill_quantity is not None and max_fill_quantity <= 0:
+            raise ValueError("MAX_FILL_QUANTITY_MUST_BE_POSITIVE")
 
     def run(
         self,
@@ -165,6 +175,9 @@ class DeterministicBacktest:
                         ask=quote_bar.close,
                         available_time=quote_bar.available_time,
                     )
+                    fill_quantity = pending_order.remaining_quantity
+                    if self._max_fill_quantity is not None:
+                        fill_quantity = min(fill_quantity, self._max_fill_quantity)
                     execution = self._kernel.execute_order(
                         pending_order.result.intent,
                         pending_order.result.order_id,
@@ -173,9 +186,10 @@ class DeterministicBacktest:
                         decision_time=pending_order.signal.decision_time,
                         fill_id=uuid5(
                             NAMESPACE_URL,
-                            f"hope:backtest:{pending_order.signal.signal_id}:fill",
+                            f"hope:backtest:{pending_order.signal.signal_id}:fill:{pending_order.fill_sequence}",
                         ),
                         timeline=timeline.with_fill_time(current_time),
+                        quantity=fill_quantity,
                     )
                     complete_result = TradingKernelResult(
                         intent=execution.intent,
@@ -185,8 +199,16 @@ class DeterministicBacktest:
                         audit_events=pending_order.result.audit_events + execution.audit_events,
                     )
                     valuation = value_portfolio(self._ledger, latest_marks, current_time)
-                    event_bar = quote_bar
-                    events.append(BacktestEvent(current_time, event_bar, complete_result, valuation))
+                    events.append(BacktestEvent(current_time, quote_bar, complete_result, valuation))
+                    remaining_quantity = pending_order.remaining_quantity - execution.fill.quantity
+                    if remaining_quantity > 0:
+                        remaining.append(_PendingOrder(
+                            pending_order.signal,
+                            complete_result,
+                            pending_order.timeline,
+                            remaining_quantity,
+                            pending_order.fill_sequence + 1,
+                        ))
                 else:
                     remaining.append(pending_order)
             pending = remaining
@@ -230,6 +252,7 @@ class DeterministicBacktest:
                                 signal.decision_time,
                                 latency=self._execution_latency,
                             ),
+                            submission.intent.quantity,
                         ))
 
             valuations.append(value_portfolio(self._ledger, latest_marks, current_time))
