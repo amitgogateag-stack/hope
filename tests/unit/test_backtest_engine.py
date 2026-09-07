@@ -4,10 +4,11 @@ from decimal import Decimal
 import pytest
 
 from hope.application.backtests.engine import BacktestDataQualityError, DeterministicBacktest
+from hope.domain.audit.models import AuditEventType
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
-from hope.domain.risk.models import RiskAssessment
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from uuid import UUID
 
@@ -88,3 +89,41 @@ def test_backtest_rejects_signal_decision_after_context_availability():
 
     with pytest.raises(ValueError, match="SIGNAL_DECISION_AFTER_CONTEXT"):
         backtest().run((bar(first),), future_decision, no_risk, OrderSide.BUY)
+
+
+def test_backtest_fill_event_preserves_submission_audit_lifecycle():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = Signal(
+        signal_id=UUID("22222222-2222-2222-2222-222222222222"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="0" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    def strategy(_context):
+        return signal
+
+    def risk(_signal):
+        return assessment
+
+    result = backtest().run((bar(first), bar(first + timedelta(minutes=1))), strategy, risk, OrderSide.BUY)
+
+    assert len(result.events) == 1
+    assert tuple(event.event_type for event in result.events[0].result.audit_events) == (
+        AuditEventType.SIGNAL_ACCEPTED,
+        AuditEventType.RISK_APPROVED,
+        AuditEventType.ORDER_CREATED,
+        AuditEventType.FILL_CREATED,
+        AuditEventType.PORTFOLIO_UPDATED,
+    )
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.fill_time == first + timedelta(minutes=1)
