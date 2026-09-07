@@ -120,7 +120,12 @@ class DeterministicBacktest:
                 bar_instrument_id = UUID(bar.instrument_id)
             except ValueError as exc:
                 raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
-            latest_marks[bar_instrument_id] = bar.close
+
+            # The simulation clock is the market event time. A quote whose
+            # information is not available until later cannot affect valuation
+            # or decision-making at this event.
+            if bar.available_time <= bar.event_time:
+                latest_marks[bar_instrument_id] = bar.close
 
             remaining: list[_PendingOrder] = []
             for pending_order in pending:
@@ -162,7 +167,11 @@ class DeterministicBacktest:
                     remaining.append(pending_order)
             pending = remaining
 
-            context = build_pit_market_context(tuple(ordered), bar.available_time)
+            # The simulation clock is event_time, not available_time. Using
+            # availability as the context clock would let a delayed bar move the
+            # strategy's decision point into the future relative to the event
+            # being processed.
+            context = build_pit_market_context(tuple(ordered), bar.event_time)
             signal = strategy(context)
             if signal is not None:
                 if signal.signal_id in submitted_signal_ids:
