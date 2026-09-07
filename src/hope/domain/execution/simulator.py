@@ -21,8 +21,6 @@ class ExecutionQuote:
         available_time = self.event_time if self.available_time is None else self.available_time
         if available_time.tzinfo is None or available_time.utcoffset() is None:
             raise ValueError("QUOTE_AVAILABLE_TIME_MUST_BE_TIMEZONE_AWARE")
-        if available_time > self.event_time:
-            raise ValueError("QUOTE_AVAILABLE_TIME_AFTER_EVENT_TIME")
         if self.bid <= 0 or self.ask <= 0:
             raise ValueError("QUOTE_PRICES_MUST_BE_POSITIVE")
         if self.ask < self.bid:
@@ -69,6 +67,9 @@ def simulate_market_fill(
     if order.instrument_id != quote.instrument_id:
         raise ValueError("ORDER_QUOTE_INSTRUMENT_MISMATCH")
     timeline.assert_quote_eligible(quote.event_time)
+    fill_time = timeline.fill_time if timeline.fill_time is not None else quote.event_time
+    if quote.available_time is not None and quote.available_time > fill_time:
+        raise ValueError("QUOTE_UNAVAILABLE_AT_FILL_TIME")
     if fill_id is None:
         raise ValueError("FILL_ID_REQUIRED")
     fill_quantity = order.quantity if quantity is None else quantity
@@ -85,5 +86,5 @@ def simulate_market_fill(
         commission = notional * cost_model.commission_rate
         return Fill(fill_id, order.order_id, order.signal_id, order.instrument_id, order.side,
                     fill_quantity, fill_price, commission, slippage_per_unit * fill_quantity,
-                    cost_model.version, quote.event_time)
+                    cost_model.version, fill_time)
     raise ValueError("UNSUPPORTED_EXECUTION_ENVIRONMENT")
