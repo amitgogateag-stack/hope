@@ -129,6 +129,7 @@ class DeterministicBacktest:
                     bar.instrument_id == str(pending_order.signal.instrument_id)
                     and bar.event_time > pending_order.signal.decision_time
                     and bar.event_time >= timeline.fill_eligible_time
+                    and bar.available_time <= bar.event_time
                 ):
                     quote = ExecutionQuote(
                         instrument_id=bar_instrument_id,
