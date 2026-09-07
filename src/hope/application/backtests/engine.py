@@ -144,8 +144,15 @@ class DeterministicBacktest:
                         and visible_bar.available_time <= current_time
                         and (
                             session_calendar is None
-                            or session_calendar.contains(visible_bar.event_time)
-                            and session_calendar.contains(visible_bar.available_time)
+                            or (
+                                session_calendar.contains(visible_bar.event_time)
+                                and session_calendar.contains(visible_bar.available_time)
+                                and _same_session(
+                                    session_calendar,
+                                    visible_bar.available_time,
+                                    current_time,
+                                )
+                            )
                         )
                     )
                 ]
@@ -235,3 +242,15 @@ class DeterministicBacktest:
             calculate_metrics(tuple(valuations)),
             tuple(item.result.order_id for item in pending),
         )
+
+
+def _same_session(
+    calendar: MarketSessionCalendar,
+    first: datetime,
+    second: datetime,
+) -> bool:
+    return any(
+        session_open <= first < session_close
+        and session_open <= second < session_close
+        for session_open, session_close in calendar.sessions
+    )
