@@ -132,9 +132,10 @@ class TradingKernel:
         fill = simulate_market_fill(
             order, quote, actual_fill_id, cost_model, timeline=timeline
         )
+        execution_time = fill.fill_time or quote.event_time
         events = [AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.FILL_CREATED,
-            event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
+            event_time=execution_time, signal_id=fill.signal_id, order_id=fill.order_id,
             fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
             payload_hash=self._hash_payload(fill.fill_id, fill.quantity, fill.price, fill.commission),
         )]
@@ -142,7 +143,7 @@ class TradingKernel:
         state = self._ledger.apply_fill(fill)
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.PORTFOLIO_UPDATED,
-            event_time=quote.event_time, signal_id=fill.signal_id, order_id=fill.order_id,
+            event_time=execution_time, signal_id=fill.signal_id, order_id=fill.order_id,
             fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
             payload_hash=self._hash_payload(fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity),
         ))
