@@ -147,8 +147,15 @@ class DeterministicBacktest:
                         ),
                         timeline=timeline.with_fill_time(bar.event_time),
                     )
+                    complete_result = TradingKernelResult(
+                        intent=execution.intent,
+                        order_id=execution.order_id,
+                        fill=execution.fill,
+                        portfolio_state=execution.portfolio_state,
+                        audit_events=pending_order.result.audit_events + execution.audit_events,
+                    )
                     valuation = value_portfolio(self._ledger, latest_marks, bar.event_time)
-                    events.append(BacktestEvent(bar.event_time, bar, execution, valuation))
+                    events.append(BacktestEvent(bar.event_time, bar, complete_result, valuation))
                 else:
                     remaining.append(pending_order)
             pending = remaining
