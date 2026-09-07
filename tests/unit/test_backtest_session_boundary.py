@@ -109,7 +109,6 @@ def test_backtest_does_not_carry_pending_order_into_next_session():
     ).run(
         (
             make_bar(INSTRUMENT, first),
-            make_bar(OTHER, session_close),
             make_bar(INSTRUMENT, next_session_quote),
         ),
         lambda context: signal if context.as_of == first else None,
