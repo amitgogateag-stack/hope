@@ -8,7 +8,9 @@ from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from hope.domain.audit.models import AuditEvent, AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
+from hope.domain.execution.lifecycle import OrderLifecycle
 from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.session import ExecutionSession
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
@@ -31,6 +33,7 @@ class TradingKernel:
 
     def __init__(self, ledger: PortfolioLedger) -> None:
         self._ledger = ledger
+        self._execution_sessions: dict[UUID, ExecutionSession] = {}
 
     @staticmethod
     def _hash_payload(*parts: object) -> str:
@@ -74,6 +77,21 @@ class TradingKernel:
             environment=environment.value,
             payload_hash=payload_hash,
         )
+
+    def _execution_session(
+        self,
+        intent: OrderIntent,
+        order_id: UUID,
+    ) -> ExecutionSession:
+        order = materialize_order(intent, order_id)
+        session = self._execution_sessions.get(order_id)
+        if session is None:
+            session = ExecutionSession(OrderLifecycle(order), self._ledger)
+            self._execution_sessions[order_id] = session
+            return session
+        if session.state.lifecycle.order != order:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+        return session
 
     def process(
         self,
@@ -149,7 +167,7 @@ class TradingKernel:
         )
 
         actual_order_id = order_id or uuid4()
-        materialize_order(intent, actual_order_id)
+        self._execution_session(intent, actual_order_id)
         order_event_time = timeline.order_time if timeline is not None else now
         order_payload_hash = self._hash_payload(
             actual_order_id, intent.quantity, intent.side
@@ -201,7 +219,8 @@ class TradingKernel:
         if timeline.order_time < decision_time:
             raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
 
-        order = materialize_order(intent, order_id)
+        session = self._execution_session(intent, order_id)
+        order = session.state.lifecycle.order
         actual_fill_id = fill_id or uuid4()
         fill = simulate_market_fill(
             order, quote, actual_fill_id, cost_model, quantity=quantity, timeline=timeline
@@ -223,7 +242,8 @@ class TradingKernel:
             )
         ]
 
-        state = self._ledger.apply_fill(fill)
+        session_state = session.apply_fill(fill)
+        state = session_state.portfolio
         portfolio_payload_hash = self._hash_payload(
             fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity
         )
