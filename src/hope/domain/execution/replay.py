@@ -6,7 +6,7 @@ from decimal import Decimal
 from typing import Sequence
 
 from hope.domain.execution.lifecycle import OrderLifecycle
-from hope.domain.execution.models import ExecutionCancellation
+from hope.domain.execution.models import ExecutionCancellation, ExecutionRejection
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.execution.session import ExecutionSession, ExecutionSessionError, ExecutionSessionState
@@ -22,6 +22,7 @@ class ReplayResult:
     fills_applied: int
     filled_quantity: Decimal
     cancellation_applied: bool = False
+    rejection_applied: bool = False
 
 
 def replay_order(
@@ -29,19 +30,20 @@ def replay_order(
     fills: Sequence[Fill],
     *,
     cancellation: ExecutionCancellation | None = None,
+    rejection: ExecutionRejection | None = None,
     order_time: datetime | None = None,
     initial_cash: Decimal = Decimal("0"),
     initial_portfolio: PortfolioState | None = None,
 ) -> ReplayResult:
-    """Replay an order's fills and optional terminal cancellation deterministically.
+    """Replay an order's fills and optional terminal outcome deterministically.
 
     Fills are applied in supplied event order. Their fill timestamps must be
     non-decreasing so replay cannot reconstruct a time-reversed execution history.
-    When a cancellation is supplied it must refer to the same order, follow every
-    replayed fill, and report exactly the remaining quantity. An unfilled
-    cancellation also requires the original timezone-aware order timestamp so
-    replay can prove cancellation did not occur before order creation. Any
-    lifecycle, identity, duplicate, temporal, or portfolio violation aborts replay.
+    A cancellation may follow zero or more fills and must report exactly the
+    remaining quantity. An execution rejection is terminal only for an unfilled
+    order. Terminal outcomes require enough timestamp evidence to prove they did
+    not occur before order creation. Any lifecycle, identity, duplicate, temporal,
+    or portfolio violation aborts replay.
     """
     ledger = PortfolioLedger(initial_cash)
     if initial_portfolio is not None:
@@ -50,6 +52,8 @@ def replay_order(
         # replay provenance ambiguous.
         raise ExecutionReplayError("INITIAL_PORTFOLIO_REPLAY_NOT_SUPPORTED")
 
+    if cancellation is not None and rejection is not None:
+        raise ExecutionReplayError("TERMINAL_OUTCOMES_MUTUALLY_EXCLUSIVE")
     if order_time is not None and (order_time.tzinfo is None or order_time.utcoffset() is None):
         raise ExecutionReplayError("ORDER_TIME_MUST_BE_TIMEZONE_AWARE")
 
@@ -99,6 +103,28 @@ def replay_order(
             raise ExecutionReplayError(str(exc)) from exc
         cancellation_applied = True
 
+    rejection_applied = False
+    if rejection is not None:
+        if rejection.order_id != order.order_id:
+            raise ExecutionReplayError("REJECTION_ORDER_MISMATCH")
+        if rejection.signal_id != order.signal_id:
+            raise ExecutionReplayError("REJECTION_SIGNAL_MISMATCH")
+        if rejection.instrument_id != order.instrument_id:
+            raise ExecutionReplayError("REJECTION_INSTRUMENT_MISMATCH")
+        if rejection.environment != order.environment:
+            raise ExecutionReplayError("REJECTION_ENVIRONMENT_MISMATCH")
+        if last_fill_time is not None:
+            raise ExecutionReplayError("REJECTION_REQUIRES_UNFILLED_ORDER")
+        if order_time is None:
+            raise ExecutionReplayError("REJECTION_ORDER_TIME_REQUIRED")
+        if rejection.rejection_time < order_time:
+            raise ExecutionReplayError("REJECTION_PRECEDES_ORDER_TIME")
+        try:
+            session.reject()
+        except ExecutionSessionError as exc:
+            raise ExecutionReplayError(str(exc)) from exc
+        rejection_applied = True
+
     state = session.state
     if state.lifecycle.filled_quantity != total_quantity:
         raise ExecutionReplayError("LIFECYCLE_FILL_QUANTITY_MISMATCH")
@@ -108,4 +134,10 @@ def replay_order(
     if resulting_quantity != signed_quantity:
         raise ExecutionReplayError("PORTFOLIO_FILL_QUANTITY_MISMATCH")
 
-    return ReplayResult(state, len(fills), total_quantity, cancellation_applied)
+    return ReplayResult(
+        state,
+        len(fills),
+        total_quantity,
+        cancellation_applied,
+        rejection_applied,
+    )

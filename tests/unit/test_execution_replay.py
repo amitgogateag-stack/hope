@@ -5,7 +5,7 @@ from uuid import uuid4
 import pytest
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
-from hope.domain.execution.models import ExecutionCancellation
+from hope.domain.execution.models import ExecutionCancellation, ExecutionRejection
 from hope.domain.execution.replay import ExecutionReplayError, replay_order
 from hope.domain.execution.timeline import ExecutionTimeline
 
@@ -37,12 +37,24 @@ def make_cancellation(order, qty, minute=2):
     )
 
 
+def make_rejection(order, minute=2):
+    return ExecutionRejection(
+        order_id=order.order_id,
+        signal_id=order.signal_id,
+        instrument_id=order.instrument_id,
+        environment=order.environment,
+        reason_code="REPLAY_REJECTED",
+        rejection_time=BASE_TIME + timedelta(minutes=minute),
+    )
+
+
 def test_replay_reconciles_multi_fill_order():
     order = make_order("10")
     result = replay_order(order, [make_fill(order, "3"), make_fill(order, "7", 1)], initial_cash=Decimal("10000"))
     assert result.fills_applied == 2
     assert result.filled_quantity == Decimal("10")
     assert result.cancellation_applied is False
+    assert result.rejection_applied is False
     assert result.state.lifecycle.status == "FILLED"
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("10")
 
@@ -59,48 +71,63 @@ def test_replay_reconstructs_partial_fill_then_cancellation():
     assert result.fills_applied == 1
     assert result.filled_quantity == Decimal("4")
     assert result.cancellation_applied is True
+    assert result.rejection_applied is False
     assert result.state.lifecycle.status == "CANCELLED"
     assert result.state.lifecycle.remaining_quantity == Decimal("6")
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("4")
 
 
-def test_replay_reconstructs_unfilled_cancellation_with_order_time():
+def test_replay_reconstructs_unfilled_execution_rejection():
     order = make_order("10")
     result = replay_order(
         order,
         [],
-        cancellation=make_cancellation(order, "10", minute=2),
-        order_time=BASE_TIME + timedelta(minutes=1),
+        rejection=make_rejection(order),
+        order_time=BASE_TIME,
         initial_cash=Decimal("10000"),
     )
 
     assert result.fills_applied == 0
     assert result.filled_quantity == Decimal("0")
-    assert result.cancellation_applied is True
-    assert result.state.lifecycle.status == "CANCELLED"
-    assert result.state.lifecycle.remaining_quantity == Decimal("10")
+    assert result.cancellation_applied is False
+    assert result.rejection_applied is True
+    assert result.state.lifecycle.status == "REJECTED"
     assert result.state.portfolio.cash == Decimal("10000")
+    assert order.instrument_id not in result.state.portfolio.positions
 
 
-def test_replay_requires_order_time_for_unfilled_cancellation():
+def test_replay_rejects_execution_rejection_without_order_time():
     order = make_order("10")
-    with pytest.raises(ExecutionReplayError, match="CANCELLATION_ORDER_TIME_REQUIRED"):
+    with pytest.raises(ExecutionReplayError, match="REJECTION_ORDER_TIME_REQUIRED"):
         replay_order(
             order,
             [],
-            cancellation=make_cancellation(order, "10"),
+            rejection=make_rejection(order),
             initial_cash=Decimal("10000"),
         )
 
 
-def test_replay_rejects_unfilled_cancellation_before_order_time():
+def test_replay_rejects_execution_rejection_after_fill():
     order = make_order("10")
-    with pytest.raises(ExecutionReplayError, match="CANCELLATION_PRECEDES_ORDER_TIME"):
+    with pytest.raises(ExecutionReplayError, match="REJECTION_REQUIRES_UNFILLED_ORDER"):
+        replay_order(
+            order,
+            [make_fill(order, "4", minute=1)],
+            rejection=make_rejection(order, minute=2),
+            order_time=BASE_TIME,
+            initial_cash=Decimal("10000"),
+        )
+
+
+def test_replay_rejects_ambiguous_terminal_outcomes():
+    order = make_order("10")
+    with pytest.raises(ExecutionReplayError, match="TERMINAL_OUTCOMES_MUTUALLY_EXCLUSIVE"):
         replay_order(
             order,
             [],
-            cancellation=make_cancellation(order, "10", minute=1),
-            order_time=BASE_TIME + timedelta(minutes=2),
+            cancellation=make_cancellation(order, "10"),
+            rejection=make_rejection(order),
+            order_time=BASE_TIME,
             initial_cash=Decimal("10000"),
         )
 
