@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
+from hope.domain.execution.models import ExecutionCancellation
 from hope.domain.execution.replay import ExecutionReplayError, replay_order
 from hope.domain.execution.timeline import ExecutionTimeline
 
@@ -24,13 +25,65 @@ def make_fill(order, qty, minute=0, fill_id=None):
     return simulate_market_fill(order, quote, fill_id or uuid4(), CostModel("test"), Decimal(qty), timeline=timeline)
 
 
+def make_cancellation(order, qty, minute=2):
+    return ExecutionCancellation(
+        order_id=order.order_id,
+        signal_id=order.signal_id,
+        instrument_id=order.instrument_id,
+        environment=order.environment,
+        reason_code="REPLAY_CANCELLED",
+        cancellation_time=BASE_TIME + timedelta(minutes=minute),
+        cancelled_quantity=Decimal(qty),
+    )
+
+
 def test_replay_reconciles_multi_fill_order():
     order = make_order("10")
     result = replay_order(order, [make_fill(order, "3"), make_fill(order, "7", 1)], initial_cash=Decimal("10000"))
     assert result.fills_applied == 2
     assert result.filled_quantity == Decimal("10")
+    assert result.cancellation_applied is False
     assert result.state.lifecycle.status == "FILLED"
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("10")
+
+
+def test_replay_reconstructs_partial_fill_then_cancellation():
+    order = make_order("10")
+    result = replay_order(
+        order,
+        [make_fill(order, "4")],
+        cancellation=make_cancellation(order, "6"),
+        initial_cash=Decimal("10000"),
+    )
+
+    assert result.fills_applied == 1
+    assert result.filled_quantity == Decimal("4")
+    assert result.cancellation_applied is True
+    assert result.state.lifecycle.status == "CANCELLED"
+    assert result.state.lifecycle.remaining_quantity == Decimal("6")
+    assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("4")
+
+
+def test_replay_rejects_cancellation_quantity_that_does_not_match_remaining_order():
+    order = make_order("10")
+    with pytest.raises(ExecutionReplayError, match="CANCELLATION_REMAINING_QUANTITY_MISMATCH"):
+        replay_order(
+            order,
+            [make_fill(order, "4")],
+            cancellation=make_cancellation(order, "5"),
+            initial_cash=Decimal("10000"),
+        )
+
+
+def test_replay_rejects_cancellation_before_replayed_fill():
+    order = make_order("10")
+    with pytest.raises(ExecutionReplayError, match="CANCELLATION_PRECEDES_REPLAYED_FILL"):
+        replay_order(
+            order,
+            [make_fill(order, "4", minute=2)],
+            cancellation=make_cancellation(order, "6", minute=1),
+            initial_cash=Decimal("10000"),
+        )
 
 
 def test_replay_rejects_duplicate_fill_event_before_state_mutation():
