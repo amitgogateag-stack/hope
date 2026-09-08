@@ -64,6 +64,47 @@ def test_replay_reconstructs_partial_fill_then_cancellation():
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("4")
 
 
+def test_replay_reconstructs_unfilled_cancellation_with_order_time():
+    order = make_order("10")
+    result = replay_order(
+        order,
+        [],
+        cancellation=make_cancellation(order, "10", minute=2),
+        order_time=BASE_TIME + timedelta(minutes=1),
+        initial_cash=Decimal("10000"),
+    )
+
+    assert result.fills_applied == 0
+    assert result.filled_quantity == Decimal("0")
+    assert result.cancellation_applied is True
+    assert result.state.lifecycle.status == "CANCELLED"
+    assert result.state.lifecycle.remaining_quantity == Decimal("10")
+    assert result.state.portfolio.cash == Decimal("10000")
+
+
+def test_replay_requires_order_time_for_unfilled_cancellation():
+    order = make_order("10")
+    with pytest.raises(ExecutionReplayError, match="CANCELLATION_ORDER_TIME_REQUIRED"):
+        replay_order(
+            order,
+            [],
+            cancellation=make_cancellation(order, "10"),
+            initial_cash=Decimal("10000"),
+        )
+
+
+def test_replay_rejects_unfilled_cancellation_before_order_time():
+    order = make_order("10")
+    with pytest.raises(ExecutionReplayError, match="CANCELLATION_PRECEDES_ORDER_TIME"):
+        replay_order(
+            order,
+            [],
+            cancellation=make_cancellation(order, "10", minute=1),
+            order_time=BASE_TIME + timedelta(minutes=2),
+            initial_cash=Decimal("10000"),
+        )
+
+
 def test_replay_rejects_cancellation_quantity_that_does_not_match_remaining_order():
     order = make_order("10")
     with pytest.raises(ExecutionReplayError, match="CANCELLATION_REMAINING_QUANTITY_MISMATCH"):
