@@ -9,6 +9,7 @@ class AuditEventType(StrEnum):
     RISK_APPROVED = "RISK_APPROVED"
     RISK_REJECTED = "RISK_REJECTED"
     ORDER_CREATED = "ORDER_CREATED"
+    EXECUTION_REJECTED = "EXECUTION_REJECTED"
     FILL_CREATED = "FILL_CREATED"
     PORTFOLIO_UPDATED = "PORTFOLIO_UPDATED"
 
@@ -26,4 +27,3 @@ class AuditEvent(BaseModel):
     instrument_id: UUID | None = None
     environment: str = Field(min_length=1)
     payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-

@@ -62,6 +62,15 @@ class ExecutionSession:
         self._fill_ids.add(fill.fill_id)
         return ExecutionSessionState(self._lifecycle, next_portfolio, frozenset(self._fill_ids))
 
+    def reject(self) -> ExecutionSessionState:
+        """Terminally reject an unfilled order without changing portfolio state."""
+        try:
+            next_lifecycle = self._lifecycle.reject()
+        except OrderLifecycleError as exc:
+            raise ExecutionSessionError(str(exc)) from exc
+        self._lifecycle = next_lifecycle
+        return self.state
+
     def _preview_ledger_fill(self, fill: Fill) -> PortfolioState:
         """Validate ledger acceptance without changing the live ledger state."""
         preview = deepcopy(self._ledger)

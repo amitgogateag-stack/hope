@@ -9,7 +9,7 @@ from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 from hope.domain.audit.models import AuditEvent, AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
 from hope.domain.execution.lifecycle import OrderLifecycle
-from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.models import Environment, ExecutionRejection, OrderSide
 from hope.domain.execution.session import ExecutionSession
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
 from hope.domain.execution.timeline import ExecutionTimeline
@@ -26,6 +26,7 @@ class TradingKernelResult:
     fill: Fill | None
     portfolio_state: PortfolioState
     audit_events: tuple[AuditEvent, ...]
+    rejection: ExecutionRejection | None = None
 
 
 class TradingKernel:
@@ -200,6 +201,63 @@ class TradingKernel:
         validate_audit_sequence(combined)
         return TradingKernelResult(
             intent, actual_order_id, execution.fill, execution.portfolio_state, combined
+        )
+
+    def reject_order(
+        self,
+        intent: OrderIntent,
+        order_id: UUID,
+        *,
+        decision_time: datetime,
+        timeline: ExecutionTimeline,
+        rejection_time: datetime,
+        reason_code: str,
+    ) -> TradingKernelResult:
+        """Terminally reject a registered, still-unfilled order with explicit evidence."""
+        if timeline.decision_time != decision_time:
+            raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
+        if timeline.order_time < decision_time:
+            raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
+        if rejection_time.tzinfo is None or rejection_time.utcoffset() is None:
+            raise ValueError("EXECUTION_REJECTION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if rejection_time < timeline.order_time:
+            raise ValueError("EXECUTION_REJECTION_PRECEDES_ORDER_TIME")
+        if not reason_code.strip():
+            raise ValueError("EXECUTION_REJECTION_REASON_REQUIRED")
+
+        expected_order = materialize_order(intent, order_id)
+        session = self._execution_sessions.get(order_id)
+        if session is None:
+            raise ValueError("UNKNOWN_ORDER_ID")
+        if session.state.lifecycle.order != expected_order:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+
+        session_state = session.reject()
+        rejection = ExecutionRejection(
+            order_id=order_id,
+            signal_id=intent.signal_id,
+            instrument_id=intent.instrument_id,
+            environment=intent.environment,
+            reason_code=reason_code,
+            rejection_time=rejection_time,
+        )
+        rejection_payload_hash = self._hash_payload(order_id, reason_code)
+        event = self._audit_event(
+            event_type=AuditEventType.EXECUTION_REJECTED,
+            event_time=rejection_time,
+            signal_id=intent.signal_id,
+            order_id=order_id,
+            instrument_id=intent.instrument_id,
+            environment=intent.environment,
+            payload_hash=rejection_payload_hash,
+        )
+        return TradingKernelResult(
+            intent,
+            order_id,
+            None,
+            session_state.portfolio,
+            (event,),
+            rejection,
         )
 
     def execute_order(
