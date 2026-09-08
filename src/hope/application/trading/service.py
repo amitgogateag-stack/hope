@@ -20,7 +20,7 @@ from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, sim
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.risk.models import RiskAssessment
-from hope.domain.signal.models import Signal
+from hope.domain.signal.models import Signal, SignalType
 from hope.domain.trading.kernel import OrderIntent, create_order_intent, materialize_order
 
 
@@ -41,6 +41,7 @@ class TradingKernel:
     def __init__(self, ledger: PortfolioLedger) -> None:
         self._ledger = ledger
         self._execution_sessions: dict[UUID, ExecutionSession] = {}
+        self._order_signal_types: dict[UUID, SignalType] = {}
 
     @staticmethod
     def _hash_payload(*parts: object) -> str:
@@ -100,6 +101,24 @@ class TradingKernel:
             raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
         return session
 
+    def _assert_exit_reduces_position(
+        self,
+        intent: OrderIntent,
+        *,
+        quantity: Decimal | None = None,
+    ) -> None:
+        position = self._ledger.state.positions.get(intent.instrument_id)
+        if position is None or position.quantity == 0:
+            raise ValueError("EXIT_REQUIRES_OPEN_POSITION")
+
+        expected_side = OrderSide.SELL if position.quantity > 0 else OrderSide.BUY
+        if intent.side is not expected_side:
+            raise ValueError("EXIT_SIDE_DOES_NOT_REDUCE_POSITION")
+
+        exit_quantity = intent.quantity if quantity is None else quantity
+        if exit_quantity > abs(position.quantity):
+            raise ValueError("EXIT_QUANTITY_EXCEEDS_POSITION")
+
     def process(
         self,
         signal: Signal,
@@ -147,6 +166,9 @@ class TradingKernel:
             validate_audit_sequence(events)
             return TradingKernelResult(None, None, None, self._ledger.state, tuple(events))
 
+        if signal.signal_type is SignalType.EXIT:
+            self._assert_exit_reduces_position(intent)
+
         if environment is Environment.PAPER and (quote is None or cost_model is None):
             raise ValueError("PAPER_EXECUTION_REQUIRES_QUOTE_AND_COST_MODEL")
         if quote is not None and quote.event_time < signal.decision_time:
@@ -175,6 +197,11 @@ class TradingKernel:
 
         actual_order_id = order_id or uuid4()
         self._execution_session(intent, actual_order_id)
+        existing_signal_type = self._order_signal_types.get(actual_order_id)
+        if existing_signal_type is not None and existing_signal_type is not signal.signal_type:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_SIGNAL_TYPE")
+        self._order_signal_types[actual_order_id] = signal.signal_type
+
         order_event_time = timeline.order_time if timeline is not None else now
         order_payload_hash = self._hash_payload(
             actual_order_id, intent.quantity, intent.side
@@ -347,9 +374,18 @@ class TradingKernel:
 
         session = self._execution_session(intent, order_id)
         order = session.state.lifecycle.order
+        fill_quantity = order.quantity if quantity is None else quantity
+        if self._order_signal_types.get(order_id) is SignalType.EXIT:
+            self._assert_exit_reduces_position(intent, quantity=fill_quantity)
+
         actual_fill_id = fill_id or uuid4()
         fill = simulate_market_fill(
-            order, quote, actual_fill_id, cost_model, quantity=quantity, timeline=timeline
+            order,
+            quote,
+            actual_fill_id,
+            cost_model,
+            quantity=fill_quantity,
+            timeline=timeline,
         )
         execution_time = fill.fill_time or quote.event_time
         fill_payload_hash = self._hash_payload(
