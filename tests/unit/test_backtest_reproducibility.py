@@ -69,6 +69,38 @@ def test_backtest_audit_evidence_is_reproducible_for_filled_order():
     assert first.events[0].result.audit_events == second.events[0].result.audit_events
 
 
+def test_same_backtest_instance_does_not_leak_state_between_runs():
+    decision = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = make_signal(decision)
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+    bars = (make_bar(decision), make_bar(decision + timedelta(minutes=1)))
+    backtest = DeterministicBacktest(
+        Decimal("10000"), CostModel(version="test")
+    )
+
+    def run_once():
+        return backtest.run(
+            bars,
+            lambda context: signal if context.as_of == decision else None,
+            lambda _signal: assessment,
+            OrderSide.BUY,
+        )
+
+    first = run_once()
+    second = run_once()
+
+    assert first == second
+    assert first.final_state.cash == Decimal("9900")
+    assert second.final_state.cash == Decimal("9900")
+    assert first.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("1")
+    assert second.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("1")
+
+
 def test_risk_rejection_audit_evidence_is_reproducible():
     decision = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     signal = make_signal(decision)

@@ -84,6 +84,7 @@ class DeterministicBacktest:
         order_submission_delay: timedelta = timedelta(0),
         max_fill_quantity: Decimal | None = None,
     ) -> None:
+        self._initial_cash = initial_cash
         self._ledger = PortfolioLedger(initial_cash)
         self._kernel = TradingKernel(self._ledger)
         self._cost_model = cost_model
@@ -119,6 +120,12 @@ class DeterministicBacktest:
         )
         if not quality.safe:
             raise BacktestDataQualityError(quality)
+
+        # A backtest run is an independent experiment. Reusing the same configured
+        # DeterministicBacktest object must never carry portfolio or order lifecycle
+        # state from a prior invocation into the next result.
+        self._ledger = PortfolioLedger(self._initial_cash)
+        self._kernel = TradingKernel(self._ledger)
 
         previous_time: datetime | None = None
         events: list[BacktestEvent] = []
