@@ -11,9 +11,19 @@ from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
+from hope.domain.portfolio.ledger import PortfolioLedger
+from hope.domain.portfolio.valuation import PortfolioValuation, value_portfolio
 from hope.domain.research.counterfactual import CounterfactualAcceptancePolicy
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
+
+
+@dataclass(frozen=True)
+class CounterfactualHorizonValuation:
+    """Exact-horizon diagnostic value using the latest PIT-visible instrument mark."""
+
+    mark_bar: MarketBar
+    valuation: PortfolioValuation
 
 
 @dataclass(frozen=True)
@@ -30,6 +40,7 @@ class CounterfactualAcceptanceReplay:
     order_submission_delay: timedelta
     max_fill_quantity: Decimal | None
     cost_model_version: str
+    horizon_valuation: CounterfactualHorizonValuation
     replay: BacktestResult
 
 
@@ -48,10 +59,9 @@ def replay_rejected_entry_acceptance(
 ) -> CounterfactualAcceptanceReplay:
     """Replay one risk-rejected ENTRY on an isolated normal backtest engine.
 
-    This component executes only the hypothetical acceptance path through the
-    policy holding horizon. It intentionally does not turn MARK_TO_HORIZON into a
-    synthetic strategy exit; explicit horizon valuation is a separate evidence
-    step. All order/fill behaviour comes from ``DeterministicBacktest``.
+    The hypothetical acceptance uses normal backtest execution semantics through
+    the declared horizon. MARK_TO_HORIZON is represented by explicit valuation
+    evidence at the horizon; no synthetic strategy EXIT is created.
     """
 
     signal = source_decision.signal
@@ -118,6 +128,14 @@ def replay_rejected_entry_acceptance(
     if len(replay.decisions) != 1:
         raise ValueError("COUNTERFACTUAL_DECISION_NOT_REPLAYED")
 
+    horizon_valuation = _mark_replay_to_horizon(
+        replay,
+        bounded_bars,
+        signal.instrument_id,
+        horizon,
+        initial_cash,
+    )
+
     return CounterfactualAcceptanceReplay(
         source_signal_id=signal.signal_id,
         counterfactual_signal_id=counterfactual_signal_id,
@@ -129,8 +147,43 @@ def replay_rejected_entry_acceptance(
         order_submission_delay=order_submission_delay,
         max_fill_quantity=max_fill_quantity,
         cost_model_version=cost_model.version,
+        horizon_valuation=horizon_valuation,
         replay=replay,
     )
+
+
+def _mark_replay_to_horizon(
+    replay: BacktestResult,
+    bounded_bars: tuple[MarketBar, ...],
+    instrument_id: UUID,
+    horizon: datetime,
+    initial_cash: Decimal,
+) -> CounterfactualHorizonValuation:
+    visible_marks = tuple(
+        bar
+        for bar in bounded_bars
+        if bar.instrument_id == str(instrument_id)
+    )
+    if not visible_marks:
+        raise ValueError("COUNTERFACTUAL_HORIZON_MARK_REQUIRED")
+    mark_bar = max(
+        visible_marks,
+        key=lambda bar: (bar.event_time, bar.available_time, bar.ingestion_time),
+    )
+
+    ledger = PortfolioLedger(initial_cash)
+    for event in replay.events:
+        if event.result.fill is not None:
+            ledger.apply_fill(event.result.fill)
+    if ledger.state != replay.final_state:
+        raise ValueError("COUNTERFACTUAL_REPLAY_STATE_MISMATCH")
+
+    valuation = value_portfolio(
+        ledger,
+        {instrument_id: mark_bar.close},
+        horizon,
+    )
+    return CounterfactualHorizonValuation(mark_bar=mark_bar, valuation=valuation)
 
 
 def _counterfactual_signal_id(

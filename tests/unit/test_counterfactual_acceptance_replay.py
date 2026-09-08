@@ -19,13 +19,19 @@ INSTRUMENT = "11111111-1111-1111-1111-111111111111"
 SOURCE_SIGNAL_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
-def make_bar(at: datetime, close: str) -> MarketBar:
+def make_bar(
+    at: datetime,
+    close: str,
+    *,
+    available_time: datetime | None = None,
+) -> MarketBar:
     price = Decimal(close)
+    visible_at = at if available_time is None else available_time
     return MarketBar(
         instrument_id=INSTRUMENT,
         event_time=at,
-        available_time=at,
-        ingestion_time=at,
+        available_time=visible_at,
+        ingestion_time=visible_at,
         open=price,
         high=price + Decimal("1"),
         low=price - Decimal("1"),
@@ -137,6 +143,17 @@ def test_rejected_entry_is_replayed_in_isolated_primary_execution_engine():
     assert replay.replay.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("2")
     assert all(event.event_time <= replay.horizon for event in replay.replay.events)
 
+    horizon_evidence = replay.horizon_valuation
+    assert horizon_evidence.mark_bar.event_time == replay.horizon
+    assert horizon_evidence.mark_bar.close == Decimal("105")
+    assert horizon_evidence.valuation.as_of == replay.horizon
+    assert horizon_evidence.valuation.market_value == Decimal("210")
+    assert horizon_evidence.valuation.equity == Decimal("10005.77598")
+    assert horizon_evidence.valuation.unrealized_pnl == Decimal("7.798")
+    assert horizon_evidence.valuation.commissions == Decimal("2.02202")
+    assert horizon_evidence.valuation.total_pnl == Decimal("5.77598")
+    assert len(replay.replay.events) == 1
+
 
 def test_counterfactual_replay_rejects_a_primary_approved_decision():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
@@ -180,3 +197,41 @@ def test_counterfactual_does_not_fill_after_declared_horizon():
     assert len(replay.replay.unfilled_order_ids) == 1
     assert replay.replay.final_state.cash == Decimal("10000")
     assert replay.replay.final_state.positions == {}
+    assert replay.horizon_valuation.valuation.as_of == replay.horizon
+    assert replay.horizon_valuation.valuation.equity == Decimal("10000")
+    assert replay.horizon_valuation.valuation.total_pnl == Decimal("0")
+
+
+def test_horizon_valuation_uses_latest_pit_visible_mark_without_synthetic_exit():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    horizon = first + timedelta(minutes=2)
+    bars = (
+        make_bar(first, "100"),
+        make_bar(first + timedelta(minutes=1), "101"),
+        make_bar(
+            horizon,
+            "500",
+            available_time=horizon + timedelta(minutes=1),
+        ),
+        make_bar(first + timedelta(minutes=3), "103"),
+    )
+    signal = make_signal(first)
+    _primary, decision = source_decision(bars, signal, RiskDecision.REJECT)
+
+    replay = replay_rejected_entry_acceptance(
+        decision,
+        bars,
+        make_policy(holding_period=timedelta(minutes=2)),
+        OrderSide.BUY,
+        Decimal("10000"),
+        CostModel(version="test"),
+    )
+
+    assert replay.horizon == horizon
+    assert replay.horizon_valuation.mark_bar.event_time == first + timedelta(minutes=1)
+    assert replay.horizon_valuation.mark_bar.close == Decimal("101")
+    assert replay.horizon_valuation.valuation.as_of == horizon
+    assert replay.horizon_valuation.valuation.equity == Decimal("10000")
+    assert replay.horizon_valuation.valuation.total_pnl == Decimal("0")
+    assert len(replay.replay.events) == 1
+    assert replay.replay.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("2")
