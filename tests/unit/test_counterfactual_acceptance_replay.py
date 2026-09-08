@@ -6,9 +6,10 @@ import pytest
 
 from hope.application.backtests.counterfactual import replay_rejected_entry_acceptance
 from hope.application.backtests.engine import DeterministicBacktest
-from hope.domain.execution.models import OrderSide
+from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
+from hope.domain.provenance.models import ProvenanceRecord
 from hope.domain.research import CounterfactualAcceptancePolicy
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
@@ -61,6 +62,26 @@ def make_policy(holding_period: timedelta = timedelta(minutes=2)) -> Counterfact
     )
 
 
+def make_provenance(
+    *,
+    strategy_version: str = "counterfactual-test",
+    cost_model_version: str = "test",
+    environment: Environment = Environment.BACKTEST,
+) -> ProvenanceRecord:
+    return ProvenanceRecord(
+        dataset_version="dataset-v1",
+        universe_version="universe-v1",
+        strategy_version=strategy_version,
+        parameter_snapshot_hash="b" * 64,
+        cost_model_version=cost_model_version,
+        execution_model_version="deterministic-backtest-v1",
+        code_commit="677da051d4b2c586f9df958c602c6b74e3021911",
+        configuration_hash="c" * 64,
+        environment=environment,
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
 def source_decision(bars, signal, decision: RiskDecision):
     assessment = RiskAssessment(
         signal_id=signal.signal_id,
@@ -95,6 +116,7 @@ def test_rejected_entry_is_replayed_in_isolated_primary_execution_engine():
         commission_rate=Decimal("0.01"),
         slippage_bps=Decimal("10"),
     )
+    provenance = make_provenance(cost_model_version="counterfactual-costs")
 
     replay = replay_rejected_entry_acceptance(
         decision,
@@ -103,6 +125,7 @@ def test_rejected_entry_is_replayed_in_isolated_primary_execution_engine():
         OrderSide.BUY,
         Decimal("10000"),
         cost_model,
+        provenance=provenance,
     )
     repeated = replay_rejected_entry_acceptance(
         decision,
@@ -111,6 +134,7 @@ def test_rejected_entry_is_replayed_in_isolated_primary_execution_engine():
         OrderSide.BUY,
         Decimal("10000"),
         cost_model,
+        provenance=provenance,
     )
 
     assert primary.events == ()
@@ -121,6 +145,8 @@ def test_rejected_entry_is_replayed_in_isolated_primary_execution_engine():
     assert replay.counterfactual_signal_id != SOURCE_SIGNAL_ID
     assert replay.counterfactual_signal_id == repeated.counterfactual_signal_id
     assert replay.source_risk.reason_code == "PRIMARY_RISK_REJECT"
+    assert replay.provenance == provenance
+    assert repeated.provenance == provenance
     assert replay.horizon == first + timedelta(minutes=2)
     assert replay.cost_model_version == "counterfactual-costs"
     assert len(replay.replay.decisions) == 1
@@ -169,6 +195,7 @@ def test_counterfactual_replay_rejects_a_primary_approved_decision():
             OrderSide.BUY,
             Decimal("10000"),
             CostModel(version="test"),
+            provenance=make_provenance(),
         )
 
 
@@ -190,6 +217,7 @@ def test_counterfactual_does_not_fill_after_declared_horizon():
         OrderSide.BUY,
         Decimal("10000"),
         CostModel(version="test"),
+        provenance=make_provenance(),
         execution_latency=timedelta(minutes=3),
     )
 
@@ -225,6 +253,7 @@ def test_horizon_valuation_uses_latest_pit_visible_mark_without_synthetic_exit()
         OrderSide.BUY,
         Decimal("10000"),
         CostModel(version="test"),
+        provenance=make_provenance(),
     )
 
     assert replay.horizon == horizon
@@ -235,3 +264,38 @@ def test_horizon_valuation_uses_latest_pit_visible_mark_without_synthetic_exit()
     assert replay.horizon_valuation.valuation.total_pnl == Decimal("0")
     assert len(replay.replay.events) == 1
     assert replay.replay.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("2")
+
+
+@pytest.mark.parametrize(
+    ("provenance", "error_code"),
+    (
+        (
+            make_provenance(strategy_version="wrong-strategy"),
+            "COUNTERFACTUAL_PROVENANCE_STRATEGY_MISMATCH",
+        ),
+        (
+            make_provenance(cost_model_version="wrong-cost-model"),
+            "COUNTERFACTUAL_PROVENANCE_COST_MODEL_MISMATCH",
+        ),
+        (
+            make_provenance(environment=Environment.PAPER),
+            "COUNTERFACTUAL_PROVENANCE_ENVIRONMENT_MUST_BE_BACKTEST",
+        ),
+    ),
+)
+def test_counterfactual_replay_rejects_mismatched_provenance(provenance, error_code):
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    bars = (make_bar(first, "100"), make_bar(first + timedelta(minutes=1), "101"))
+    signal = make_signal(first)
+    _primary, decision = source_decision(bars, signal, RiskDecision.REJECT)
+
+    with pytest.raises(ValueError, match=error_code):
+        replay_rejected_entry_acceptance(
+            decision,
+            bars,
+            make_policy(),
+            OrderSide.BUY,
+            Decimal("10000"),
+            CostModel(version="test"),
+            provenance=provenance,
+        )

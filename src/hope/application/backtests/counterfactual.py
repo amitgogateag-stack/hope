@@ -8,11 +8,12 @@ from uuid import UUID, NAMESPACE_URL, uuid5
 
 from hope.application.backtests.engine import BacktestDecision, BacktestResult, DeterministicBacktest
 from hope.application.market_data.calendar import MarketSessionCalendar
-from hope.domain.execution.models import OrderSide
+from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import CostModel
 from hope.domain.market_data.models import MarketBar
 from hope.domain.portfolio.ledger import PortfolioLedger
 from hope.domain.portfolio.valuation import PortfolioValuation, value_portfolio
+from hope.domain.provenance.models import ProvenanceRecord
 from hope.domain.research.counterfactual import CounterfactualAcceptancePolicy
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
@@ -34,6 +35,7 @@ class CounterfactualAcceptanceReplay:
     counterfactual_signal_id: UUID
     source_risk: RiskAssessment
     policy: CounterfactualAcceptancePolicy
+    provenance: ProvenanceRecord
     horizon: datetime
     entry_side: OrderSide
     execution_latency: timedelta
@@ -52,6 +54,7 @@ def replay_rejected_entry_acceptance(
     initial_cash: Decimal,
     cost_model: CostModel,
     *,
+    provenance: ProvenanceRecord,
     execution_latency: timedelta = timedelta(0),
     order_submission_delay: timedelta = timedelta(0),
     max_fill_quantity: Decimal | None = None,
@@ -77,6 +80,12 @@ def replay_rejected_entry_acceptance(
         raise ValueError("COUNTERFACTUAL_SOURCE_DECISION_TIME_MISMATCH")
     if initial_cash <= 0:
         raise ValueError("COUNTERFACTUAL_INITIAL_CASH_MUST_BE_POSITIVE")
+    if provenance.strategy_version != signal.strategy_version:
+        raise ValueError("COUNTERFACTUAL_PROVENANCE_STRATEGY_MISMATCH")
+    if provenance.cost_model_version != cost_model.version:
+        raise ValueError("COUNTERFACTUAL_PROVENANCE_COST_MODEL_MISMATCH")
+    if provenance.environment is not Environment.BACKTEST:
+        raise ValueError("COUNTERFACTUAL_PROVENANCE_ENVIRONMENT_MUST_BE_BACKTEST")
 
     horizon = signal.decision_time + policy.holding_period
     source_bars = tuple(bars)
@@ -141,6 +150,7 @@ def replay_rejected_entry_acceptance(
         counterfactual_signal_id=counterfactual_signal_id,
         source_risk=source_decision.risk,
         policy=policy,
+        provenance=provenance,
         horizon=horizon,
         entry_side=side,
         execution_latency=execution_latency,
