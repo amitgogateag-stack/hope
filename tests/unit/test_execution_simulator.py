@@ -155,3 +155,19 @@ def test_delayed_quote_is_rejected_before_availability():
 
     with pytest.raises(ValueError, match="QUOTE_UNAVAILABLE_AT_FILL_TIME"):
         simulate_market_fill(order, quote, uuid4(), CostModel("v1"), timeline=timeline)
+
+
+def test_delayed_quote_is_valid_at_exact_availability_boundary():
+    instrument = uuid4()
+    quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
+    available_time = datetime(2026, 1, 1, 14, 2, tzinfo=timezone.utc)
+    order = Order(order_id=uuid4(), signal_id=uuid4(), instrument_id=instrument, side=OrderSide.BUY,
+                  quantity=Decimal("1"), environment=Environment.BACKTEST)
+    quote = ExecutionQuote(
+        instrument, quote_time, Decimal("99"), Decimal("100"), available_time=available_time
+    )
+    timeline = ExecutionTimeline.from_decision(quote_time, latency=timedelta(0)).with_fill_time(available_time)
+
+    fill = simulate_market_fill(order, quote, uuid4(), CostModel("v1"), timeline=timeline)
+
+    assert fill.fill_time == available_time
