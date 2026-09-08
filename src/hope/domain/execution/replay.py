@@ -33,10 +33,11 @@ def replay_order(
 ) -> ReplayResult:
     """Replay an order's fills and optional terminal cancellation deterministically.
 
-    Fills are applied in supplied event order. When a cancellation is supplied it
-    must refer to the same order, follow every replayed fill, and report exactly
-    the remaining quantity. Any lifecycle, identity, duplicate, temporal, or
-    portfolio violation aborts the replay.
+    Fills are applied in supplied event order. Their fill timestamps must be
+    non-decreasing so replay cannot reconstruct a time-reversed execution history.
+    When a cancellation is supplied it must refer to the same order, follow every
+    replayed fill, and report exactly the remaining quantity. Any lifecycle,
+    identity, duplicate, temporal, or portfolio violation aborts the replay.
     """
     ledger = PortfolioLedger(initial_cash)
     if initial_portfolio is not None:
@@ -54,6 +55,8 @@ def replay_order(
     for fill in fills:
         if fill.fill_id in seen_ids:
             raise ExecutionReplayError("DUPLICATE_FILL_EVENT")
+        if last_fill_time is not None and fill.fill_time < last_fill_time:
+            raise ExecutionReplayError("FILL_EVENTS_OUT_OF_TIME_ORDER")
         seen_ids.add(fill.fill_id)
         total_quantity += fill.quantity
         signed_quantity += fill.quantity if fill.side.value == "BUY" else -fill.quantity

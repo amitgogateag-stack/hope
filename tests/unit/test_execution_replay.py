@@ -86,6 +86,15 @@ def test_replay_rejects_cancellation_before_replayed_fill():
         )
 
 
+def test_replay_rejects_fill_events_out_of_time_order():
+    order = make_order("10")
+    later = make_fill(order, "4", minute=2)
+    earlier = make_fill(order, "6", minute=1)
+
+    with pytest.raises(ExecutionReplayError, match="FILL_EVENTS_OUT_OF_TIME_ORDER"):
+        replay_order(order, [later, earlier], initial_cash=Decimal("10000"))
+
+
 def test_replay_rejects_duplicate_fill_event_before_state_mutation():
     order = make_order("10")
     fill = make_fill(order, "5")
