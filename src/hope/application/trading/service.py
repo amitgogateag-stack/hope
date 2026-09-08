@@ -9,7 +9,12 @@ from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 from hope.domain.audit.models import AuditEvent, AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
 from hope.domain.execution.lifecycle import OrderLifecycle
-from hope.domain.execution.models import Environment, ExecutionRejection, OrderSide
+from hope.domain.execution.models import (
+    Environment,
+    ExecutionCancellation,
+    ExecutionRejection,
+    OrderSide,
+)
 from hope.domain.execution.session import ExecutionSession
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
 from hope.domain.execution.timeline import ExecutionTimeline
@@ -27,6 +32,7 @@ class TradingKernelResult:
     portfolio_state: PortfolioState
     audit_events: tuple[AuditEvent, ...]
     rejection: ExecutionRejection | None = None
+    cancellation: ExecutionCancellation | None = None
 
 
 class TradingKernel:
@@ -258,6 +264,68 @@ class TradingKernel:
             session_state.portfolio,
             (event,),
             rejection,
+        )
+
+    def cancel_order(
+        self,
+        intent: OrderIntent,
+        order_id: UUID,
+        *,
+        decision_time: datetime,
+        timeline: ExecutionTimeline,
+        cancellation_time: datetime,
+        reason_code: str,
+    ) -> TradingKernelResult:
+        """Terminally cancel a registered open/partial order with explicit evidence."""
+        if timeline.decision_time != decision_time:
+            raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
+        if timeline.order_time < decision_time:
+            raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
+        if cancellation_time.tzinfo is None or cancellation_time.utcoffset() is None:
+            raise ValueError("EXECUTION_CANCELLATION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if cancellation_time < timeline.order_time:
+            raise ValueError("EXECUTION_CANCELLATION_PRECEDES_ORDER_TIME")
+        if not reason_code.strip():
+            raise ValueError("EXECUTION_CANCELLATION_REASON_REQUIRED")
+
+        expected_order = materialize_order(intent, order_id)
+        session = self._execution_sessions.get(order_id)
+        if session is None:
+            raise ValueError("UNKNOWN_ORDER_ID")
+        if session.state.lifecycle.order != expected_order:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+
+        cancelled_quantity = session.state.lifecycle.remaining_quantity
+        session_state = session.cancel()
+        cancellation = ExecutionCancellation(
+            order_id=order_id,
+            signal_id=intent.signal_id,
+            instrument_id=intent.instrument_id,
+            environment=intent.environment,
+            reason_code=reason_code,
+            cancellation_time=cancellation_time,
+            cancelled_quantity=cancelled_quantity,
+        )
+        cancellation_payload_hash = self._hash_payload(
+            order_id, reason_code, cancelled_quantity
+        )
+        event = self._audit_event(
+            event_type=AuditEventType.ORDER_CANCELLED,
+            event_time=cancellation_time,
+            signal_id=intent.signal_id,
+            order_id=order_id,
+            instrument_id=intent.instrument_id,
+            environment=intent.environment,
+            payload_hash=cancellation_payload_hash,
+        )
+        return TradingKernelResult(
+            intent,
+            order_id,
+            None,
+            session_state.portfolio,
+            (event,),
+            None,
+            cancellation,
         )
 
     def execute_order(

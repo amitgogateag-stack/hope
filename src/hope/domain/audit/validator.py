@@ -14,6 +14,7 @@ _REQUIRED_REFERENCES = {
     AuditEventType.RISK_REJECTED: ("signal_id", "instrument_id"),
     AuditEventType.ORDER_CREATED: ("signal_id", "order_id", "instrument_id"),
     AuditEventType.EXECUTION_REJECTED: ("signal_id", "order_id", "instrument_id"),
+    AuditEventType.ORDER_CANCELLED: ("signal_id", "order_id", "instrument_id"),
     AuditEventType.FILL_CREATED: ("signal_id", "order_id", "fill_id", "instrument_id"),
     AuditEventType.PORTFOLIO_UPDATED: ("signal_id", "order_id", "fill_id", "instrument_id"),
 }
@@ -30,6 +31,7 @@ def validate_audit_sequence(events: tuple[AuditEvent, ...] | list[AuditEvent]) -
     seen_risk = False
     terminal_risk_rejected = False
     terminal_execution_rejected = False
+    terminal_order_cancelled = False
     active_signal_id = events[0].signal_id
     active_instrument_id = events[0].instrument_id
     active_order_id = None
@@ -46,6 +48,8 @@ def validate_audit_sequence(events: tuple[AuditEvent, ...] | list[AuditEvent]) -
             raise AuditSequenceError("AUDIT_CROSS_ENTITY_REFERENCE_MISMATCH")
         if terminal_execution_rejected:
             raise AuditSequenceError("AUDIT_EVENT_AFTER_EXECUTION_REJECTION")
+        if terminal_order_cancelled:
+            raise AuditSequenceError("AUDIT_EVENT_AFTER_ORDER_CANCELLATION")
 
         if event.event_type is AuditEventType.SIGNAL_ACCEPTED:
             if seen_risk or seen_order or seen_fill:
@@ -76,6 +80,12 @@ def validate_audit_sequence(events: tuple[AuditEvent, ...] | list[AuditEvent]) -
             if event.order_id != active_order_id:
                 raise AuditSequenceError("EXECUTION_REJECTION_ORDER_REFERENCE_MISMATCH")
             terminal_execution_rejected = True
+        elif event.event_type is AuditEventType.ORDER_CANCELLED:
+            if not seen_order:
+                raise AuditSequenceError("ORDER_CANCELLATION_BEFORE_ORDER")
+            if event.order_id != active_order_id:
+                raise AuditSequenceError("ORDER_CANCELLATION_ORDER_REFERENCE_MISMATCH")
+            terminal_order_cancelled = True
         elif event.event_type is AuditEventType.FILL_CREATED:
             if not seen_order:
                 raise AuditSequenceError("FILL_BEFORE_ORDER")

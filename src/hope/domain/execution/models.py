@@ -49,3 +49,24 @@ class ExecutionRejection:
             raise ValueError("EXECUTION_REJECTION_REASON_REQUIRED")
         if self.rejection_time.tzinfo is None or self.rejection_time.utcoffset() is None:
             raise ValueError("EXECUTION_REJECTION_TIME_MUST_BE_TIMEZONE_AWARE")
+
+
+@dataclass(frozen=True)
+class ExecutionCancellation:
+    """Terminal cancellation outcome for an open or partially filled order."""
+
+    order_id: UUID
+    signal_id: UUID
+    instrument_id: UUID
+    environment: Environment
+    reason_code: str
+    cancellation_time: datetime
+    cancelled_quantity: Decimal
+
+    def __post_init__(self) -> None:
+        if not self.reason_code.strip():
+            raise ValueError("EXECUTION_CANCELLATION_REASON_REQUIRED")
+        if self.cancellation_time.tzinfo is None or self.cancellation_time.utcoffset() is None:
+            raise ValueError("EXECUTION_CANCELLATION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if self.cancelled_quantity <= 0:
+            raise ValueError("EXECUTION_CANCELLATION_QUANTITY_MUST_BE_POSITIVE")

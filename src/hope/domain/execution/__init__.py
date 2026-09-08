@@ -1,5 +1,5 @@
 from .lifecycle import OrderLifecycle, OrderLifecycleError
-from .models import Environment, ExecutionRejection, Order, OrderSide
+from .models import Environment, ExecutionCancellation, ExecutionRejection, Order, OrderSide
 from .simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
 from .timeline import ExecutionTimeline, ExecutionTimelineError
 
@@ -8,7 +8,7 @@ from .timeline import ExecutionTimeline, ExecutionTimelineError
 # depends on execution models. Import them from their concrete modules.
 
 __all__ = [
-    "Environment", "ExecutionRejection", "Order", "OrderSide", "CostModel",
+    "Environment", "ExecutionCancellation", "ExecutionRejection", "Order", "OrderSide", "CostModel",
     "ExecutionQuote", "Fill", "simulate_market_fill", "OrderLifecycle",
     "OrderLifecycleError", "ExecutionTimeline", "ExecutionTimelineError",
 ]
