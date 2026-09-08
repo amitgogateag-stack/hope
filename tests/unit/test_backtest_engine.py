@@ -351,7 +351,7 @@ def test_backtest_executes_delayed_quote_at_availability_without_later_market_ev
     assert result.unfilled_order_ids == ()
 
 
-def test_backtest_processes_same_time_bars_in_deterministic_instrument_order():
+def test_backtest_evaluates_strategy_once_per_same_time_market_context():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     instrument_a = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
     instrument_b = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -379,7 +379,7 @@ def test_backtest_processes_same_time_bars_in_deterministic_instrument_order():
 
     backtest().run(bars, strategy, no_risk, OrderSide.BUY)
 
-    assert observed == [first, first]
+    assert observed == [first]
 
 
 def test_backtest_emits_one_valuation_per_clock_time_for_same_time_multi_instrument_bars():

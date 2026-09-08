@@ -269,12 +269,13 @@ class DeterministicBacktest:
                         raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
 
                 clock_signals: dict[UUID, Signal] = {}
-                for _current_bar in current_bars:
-                    for signal in _normalize_strategy_signals(strategy(context)):
-                        existing = clock_signals.get(signal.signal_id)
-                        if existing is not None and existing != signal:
+                for signal in _normalize_strategy_signals(strategy(context)):
+                    existing = clock_signals.get(signal.signal_id)
+                    if existing is not None:
+                        if existing != signal:
                             raise ValueError("SIGNAL_ID_REUSED_WITH_DIFFERENT_CONTENT")
-                        clock_signals.setdefault(signal.signal_id, signal)
+                        raise ValueError("DUPLICATE_SIGNAL_ID")
+                    clock_signals[signal.signal_id] = signal
 
                 for signal in clock_signals.values():
                     if signal.signal_id in submitted_signal_ids:

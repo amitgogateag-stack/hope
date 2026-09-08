@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -13,11 +13,11 @@ from hope.domain.signal.models import Signal, SignalType
 
 UTC = timezone.utc
 INSTRUMENT = "11111111-1111-1111-1111-111111111111"
-OTHER_INSTRUMENT = "22222222-2222-2222-2222-222222222222"
 
 
 def test_backtest_rejects_duplicate_signal_id_after_risk_rejection():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
     bars = (
         MarketBar(
             instrument_id=INSTRUMENT,
@@ -31,14 +31,14 @@ def test_backtest_rejects_duplicate_signal_id_after_risk_rejection():
             volume=Decimal("1000"),
         ),
         MarketBar(
-            instrument_id=OTHER_INSTRUMENT,
-            event_time=first,
-            available_time=first,
-            ingestion_time=first,
-            open=Decimal("200"),
-            high=Decimal("201"),
-            low=Decimal("199"),
-            close=Decimal("200"),
+            instrument_id=INSTRUMENT,
+            event_time=second,
+            available_time=second,
+            ingestion_time=second,
+            open=Decimal("101"),
+            high=Decimal("102"),
+            low=Decimal("100"),
+            close=Decimal("101"),
             volume=Decimal("1000"),
         ),
     )

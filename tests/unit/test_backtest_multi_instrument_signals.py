@@ -2,6 +2,8 @@ from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
+import pytest
+
 from hope.application.backtests.engine import DeterministicBacktest
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import CostModel
@@ -61,8 +63,10 @@ def test_backtest_accepts_multi_instrument_signal_batch_independent_of_bar_order
         make_bar(INSTRUMENT_B, second, "201"),
         make_bar(INSTRUMENT_A, second, "101"),
     )
+    calls = []
 
     def strategy(context):
+        calls.append(context.as_of)
         if context.as_of == first:
             return (signal_b, signal_a)
         return None
@@ -80,6 +84,7 @@ def test_backtest_accepts_multi_instrument_signal_batch_independent_of_bar_order
         CostModel(version="test"),
     ).run(bars, strategy, risk, OrderSide.BUY)
 
+    assert calls == [first, second]
     assert len(result.events) == 2
     assert result.unfilled_order_ids == ()
     assert tuple(event.event_time for event in result.events) == (second, second)
@@ -89,3 +94,30 @@ def test_backtest_accepts_multi_instrument_signal_batch_independent_of_bar_order
     }
     assert result.final_state.positions[UUID(INSTRUMENT_A)].quantity == Decimal("1")
     assert result.final_state.positions[UUID(INSTRUMENT_B)].quantity == Decimal("1")
+
+
+def test_backtest_rejects_duplicate_signal_id_within_same_clock_batch():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = make_signal(
+        "33333333-3333-3333-3333-333333333333",
+        INSTRUMENT_A,
+        first,
+    )
+    bars = (
+        make_bar(INSTRUMENT_B, first, "200"),
+        make_bar(INSTRUMENT_A, first, "100"),
+    )
+
+    def risk_must_not_run(_signal):
+        raise AssertionError("risk must not run for a duplicate strategy batch")
+
+    with pytest.raises(ValueError, match="DUPLICATE_SIGNAL_ID"):
+        DeterministicBacktest(
+            Decimal("10000"),
+            CostModel(version="test"),
+        ).run(
+            bars,
+            lambda _context: (signal, signal),
+            risk_must_not_run,
+            OrderSide.BUY,
+        )
