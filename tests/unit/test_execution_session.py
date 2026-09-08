@@ -59,3 +59,24 @@ def test_duplicate_fill_does_not_mutate_session():
         session.apply_fill(fill)
     after = session.state
     assert after == before
+
+
+def test_partial_fill_can_be_cancelled_without_portfolio_mutation_and_blocks_later_fill():
+    order = make_order("10")
+    session = ExecutionSession(OrderLifecycle(order), PortfolioLedger(Decimal("10000")))
+    partially_filled = session.apply_fill(make_fill(order, "4"))
+    portfolio_before_cancel = partially_filled.portfolio
+    fill_ids_before_cancel = partially_filled.fill_ids
+
+    cancelled = session.cancel()
+
+    assert cancelled.lifecycle.status == "CANCELLED"
+    assert cancelled.lifecycle.filled_quantity == Decimal("4")
+    assert cancelled.lifecycle.remaining_quantity == Decimal("6")
+    assert cancelled.portfolio == portfolio_before_cancel
+    assert cancelled.fill_ids == fill_ids_before_cancel
+
+    with pytest.raises(ExecutionSessionError, match="TERMINAL_ORDER_CANNOT_FILL"):
+        session.apply_fill(make_fill(order, "1", 1))
+
+    assert session.state == cancelled
