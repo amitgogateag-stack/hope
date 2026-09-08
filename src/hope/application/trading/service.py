@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from hashlib import sha256
-from uuid import UUID, uuid4
+from uuid import UUID, NAMESPACE_URL, uuid4, uuid5
 
 from hope.domain.audit.models import AuditEvent, AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
@@ -37,6 +37,44 @@ class TradingKernel:
         canonical = "|".join(str(part) for part in parts)
         return sha256(canonical.encode("utf-8")).hexdigest()
 
+    @classmethod
+    def _audit_event(
+        cls,
+        *,
+        event_type: AuditEventType,
+        event_time: datetime,
+        environment: Environment,
+        payload_hash: str,
+        signal_id: UUID | None = None,
+        order_id: UUID | None = None,
+        fill_id: UUID | None = None,
+        instrument_id: UUID | None = None,
+    ) -> AuditEvent:
+        canonical_time = event_time.astimezone(timezone.utc).isoformat()
+        canonical = "|".join(
+            (
+                event_type.value,
+                canonical_time,
+                environment.value,
+                str(signal_id or ""),
+                str(order_id or ""),
+                str(fill_id or ""),
+                str(instrument_id or ""),
+                payload_hash,
+            )
+        )
+        return AuditEvent(
+            event_id=uuid5(NAMESPACE_URL, f"hope:audit:{canonical}"),
+            event_type=event_type,
+            event_time=event_time,
+            signal_id=signal_id,
+            order_id=order_id,
+            fill_id=fill_id,
+            instrument_id=instrument_id,
+            environment=environment.value,
+            payload_hash=payload_hash,
+        )
+
     def process(
         self,
         signal: Signal,
@@ -52,21 +90,35 @@ class TradingKernel:
     ) -> TradingKernelResult:
         events: list[AuditEvent] = []
         now = signal.decision_time
-        events.append(AuditEvent(
-            event_id=uuid4(), event_type=AuditEventType.SIGNAL_ACCEPTED,
-            event_time=signal.decision_time, signal_id=signal.signal_id,
-            instrument_id=signal.instrument_id, environment=environment.value,
-            payload_hash=self._hash_payload(signal.signal_id, signal.instrument_id, signal.inputs_hash),
-        ))
+        signal_payload_hash = self._hash_payload(
+            signal.signal_id, signal.instrument_id, signal.inputs_hash
+        )
+        events.append(
+            self._audit_event(
+                event_type=AuditEventType.SIGNAL_ACCEPTED,
+                event_time=signal.decision_time,
+                signal_id=signal.signal_id,
+                instrument_id=signal.instrument_id,
+                environment=environment,
+                payload_hash=signal_payload_hash,
+            )
+        )
 
         intent = create_order_intent(signal, risk, side, environment)
         if intent is None:
-            events.append(AuditEvent(
-                event_id=uuid4(), event_type=AuditEventType.RISK_REJECTED,
-                event_time=now, signal_id=signal.signal_id,
-                instrument_id=signal.instrument_id, environment=environment.value,
-                payload_hash=self._hash_payload(signal.signal_id, risk.decision, risk.reason_code),
-            ))
+            risk_payload_hash = self._hash_payload(
+                signal.signal_id, risk.decision, risk.reason_code
+            )
+            events.append(
+                self._audit_event(
+                    event_type=AuditEventType.RISK_REJECTED,
+                    event_time=now,
+                    signal_id=signal.signal_id,
+                    instrument_id=signal.instrument_id,
+                    environment=environment,
+                    payload_hash=risk_payload_hash,
+                )
+            )
             validate_audit_sequence(events)
             return TradingKernelResult(None, None, None, self._ledger.state, tuple(events))
 
@@ -82,22 +134,37 @@ class TradingKernel:
             if timeline.order_time < signal.decision_time:
                 raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
 
-        events.append(AuditEvent(
-            event_id=uuid4(), event_type=AuditEventType.RISK_APPROVED,
-            event_time=now, signal_id=signal.signal_id,
-            instrument_id=signal.instrument_id, environment=environment.value,
-            payload_hash=self._hash_payload(signal.signal_id, risk.approved_quantity, risk.reason_code),
-        ))
+        risk_payload_hash = self._hash_payload(
+            signal.signal_id, risk.approved_quantity, risk.reason_code
+        )
+        events.append(
+            self._audit_event(
+                event_type=AuditEventType.RISK_APPROVED,
+                event_time=now,
+                signal_id=signal.signal_id,
+                instrument_id=signal.instrument_id,
+                environment=environment,
+                payload_hash=risk_payload_hash,
+            )
+        )
 
         actual_order_id = order_id or uuid4()
         materialize_order(intent, actual_order_id)
         order_event_time = timeline.order_time if timeline is not None else now
-        events.append(AuditEvent(
-            event_id=uuid4(), event_type=AuditEventType.ORDER_CREATED,
-            event_time=order_event_time, signal_id=intent.signal_id, order_id=actual_order_id,
-            instrument_id=intent.instrument_id, environment=intent.environment.value,
-            payload_hash=self._hash_payload(actual_order_id, intent.quantity, intent.side),
-        ))
+        order_payload_hash = self._hash_payload(
+            actual_order_id, intent.quantity, intent.side
+        )
+        events.append(
+            self._audit_event(
+                event_type=AuditEventType.ORDER_CREATED,
+                event_time=order_event_time,
+                signal_id=intent.signal_id,
+                order_id=actual_order_id,
+                instrument_id=intent.instrument_id,
+                environment=intent.environment,
+                payload_hash=order_payload_hash,
+            )
+        )
 
         if quote is None or cost_model is None:
             validate_audit_sequence(events)
@@ -140,18 +207,36 @@ class TradingKernel:
             order, quote, actual_fill_id, cost_model, quantity=quantity, timeline=timeline
         )
         execution_time = fill.fill_time or quote.event_time
-        events = [AuditEvent(
-            event_id=uuid4(), event_type=AuditEventType.FILL_CREATED,
-            event_time=execution_time, signal_id=fill.signal_id, order_id=fill.order_id,
-            fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
-            payload_hash=self._hash_payload(fill.fill_id, fill.quantity, fill.price, fill.commission),
-        )]
+        fill_payload_hash = self._hash_payload(
+            fill.fill_id, fill.quantity, fill.price, fill.commission
+        )
+        events = [
+            self._audit_event(
+                event_type=AuditEventType.FILL_CREATED,
+                event_time=execution_time,
+                signal_id=fill.signal_id,
+                order_id=fill.order_id,
+                fill_id=fill.fill_id,
+                instrument_id=fill.instrument_id,
+                environment=order.environment,
+                payload_hash=fill_payload_hash,
+            )
+        ]
 
         state = self._ledger.apply_fill(fill)
-        events.append(AuditEvent(
-            event_id=uuid4(), event_type=AuditEventType.PORTFOLIO_UPDATED,
-            event_time=execution_time, signal_id=fill.signal_id, order_id=fill.order_id,
-            fill_id=fill.fill_id, instrument_id=fill.instrument_id, environment=order.environment.value,
-            payload_hash=self._hash_payload(fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity),
-        ))
+        portfolio_payload_hash = self._hash_payload(
+            fill.fill_id, state.cash, state.positions[fill.instrument_id].quantity
+        )
+        events.append(
+            self._audit_event(
+                event_type=AuditEventType.PORTFOLIO_UPDATED,
+                event_time=execution_time,
+                signal_id=fill.signal_id,
+                order_id=fill.order_id,
+                fill_id=fill.fill_id,
+                instrument_id=fill.instrument_id,
+                environment=order.environment,
+                payload_hash=portfolio_payload_hash,
+            )
+        )
         return TradingKernelResult(intent, order_id, fill, state, tuple(events))
