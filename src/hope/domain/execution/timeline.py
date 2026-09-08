@@ -17,7 +17,7 @@ def _aware(value: datetime, name: str) -> None:
 class ExecutionTimeline:
     """Immutable timestamps separating decision, order, eligibility and fill.
 
-    The timeline is deliberately independent of market data.  A quote may only
+    The timeline is deliberately independent of market data. A quote may only
     be used for a fill when its timestamp is at or after fill_eligible_time.
     """
 
@@ -43,11 +43,19 @@ class ExecutionTimeline:
             raise ExecutionTimelineError("FILL_TIME_PRECEDES_ELIGIBILITY")
 
     @classmethod
-    def from_decision(cls, decision_time: datetime, *, latency: timedelta) -> "ExecutionTimeline":
+    def from_decision(
+        cls,
+        decision_time: datetime,
+        *,
+        latency: timedelta,
+        order_submission_delay: timedelta = timedelta(0),
+    ) -> "ExecutionTimeline":
         _aware(decision_time, "DECISION_TIME")
         if latency < timedelta(0):
             raise ExecutionTimelineError("LATENCY_MUST_BE_NON_NEGATIVE")
-        order_time = decision_time
+        if order_submission_delay < timedelta(0):
+            raise ExecutionTimelineError("ORDER_SUBMISSION_DELAY_MUST_BE_NON_NEGATIVE")
+        order_time = decision_time + order_submission_delay
         return cls(decision_time, order_time, latency, order_time + latency)
 
     def with_fill_time(self, fill_time: datetime) -> "ExecutionTimeline":

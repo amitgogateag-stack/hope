@@ -76,6 +76,11 @@ class TradingKernel:
             raise ValueError("QUOTE_PRECEDES_SIGNAL_DECISION_TIME")
         if quote is not None and timeline is None:
             raise ValueError("QUOTE_EXECUTION_REQUIRES_TIMELINE")
+        if timeline is not None:
+            if timeline.decision_time != signal.decision_time:
+                raise ValueError("TIMELINE_SIGNAL_DECISION_MISMATCH")
+            if timeline.order_time < signal.decision_time:
+                raise ValueError("TIMELINE_ORDER_PRECEDES_SIGNAL")
 
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.RISK_APPROVED,
@@ -86,9 +91,10 @@ class TradingKernel:
 
         actual_order_id = order_id or uuid4()
         materialize_order(intent, actual_order_id)
+        order_event_time = timeline.order_time if timeline is not None else now
         events.append(AuditEvent(
             event_id=uuid4(), event_type=AuditEventType.ORDER_CREATED,
-            event_time=now, signal_id=intent.signal_id, order_id=actual_order_id,
+            event_time=order_event_time, signal_id=intent.signal_id, order_id=actual_order_id,
             instrument_id=intent.instrument_id, environment=intent.environment.value,
             payload_hash=self._hash_payload(actual_order_id, intent.quantity, intent.side),
         ))

@@ -64,10 +64,11 @@ class BacktestDataQualityError(ValueError):
 class DeterministicBacktest:
     """Event-aware backtest with explicit PIT and future-quote execution boundaries.
 
-    Signals are submitted at their decision time. Approved orders remain pending
-    until a later market event supplies an executable quote at or after the
-    timeline's fill-eligibility time. Availability-only clock points are also
-    processed so a delayed quote can execute when it actually becomes visible.
+    Signals are evaluated at their decision time. Approved orders may be delayed
+    before submission, then remain pending until a later market event supplies an
+    executable quote at or after the timeline's fill-eligibility time.
+    Availability-only clock points are also processed so a delayed quote can
+    execute when it actually becomes visible.
 
     ``max_fill_quantity`` is an explicit deterministic execution constraint. When
     set, each eligible quote fills at most that quantity; otherwise the full
@@ -80,15 +81,19 @@ class DeterministicBacktest:
         cost_model: CostModel,
         *,
         execution_latency: timedelta = timedelta(0),
+        order_submission_delay: timedelta = timedelta(0),
         max_fill_quantity: Decimal | None = None,
     ) -> None:
         self._ledger = PortfolioLedger(initial_cash)
         self._kernel = TradingKernel(self._ledger)
         self._cost_model = cost_model
         self._execution_latency = execution_latency
+        self._order_submission_delay = order_submission_delay
         self._max_fill_quantity = max_fill_quantity
         if execution_latency < timedelta(0):
             raise ValueError("EXECUTION_LATENCY_MUST_BE_NON_NEGATIVE")
+        if order_submission_delay < timedelta(0):
+            raise ValueError("ORDER_SUBMISSION_DELAY_MUST_BE_NON_NEGATIVE")
         if max_fill_quantity is not None and max_fill_quantity <= 0:
             raise ValueError("MAX_FILL_QUANTITY_MUST_BE_POSITIVE")
 
@@ -161,8 +166,14 @@ class DeterministicBacktest:
                             session_calendar is None
                             or (
                                 session_calendar.contains(pending_order.signal.decision_time)
+                                and session_calendar.contains(timeline.order_time)
                                 and session_calendar.contains(visible_bar.event_time)
                                 and session_calendar.contains(visible_bar.available_time)
+                                and _same_session(
+                                    session_calendar,
+                                    pending_order.signal.decision_time,
+                                    timeline.order_time,
+                                )
                                 and _same_session(
                                     session_calendar,
                                     pending_order.signal.decision_time,
@@ -244,6 +255,11 @@ class DeterministicBacktest:
                     submitted_signal_ids.add(signal.signal_id)
 
                     assessment = risk(signal)
+                    timeline = ExecutionTimeline.from_decision(
+                        signal.decision_time,
+                        latency=self._execution_latency,
+                        order_submission_delay=self._order_submission_delay,
+                    )
                     submission = self._kernel.process(
                         signal,
                         assessment,
@@ -255,15 +271,13 @@ class DeterministicBacktest:
                             NAMESPACE_URL,
                             f"hope:backtest:{signal.signal_id}:order",
                         ),
+                        timeline=timeline,
                     )
                     if submission.intent is not None:
                         pending.append(_PendingOrder(
                             signal,
                             submission,
-                            ExecutionTimeline.from_decision(
-                                signal.decision_time,
-                                latency=self._execution_latency,
-                            ),
+                            timeline,
                             submission.intent.quantity,
                         ))
 
