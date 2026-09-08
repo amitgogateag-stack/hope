@@ -49,7 +49,8 @@ class _PendingOrder:
     last_fill_event_time: datetime | None = None
 
 
-StrategyFn = Callable[[PITMarketContext], Signal | None]
+StrategyResult = Signal | Sequence[Signal] | None
+StrategyFn = Callable[[PITMarketContext], StrategyResult]
 RiskFn = Callable[[Signal], RiskAssessment]
 
 
@@ -259,17 +260,27 @@ class DeterministicBacktest:
                     remaining.append(pending_order)
             pending = remaining
 
-            for current_bar in current_bars:
-                signal = strategy(context)
-                if signal is not None:
-                    if signal.signal_id in submitted_signal_ids:
-                        raise ValueError("DUPLICATE_SIGNAL_ID")
+            if current_bars:
+                current_instrument_ids: set[UUID] = set()
+                for current_bar in current_bars:
                     try:
-                        bar_instrument_id = UUID(current_bar.instrument_id)
+                        current_instrument_ids.add(UUID(current_bar.instrument_id))
                     except ValueError as exc:
                         raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
-                    if signal.instrument_id != bar_instrument_id:
-                        raise ValueError("SIGNAL_BAR_INSTRUMENT_MISMATCH")
+
+                clock_signals: dict[UUID, Signal] = {}
+                for _current_bar in current_bars:
+                    for signal in _normalize_strategy_signals(strategy(context)):
+                        existing = clock_signals.get(signal.signal_id)
+                        if existing is not None and existing != signal:
+                            raise ValueError("SIGNAL_ID_REUSED_WITH_DIFFERENT_CONTENT")
+                        clock_signals.setdefault(signal.signal_id, signal)
+
+                for signal in clock_signals.values():
+                    if signal.signal_id in submitted_signal_ids:
+                        raise ValueError("DUPLICATE_SIGNAL_ID")
+                    if signal.instrument_id not in current_instrument_ids:
+                        raise ValueError("SIGNAL_INSTRUMENT_NOT_UPDATED_AT_CONTEXT")
                     if signal.decision_time > context.as_of:
                         raise ValueError("SIGNAL_DECISION_AFTER_CONTEXT")
                     if signal.decision_time != context.as_of:
@@ -314,6 +325,17 @@ class DeterministicBacktest:
             calculate_metrics(tuple(valuations)),
             tuple(item.result.order_id for item in pending),
         )
+
+
+def _normalize_strategy_signals(result: StrategyResult) -> tuple[Signal, ...]:
+    if result is None:
+        return ()
+    if isinstance(result, Signal):
+        return (result,)
+    signals = tuple(result)
+    if any(not isinstance(signal, Signal) for signal in signals):
+        raise ValueError("STRATEGY_RETURNED_INVALID_SIGNAL_BATCH")
+    return signals
 
 
 def _same_session(
