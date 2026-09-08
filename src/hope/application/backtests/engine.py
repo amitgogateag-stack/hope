@@ -30,6 +30,16 @@ class BacktestEvent:
 
 
 @dataclass(frozen=True)
+class BacktestDecision:
+    decision_time: datetime
+    bar: MarketBar
+    signal: Signal
+    risk: RiskAssessment
+    result: TradingKernelResult
+    valuation: PortfolioValuation
+
+
+@dataclass(frozen=True)
 class BacktestResult:
     initial_cash: Decimal
     final_state: PortfolioState
@@ -37,6 +47,7 @@ class BacktestResult:
     valuations: tuple[PortfolioValuation, ...]
     metrics: BacktestMetrics
     unfilled_order_ids: tuple[UUID, ...] = ()
+    decisions: tuple[BacktestDecision, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -130,6 +141,7 @@ class DeterministicBacktest:
 
         previous_time: datetime | None = None
         events: list[BacktestEvent] = []
+        decisions: list[BacktestDecision] = []
         valuations: list[PortfolioValuation] = []
         latest_marks = {}
         pending: list[_PendingOrder] = []
@@ -261,12 +273,14 @@ class DeterministicBacktest:
             pending = remaining
 
             if current_bars:
-                current_instrument_ids: set[UUID] = set()
+                current_bars_by_instrument: dict[UUID, MarketBar] = {}
                 for current_bar in current_bars:
                     try:
-                        current_instrument_ids.add(UUID(current_bar.instrument_id))
+                        instrument_id = UUID(current_bar.instrument_id)
                     except ValueError as exc:
                         raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
+                    current_bars_by_instrument[instrument_id] = current_bar
+                current_instrument_ids = set(current_bars_by_instrument)
 
                 clock_signals: dict[UUID, Signal] = {}
                 for signal in _normalize_strategy_signals(strategy(context)):
@@ -308,6 +322,17 @@ class DeterministicBacktest:
                         ),
                         timeline=timeline,
                     )
+                    decision_valuation = value_portfolio(self._ledger, latest_marks, current_time)
+                    decisions.append(
+                        BacktestDecision(
+                            decision_time=current_time,
+                            bar=current_bars_by_instrument[signal.instrument_id],
+                            signal=signal,
+                            risk=assessment,
+                            result=submission,
+                            valuation=decision_valuation,
+                        )
+                    )
                     if submission.intent is not None:
                         pending.append(_PendingOrder(
                             signal,
@@ -319,12 +344,13 @@ class DeterministicBacktest:
             valuations.append(value_portfolio(self._ledger, latest_marks, current_time))
 
         return BacktestResult(
-            self._ledger.initial_cash,
-            self._ledger.state,
-            tuple(events),
-            tuple(valuations),
-            calculate_metrics(tuple(valuations)),
-            tuple(item.result.order_id for item in pending),
+            initial_cash=self._ledger.initial_cash,
+            final_state=self._ledger.state,
+            events=tuple(events),
+            valuations=tuple(valuations),
+            metrics=calculate_metrics(tuple(valuations)),
+            unfilled_order_ids=tuple(item.result.order_id for item in pending),
+            decisions=tuple(decisions),
         )
 
 
