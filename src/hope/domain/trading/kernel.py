@@ -4,7 +4,7 @@ from uuid import UUID
 
 from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
-from hope.domain.signal.models import Signal
+from hope.domain.signal.models import Signal, SignalType
 
 
 @dataclass(frozen=True)
@@ -14,6 +14,7 @@ class OrderIntent:
     side: OrderSide
     quantity: Decimal
     environment: Environment
+    signal_type: SignalType
 
 
 def create_order_intent(signal: Signal, risk: RiskAssessment, side: OrderSide, environment: Environment) -> OrderIntent | None:
@@ -25,7 +26,14 @@ def create_order_intent(signal: Signal, risk: RiskAssessment, side: OrderSide, e
         raise ValueError("APPROVED_QUANTITY_MUST_BE_POSITIVE")
     if environment not in Environment:
         raise ValueError("UNSUPPORTED_EXECUTION_ENVIRONMENT")
-    return OrderIntent(signal.signal_id, signal.instrument_id, side, risk.approved_quantity, environment)
+    return OrderIntent(
+        signal.signal_id,
+        signal.instrument_id,
+        side,
+        risk.approved_quantity,
+        environment,
+        signal.signal_type,
+    )
 
 
 def materialize_order(intent: OrderIntent, order_id: UUID) -> Order:
