@@ -217,5 +217,5 @@ def test_partial_fill_does_not_continue_into_next_session():
     assert len(result.events) == 1
     assert result.events[0].result.fill is not None
     assert result.events[0].result.fill.quantity == Decimal("4")
-    assert result.final_state.positions[UUID(INSTRUMENT)] == Decimal("4")
+    assert result.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("4")
     assert len(result.unfilled_order_ids) == 1
