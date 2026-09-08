@@ -177,7 +177,7 @@ class DeterministicBacktest:
                         )
                     )
                 ]
-                quote_bar = max(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
+                quote_bar = min(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
                 if quote_bar is not None and session_open:
                     quote = ExecutionQuote(
                         instrument_id=UUID(quote_bar.instrument_id),

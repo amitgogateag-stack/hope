@@ -270,3 +270,46 @@ def test_backtest_uses_first_quote_at_or_after_latency_eligibility():
     assert result.events[0].result.fill is not None
     assert result.events[0].result.fill.quantity == Decimal("1")
     assert result.unfilled_order_ids == ()
+
+
+def test_backtest_uses_earliest_eligible_quote_when_multiple_are_visible():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    first_eligible = first + timedelta(minutes=2)
+    later_eligible = first + timedelta(minutes=3)
+    availability = first + timedelta(minutes=5)
+    session_close = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
+    session_calendar = MarketSessionCalendar(((first, session_close),))
+    signal = Signal(
+        signal_id=UUID("dddddddd-dddd-dddd-dddd-dddddddddddd"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="a" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = DeterministicBacktest(
+        Decimal("10000"), CostModel(version="test"), execution_latency=timedelta(minutes=2)
+    ).run(
+        (
+            make_bar(INSTRUMENT, first),
+            make_bar(INSTRUMENT, first_eligible, availability),
+            make_bar(INSTRUMENT, later_eligible, availability),
+        ),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+        session_calendar=session_calendar,
+    )
+
+    assert len(result.events) == 1
+    assert result.events[0].bar.event_time == first_eligible
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.quantity == Decimal("1")
