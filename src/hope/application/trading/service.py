@@ -375,7 +375,7 @@ class TradingKernel:
         session = self._execution_session(intent, order_id)
         order = session.state.lifecycle.order
         fill_quantity = order.quantity if quantity is None else quantity
-        if self._order_signal_types.get(order_id) is SignalType.EXIT:
+        if intent.signal_type is SignalType.EXIT:
             self._assert_exit_reduces_position(intent, quantity=fill_quantity)
 
         actual_fill_id = fill_id or uuid4()
