@@ -150,87 +150,103 @@ class DeterministicBacktest:
             session_open = session_calendar is None or session_calendar.contains(current_time)
             for pending_order in pending:
                 timeline = pending_order.timeline
-                eligible_quotes = [
-                    visible_bar
-                    for visible_bar in context.bars
-                    if (
-                        visible_bar.instrument_id == str(pending_order.signal.instrument_id)
-                        and visible_bar.event_time > pending_order.signal.decision_time
-                        and visible_bar.event_time >= timeline.fill_eligible_time
-                        and (
-                            pending_order.last_fill_event_time is None
-                            or visible_bar.event_time > pending_order.last_fill_event_time
-                        )
-                        and visible_bar.available_time <= current_time
-                        and (
-                            session_calendar is None
-                            or (
-                                session_calendar.contains(pending_order.signal.decision_time)
-                                and session_calendar.contains(timeline.order_time)
-                                and session_calendar.contains(visible_bar.event_time)
-                                and session_calendar.contains(visible_bar.available_time)
-                                and _same_session(
-                                    session_calendar,
-                                    pending_order.signal.decision_time,
-                                    timeline.order_time,
-                                )
-                                and _same_session(
-                                    session_calendar,
-                                    pending_order.signal.decision_time,
-                                    current_time,
-                                )
-                                and _same_session(
-                                    session_calendar,
-                                    visible_bar.available_time,
-                                    current_time,
+                eligible_quotes = sorted(
+                    (
+                        visible_bar
+                        for visible_bar in context.bars
+                        if (
+                            visible_bar.instrument_id == str(pending_order.signal.instrument_id)
+                            and visible_bar.event_time > pending_order.signal.decision_time
+                            and visible_bar.event_time >= timeline.fill_eligible_time
+                            and (
+                                pending_order.last_fill_event_time is None
+                                or visible_bar.event_time > pending_order.last_fill_event_time
+                            )
+                            and visible_bar.available_time <= current_time
+                            and (
+                                session_calendar is None
+                                or (
+                                    session_calendar.contains(pending_order.signal.decision_time)
+                                    and session_calendar.contains(timeline.order_time)
+                                    and session_calendar.contains(visible_bar.event_time)
+                                    and session_calendar.contains(visible_bar.available_time)
+                                    and _same_session(
+                                        session_calendar,
+                                        pending_order.signal.decision_time,
+                                        timeline.order_time,
+                                    )
+                                    and _same_session(
+                                        session_calendar,
+                                        pending_order.signal.decision_time,
+                                        current_time,
+                                    )
+                                    and _same_session(
+                                        session_calendar,
+                                        visible_bar.available_time,
+                                        current_time,
+                                    )
                                 )
                             )
                         )
-                    )
-                ]
-                quote_bar = min(eligible_quotes, key=lambda candidate: candidate.event_time, default=None)
-                if quote_bar is not None and session_open:
-                    quote = ExecutionQuote(
-                        instrument_id=UUID(quote_bar.instrument_id),
-                        event_time=quote_bar.event_time,
-                        bid=quote_bar.close,
-                        ask=quote_bar.close,
-                        available_time=quote_bar.available_time,
-                    )
-                    fill_quantity = pending_order.remaining_quantity
-                    if self._max_fill_quantity is not None:
-                        fill_quantity = min(fill_quantity, self._max_fill_quantity)
-                    execution = self._kernel.execute_order(
-                        pending_order.result.intent,
-                        pending_order.result.order_id,
-                        quote,
-                        self._cost_model,
-                        decision_time=pending_order.signal.decision_time,
-                        fill_id=uuid5(
-                            NAMESPACE_URL,
-                            f"hope:backtest:{pending_order.signal.signal_id}:fill:{pending_order.fill_sequence}",
-                        ),
-                        timeline=timeline.with_fill_time(current_time),
-                        quantity=fill_quantity,
-                    )
-                    complete_result = TradingKernelResult(
-                        intent=execution.intent,
-                        order_id=execution.order_id,
-                        fill=execution.fill,
-                        portfolio_state=execution.portfolio_state,
-                        audit_events=pending_order.result.audit_events + execution.audit_events,
-                    )
-                    valuation = value_portfolio(self._ledger, latest_marks, current_time)
-                    events.append(BacktestEvent(current_time, quote_bar, complete_result, valuation))
-                    remaining_quantity = pending_order.remaining_quantity - execution.fill.quantity
+                    ),
+                    key=lambda candidate: (
+                        candidate.event_time,
+                        candidate.available_time,
+                        candidate.ingestion_time,
+                    ),
+                )
+                if eligible_quotes and session_open:
+                    active_result = pending_order.result
+                    remaining_quantity = pending_order.remaining_quantity
+                    fill_sequence = pending_order.fill_sequence
+                    last_fill_event_time = pending_order.last_fill_event_time
+                    for quote_bar in eligible_quotes:
+                        if remaining_quantity <= 0:
+                            break
+                        quote = ExecutionQuote(
+                            instrument_id=UUID(quote_bar.instrument_id),
+                            event_time=quote_bar.event_time,
+                            bid=quote_bar.close,
+                            ask=quote_bar.close,
+                            available_time=quote_bar.available_time,
+                        )
+                        fill_quantity = remaining_quantity
+                        if self._max_fill_quantity is not None:
+                            fill_quantity = min(fill_quantity, self._max_fill_quantity)
+                        execution = self._kernel.execute_order(
+                            active_result.intent,
+                            active_result.order_id,
+                            quote,
+                            self._cost_model,
+                            decision_time=pending_order.signal.decision_time,
+                            fill_id=uuid5(
+                                NAMESPACE_URL,
+                                f"hope:backtest:{pending_order.signal.signal_id}:fill:{fill_sequence}",
+                            ),
+                            timeline=timeline.with_fill_time(current_time),
+                            quantity=fill_quantity,
+                        )
+                        complete_result = TradingKernelResult(
+                            intent=execution.intent,
+                            order_id=execution.order_id,
+                            fill=execution.fill,
+                            portfolio_state=execution.portfolio_state,
+                            audit_events=active_result.audit_events + execution.audit_events,
+                        )
+                        valuation = value_portfolio(self._ledger, latest_marks, current_time)
+                        events.append(BacktestEvent(current_time, quote_bar, complete_result, valuation))
+                        remaining_quantity -= execution.fill.quantity
+                        active_result = complete_result
+                        fill_sequence += 1
+                        last_fill_event_time = quote_bar.event_time
                     if remaining_quantity > 0:
                         remaining.append(_PendingOrder(
                             pending_order.signal,
-                            complete_result,
+                            active_result,
                             pending_order.timeline,
                             remaining_quantity,
-                            pending_order.fill_sequence + 1,
-                            quote_bar.event_time,
+                            fill_sequence,
+                            last_fill_event_time,
                         ))
                 else:
                     remaining.append(pending_order)
