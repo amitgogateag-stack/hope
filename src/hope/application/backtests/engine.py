@@ -14,7 +14,7 @@ from hope.domain.market_data.models import MarketBar
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
 from hope.domain.portfolio.valuation import PortfolioValuation, value_portfolio
 from hope.domain.risk.models import RiskAssessment
-from hope.domain.signal.models import Signal
+from hope.domain.signal.models import Signal, SignalType
 from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.application.market_data.quality import DataQualityReport, validate_bars
 from hope.application.trading.service import TradingKernel, TradingKernelResult
@@ -81,6 +81,10 @@ class DeterministicBacktest:
     executable quote at or after the timeline's fill-eligibility time.
     Availability-only clock points are also processed so a delayed quote can
     execute when it actually becomes visible.
+
+    ``side`` is the strategy's entry direction for the run. ENTRY signals use it;
+    EXIT signals use the opposite side so a long or short strategy can complete a
+    genuine round trip without changing the signal/audit contract.
 
     ``max_fill_quantity`` is an explicit deterministic execution constraint. When
     set, each eligible quote fills at most that quantity; otherwise the full
@@ -312,7 +316,7 @@ class DeterministicBacktest:
                     submission = self._kernel.process(
                         signal,
                         assessment,
-                        side,
+                        _order_side_for_signal(signal, side),
                         Environment.BACKTEST,
                         None,
                         None,
@@ -363,6 +367,14 @@ def _normalize_strategy_signals(result: StrategyResult) -> tuple[Signal, ...]:
     if any(not isinstance(signal, Signal) for signal in signals):
         raise ValueError("STRATEGY_RETURNED_INVALID_SIGNAL_BATCH")
     return signals
+
+
+def _order_side_for_signal(signal: Signal, entry_side: OrderSide) -> OrderSide:
+    if signal.signal_type is SignalType.ENTRY:
+        return entry_side
+    if signal.signal_type is SignalType.EXIT:
+        return OrderSide.SELL if entry_side is OrderSide.BUY else OrderSide.BUY
+    raise ValueError("UNSUPPORTED_SIGNAL_TYPE")
 
 
 def _same_session(
