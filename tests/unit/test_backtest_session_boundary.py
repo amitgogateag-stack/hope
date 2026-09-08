@@ -219,3 +219,54 @@ def test_partial_fill_does_not_continue_into_next_session():
     assert result.events[0].result.fill.quantity == Decimal("4")
     assert result.final_state.positions[UUID(INSTRUMENT)].quantity == Decimal("4")
     assert len(result.unfilled_order_ids) == 1
+
+
+def test_backtest_uses_first_quote_at_or_after_latency_eligibility():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    early_quote = first + timedelta(minutes=1)
+    eligible_quote = first + timedelta(minutes=3)
+    session_close = datetime(2026, 1, 5, 15, 0, tzinfo=UTC)
+    next_session_open = datetime(2026, 1, 6, 14, 30, tzinfo=UTC)
+    session_calendar = MarketSessionCalendar(
+        (
+            (first, session_close),
+            (next_session_open, next_session_open + timedelta(minutes=30)),
+        )
+    )
+    signal = Signal(
+        signal_id=UUID("cccccccc-cccc-cccc-cccc-cccccccccccc"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="9" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = DeterministicBacktest(
+        Decimal("10000"),
+        CostModel(version="test"),
+        execution_latency=timedelta(minutes=2),
+    ).run(
+        (
+            make_bar(INSTRUMENT, first),
+            make_bar(INSTRUMENT, early_quote),
+            make_bar(INSTRUMENT, eligible_quote),
+        ),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+        session_calendar=session_calendar,
+    )
+
+    assert len(result.events) == 1
+    assert result.events[0].bar.event_time == eligible_quote
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.quantity == Decimal("1")
+    assert result.unfilled_order_ids == ()
