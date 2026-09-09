@@ -23,6 +23,7 @@ class ReplayResult:
     filled_quantity: Decimal
     cancellation_applied: bool = False
     rejection_applied: bool = False
+    session: ExecutionSession | None = None
 
 
 def replay_order(
@@ -35,7 +36,7 @@ def replay_order(
     initial_cash: Decimal = Decimal("0"),
     initial_portfolio: PortfolioState | None = None,
 ) -> ReplayResult:
-    """Replay an order's fills and optional terminal outcome deterministically.
+    """Replay an order's durable execution history into a resumable session.
 
     Fills are applied in supplied event order. Their fill timestamps must be
     non-decreasing so replay cannot reconstruct a time-reversed execution history.
@@ -43,7 +44,9 @@ def replay_order(
     remaining quantity. An execution rejection is terminal only for an unfilled
     order. Terminal outcomes require enough timestamp evidence to prove they did
     not occur before order creation. Any lifecycle, identity, duplicate, temporal,
-    or portfolio violation aborts replay.
+    or portfolio violation aborts replay. The returned session is the reconstructed
+    execution session and may continue processing later fills after a restart when
+    the replayed order remains open or partially filled.
     """
     ledger = PortfolioLedger(initial_cash)
     if initial_portfolio is not None:
@@ -140,4 +143,5 @@ def replay_order(
         total_quantity,
         cancellation_applied,
         rejection_applied,
+        session,
     )
