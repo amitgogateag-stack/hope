@@ -186,3 +186,22 @@ def test_restore_rejects_non_finite_cash():
 
     with pytest.raises(ValueError, match="PORTFOLIO_CASH_MUST_BE_FINITE"):
         PortfolioLedger.from_state(state)
+
+
+def test_restore_rejects_non_finite_position_quantity():
+    instrument = uuid4()
+    state = PortfolioState(
+        cash=Decimal("1000"),
+        positions={
+            instrument: PositionState(
+                instrument_id=instrument,
+                quantity=Decimal("NaN"),
+                average_price=Decimal("100"),
+                realized_pnl=Decimal("0"),
+                total_commission=Decimal("0"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="PORTFOLIO_POSITION_QUANTITY_MUST_BE_FINITE"):
+        PortfolioLedger.from_state(state)
