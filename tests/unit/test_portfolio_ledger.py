@@ -243,3 +243,22 @@ def test_restore_rejects_non_finite_total_commission():
 
     with pytest.raises(ValueError, match="PORTFOLIO_TOTAL_COMMISSION_MUST_BE_FINITE"):
         PortfolioLedger.from_state(state)
+
+
+def test_restore_rejects_non_finite_realized_pnl():
+    instrument = uuid4()
+    state = PortfolioState(
+        cash=Decimal("1000"),
+        positions={
+            instrument: PositionState(
+                instrument_id=instrument,
+                quantity=Decimal("1"),
+                average_price=Decimal("100"),
+                realized_pnl=Decimal("NaN"),
+                total_commission=Decimal("0"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="PORTFOLIO_REALIZED_PNL_MUST_BE_FINITE"):
+        PortfolioLedger.from_state(state)
