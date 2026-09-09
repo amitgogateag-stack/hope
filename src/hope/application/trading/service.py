@@ -13,6 +13,7 @@ from hope.domain.execution.models import (
     Environment,
     ExecutionCancellation,
     ExecutionRejection,
+    Order,
     OrderSide,
 )
 from hope.domain.execution.session import ExecutionSession, ExecutionSessionState
@@ -41,14 +42,22 @@ class TradingKernel:
     def __init__(self, ledger: PortfolioLedger) -> None:
         self._ledger = ledger
         self._execution_sessions: dict[UUID, ExecutionSession] = {}
+        self._terminal_orders: dict[UUID, Order] = {}
         self._order_signal_types: dict[UUID, SignalType] = {}
 
     def restore_execution_session(self, state: ExecutionSessionState) -> ExecutionSessionState:
-        """Register a durable execution session against this kernel's shared ledger."""
+        """Register a resumable durable execution session against this kernel's shared ledger."""
         order = state.lifecycle.order
         order_id = order.order_id
+        terminal_order = self._terminal_orders.get(order_id)
+        if terminal_order is not None:
+            if terminal_order != order:
+                raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+            raise ValueError("TERMINAL_ORDER_ID_CANNOT_BE_REUSED")
         if order_id in self._execution_sessions:
             raise ValueError("EXECUTION_SESSION_ALREADY_REGISTERED")
+        if state.lifecycle.status not in {"OPEN", "PARTIALLY_FILLED"}:
+            raise ValueError("EXECUTION_SESSION_NOT_RESUMABLE")
         if state.order_time is None and state.last_fill_time is None:
             raise ValueError("EXECUTION_SESSION_TEMPORAL_ANCHOR_REQUIRED")
 
@@ -60,6 +69,30 @@ class TradingKernel:
         self._execution_sessions[order_id] = session
         self._order_signal_types[order_id] = order.signal_type
         return session.state
+
+    def restore_terminal_order(self, state: ExecutionSessionState) -> ExecutionSessionState:
+        """Reserve durable identity for a terminal order without making it resumable."""
+        order = state.lifecycle.order
+        order_id = order.order_id
+        if state.lifecycle.status not in {"FILLED", "CANCELLED", "REJECTED"}:
+            raise ValueError("TERMINAL_ORDER_STATE_REQUIRED")
+        if order_id in self._execution_sessions:
+            raise ValueError("ORDER_ID_ALREADY_REGISTERED_AS_EXECUTION_SESSION")
+
+        existing_terminal = self._terminal_orders.get(order_id)
+        if existing_terminal is not None:
+            if existing_terminal != order:
+                raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+            raise ValueError("TERMINAL_ORDER_ALREADY_REGISTERED")
+
+        existing_signal_type = self._order_signal_types.get(order_id)
+        if existing_signal_type is not None and existing_signal_type is not order.signal_type:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_SIGNAL_TYPE")
+
+        ExecutionSession.from_state(state, self._ledger)
+        self._terminal_orders[order_id] = order
+        self._order_signal_types[order_id] = order.signal_type
+        return state
 
     @staticmethod
     def _hash_payload(*parts: object) -> str:
@@ -110,6 +143,12 @@ class TradingKernel:
         order_id: UUID,
     ) -> ExecutionSession:
         order = materialize_order(intent, order_id)
+        terminal_order = self._terminal_orders.get(order_id)
+        if terminal_order is not None:
+            if terminal_order != order:
+                raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_INTENT")
+            raise ValueError("TERMINAL_ORDER_ID_CANNOT_BE_REUSED")
+
         session = self._execution_sessions.get(order_id)
         if session is None:
             session = ExecutionSession(OrderLifecycle(order), self._ledger)
