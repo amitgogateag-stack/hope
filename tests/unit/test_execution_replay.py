@@ -185,3 +185,19 @@ def test_replay_rejects_excess_quantity():
     order = make_order("10")
     with pytest.raises(ExecutionReplayError, match="FILL_EXCEEDS_REMAINING_ORDER_QUANTITY"):
         replay_order(order, [make_fill(order, "6"), make_fill(order, "5", 1)], initial_cash=Decimal("10000"))
+
+
+@pytest.mark.parametrize("quantity", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+def test_execution_cancellation_rejects_non_finite_quantity(quantity):
+    order = make_order("10")
+
+    with pytest.raises(ValueError, match="EXECUTION_CANCELLATION_QUANTITY_MUST_BE_FINITE"):
+        ExecutionCancellation(
+            order_id=order.order_id,
+            signal_id=order.signal_id,
+            instrument_id=order.instrument_id,
+            environment=order.environment,
+            reason_code="REPLAY_CANCELLED",
+            cancellation_time=BASE_TIME,
+            cancelled_quantity=quantity,
+        )

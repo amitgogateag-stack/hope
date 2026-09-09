@@ -71,5 +71,7 @@ class ExecutionCancellation:
             raise ValueError("EXECUTION_CANCELLATION_REASON_REQUIRED")
         if self.cancellation_time.tzinfo is None or self.cancellation_time.utcoffset() is None:
             raise ValueError("EXECUTION_CANCELLATION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if not self.cancelled_quantity.is_finite():
+            raise ValueError("EXECUTION_CANCELLATION_QUANTITY_MUST_BE_FINITE")
         if self.cancelled_quantity <= 0:
             raise ValueError("EXECUTION_CANCELLATION_QUANTITY_MUST_BE_POSITIVE")
