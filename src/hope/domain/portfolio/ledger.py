@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict
@@ -51,7 +52,12 @@ class PortfolioLedger:
         self._applied_fill_ids: set[UUID] = set()
 
     @classmethod
-    def from_state(cls, state: PortfolioState) -> "PortfolioLedger":
+    def from_state(
+        cls,
+        state: PortfolioState,
+        *,
+        applied_fill_ids: Collection[UUID] = (),
+    ) -> "PortfolioLedger":
         """Restore a ledger from an already-materialized domain state baseline."""
         if not state.cash.is_finite():
             raise ValueError("PORTFOLIO_CASH_MUST_BE_FINITE")
@@ -75,6 +81,7 @@ class PortfolioLedger:
         ledger = cls(Decimal("0"))
         ledger._initial_cash = state.cash
         ledger._state = PortfolioState(state.cash, dict(state.positions))
+        ledger._applied_fill_ids = set(applied_fill_ids)
         return ledger
 
     @property

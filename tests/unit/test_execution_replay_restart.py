@@ -81,6 +81,38 @@ def test_replay_rejects_ambiguous_cash_and_portfolio_baselines():
         replay_order(order, [], order_time=BASE_TIME, initial_cash=Decimal("10000"), initial_portfolio=baseline)
 
 
+def test_replay_requires_portfolio_baseline_for_restored_fill_ids():
+    order = make_order()
+
+    with pytest.raises(ExecutionReplayError, match="INITIAL_FILL_IDS_REQUIRE_PORTFOLIO_BASELINE"):
+        replay_order(
+            order,
+            [],
+            order_time=BASE_TIME,
+            initial_cash=Decimal("10000"),
+            initial_applied_fill_ids={uuid4()},
+        )
+
+
+def test_replayed_session_preserves_preorder_fill_id_history():
+    order = make_order()
+    baseline = PortfolioState(cash=Decimal("5000"), positions={})
+    historical_fill = make_fill(order, "1", 0)
+    restored = replay_order(
+        order,
+        [],
+        order_time=BASE_TIME,
+        initial_portfolio=baseline,
+        initial_applied_fill_ids={historical_fill.fill_id},
+    )
+    before = restored.session.state
+
+    with pytest.raises(ExecutionSessionError, match="DUPLICATE_FILL"):
+        restored.session.apply_fill(historical_fill)
+
+    assert restored.session.state == before
+
+
 def test_replayed_session_rejects_fill_older_than_last_replayed_fill():
     order = make_order()
     first_fill = make_fill(order, "4", 2)

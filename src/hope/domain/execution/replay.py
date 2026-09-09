@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Collection
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Sequence
+from uuid import UUID
 
 from hope.domain.execution.lifecycle import OrderLifecycle
 from hope.domain.execution.models import ExecutionCancellation, ExecutionRejection
@@ -35,13 +37,19 @@ def replay_order(
     order_time: datetime | None = None,
     initial_cash: Decimal = Decimal("0"),
     initial_portfolio: PortfolioState | None = None,
+    initial_applied_fill_ids: Collection[UUID] = (),
 ) -> ReplayResult:
     """Replay an order's durable execution history into a safely resumable session when anchored."""
     if initial_portfolio is not None and initial_cash != Decimal("0"):
         raise ExecutionReplayError("INITIAL_CASH_AND_PORTFOLIO_MUTUALLY_EXCLUSIVE")
+    if initial_applied_fill_ids and initial_portfolio is None:
+        raise ExecutionReplayError("INITIAL_FILL_IDS_REQUIRE_PORTFOLIO_BASELINE")
 
     if initial_portfolio is not None:
-        ledger = PortfolioLedger.from_state(initial_portfolio)
+        ledger = PortfolioLedger.from_state(
+            initial_portfolio,
+            applied_fill_ids=initial_applied_fill_ids,
+        )
         baseline_position = initial_portfolio.positions.get(order.instrument_id)
         baseline_quantity = baseline_position.quantity if baseline_position else Decimal("0")
     else:
