@@ -64,6 +64,8 @@ class PortfolioLedger:
                 raise ValueError("PORTFOLIO_OPEN_POSITION_AVERAGE_PRICE_MUST_BE_POSITIVE")
             if position.quantity == 0 and position.average_price != 0:
                 raise ValueError("PORTFOLIO_FLAT_POSITION_AVERAGE_PRICE_MUST_BE_ZERO")
+            if not position.total_commission.is_finite():
+                raise ValueError("PORTFOLIO_TOTAL_COMMISSION_MUST_BE_FINITE")
             if position.total_commission < 0:
                 raise ValueError("PORTFOLIO_TOTAL_COMMISSION_MUST_BE_NON_NEGATIVE")
         ledger = cls(Decimal("0"))
