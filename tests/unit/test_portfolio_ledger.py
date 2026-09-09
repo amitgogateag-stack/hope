@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
 from hope.domain.execution.timeline import ExecutionTimeline
-from hope.domain.portfolio.ledger import PortfolioLedger
+from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState, PositionState
 
 
 BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)
@@ -102,3 +102,23 @@ def test_duplicate_fill_is_rejected():
     ledger.apply_fill(fill)
     with pytest.raises(ValueError, match="DUPLICATE_FILL"):
         ledger.apply_fill(fill)
+
+
+def test_restore_rejects_position_key_identity_mismatch():
+    key_instrument = uuid4()
+    embedded_instrument = uuid4()
+    state = PortfolioState(
+        cash=Decimal("1000"),
+        positions={
+            key_instrument: PositionState(
+                instrument_id=embedded_instrument,
+                quantity=Decimal("1"),
+                average_price=Decimal("100"),
+                realized_pnl=Decimal("0"),
+                total_commission=Decimal("0"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="PORTFOLIO_POSITION_KEY_MISMATCH"):
+        PortfolioLedger.from_state(state)

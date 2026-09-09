@@ -51,6 +51,9 @@ class PortfolioLedger:
     @classmethod
     def from_state(cls, state: PortfolioState) -> "PortfolioLedger":
         """Restore a ledger from an already-materialized domain state baseline."""
+        for instrument_id, position in state.positions.items():
+            if position.instrument_id != instrument_id:
+                raise ValueError("PORTFOLIO_POSITION_KEY_MISMATCH")
         ledger = cls(Decimal("0"))
         ledger._initial_cash = state.cash
         ledger._state = PortfolioState(state.cash, dict(state.positions))
