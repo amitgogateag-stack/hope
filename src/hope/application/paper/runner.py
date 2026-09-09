@@ -10,6 +10,7 @@ from hope.application.jobs import (
     ScheduledJobRun,
     create_job_run_completion,
 )
+from hope.application.paper.context import PaperCycleContext
 
 
 class PaperCycleOutcome(str, Enum):
@@ -44,7 +45,7 @@ class PaperCycleRunner:
     def run(
         self,
         job_run: ScheduledJobRun,
-        work: Callable[[ScheduledJobRun], None],
+        work: Callable[[PaperCycleContext], None],
     ) -> PaperCycleOutcome:
         if not self._repository.claim(job_run):
             record = self._repository.get_record(job_run.job_run_id)
@@ -54,8 +55,9 @@ class PaperCycleRunner:
                 raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
             return PaperCycleOutcome.SKIPPED_TERMINAL
 
+        context = PaperCycleContext(job_run)
         try:
-            work(job_run)
+            work(context)
         except Exception as exc:
             completion = create_job_run_completion(
                 job_run,

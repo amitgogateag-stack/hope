@@ -40,8 +40,14 @@ def test_paper_cycle_runtime_executes_once_and_persists_terminal_state() -> None
             now=lambda: job_run.scheduled_for + timedelta(minutes=1),
         )
 
-        assert runner.run(job_run, lambda run: calls.append(run.job_run_id)) is PaperCycleOutcome.EXECUTED
-        assert runner.run(job_run, lambda run: pytest.fail("duplicate work must not run")) is PaperCycleOutcome.SKIPPED_TERMINAL
+        assert runner.run(
+            job_run,
+            lambda context: calls.append(context.job_run.job_run_id),
+        ) is PaperCycleOutcome.EXECUTED
+        assert runner.run(
+            job_run,
+            lambda context: pytest.fail("duplicate work must not run"),
+        ) is PaperCycleOutcome.SKIPPED_TERMINAL
         assert calls == [job_run.job_run_id]
 
         record = repository.get_record(job_run.job_run_id)
@@ -85,4 +91,7 @@ def test_stranded_paper_claim_can_be_explicitly_quarantined_without_replay() -> 
         assert record.completed_at == job_run.scheduled_for + timedelta(minutes=5)
         assert record.failure_code == "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"
 
-        assert runner.run(job_run, lambda run: pytest.fail("quarantined work must not replay")) is PaperCycleOutcome.SKIPPED_TERMINAL
+        assert runner.run(
+            job_run,
+            lambda context: pytest.fail("quarantined work must not replay"),
+        ) is PaperCycleOutcome.SKIPPED_TERMINAL

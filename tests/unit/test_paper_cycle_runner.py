@@ -49,7 +49,7 @@ def test_paper_cycle_runner_executes_claimed_run_and_marks_success() -> None:
         now=lambda: job_run.scheduled_for + timedelta(minutes=1),
     )
 
-    outcome = runner.run(job_run, lambda run: calls.append(run.job_run_id))
+    outcome = runner.run(job_run, lambda context: calls.append(context.job_run.job_run_id))
 
     assert outcome is PaperCycleOutcome.EXECUTED
     assert calls == [job_run.job_run_id]
@@ -67,7 +67,7 @@ def test_paper_cycle_runner_skips_terminal_duplicate_without_running_work() -> N
     repository = FakeJobRunRepository(claim_result=False, record=terminal)
     runner = PaperCycleRunner(repository, now=lambda: terminal.completed_at)
 
-    outcome = runner.run(job_run, lambda run: pytest.fail("work must not run"))
+    outcome = runner.run(job_run, lambda context: pytest.fail("work must not run"))
 
     assert outcome is PaperCycleOutcome.SKIPPED_TERMINAL
     assert repository.completions == []
@@ -80,7 +80,7 @@ def test_paper_cycle_runner_rejects_incomplete_prior_claim() -> None:
     runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
-        runner.run(job_run, lambda run: pytest.fail("work must not run"))
+        runner.run(job_run, lambda context: pytest.fail("work must not run"))
 
 
 def test_paper_cycle_runner_marks_failure_and_reraises_work_error() -> None:
@@ -91,7 +91,7 @@ def test_paper_cycle_runner_marks_failure_and_reraises_work_error() -> None:
         now=lambda: job_run.scheduled_for + timedelta(minutes=2),
     )
 
-    def fail(_job_run) -> None:
+    def fail(_context) -> None:
         raise ValueError("boom")
 
     with pytest.raises(ValueError, match="boom"):
@@ -112,7 +112,7 @@ def test_paper_cycle_runner_fails_closed_when_terminal_write_loses() -> None:
     )
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_COMPLETION_CONFLICT"):
-        runner.run(job_run, lambda run: None)
+        runner.run(job_run, lambda context: None)
 
 
 def test_paper_cycle_runner_rejects_missing_state_after_failed_claim() -> None:
@@ -121,7 +121,7 @@ def test_paper_cycle_runner_rejects_missing_state_after_failed_claim() -> None:
     runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_CLAIM_STATE_MISSING"):
-        runner.run(job_run, lambda run: pytest.fail("work must not run"))
+        runner.run(job_run, lambda context: pytest.fail("work must not run"))
 
 
 def test_quarantine_incomplete_claim_marks_stranded_run_failed() -> None:
