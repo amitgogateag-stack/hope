@@ -49,3 +49,40 @@ def test_paper_cycle_runtime_executes_once_and_persists_terminal_state() -> None
         assert record.status is JobRunStatus.SUCCEEDED
         assert record.completed_at == job_run.scheduled_for + timedelta(minutes=1)
         assert record.failure_code is None
+
+
+@pytest.mark.integration
+def test_stranded_paper_claim_can_be_explicitly_quarantined_without_replay() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    job_run = create_scheduled_job_run(
+        "paper-runtime-stranded",
+        datetime(2026, 9, 9, 21, 0, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("DELETE FROM job_runs WHERE job_key = :job_key AND scheduled_for = :scheduled_for"),
+            {"job_key": job_run.job_key, "scheduled_for": job_run.scheduled_for},
+        )
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.claim(job_run) is True
+
+        runner = PaperCycleRunner(
+            repository,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=5),
+        )
+        assert runner.quarantine_incomplete_claim(job_run) is PaperCycleOutcome.QUARANTINED_INCOMPLETE
+
+        record = repository.get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.completed_at == job_run.scheduled_for + timedelta(minutes=5)
+        assert record.failure_code == "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"
+
+        assert runner.run(job_run, lambda run: pytest.fail("quarantined work must not replay")) is PaperCycleOutcome.SKIPPED_TERMINAL

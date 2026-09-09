@@ -15,6 +15,7 @@ from hope.application.jobs import (
 class PaperCycleOutcome(str, Enum):
     EXECUTED = "EXECUTED"
     SKIPPED_TERMINAL = "SKIPPED_TERMINAL"
+    QUARANTINED_INCOMPLETE = "QUARANTINED_INCOMPLETE"
 
 
 class PaperJobRunRepository(Protocol):
@@ -74,3 +75,21 @@ class PaperCycleRunner:
         if not self._repository.complete(completion):
             raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
         return PaperCycleOutcome.EXECUTED
+
+    def quarantine_incomplete_claim(self, job_run: ScheduledJobRun) -> PaperCycleOutcome:
+        """Explicitly terminalize a stranded claim after the caller proves its worker is gone."""
+        record = self._repository.get_record(job_run.job_run_id)
+        if record is None:
+            raise RuntimeError("PAPER_JOB_CLAIM_STATE_MISSING")
+        if record.status is not JobRunStatus.CLAIMED:
+            return PaperCycleOutcome.SKIPPED_TERMINAL
+
+        completion = create_job_run_completion(
+            job_run,
+            JobRunStatus.FAILED,
+            self._now(),
+            failure_code="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM",
+        )
+        if not self._repository.complete(completion):
+            raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
+        return PaperCycleOutcome.QUARANTINED_INCOMPLETE

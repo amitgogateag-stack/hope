@@ -122,3 +122,58 @@ def test_paper_cycle_runner_rejects_missing_state_after_failed_claim() -> None:
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_CLAIM_STATE_MISSING"):
         runner.run(job_run, lambda run: pytest.fail("work must not run"))
+
+
+def test_quarantine_incomplete_claim_marks_stranded_run_failed() -> None:
+    job_run = make_run()
+    claimed = JobRunRecord(run=job_run, status=JobRunStatus.CLAIMED)
+    repository = FakeJobRunRepository(record=claimed)
+    runner = PaperCycleRunner(
+        repository,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=5),
+    )
+
+    outcome = runner.quarantine_incomplete_claim(job_run)
+
+    assert outcome is PaperCycleOutcome.QUARANTINED_INCOMPLETE
+    assert len(repository.completions) == 1
+    completion = repository.completions[0]
+    assert completion.status is JobRunStatus.FAILED
+    assert completion.failure_code == "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"
+
+
+def test_quarantine_incomplete_claim_is_idempotent_for_terminal_run() -> None:
+    job_run = make_run()
+    terminal = JobRunRecord(
+        run=job_run,
+        status=JobRunStatus.FAILED,
+        completed_at=job_run.scheduled_for + timedelta(minutes=1),
+        failure_code="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM",
+    )
+    repository = FakeJobRunRepository(record=terminal)
+    runner = PaperCycleRunner(repository, now=lambda: terminal.completed_at)
+
+    assert runner.quarantine_incomplete_claim(job_run) is PaperCycleOutcome.SKIPPED_TERMINAL
+    assert repository.completions == []
+
+
+def test_quarantine_incomplete_claim_rejects_missing_state() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository(record=None)
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_CLAIM_STATE_MISSING"):
+        runner.quarantine_incomplete_claim(job_run)
+
+
+def test_quarantine_incomplete_claim_fails_closed_when_terminal_write_loses() -> None:
+    job_run = make_run()
+    claimed = JobRunRecord(run=job_run, status=JobRunStatus.CLAIMED)
+    repository = FakeJobRunRepository(record=claimed, complete_result=False)
+    runner = PaperCycleRunner(
+        repository,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=5),
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_COMPLETION_CONFLICT"):
+        runner.quarantine_incomplete_claim(job_run)
