@@ -62,3 +62,9 @@ class PaperCycleContext:
         if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
             raise ValueError("PAPER_FILL_SEQUENCE_INVALID")
         return uuid5(NAMESPACE_URL, f"hope:paper:fill:{signal_id}:{sequence}")
+
+    @staticmethod
+    def pnl_event_id(position_id: UUID, sequence: int) -> UUID:
+        if isinstance(sequence, bool) or not isinstance(sequence, int) or sequence < 0:
+            raise ValueError("PAPER_PNL_SEQUENCE_INVALID")
+        return uuid5(NAMESPACE_URL, f"hope:paper:pnl:{position_id}:{sequence}")
