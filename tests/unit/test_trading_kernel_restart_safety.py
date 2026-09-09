@@ -6,6 +6,7 @@ import pytest
 
 from hope.application.trading.service import TradingKernel
 from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.replay import replay_order
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger
@@ -21,6 +22,44 @@ ENTRY_FILL_ID = UUID("44444444-4444-4444-4444-444444444444")
 EXIT_SIGNAL_ID = UUID("55555555-5555-5555-5555-555555555555")
 EXIT_ORDER_ID = UUID("66666666-6666-6666-6666-666666666666")
 EXIT_FILL_ID = UUID("77777777-7777-7777-7777-777777777777")
+RESUME_FILL_ID = UUID("88888888-8888-8888-8888-888888888888")
+
+
+def make_replayed_partial_entry():
+    decision = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    intent = OrderIntent(
+        signal_id=ENTRY_SIGNAL_ID,
+        instrument_id=INSTRUMENT_ID,
+        side=OrderSide.BUY,
+        quantity=Decimal("10"),
+        environment=Environment.BACKTEST,
+        signal_type=SignalType.ENTRY,
+    )
+    order = materialize_order(intent, ENTRY_ORDER_ID)
+    first_fill = Fill(
+        fill_id=ENTRY_FILL_ID,
+        order_id=ENTRY_ORDER_ID,
+        signal_id=ENTRY_SIGNAL_ID,
+        instrument_id=INSTRUMENT_ID,
+        side=OrderSide.BUY,
+        quantity=Decimal("4"),
+        price=Decimal("100"),
+        commission=Decimal("0"),
+        slippage=Decimal("0"),
+        cost_model_version="seed",
+        fill_time=decision,
+    )
+    replayed = replay_order(
+        order,
+        [first_fill],
+        order_time=decision,
+        initial_cash=Decimal("10000"),
+    )
+    ledger = PortfolioLedger.from_state(
+        replayed.state.portfolio,
+        applied_fill_ids=replayed.state.fill_ids,
+    )
+    return decision, intent, replayed.state, ledger
 
 
 def test_fresh_kernel_exit_intent_cannot_reverse_existing_position():
@@ -101,3 +140,52 @@ def test_materialized_order_retains_signal_type_as_durable_identity():
     assert exit_order.signal_type is SignalType.EXIT
     assert entry_order.signal_type is SignalType.ENTRY
     assert exit_order != entry_order
+
+
+def test_kernel_restores_partial_execution_session_and_resumes_on_shared_ledger():
+    decision, intent, session_state, ledger = make_replayed_partial_entry()
+    kernel = TradingKernel(ledger)
+
+    restored = kernel.restore_execution_session(session_state)
+    assert restored == session_state
+
+    resume_time = decision + timedelta(minutes=1)
+    timeline = ExecutionTimeline.from_decision(
+        decision,
+        latency=timedelta(0),
+    ).with_fill_time(resume_time)
+    result = kernel.execute_order(
+        intent,
+        ENTRY_ORDER_ID,
+        ExecutionQuote(
+            INSTRUMENT_ID,
+            resume_time,
+            Decimal("100"),
+            Decimal("100"),
+        ),
+        CostModel(version="resume-test"),
+        decision_time=decision,
+        fill_id=RESUME_FILL_ID,
+        timeline=timeline,
+        quantity=Decimal("6"),
+    )
+
+    assert result.portfolio_state == ledger.state
+    assert ledger.state.positions[INSTRUMENT_ID].quantity == Decimal("10")
+    assert ledger.state.cash == Decimal("9000")
+    assert kernel._execution_sessions[ENTRY_ORDER_ID].state.lifecycle.status == "FILLED"
+    assert kernel._execution_sessions[ENTRY_ORDER_ID].state.fill_ids == frozenset(
+        {ENTRY_FILL_ID, RESUME_FILL_ID}
+    )
+
+
+def test_kernel_restart_restore_cannot_overwrite_existing_execution_session():
+    _, _, session_state, ledger = make_replayed_partial_entry()
+    kernel = TradingKernel(ledger)
+    kernel.restore_execution_session(session_state)
+    before = ledger.state
+
+    with pytest.raises(ValueError, match="EXECUTION_SESSION_ALREADY_REGISTERED"):
+        kernel.restore_execution_session(session_state)
+
+    assert ledger.state == before

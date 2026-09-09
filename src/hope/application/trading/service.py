@@ -15,7 +15,7 @@ from hope.domain.execution.models import (
     ExecutionRejection,
     OrderSide,
 )
-from hope.domain.execution.session import ExecutionSession
+from hope.domain.execution.session import ExecutionSession, ExecutionSessionState
 from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill, simulate_market_fill
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState
@@ -42,6 +42,24 @@ class TradingKernel:
         self._ledger = ledger
         self._execution_sessions: dict[UUID, ExecutionSession] = {}
         self._order_signal_types: dict[UUID, SignalType] = {}
+
+    def restore_execution_session(self, state: ExecutionSessionState) -> ExecutionSessionState:
+        """Register a durable execution session against this kernel's shared ledger."""
+        order = state.lifecycle.order
+        order_id = order.order_id
+        if order_id in self._execution_sessions:
+            raise ValueError("EXECUTION_SESSION_ALREADY_REGISTERED")
+        if state.order_time is None and state.last_fill_time is None:
+            raise ValueError("EXECUTION_SESSION_TEMPORAL_ANCHOR_REQUIRED")
+
+        existing_signal_type = self._order_signal_types.get(order_id)
+        if existing_signal_type is not None and existing_signal_type is not order.signal_type:
+            raise ValueError("ORDER_ID_REUSED_WITH_DIFFERENT_SIGNAL_TYPE")
+
+        session = ExecutionSession.from_state(state, self._ledger)
+        self._execution_sessions[order_id] = session
+        self._order_signal_types[order_id] = order.signal_type
+        return session.state
 
     @staticmethod
     def _hash_payload(*parts: object) -> str:
