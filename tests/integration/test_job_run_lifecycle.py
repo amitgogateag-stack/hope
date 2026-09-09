@@ -89,3 +89,52 @@ def test_job_run_terminal_transitions_are_atomic_and_idempotent() -> None:
         assert failed_record.status is JobRunStatus.FAILED
         assert failed_record.completed_at == failure.completed_at
         assert failed_record.failure_code == "UPSTREAM_DATA_UNAVAILABLE"
+
+
+@pytest.mark.integration
+def test_job_run_completion_rejects_durable_identity_conflict() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    job_run = create_scheduled_job_run(
+        "paper-cycle-corrupted-completion",
+        datetime(2026, 9, 9, 20, 0, tzinfo=UTC),
+    )
+    completion = create_job_run_completion(
+        job_run,
+        JobRunStatus.SUCCEEDED,
+        job_run.scheduled_for + timedelta(minutes=5),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "DELETE FROM job_runs "
+                "WHERE job_run_id = :job_run_id "
+                "OR (job_key = :job_key AND scheduled_for = :scheduled_for)"
+            ),
+            {
+                "job_run_id": job_run.job_run_id,
+                "job_key": job_run.job_key,
+                "scheduled_for": job_run.scheduled_for,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for) "
+                "VALUES (:job_run_id, :corrupted_key, :scheduled_for)"
+            ),
+            {
+                "job_run_id": job_run.job_run_id,
+                "corrupted_key": "different-job-key",
+                "scheduled_for": job_run.scheduled_for,
+            },
+        )
+        repository = SqlAlchemyJobRunRepository(connection)
+
+        with pytest.raises(ValueError, match="JOB_RUN_IDENTITY_CONFLICT"):
+            repository.complete(completion)

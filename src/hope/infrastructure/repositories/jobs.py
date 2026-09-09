@@ -72,7 +72,32 @@ class SqlAlchemyJobRunRepository:
             .returning(self._job_runs.c.job_run_id)
         )
         completed_id = self._connection.execute(statement).scalar_one_or_none()
-        return completed_id is not None
+        if completed_id is not None:
+            return True
+
+        existing_by_id = self._connection.execute(
+            select(
+                self._job_runs.c.job_key,
+                self._job_runs.c.scheduled_for,
+            ).where(self._job_runs.c.job_run_id == completion.run.job_run_id)
+        ).mappings().one_or_none()
+        if existing_by_id is not None:
+            if (
+                existing_by_id["job_key"] != completion.run.job_key
+                or existing_by_id["scheduled_for"] != completion.run.scheduled_for
+            ):
+                raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+            return False
+
+        existing_id = self._connection.execute(
+            select(self._job_runs.c.job_run_id).where(
+                self._job_runs.c.job_key == completion.run.job_key,
+                self._job_runs.c.scheduled_for == completion.run.scheduled_for,
+            )
+        ).scalar_one_or_none()
+        if existing_id is not None and existing_id != completion.run.job_run_id:
+            raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+        return False
 
     def get(self, job_run_id: UUID) -> ScheduledJobRun | None:
         record = self.get_record(job_run_id)
