@@ -12,6 +12,24 @@ class JobRunStatus(str, Enum):
     FAILED = "FAILED"
 
 
+def _canonical_job_key(job_key: str) -> str:
+    normalized_key = job_key.strip()
+    if not normalized_key:
+        raise ValueError("JOB_KEY_REQUIRED")
+    return normalized_key
+
+
+def _canonical_schedule_time(scheduled_for: datetime) -> datetime:
+    if scheduled_for.tzinfo is None or scheduled_for.utcoffset() is None:
+        raise ValueError("JOB_SCHEDULE_TIME_MUST_BE_TIMEZONE_AWARE")
+    return scheduled_for.astimezone(timezone.utc)
+
+
+def _scheduled_job_run_id(job_key: str, scheduled_for: datetime) -> UUID:
+    canonical = f"{job_key}|{scheduled_for.isoformat()}"
+    return uuid5(NAMESPACE_URL, f"hope:scheduled-job:{canonical}")
+
+
 @dataclass(frozen=True)
 class ScheduledJobRun:
     """Durable identity for one scheduled invocation of a named HOPE job."""
@@ -19,6 +37,15 @@ class ScheduledJobRun:
     job_run_id: UUID
     job_key: str
     scheduled_for: datetime
+
+    def __post_init__(self) -> None:
+        normalized_key = _canonical_job_key(self.job_key)
+        canonical_time = _canonical_schedule_time(self.scheduled_for)
+        expected_id = _scheduled_job_run_id(normalized_key, canonical_time)
+        if self.job_run_id != expected_id:
+            raise ValueError("JOB_RUN_IDENTITY_MISMATCH")
+        object.__setattr__(self, "job_key", normalized_key)
+        object.__setattr__(self, "scheduled_for", canonical_time)
 
 
 @dataclass(frozen=True)
@@ -48,7 +75,7 @@ class JobRunRecord:
             raise ValueError("JOB_COMPLETION_TIME_MUST_BE_TIMEZONE_AWARE")
 
         canonical_completion = self.completed_at.astimezone(timezone.utc)
-        if canonical_completion < self.run.scheduled_for.astimezone(timezone.utc):
+        if canonical_completion < self.run.scheduled_for:
             raise ValueError("JOB_COMPLETION_PRECEDES_SCHEDULE")
         object.__setattr__(self, "completed_at", canonical_completion)
 
@@ -65,16 +92,10 @@ class JobRunRecord:
 
 def create_scheduled_job_run(job_key: str, scheduled_for: datetime) -> ScheduledJobRun:
     """Create a deterministic job-run identity from a name and scheduled instant."""
-    normalized_key = job_key.strip()
-    if not normalized_key:
-        raise ValueError("JOB_KEY_REQUIRED")
-    if scheduled_for.tzinfo is None or scheduled_for.utcoffset() is None:
-        raise ValueError("JOB_SCHEDULE_TIME_MUST_BE_TIMEZONE_AWARE")
-
-    canonical_time = scheduled_for.astimezone(timezone.utc)
-    canonical = f"{normalized_key}|{canonical_time.isoformat()}"
+    normalized_key = _canonical_job_key(job_key)
+    canonical_time = _canonical_schedule_time(scheduled_for)
     return ScheduledJobRun(
-        job_run_id=uuid5(NAMESPACE_URL, f"hope:scheduled-job:{canonical}"),
+        job_run_id=_scheduled_job_run_id(normalized_key, canonical_time),
         job_key=normalized_key,
         scheduled_for=canonical_time,
     )
