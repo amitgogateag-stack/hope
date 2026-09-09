@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from uuid import UUID
 from decimal import Decimal
 
+from hope.domain.signal.models import SignalType
+
 
 class Environment(StrEnum):
     RESEARCH = "RESEARCH"
@@ -26,6 +28,7 @@ class Order(BaseModel):
     side: OrderSide
     quantity: Decimal = Field(gt=0)
     environment: Environment
+    signal_type: SignalType = SignalType.ENTRY
 
     def assert_paper_safe(self) -> None:
         # There is intentionally no LIVE environment in v0.1.

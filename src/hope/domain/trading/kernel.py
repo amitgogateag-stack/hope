@@ -44,6 +44,7 @@ def materialize_order(intent: OrderIntent, order_id: UUID) -> Order:
         side=intent.side,
         quantity=intent.quantity,
         environment=intent.environment,
+        signal_type=intent.signal_type,
     )
     order.assert_paper_safe()
     return order

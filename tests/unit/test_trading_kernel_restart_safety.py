@@ -10,7 +10,7 @@ from hope.domain.execution.simulator import CostModel, ExecutionQuote, Fill
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger
 from hope.domain.signal.models import SignalType
-from hope.domain.trading.kernel import OrderIntent
+from hope.domain.trading.kernel import OrderIntent, materialize_order
 
 
 UTC = timezone.utc
@@ -75,3 +75,29 @@ def test_fresh_kernel_exit_intent_cannot_reverse_existing_position():
 
     assert ledger.state.positions[INSTRUMENT_ID].quantity == Decimal("1")
     assert ledger.state.cash == Decimal("9900")
+
+
+def test_materialized_order_retains_signal_type_as_durable_identity():
+    exit_intent = OrderIntent(
+        signal_id=EXIT_SIGNAL_ID,
+        instrument_id=INSTRUMENT_ID,
+        side=OrderSide.SELL,
+        quantity=Decimal("1"),
+        environment=Environment.BACKTEST,
+        signal_type=SignalType.EXIT,
+    )
+    entry_intent = OrderIntent(
+        signal_id=EXIT_SIGNAL_ID,
+        instrument_id=INSTRUMENT_ID,
+        side=OrderSide.SELL,
+        quantity=Decimal("1"),
+        environment=Environment.BACKTEST,
+        signal_type=SignalType.ENTRY,
+    )
+
+    exit_order = materialize_order(exit_intent, EXIT_ORDER_ID)
+    entry_order = materialize_order(entry_intent, EXIT_ORDER_ID)
+
+    assert exit_order.signal_type is SignalType.EXIT
+    assert entry_order.signal_type is SignalType.ENTRY
+    assert exit_order != entry_order
