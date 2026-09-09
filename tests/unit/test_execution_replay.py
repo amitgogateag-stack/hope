@@ -57,6 +57,7 @@ def test_replay_reconciles_multi_fill_order():
     assert result.rejection_applied is False
     assert result.state.lifecycle.status == "FILLED"
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("10")
+    assert result.session is None
 
 
 def test_replay_reconstructs_partial_fill_then_cancellation():
@@ -75,6 +76,7 @@ def test_replay_reconstructs_partial_fill_then_cancellation():
     assert result.state.lifecycle.status == "CANCELLED"
     assert result.state.lifecycle.remaining_quantity == Decimal("6")
     assert result.state.portfolio.positions[order.instrument_id].quantity == Decimal("4")
+    assert result.session is None
 
 
 def test_replay_reconstructs_unfilled_execution_rejection():
@@ -94,6 +96,7 @@ def test_replay_reconstructs_unfilled_execution_rejection():
     assert result.state.lifecycle.status == "REJECTED"
     assert result.state.portfolio.cash == Decimal("10000")
     assert order.instrument_id not in result.state.portfolio.positions
+    assert result.session is None
 
 
 def test_replay_rejects_execution_rejection_without_order_time():

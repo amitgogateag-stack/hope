@@ -127,12 +127,10 @@ def replay_order(
     if resulting_quantity != signed_quantity:
         raise ExecutionReplayError("PORTFOLIO_FILL_QUANTITY_MISMATCH")
 
-    resumable_session = session
-    if state.lifecycle.status == "OPEN" and last_fill_time is None and order_time is None:
-        # A zero-fill open order without an order timestamp has no durable temporal
-        # anchor. Return its reconstructed snapshot, but do not expose a resumable
-        # session that could accept fills from before the unknown order creation time.
-        resumable_session = None
+    resumable_session: ExecutionSession | None = None
+    if state.lifecycle.status in {"OPEN", "PARTIALLY_FILLED"}:
+        if last_fill_time is not None or order_time is not None:
+            resumable_session = session
 
     return ReplayResult(
         state,
