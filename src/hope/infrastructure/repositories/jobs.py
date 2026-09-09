@@ -33,9 +33,10 @@ class SqlAlchemyJobRunRepository:
                 scheduled_for=job_run.scheduled_for,
             )
             .on_conflict_do_nothing(index_elements=["job_key", "scheduled_for"])
+            .returning(self._job_runs.c.job_run_id)
         )
-        result = self._connection.execute(statement)
-        return result.rowcount == 1
+        inserted_id = self._connection.execute(statement).scalar_one_or_none()
+        return inserted_id is not None
 
     def get(self, job_run_id: UUID) -> ScheduledJobRun | None:
         row = self._connection.execute(
