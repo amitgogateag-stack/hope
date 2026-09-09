@@ -70,6 +70,17 @@ def test_replayed_open_session_preserves_order_time_for_future_fills():
     assert restored.session.state == before
 
 
+def test_zero_fill_open_replay_without_order_time_is_snapshot_only():
+    order = make_order()
+    restored = replay_order(order, [], initial_cash=Decimal("10000"))
+
+    assert restored.state.lifecycle.status == "OPEN"
+    assert restored.state.lifecycle.filled_quantity == Decimal("0")
+    assert restored.state.order_time is None
+    assert restored.state.last_fill_time is None
+    assert restored.session is None
+
+
 @pytest.mark.parametrize(
     ("fill_time", "error_code"),
     (
