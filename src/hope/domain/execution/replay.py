@@ -62,6 +62,15 @@ def replay_order(
     for fill in fills:
         if fill.fill_id in seen_ids:
             raise ExecutionReplayError("DUPLICATE_FILL_EVENT")
+        numeric_fields = (
+            ("QUANTITY", fill.quantity),
+            ("PRICE", fill.price),
+            ("COMMISSION", fill.commission),
+            ("SLIPPAGE", fill.slippage),
+        )
+        for field_name, value in numeric_fields:
+            if not value.is_finite():
+                raise ExecutionReplayError(f"FILL_{field_name}_MUST_BE_FINITE")
         if fill.fill_time is None:
             raise ExecutionReplayError("FILL_TIME_REQUIRED")
         if fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:

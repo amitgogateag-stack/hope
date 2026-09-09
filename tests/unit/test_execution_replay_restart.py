@@ -130,3 +130,20 @@ def test_replay_rejects_fill_without_usable_event_time(fill_time, error_code):
 
     with pytest.raises(ExecutionReplayError, match=error_code):
         replay_order(order, [malformed], initial_cash=Decimal("10000"))
+
+
+@pytest.mark.parametrize(
+    ("field_name", "error_code"),
+    (
+        ("quantity", "FILL_QUANTITY_MUST_BE_FINITE"),
+        ("price", "FILL_PRICE_MUST_BE_FINITE"),
+        ("commission", "FILL_COMMISSION_MUST_BE_FINITE"),
+        ("slippage", "FILL_SLIPPAGE_MUST_BE_FINITE"),
+    ),
+)
+def test_replay_rejects_non_finite_fill_numeric_fields(field_name, error_code):
+    order = make_order()
+    malformed = replace(make_fill(order, "4", 0), **{field_name: Decimal("NaN")})
+
+    with pytest.raises(ExecutionReplayError, match=error_code):
+        replay_order(order, [malformed], initial_cash=Decimal("10000"))
