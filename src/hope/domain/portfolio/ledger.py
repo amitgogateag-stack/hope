@@ -42,6 +42,8 @@ class PortfolioLedger:
     """
 
     def __init__(self, initial_cash: Decimal = Decimal("0")) -> None:
+        if not initial_cash.is_finite():
+            raise ValueError("INITIAL_CASH_MUST_BE_FINITE")
         if initial_cash < 0:
             raise ValueError("INITIAL_CASH_MUST_BE_NON_NEGATIVE")
         self._initial_cash = initial_cash

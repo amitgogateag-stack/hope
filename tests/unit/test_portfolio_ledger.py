@@ -104,6 +104,11 @@ def test_duplicate_fill_is_rejected():
         ledger.apply_fill(fill)
 
 
+def test_initial_cash_rejects_non_finite_value():
+    with pytest.raises(ValueError, match="INITIAL_CASH_MUST_BE_FINITE"):
+        PortfolioLedger(Decimal("NaN"))
+
+
 def test_restore_rejects_position_key_identity_mismatch():
     key_instrument = uuid4()
     embedded_instrument = uuid4()
