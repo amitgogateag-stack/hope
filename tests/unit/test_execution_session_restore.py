@@ -89,3 +89,14 @@ def test_session_restore_rejects_fill_history_mismatch():
 
     with pytest.raises(ExecutionSessionError, match="EXECUTION_SESSION_FILL_HISTORY_MISMATCH"):
         ExecutionSession.from_state(malformed, restored_ledger)
+
+
+def test_session_restore_requires_session_fill_history_in_shared_ledger():
+    order = make_order()
+    source_ledger = PortfolioLedger(Decimal("10000"))
+    source_session = ExecutionSession(OrderLifecycle(order), source_ledger, order_time=BASE_TIME)
+    snapshot = source_session.apply_fill(make_fill(order, "4", 1))
+    restored_ledger = PortfolioLedger.from_state(snapshot.portfolio)
+
+    with pytest.raises(ExecutionSessionError, match="EXECUTION_SESSION_FILL_HISTORY_NOT_IN_LEDGER"):
+        ExecutionSession.from_state(snapshot, restored_ledger)

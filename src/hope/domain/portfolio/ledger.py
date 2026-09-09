@@ -92,6 +92,10 @@ class PortfolioLedger:
     def state(self) -> PortfolioState:
         return self._state
 
+    @property
+    def applied_fill_ids(self) -> frozenset[UUID]:
+        return frozenset(self._applied_fill_ids)
+
     def apply_fill(self, fill: Fill) -> PortfolioState:
         if fill.fill_id in self._applied_fill_ids:
             raise ValueError("DUPLICATE_FILL")

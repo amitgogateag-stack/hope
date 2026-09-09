@@ -55,6 +55,8 @@ class ExecutionSession:
             raise ExecutionSessionError("EXECUTION_SESSION_PORTFOLIO_MISMATCH")
         if state.lifecycle.applied_fill_ids != state.fill_ids:
             raise ExecutionSessionError("EXECUTION_SESSION_FILL_HISTORY_MISMATCH")
+        if not state.fill_ids.issubset(ledger.applied_fill_ids):
+            raise ExecutionSessionError("EXECUTION_SESSION_FILL_HISTORY_NOT_IN_LEDGER")
         if state.last_fill_time is not None:
             if state.last_fill_time.tzinfo is None or state.last_fill_time.utcoffset() is None:
                 raise ExecutionSessionError("LAST_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
