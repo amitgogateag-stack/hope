@@ -9,6 +9,7 @@ from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order,
 from hope.domain.execution.replay import ExecutionReplayError, replay_order
 from hope.domain.execution.session import ExecutionSessionError
 from hope.domain.execution.timeline import ExecutionTimeline
+from hope.domain.portfolio.ledger import PortfolioState, PositionState
 
 
 BASE_TIME = datetime(2026, 1, 1, 14, 0, tzinfo=timezone.utc)
@@ -43,6 +44,41 @@ def test_replayed_partial_order_returns_session_that_can_resume_after_restart():
     assert resumed.portfolio.positions[order.instrument_id].quantity == Decimal("10")
     assert first_fill.fill_id in resumed.fill_ids
     assert resumed.last_fill_time == BASE_TIME + timedelta(minutes=1)
+
+
+def test_replay_restores_preorder_portfolio_before_resuming_execution():
+    order = make_order()
+    baseline = PortfolioState(
+        cash=Decimal("5000"),
+        positions={
+            order.instrument_id: PositionState(
+                instrument_id=order.instrument_id,
+                quantity=Decimal("3"),
+                average_price=Decimal("90"),
+                realized_pnl=Decimal("12"),
+                total_commission=Decimal("1"),
+            )
+        },
+    )
+    first_fill = make_fill(order, "4", 0)
+
+    restored = replay_order(order, [first_fill], initial_portfolio=baseline)
+
+    assert restored.session is not None
+    assert restored.state.portfolio.positions[order.instrument_id].quantity == Decimal("7")
+    assert baseline.positions[order.instrument_id].quantity == Decimal("3")
+
+    resumed = restored.session.apply_fill(make_fill(order, "6", 1))
+    assert resumed.lifecycle.status == "FILLED"
+    assert resumed.portfolio.positions[order.instrument_id].quantity == Decimal("13")
+
+
+def test_replay_rejects_ambiguous_cash_and_portfolio_baselines():
+    order = make_order()
+    baseline = PortfolioState(cash=Decimal("5000"), positions={})
+
+    with pytest.raises(ExecutionReplayError, match="INITIAL_CASH_AND_PORTFOLIO_MUTUALLY_EXCLUSIVE"):
+        replay_order(order, [], order_time=BASE_TIME, initial_cash=Decimal("10000"), initial_portfolio=baseline)
 
 
 def test_replayed_session_rejects_fill_older_than_last_replayed_fill():

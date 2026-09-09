@@ -48,6 +48,14 @@ class PortfolioLedger:
         self._state = PortfolioState(initial_cash, {})
         self._applied_fill_ids: set[UUID] = set()
 
+    @classmethod
+    def from_state(cls, state: PortfolioState) -> "PortfolioLedger":
+        """Restore a ledger from an already-materialized domain state baseline."""
+        ledger = cls(Decimal("0"))
+        ledger._initial_cash = state.cash
+        ledger._state = PortfolioState(state.cash, dict(state.positions))
+        return ledger
+
     @property
     def initial_cash(self) -> Decimal:
         return self._initial_cash

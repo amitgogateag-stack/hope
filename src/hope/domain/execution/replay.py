@@ -37,9 +37,16 @@ def replay_order(
     initial_portfolio: PortfolioState | None = None,
 ) -> ReplayResult:
     """Replay an order's durable execution history into a safely resumable session when anchored."""
-    ledger = PortfolioLedger(initial_cash)
+    if initial_portfolio is not None and initial_cash != Decimal("0"):
+        raise ExecutionReplayError("INITIAL_CASH_AND_PORTFOLIO_MUTUALLY_EXCLUSIVE")
+
     if initial_portfolio is not None:
-        raise ExecutionReplayError("INITIAL_PORTFOLIO_REPLAY_NOT_SUPPORTED")
+        ledger = PortfolioLedger.from_state(initial_portfolio)
+        baseline_position = initial_portfolio.positions.get(order.instrument_id)
+        baseline_quantity = baseline_position.quantity if baseline_position else Decimal("0")
+    else:
+        ledger = PortfolioLedger(initial_cash)
+        baseline_quantity = Decimal("0")
 
     if cancellation is not None and rejection is not None:
         raise ExecutionReplayError("TERMINAL_OUTCOMES_MUTUALLY_EXCLUSIVE")
@@ -124,7 +131,7 @@ def replay_order(
 
     position = state.portfolio.positions.get(order.instrument_id)
     resulting_quantity = position.quantity if position else Decimal("0")
-    if resulting_quantity != signed_quantity:
+    if resulting_quantity != baseline_quantity + signed_quantity:
         raise ExecutionReplayError("PORTFOLIO_FILL_QUANTITY_MISMATCH")
 
     resumable_session: ExecutionSession | None = None
