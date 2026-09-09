@@ -56,6 +56,8 @@ class PortfolioLedger:
                 raise ValueError("PORTFOLIO_POSITION_KEY_MISMATCH")
             if position.quantity != 0 and position.average_price <= 0:
                 raise ValueError("PORTFOLIO_OPEN_POSITION_AVERAGE_PRICE_MUST_BE_POSITIVE")
+            if position.quantity == 0 and position.average_price != 0:
+                raise ValueError("PORTFOLIO_FLAT_POSITION_AVERAGE_PRICE_MUST_BE_ZERO")
         ledger = cls(Decimal("0"))
         ledger._initial_cash = state.cash
         ledger._state = PortfolioState(state.cash, dict(state.positions))

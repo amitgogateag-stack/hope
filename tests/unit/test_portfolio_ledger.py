@@ -141,3 +141,22 @@ def test_restore_rejects_open_position_without_positive_average_price():
 
     with pytest.raises(ValueError, match="PORTFOLIO_OPEN_POSITION_AVERAGE_PRICE_MUST_BE_POSITIVE"):
         PortfolioLedger.from_state(state)
+
+
+def test_restore_rejects_flat_position_with_nonzero_average_price():
+    instrument = uuid4()
+    state = PortfolioState(
+        cash=Decimal("1000"),
+        positions={
+            instrument: PositionState(
+                instrument_id=instrument,
+                quantity=Decimal("0"),
+                average_price=Decimal("100"),
+                realized_pnl=Decimal("25"),
+                total_commission=Decimal("1"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="PORTFOLIO_FLAT_POSITION_AVERAGE_PRICE_MUST_BE_ZERO"):
+        PortfolioLedger.from_state(state)
