@@ -71,6 +71,8 @@ def replay_order(
         for field_name, value in numeric_fields:
             if not value.is_finite():
                 raise ExecutionReplayError(f"FILL_{field_name}_MUST_BE_FINITE")
+        if not fill.cost_model_version.strip():
+            raise ExecutionReplayError("FILL_COST_MODEL_VERSION_REQUIRED")
         if fill.fill_time is None:
             raise ExecutionReplayError("FILL_TIME_REQUIRED")
         if fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:
