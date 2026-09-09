@@ -21,6 +21,24 @@ class OrderLifecycle:
     rejected: bool = False
     applied_fill_ids: frozenset[UUID] = field(default_factory=frozenset)
 
+    def __post_init__(self) -> None:
+        if not self.filled_quantity.is_finite():
+            raise OrderLifecycleError("ORDER_LIFECYCLE_FILLED_QUANTITY_MUST_BE_FINITE")
+        if self.filled_quantity < 0:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_FILLED_QUANTITY_MUST_BE_NON_NEGATIVE")
+        if self.filled_quantity > self.order.quantity:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_FILLED_QUANTITY_EXCEEDS_ORDER_QUANTITY")
+        if self.cancelled and self.rejected:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_TERMINAL_FLAGS_MUTUALLY_EXCLUSIVE")
+        if self.rejected and self.filled_quantity != 0:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_REJECTED_MUST_BE_UNFILLED")
+        if self.cancelled and self.filled_quantity >= self.order.quantity:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_CANCELLED_REQUIRES_REMAINING_QUANTITY")
+        if self.filled_quantity == 0 and self.applied_fill_ids:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_FILL_HISTORY_WITHOUT_FILLED_QUANTITY")
+        if self.filled_quantity > 0 and not self.applied_fill_ids:
+            raise OrderLifecycleError("ORDER_LIFECYCLE_FILLED_QUANTITY_REQUIRES_FILL_HISTORY")
+
     @property
     def remaining_quantity(self) -> Decimal:
         return self.order.quantity - self.filled_quantity

@@ -90,3 +90,58 @@ def test_fill_with_different_instrument_is_rejected():
                       simulated.slippage, simulated.cost_model_version, simulated.fill_time)
     with pytest.raises(OrderLifecycleError, match="FILL_INSTRUMENT_MISMATCH"):
         OrderLifecycle(order).apply_fill(mismatched)
+
+
+@pytest.mark.parametrize("quantity", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
+def test_reconstructed_lifecycle_rejects_non_finite_filled_quantity(quantity):
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_FILLED_QUANTITY_MUST_BE_FINITE"):
+        OrderLifecycle(make_order(), filled_quantity=quantity)
+
+
+def test_reconstructed_lifecycle_rejects_negative_filled_quantity():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_FILLED_QUANTITY_MUST_BE_NON_NEGATIVE"):
+        OrderLifecycle(make_order(), filled_quantity=Decimal("-1"))
+
+
+def test_reconstructed_lifecycle_rejects_overfilled_quantity():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_FILLED_QUANTITY_EXCEEDS_ORDER_QUANTITY"):
+        OrderLifecycle(
+            make_order(),
+            filled_quantity=Decimal("11"),
+            applied_fill_ids=frozenset({uuid4()}),
+        )
+
+
+def test_reconstructed_lifecycle_rejects_mutually_exclusive_terminal_flags():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_TERMINAL_FLAGS_MUTUALLY_EXCLUSIVE"):
+        OrderLifecycle(make_order(), cancelled=True, rejected=True)
+
+
+def test_reconstructed_rejection_must_be_unfilled():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_REJECTED_MUST_BE_UNFILLED"):
+        OrderLifecycle(
+            make_order(),
+            filled_quantity=Decimal("1"),
+            rejected=True,
+            applied_fill_ids=frozenset({uuid4()}),
+        )
+
+
+def test_reconstructed_cancellation_requires_remaining_quantity():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_CANCELLED_REQUIRES_REMAINING_QUANTITY"):
+        OrderLifecycle(
+            make_order(),
+            filled_quantity=Decimal("10"),
+            cancelled=True,
+            applied_fill_ids=frozenset({uuid4()}),
+        )
+
+
+def test_reconstructed_lifecycle_rejects_fill_history_without_filled_quantity():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_FILL_HISTORY_WITHOUT_FILLED_QUANTITY"):
+        OrderLifecycle(make_order(), applied_fill_ids=frozenset({uuid4()}))
+
+
+def test_reconstructed_lifecycle_requires_fill_history_for_positive_filled_quantity():
+    with pytest.raises(OrderLifecycleError, match="ORDER_LIFECYCLE_FILLED_QUANTITY_REQUIRES_FILL_HISTORY"):
+        OrderLifecycle(make_order(), filled_quantity=Decimal("1"))
