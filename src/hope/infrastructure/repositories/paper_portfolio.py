@@ -115,13 +115,23 @@ class SqlAlchemyPaperPortfolioRepository:
         ).mappings().one_or_none()
         if portfolio is None:
             return None
-        applied = self._connection.execute(
-            select(self._applications.c.fill_id)
+        applications = self._connection.execute(
+            select(
+                self._applications.c.fill_id,
+                self._applications.c.application_sequence,
+            )
             .where(self._applications.c.portfolio_id == portfolio_id)
             .order_by(self._applications.c.application_sequence)
-        ).scalars().all()
+        ).mappings().all()
+        expected_sequences = list(range(1, portfolio["version"] + 1))
+        actual_sequences = [row["application_sequence"] for row in applications]
+        if actual_sequences != expected_sequences:
+            raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT")
         state = PortfolioState(portfolio["cash"], self._load_positions(portfolio_id))
-        return PortfolioLedger.from_state(state, applied_fill_ids=applied)
+        return PortfolioLedger.from_state(
+            state,
+            applied_fill_ids=[row["fill_id"] for row in applications],
+        )
 
     def apply_fill(self, portfolio_id: UUID, initial_cash: Decimal, fill: Fill) -> bool:
         """Atomically apply one already-durable PAPER fill to materialized portfolio state."""
