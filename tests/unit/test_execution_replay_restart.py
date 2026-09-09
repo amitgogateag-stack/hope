@@ -57,6 +57,19 @@ def test_replayed_session_rejects_fill_older_than_last_replayed_fill():
     assert restored.session.state == before
 
 
+def test_replayed_open_session_preserves_order_time_for_future_fills():
+    order = make_order()
+    order_time = BASE_TIME
+    restored = replay_order(order, [], order_time=order_time, initial_cash=Decimal("10000"))
+    before = restored.session.state
+
+    assert before.order_time == order_time
+    with pytest.raises(ExecutionSessionError, match="FILL_PRECEDES_ORDER_TIME"):
+        restored.session.apply_fill(make_fill(order, "1", -1))
+
+    assert restored.session.state == before
+
+
 @pytest.mark.parametrize(
     ("fill_time", "error_code"),
     (

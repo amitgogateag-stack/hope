@@ -36,23 +36,9 @@ def replay_order(
     initial_cash: Decimal = Decimal("0"),
     initial_portfolio: PortfolioState | None = None,
 ) -> ReplayResult:
-    """Replay an order's durable execution history into a resumable session.
-
-    Fills are applied in supplied event order. Their fill timestamps must be
-    non-decreasing so replay cannot reconstruct a time-reversed execution history.
-    A cancellation may follow zero or more fills and must report exactly the
-    remaining quantity. An execution rejection is terminal only for an unfilled
-    order. Terminal outcomes require enough timestamp evidence to prove they did
-    not occur before order creation. Any lifecycle, identity, duplicate, temporal,
-    or portfolio violation aborts replay. The returned session is the reconstructed
-    execution session and may continue processing later fills after a restart when
-    the replayed order remains open or partially filled.
-    """
+    """Replay an order's durable execution history into a resumable session."""
     ledger = PortfolioLedger(initial_cash)
     if initial_portfolio is not None:
-        # Initial state injection is intentionally unsupported until it has a
-        # dedicated serialization contract; accepting it silently would make
-        # replay provenance ambiguous.
         raise ExecutionReplayError("INITIAL_PORTFOLIO_REPLAY_NOT_SUPPORTED")
 
     if cancellation is not None and rejection is not None:
@@ -60,7 +46,7 @@ def replay_order(
     if order_time is not None and (order_time.tzinfo is None or order_time.utcoffset() is None):
         raise ExecutionReplayError("ORDER_TIME_MUST_BE_TIMEZONE_AWARE")
 
-    session = ExecutionSession(OrderLifecycle(order), ledger)
+    session = ExecutionSession(OrderLifecycle(order), ledger, order_time=order_time)
     seen_ids: set = set()
     total_quantity = Decimal("0")
     signed_quantity = Decimal("0")

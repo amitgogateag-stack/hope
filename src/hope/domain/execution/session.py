@@ -21,25 +21,28 @@ class ExecutionSessionState:
     portfolio: PortfolioState
     fill_ids: frozenset[UUID]
     last_fill_time: datetime | None = None
+    order_time: datetime | None = None
 
 
 class ExecutionSession:
-    """Coordinates one order lifecycle with the portfolio ledger.
+    """Coordinates one order lifecycle with the portfolio ledger."""
 
-    A fill is accepted only when both the order lifecycle and portfolio ledger
-    can accept it. Validation is performed before mutating either component,
-    preserving atomic behavior at the in-memory domain boundary. Fill event time
-    is monotonic within the session so a restored session cannot accept history
-    that predates its last replayed fill.
-    """
-
-    def __init__(self, lifecycle: OrderLifecycle, ledger: PortfolioLedger) -> None:
+    def __init__(
+        self,
+        lifecycle: OrderLifecycle,
+        ledger: PortfolioLedger,
+        *,
+        order_time: datetime | None = None,
+    ) -> None:
         if lifecycle.order.environment.value not in {"RESEARCH", "BACKTEST", "WALK_FORWARD", "PAPER"}:
             raise ExecutionSessionError("UNSUPPORTED_EXECUTION_ENVIRONMENT")
+        if order_time is not None and (order_time.tzinfo is None or order_time.utcoffset() is None):
+            raise ExecutionSessionError("ORDER_TIME_MUST_BE_TIMEZONE_AWARE")
         self._lifecycle = lifecycle
         self._ledger = ledger
         self._fill_ids: set[UUID] = set()
         self._last_fill_time: datetime | None = None
+        self._order_time = order_time
 
     @property
     def state(self) -> ExecutionSessionState:
@@ -48,6 +51,7 @@ class ExecutionSession:
             self._ledger.state,
             frozenset(self._fill_ids),
             self._last_fill_time,
+            self._order_time,
         )
 
     def apply_fill(self, fill: Fill) -> ExecutionSessionState:
@@ -57,6 +61,8 @@ class ExecutionSession:
             raise ExecutionSessionError("FILL_TIME_REQUIRED")
         if fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:
             raise ExecutionSessionError("FILL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if self._order_time is not None and fill.fill_time < self._order_time:
+            raise ExecutionSessionError("FILL_PRECEDES_ORDER_TIME")
         if self._last_fill_time is not None and fill.fill_time < self._last_fill_time:
             raise ExecutionSessionError("FILL_EVENTS_OUT_OF_TIME_ORDER")
 
@@ -66,7 +72,7 @@ class ExecutionSession:
             raise ExecutionSessionError(str(exc)) from exc
 
         try:
-            next_portfolio = self._preview_ledger_fill(fill)
+            self._preview_ledger_fill(fill)
         except (ValueError, KeyError) as exc:
             raise ExecutionSessionError(str(exc)) from exc
 
