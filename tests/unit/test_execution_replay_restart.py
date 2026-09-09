@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -5,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from hope.domain.execution import CostModel, Environment, ExecutionQuote, Order, OrderSide, simulate_market_fill
-from hope.domain.execution.replay import replay_order
+from hope.domain.execution.replay import ExecutionReplayError, replay_order
 from hope.domain.execution.session import ExecutionSessionError
 from hope.domain.execution.timeline import ExecutionTimeline
 
@@ -54,3 +55,18 @@ def test_replayed_session_rejects_fill_older_than_last_replayed_fill():
         restored.session.apply_fill(make_fill(order, "6", 1))
 
     assert restored.session.state == before
+
+
+@pytest.mark.parametrize(
+    ("fill_time", "error_code"),
+    (
+        (None, "FILL_TIME_REQUIRED"),
+        (datetime(2026, 1, 1, 14, 0), "FILL_TIME_MUST_BE_TIMEZONE_AWARE"),
+    ),
+)
+def test_replay_rejects_fill_without_usable_event_time(fill_time, error_code):
+    order = make_order()
+    malformed = replace(make_fill(order, "4", 0), fill_time=fill_time)
+
+    with pytest.raises(ExecutionReplayError, match=error_code):
+        replay_order(order, [malformed], initial_cash=Decimal("10000"))

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
@@ -59,6 +60,25 @@ def test_duplicate_fill_does_not_mutate_session():
         session.apply_fill(fill)
     after = session.state
     assert after == before
+
+
+@pytest.mark.parametrize(
+    ("fill_time", "error_code"),
+    (
+        (None, "FILL_TIME_REQUIRED"),
+        (datetime(2026, 1, 1, 14, 0), "FILL_TIME_MUST_BE_TIMEZONE_AWARE"),
+    ),
+)
+def test_fill_requires_timezone_aware_time_before_state_mutation(fill_time, error_code):
+    order = make_order("10")
+    session = ExecutionSession(OrderLifecycle(order), PortfolioLedger(Decimal("10000")))
+    malformed = replace(make_fill(order, "1"), fill_time=fill_time)
+    before = session.state
+
+    with pytest.raises(ExecutionSessionError, match=error_code):
+        session.apply_fill(malformed)
+
+    assert session.state == before
 
 
 def test_partial_fill_can_be_cancelled_without_portfolio_mutation_and_blocks_later_fill():

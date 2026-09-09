@@ -53,6 +53,10 @@ class ExecutionSession:
     def apply_fill(self, fill: Fill) -> ExecutionSessionState:
         if fill.fill_id in self._fill_ids:
             raise ExecutionSessionError("DUPLICATE_FILL")
+        if fill.fill_time is None:
+            raise ExecutionSessionError("FILL_TIME_REQUIRED")
+        if fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:
+            raise ExecutionSessionError("FILL_TIME_MUST_BE_TIMEZONE_AWARE")
         if self._last_fill_time is not None and fill.fill_time < self._last_fill_time:
             raise ExecutionSessionError("FILL_EVENTS_OUT_OF_TIME_ORDER")
 
