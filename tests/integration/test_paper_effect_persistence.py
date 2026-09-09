@@ -107,7 +107,7 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
             uuid4(),
             PAYLOAD,
         )
-        with connection.begin_nested():
-            with pytest.raises(IntegrityError) as exc_info:
+        with pytest.raises(IntegrityError) as exc_info:
+            with connection.begin_nested():
                 effects.record(terminal_effect)
         assert "PAPER_EFFECT_REQUIRES_CLAIMED_JOB" in str(exc_info.value)
