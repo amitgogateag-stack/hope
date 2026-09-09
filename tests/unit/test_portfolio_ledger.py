@@ -179,3 +179,10 @@ def test_restore_rejects_negative_total_commission():
 
     with pytest.raises(ValueError, match="PORTFOLIO_TOTAL_COMMISSION_MUST_BE_NON_NEGATIVE"):
         PortfolioLedger.from_state(state)
+
+
+def test_restore_rejects_non_finite_cash():
+    state = PortfolioState(cash=Decimal("NaN"), positions={})
+
+    with pytest.raises(ValueError, match="PORTFOLIO_CASH_MUST_BE_FINITE"):
+        PortfolioLedger.from_state(state)

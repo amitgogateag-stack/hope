@@ -51,6 +51,8 @@ class PortfolioLedger:
     @classmethod
     def from_state(cls, state: PortfolioState) -> "PortfolioLedger":
         """Restore a ledger from an already-materialized domain state baseline."""
+        if not state.cash.is_finite():
+            raise ValueError("PORTFOLIO_CASH_MUST_BE_FINITE")
         for instrument_id, position in state.positions.items():
             if position.instrument_id != instrument_id:
                 raise ValueError("PORTFOLIO_POSITION_KEY_MISMATCH")
