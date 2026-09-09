@@ -160,3 +160,22 @@ def test_restore_rejects_flat_position_with_nonzero_average_price():
 
     with pytest.raises(ValueError, match="PORTFOLIO_FLAT_POSITION_AVERAGE_PRICE_MUST_BE_ZERO"):
         PortfolioLedger.from_state(state)
+
+
+def test_restore_rejects_negative_total_commission():
+    instrument = uuid4()
+    state = PortfolioState(
+        cash=Decimal("1000"),
+        positions={
+            instrument: PositionState(
+                instrument_id=instrument,
+                quantity=Decimal("1"),
+                average_price=Decimal("100"),
+                realized_pnl=Decimal("0"),
+                total_commission=Decimal("-1"),
+            )
+        },
+    )
+
+    with pytest.raises(ValueError, match="PORTFOLIO_TOTAL_COMMISSION_MUST_BE_NON_NEGATIVE"):
+        PortfolioLedger.from_state(state)
