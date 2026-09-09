@@ -29,6 +29,8 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "006_cross_entity_trading_integrity.sql",
             "007_identity_namespace_integrity.sql",
             "008_migration_checksums.sql",
+            "009_job_run_identity.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
+        assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='job_runs'")).scalar_one() == 1
