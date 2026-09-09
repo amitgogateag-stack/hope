@@ -39,7 +39,18 @@ class SqlAlchemyJobRunRepository:
             .returning(self._job_runs.c.job_run_id)
         )
         inserted_id = self._connection.execute(statement).scalar_one_or_none()
-        return inserted_id is not None
+        if inserted_id is not None:
+            return True
+
+        existing_id = self._connection.execute(
+            select(self._job_runs.c.job_run_id).where(
+                self._job_runs.c.job_key == job_run.job_key,
+                self._job_runs.c.scheduled_for == job_run.scheduled_for,
+            )
+        ).scalar_one()
+        if existing_id != job_run.job_run_id:
+            raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+        return False
 
     def complete(self, completion: JobRunRecord) -> bool:
         """Apply one terminal transition; return False when the run is already terminal or absent."""
