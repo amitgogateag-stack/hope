@@ -44,6 +44,28 @@ class ExecutionSession:
         self._last_fill_time: datetime | None = None
         self._order_time = order_time
 
+    @classmethod
+    def from_state(
+        cls,
+        state: ExecutionSessionState,
+        ledger: PortfolioLedger,
+    ) -> "ExecutionSession":
+        """Restore session history onto an already-restored shared portfolio ledger."""
+        if ledger.state != state.portfolio:
+            raise ExecutionSessionError("EXECUTION_SESSION_PORTFOLIO_MISMATCH")
+        if state.lifecycle.applied_fill_ids != state.fill_ids:
+            raise ExecutionSessionError("EXECUTION_SESSION_FILL_HISTORY_MISMATCH")
+        if state.last_fill_time is not None:
+            if state.last_fill_time.tzinfo is None or state.last_fill_time.utcoffset() is None:
+                raise ExecutionSessionError("LAST_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
+            if state.order_time is not None and state.last_fill_time < state.order_time:
+                raise ExecutionSessionError("LAST_FILL_PRECEDES_ORDER_TIME")
+
+        session = cls(state.lifecycle, ledger, order_time=state.order_time)
+        session._fill_ids = set(state.fill_ids)
+        session._last_fill_time = state.last_fill_time
+        return session
+
     @property
     def state(self) -> ExecutionSessionState:
         return ExecutionSessionState(
