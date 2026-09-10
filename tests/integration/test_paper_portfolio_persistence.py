@@ -96,8 +96,18 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
             side=OrderSide.SELL, quantity=Decimal("1"), price=Decimal("110"), sequence=0, decision_minute=23,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), buy)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), sell)
+        buy_transition = repository.apply_fill_with_transition(portfolio_id, Decimal("1000"), buy)
+        assert buy_transition is not None
+        assert buy_transition.realized_pnl_delta == Decimal("0")
+        assert buy_transition.commission_delta == Decimal("0.25")
+        assert buy_transition.cash_delta == Decimal("-203.25")
+
+        sell_transition = repository.apply_fill_with_transition(portfolio_id, Decimal("1000"), sell)
+        assert sell_transition is not None
+        assert sell_transition.state_before == buy_transition.state_after
+        assert sell_transition.realized_pnl_delta == Decimal("8.5")
+        assert sell_transition.commission_delta == Decimal("0.20")
+        assert sell_transition.cash_delta == Decimal("109.80")
         assert repository.apply_fill(portfolio_id, Decimal("1000"), sell) is False
 
         restored = repository.load_ledger(portfolio_id)

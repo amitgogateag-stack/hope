@@ -9,7 +9,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
 from hope.domain.execution.simulator import Fill
-from hope.domain.portfolio.ledger import PortfolioLedger, PortfolioState, PositionState
+from hope.domain.portfolio.ledger import PortfolioFillTransition, PortfolioLedger, PortfolioState, PositionState
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
 
@@ -148,14 +148,19 @@ class SqlAlchemyPaperPortfolioRepository:
             initial_cash=portfolio["initial_cash"],
         )
 
-    def apply_fill(self, portfolio_id: UUID, initial_cash: Decimal, fill: Fill) -> bool:
-        """Atomically apply one already-durable PAPER fill to materialized portfolio state."""
+    def apply_fill_with_transition(
+        self,
+        portfolio_id: UUID,
+        initial_cash: Decimal,
+        fill: Fill,
+    ) -> PortfolioFillTransition | None:
+        """Atomically apply one durable PAPER fill and return its accounting transition."""
         with self._connection.begin_nested():
             self._assert_tracked_fill(fill)
             portfolio = self._ensure_and_lock_portfolio(portfolio_id, initial_cash)
             applications = self._load_application_history(portfolio_id, portfolio["version"])
             if any(row["fill_id"] == fill.fill_id for row in applications):
-                return False
+                return None
             if applications and fill.fill_time < applications[-1]["filled_at"]:
                 raise ValueError("PAPER_PORTFOLIO_FILL_TIME_REGRESSION")
 
@@ -164,7 +169,8 @@ class SqlAlchemyPaperPortfolioRepository:
                 applied_fill_ids=[row["fill_id"] for row in applications],
                 initial_cash=portfolio["initial_cash"],
             )
-            state = ledger.apply_fill(fill)
+            transition = ledger.apply_fill_with_transition(fill)
+            state = transition.state_after
             position = state.positions[fill.instrument_id]
             next_version = portfolio["version"] + 1
 
@@ -205,4 +211,8 @@ class SqlAlchemyPaperPortfolioRepository:
             ).scalar_one_or_none()
             if inserted is None:
                 raise ValueError("PAPER_PORTFOLIO_FILL_APPLICATION_CONFLICT")
-            return True
+            return transition
+
+    def apply_fill(self, portfolio_id: UUID, initial_cash: Decimal, fill: Fill) -> bool:
+        """Backward-compatible boolean wrapper around the authoritative transition API."""
+        return self.apply_fill_with_transition(portfolio_id, initial_cash, fill) is not None
