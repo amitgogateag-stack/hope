@@ -7,12 +7,12 @@ from uuid import UUID
 
 from hope.application.paper.provenance import paper_decision_inputs_hash
 from hope.application.paper.runner import PaperRuntimeContext
+from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.execution.models import Environment, Order
 from hope.domain.execution.simulator import Fill
 from hope.domain.market_data.context import PITMarketContext
 from hope.domain.signal.models import Signal
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
-from hope.domain.universe.models import UniverseVersion
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class PaperStrategyDecisionJob:
 
     strategy: Strategy
     market_context: PITMarketContext
-    universe: UniverseVersion
+    universe: UniverseSnapshot
     parameters: ParameterSnapshot
 
     def __post_init__(self) -> None:
@@ -48,9 +48,9 @@ class PaperStrategyDecisionJob:
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_STRATEGY")
         if not isinstance(self.market_context, PITMarketContext):
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_PIT_MARKET_CONTEXT")
-        if not isinstance(self.universe, UniverseVersion):
-            raise TypeError("PAPER_DECISION_JOB_REQUIRES_UNIVERSE_VERSION")
-        if not self.universe.pit_certified:
+        if not isinstance(self.universe, UniverseSnapshot):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_UNIVERSE_SNAPSHOT")
+        if not self.universe.version.pit_certified:
             raise ValueError("PAPER_DECISION_JOB_REQUIRES_PIT_CERTIFIED_UNIVERSE")
         if not isinstance(self.parameters, ParameterSnapshot):
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_PARAMETER_SNAPSHOT")
@@ -70,7 +70,7 @@ class PaperStrategyDecisionJob:
         )
         signals = self.strategy.generate_signals(
             self.market_context,
-            self.universe,
+            self.universe.version,
             self.parameters,
         )
         if not isinstance(signals, tuple):
