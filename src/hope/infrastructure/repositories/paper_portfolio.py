@@ -145,6 +145,7 @@ class SqlAlchemyPaperPortfolioRepository:
         return PortfolioLedger.from_state(
             state,
             applied_fill_ids=[row["fill_id"] for row in applications],
+            initial_cash=portfolio["initial_cash"],
         )
 
     def apply_fill(self, portfolio_id: UUID, initial_cash: Decimal, fill: Fill) -> bool:
@@ -161,6 +162,7 @@ class SqlAlchemyPaperPortfolioRepository:
             ledger = PortfolioLedger.from_state(
                 PortfolioState(portfolio["cash"], self._load_positions(portfolio_id)),
                 applied_fill_ids=[row["fill_id"] for row in applications],
+                initial_cash=portfolio["initial_cash"],
             )
             state = ledger.apply_fill(fill)
             position = state.positions[fill.instrument_id]

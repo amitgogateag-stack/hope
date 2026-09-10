@@ -57,6 +57,7 @@ class PortfolioLedger:
         state: PortfolioState,
         *,
         applied_fill_ids: Collection[UUID] = (),
+        initial_cash: Decimal | None = None,
     ) -> "PortfolioLedger":
         """Restore a ledger from an already-materialized domain state baseline."""
         if not state.cash.is_finite():
@@ -78,8 +79,8 @@ class PortfolioLedger:
                 raise ValueError("PORTFOLIO_TOTAL_COMMISSION_MUST_BE_FINITE")
             if position.total_commission < 0:
                 raise ValueError("PORTFOLIO_TOTAL_COMMISSION_MUST_BE_NON_NEGATIVE")
-        ledger = cls(Decimal("0"))
-        ledger._initial_cash = state.cash
+        restored_initial_cash = state.cash if initial_cash is None else initial_cash
+        ledger = cls(restored_initial_cash)
         ledger._state = PortfolioState(state.cash, dict(state.positions))
         ledger._applied_fill_ids = set(applied_fill_ids)
         return ledger

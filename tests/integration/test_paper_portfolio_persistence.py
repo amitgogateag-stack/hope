@@ -103,6 +103,7 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
         restored = repository.load_ledger(portfolio_id)
         assert restored is not None
         position = restored.state.positions[instrument_id]
+        assert restored.initial_cash == Decimal("1000")
         assert restored.state.cash == Decimal("906.55")
         assert position.quantity == Decimal("1")
         assert position.average_price == Decimal("101.5")
