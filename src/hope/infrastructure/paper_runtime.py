@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable
 
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine
 
 from hope.application.jobs import ScheduledJobRun
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
@@ -52,3 +52,33 @@ class SqlAlchemyPaperRuntime:
     def quarantine_incomplete_claim(self, job_run: ScheduledJobRun) -> PaperCycleOutcome:
         """Expose only the explicit no-replay quarantine lifecycle action."""
         return self._runner.quarantine_incomplete_claim(job_run)
+
+
+def run_paper_once(
+    engine: Engine,
+    job_run: ScheduledJobRun,
+    work: Callable[[PaperRuntimeContext], None],
+    *,
+    now: Callable[[], datetime],
+) -> PaperCycleOutcome:
+    """Execute exactly one PAPER job and durably preserve its terminal lifecycle state.
+
+    Application work errors are re-raised only after the transaction commits the runner's
+    FAILED terminal record. Database/commit failures remain fail-closed and are not converted
+    into application success.
+    """
+    outcome: PaperCycleOutcome | None = None
+    work_error: Exception | None = None
+
+    with engine.begin() as connection:
+        runtime = SqlAlchemyPaperRuntime(connection, now=now)
+        try:
+            outcome = runtime.run(job_run, work)
+        except Exception as exc:
+            work_error = exc
+
+    if work_error is not None:
+        raise work_error
+    if outcome is None:
+        raise RuntimeError("PAPER_ONE_SHOT_OUTCOME_MISSING")
+    return outcome
