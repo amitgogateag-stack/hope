@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
+from uuid import UUID
 
 import pytest
 
 from hope.application.jobs import JobRunRecord, JobRunStatus, create_scheduled_job_run
-from hope.application.paper import PaperCycleOutcome, PaperCycleRunner
+from hope.application.paper import PaperCycleOutcome, PaperCycleRunner, PaperFillAccountingWriter
 
 
 UTC = timezone.utc
@@ -31,6 +33,15 @@ class FakeJobRunRepository:
 
     def get_record(self, job_run_id) -> JobRunRecord | None:
         return self.record
+
+
+class FakeFillAccountingPersistence:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def persist(self, context, portfolio_id, initial_cash, fill, *, sequence: int) -> bool:
+        self.calls.append((context, portfolio_id, initial_cash, fill, sequence))
+        return True
 
 
 def make_run():
@@ -122,6 +133,50 @@ def test_paper_cycle_runner_rejects_missing_state_after_failed_claim() -> None:
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_CLAIM_STATE_MISSING"):
         runner.run(job_run, lambda context: pytest.fail("work must not run"))
+
+
+def test_paper_cycle_runtime_facade_uses_authoritative_fill_accounting_writer() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    persistence = FakeFillAccountingPersistence()
+    writer = PaperFillAccountingWriter(persistence)
+    runner = PaperCycleRunner(
+        repository,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+    )
+    portfolio_id = UUID(int=1)
+    fill = object()
+
+    outcome = runner.run_runtime(
+        job_run,
+        writer,
+        lambda runtime: runtime.record_fill(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            sequence=7,
+        ),
+    )
+
+    assert outcome is PaperCycleOutcome.EXECUTED
+    assert len(persistence.calls) == 1
+    context, actual_portfolio_id, initial_cash, actual_fill, sequence = persistence.calls[0]
+    assert context.job_run.job_run_id == job_run.job_run_id
+    assert actual_portfolio_id == portfolio_id
+    assert initial_cash == Decimal("1000")
+    assert actual_fill is fill
+    assert sequence == 7
+
+
+def test_paper_cycle_runtime_facade_rejects_non_authoritative_fill_writer() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+
+    with pytest.raises(TypeError, match="PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER"):
+        runner.run_runtime(job_run, object(), lambda runtime: None)
+
+    assert repository.completions == []
 
 
 def test_quarantine_incomplete_claim_marks_stranded_run_failed() -> None:
