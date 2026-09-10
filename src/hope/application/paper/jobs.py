@@ -71,11 +71,14 @@ class PaperStrategyDecisionJob:
         signals = self.strategy.generate_signals(
             self.market_context,
             self.universe.version,
+            self.universe.members,
             self.parameters,
+            expected_inputs_hash,
         )
         if not isinstance(signals, tuple):
             raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
 
+        universe_member_ids = {member.instrument_id for member in self.universe.members}
         for signal in signals:
             if not isinstance(signal, Signal):
                 raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
@@ -88,6 +91,8 @@ class PaperStrategyDecisionJob:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
             if signal.inputs_hash != expected_inputs_hash:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH")
+            if signal.instrument_id not in universe_member_ids:
+                raise ValueError("PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE")
 
         for signal in signals:
             runtime.record_signal(signal)

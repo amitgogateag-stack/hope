@@ -44,8 +44,8 @@ class _Strategy(Strategy):
         self.signals = signals
         self.calls = []
 
-    def generate_signals(self, market_context, universe, parameters):
-        self.calls.append((market_context, universe, parameters))
+    def generate_signals(self, market_context, universe, universe_members, parameters, inputs_hash):
+        self.calls.append((market_context, universe, universe_members, parameters, inputs_hash))
         return self.signals
 
 
@@ -73,12 +73,13 @@ def _snapshot(*, pit_certified: bool = True, version: str = "u1") -> UniverseSna
 def _signal(
     decision_time: datetime,
     *,
+    instrument_id=None,
     version: str = "test-strategy-v1",
     inputs_hash: str = "b" * 64,
 ) -> Signal:
     return Signal(
         signal_id=uuid4(),
-        instrument_id=uuid4(),
+        instrument_id=instrument_id or uuid4(),
         strategy_version=version,
         decision_time=decision_time,
         signal_type=SignalType.ENTRY,
@@ -161,13 +162,19 @@ def test_paper_strategy_decision_job_records_valid_strategy_signals() -> None:
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(strategy, context, universe, parameters)
-    signal = _signal(decision_time, inputs_hash=inputs_hash)
+    signal = _signal(
+        decision_time,
+        instrument_id=universe.members[0].instrument_id,
+        inputs_hash=inputs_hash,
+    )
     strategy.signals = (signal,)
     runtime = _runtime(decision_time)
 
     PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
 
-    assert strategy.calls == [(context, universe.version, parameters)]
+    assert strategy.calls == [
+        (context, universe.version, universe.members, parameters, inputs_hash)
+    ]
     assert runtime.recorded == [signal]
 
 
@@ -202,8 +209,16 @@ def test_paper_strategy_decision_job_validates_all_outputs_before_persisting() -
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(strategy, context, universe, parameters)
-    valid = _signal(decision_time, inputs_hash=inputs_hash)
-    invalid = _signal(decision_time + timedelta(seconds=1), inputs_hash=inputs_hash)
+    valid = _signal(
+        decision_time,
+        instrument_id=universe.members[0].instrument_id,
+        inputs_hash=inputs_hash,
+    )
+    invalid = _signal(
+        decision_time + timedelta(seconds=1),
+        instrument_id=universe.members[0].instrument_id,
+        inputs_hash=inputs_hash,
+    )
     strategy.signals = (valid, invalid)
     runtime = _runtime(decision_time + timedelta(minutes=1))
 
@@ -232,7 +247,14 @@ def test_paper_strategy_decision_job_rejects_strategy_version_mismatch() -> None
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(strategy, context, universe, parameters)
-    strategy.signals = (_signal(decision_time, version="wrong-version", inputs_hash=inputs_hash),)
+    strategy.signals = (
+        _signal(
+            decision_time,
+            instrument_id=universe.members[0].instrument_id,
+            version="wrong-version",
+            inputs_hash=inputs_hash,
+        ),
+    )
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH"):
@@ -246,10 +268,34 @@ def test_paper_strategy_decision_job_rejects_inputs_hash_mismatch_without_persis
     context = PITMarketContext(as_of=decision_time, bars=())
     universe = _snapshot()
     parameters = _TunedParameters(lookback=20)
-    strategy = _Strategy((_signal(decision_time, inputs_hash="f" * 64),))
+    strategy = _Strategy(
+        (
+            _signal(
+                decision_time,
+                instrument_id=universe.members[0].instrument_id,
+                inputs_hash="f" * 64,
+            ),
+        )
+    )
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH"):
+        PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
+
+    assert runtime.recorded == []
+
+
+def test_paper_strategy_decision_job_rejects_signal_outside_universe() -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    context = PITMarketContext(as_of=decision_time, bars=())
+    universe = _snapshot()
+    parameters = _Parameters()
+    strategy = _Strategy()
+    inputs_hash = paper_decision_inputs_hash(strategy, context, universe, parameters)
+    strategy.signals = (_signal(decision_time, inputs_hash=inputs_hash),)
+    runtime = _runtime(decision_time)
+
+    with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE"):
         PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
 
     assert runtime.recorded == []

@@ -3,7 +3,7 @@ from abc import ABC, abstractmethod
 from pydantic import BaseModel, ConfigDict
 
 from hope.domain.market_data.context import PITMarketContext
-from hope.domain.universe.models import UniverseVersion
+from hope.domain.universe.models import UniverseMember, UniverseVersion
 
 
 class ParameterSnapshot(BaseModel):
@@ -19,6 +19,8 @@ class Strategy(ABC):
         self,
         market_context: PITMarketContext,
         universe: UniverseVersion,
+        universe_members: tuple[UniverseMember, ...],
         parameters: ParameterSnapshot,
+        inputs_hash: str,
     ):
         raise NotImplementedError
