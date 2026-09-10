@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import Callable, Mapping
+from typing import Callable, Iterable
 
 from sqlalchemy import Connection, Engine
 
@@ -20,21 +21,35 @@ from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignal
 PaperJobWork = Callable[[PaperRuntimeContext], None]
 
 
-class PaperJobRegistry:
-    """Immutable allow-list mapping scheduled PAPER job keys to approved work handlers."""
+@dataclass(frozen=True)
+class PaperJobDefinition:
+    """One explicitly approved PAPER application job and its durable job key."""
 
-    def __init__(self, handlers: Mapping[str, PaperJobWork]) -> None:
-        normalized: dict[str, PaperJobWork] = {}
-        for job_key, handler in handlers.items():
-            key = job_key.strip()
-            if not key:
-                raise ValueError("PAPER_JOB_KEY_REQUIRED")
-            if key != job_key:
-                raise ValueError("PAPER_JOB_KEY_NOT_CANONICAL")
-            if not callable(handler):
-                raise TypeError("PAPER_JOB_HANDLER_MUST_BE_CALLABLE")
-            normalized[key] = handler
-        self._handlers = MappingProxyType(normalized)
+    job_key: str
+    work: PaperJobWork
+
+    def __post_init__(self) -> None:
+        key = self.job_key.strip()
+        if not key:
+            raise ValueError("PAPER_JOB_KEY_REQUIRED")
+        if key != self.job_key:
+            raise ValueError("PAPER_JOB_KEY_NOT_CANONICAL")
+        if not callable(self.work):
+            raise TypeError("PAPER_JOB_HANDLER_MUST_BE_CALLABLE")
+
+
+class PaperJobRegistry:
+    """Immutable allow-list of explicitly defined scheduled PAPER jobs."""
+
+    def __init__(self, definitions: Iterable[PaperJobDefinition]) -> None:
+        handlers: dict[str, PaperJobWork] = {}
+        for definition in definitions:
+            if not isinstance(definition, PaperJobDefinition):
+                raise TypeError("PAPER_JOB_DEFINITION_REQUIRED")
+            if definition.job_key in handlers:
+                raise ValueError("PAPER_JOB_KEY_DUPLICATE")
+            handlers[definition.job_key] = definition.work
+        self._handlers = MappingProxyType(handlers)
 
     def resolve(self, job_run: ScheduledJobRun) -> PaperJobWork:
         """Resolve only an explicitly registered handler for this durable job identity."""

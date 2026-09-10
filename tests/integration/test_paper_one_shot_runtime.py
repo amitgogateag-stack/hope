@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
-from hope.infrastructure.paper_runtime import PaperJobRegistry, run_paper_once
+from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, run_paper_once
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -43,7 +43,12 @@ def test_run_paper_once_commits_successful_terminal_state() -> None:
     completed_at = job_run.scheduled_for + timedelta(minutes=1)
     calls = []
     registry = PaperJobRegistry(
-        {job_run.job_key: lambda runtime: calls.append(runtime.cycle.job_run.job_run_id)}
+        [
+            PaperJobDefinition(
+                job_run.job_key,
+                lambda runtime: calls.append(runtime.cycle.job_run.job_run_id),
+            )
+        ]
     )
 
     outcome = run_paper_once(
@@ -78,7 +83,7 @@ def test_run_paper_once_commits_failed_terminal_state_before_reraising() -> None
         calls.append(runtime.cycle.job_run.job_run_id)
         raise ValueError("paper-one-shot-boom")
 
-    registry = PaperJobRegistry({job_run.job_key: fail})
+    registry = PaperJobRegistry([PaperJobDefinition(job_run.job_key, fail)])
 
     with pytest.raises(ValueError, match="paper-one-shot-boom"):
         run_paper_once(engine, job_run, registry, now=lambda: completed_at)
@@ -114,7 +119,7 @@ def test_run_paper_once_rejects_unregistered_job_before_lifecycle_claim() -> Non
         run_paper_once(
             engine,
             job_run,
-            PaperJobRegistry({}),
+            PaperJobRegistry([]),
             now=lambda: job_run.scheduled_for + timedelta(minutes=1),
         )
 
