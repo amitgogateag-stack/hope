@@ -8,7 +8,8 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperPnLEvent, PaperPnLWriter, PaperSignalWriter
+from hope.application.paper import PaperCycleContext, PaperPnLEvent, PaperSignalWriter
+from hope.application.paper.pnl import PaperPnLWriter
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
