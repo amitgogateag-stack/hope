@@ -5,7 +5,13 @@ from uuid import UUID
 import pytest
 
 from hope.application.jobs import JobRunRecord, JobRunStatus, create_scheduled_job_run
-from hope.application.paper import PaperCycleOutcome, PaperCycleRunner, PaperFillAccountingWriter
+from hope.application.paper import (
+    PaperCycleOutcome,
+    PaperCycleRunner,
+    PaperFillAccountingWriter,
+    PaperOrderWriter,
+    PaperSignalWriter,
+)
 
 
 UTC = timezone.utc
@@ -35,11 +41,29 @@ class FakeJobRunRepository:
         return self.record
 
 
-class FakeFillAccountingPersistence:
+class RecordingSignalWriter(PaperSignalWriter):
     def __init__(self) -> None:
         self.calls = []
 
-    def persist(self, context, portfolio_id, initial_cash, fill, *, sequence: int) -> bool:
+    def record(self, context, signal) -> bool:
+        self.calls.append((context, signal))
+        return True
+
+
+class RecordingOrderWriter(PaperOrderWriter):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def record(self, context, order) -> bool:
+        self.calls.append((context, order))
+        return True
+
+
+class RecordingFillAccountingWriter(PaperFillAccountingWriter):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def record(self, context, portfolio_id, initial_cash, fill, *, sequence: int) -> bool:
         self.calls.append((context, portfolio_id, initial_cash, fill, sequence))
         return True
 
@@ -135,46 +159,69 @@ def test_paper_cycle_runner_rejects_missing_state_after_failed_claim() -> None:
         runner.run(job_run, lambda context: pytest.fail("work must not run"))
 
 
-def test_paper_cycle_runtime_facade_uses_authoritative_fill_accounting_writer() -> None:
+def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_writer() -> None:
     job_run = make_run()
     repository = FakeJobRunRepository()
-    persistence = FakeFillAccountingPersistence()
-    writer = PaperFillAccountingWriter(persistence)
+    signal_writer = RecordingSignalWriter()
+    order_writer = RecordingOrderWriter()
+    fill_writer = RecordingFillAccountingWriter()
     runner = PaperCycleRunner(
         repository,
         now=lambda: job_run.scheduled_for + timedelta(minutes=1),
     )
     portfolio_id = UUID(int=1)
+    signal = object()
+    order = object()
     fill = object()
 
-    outcome = runner.run_runtime(
-        job_run,
-        writer,
-        lambda runtime: runtime.record_fill(
+    def work(runtime) -> None:
+        assert runtime.record_signal(signal) is True
+        assert runtime.record_order(order) is True
+        assert runtime.record_fill(
             portfolio_id,
             Decimal("1000"),
             fill,
             sequence=7,
-        ),
+        ) is True
+
+    outcome = runner.run_runtime(
+        job_run,
+        signal_writer,
+        order_writer,
+        fill_writer,
+        work,
     )
 
     assert outcome is PaperCycleOutcome.EXECUTED
-    assert len(persistence.calls) == 1
-    context, actual_portfolio_id, initial_cash, actual_fill, sequence = persistence.calls[0]
-    assert context.job_run.job_run_id == job_run.job_run_id
+    assert signal_writer.calls == [(signal_writer.calls[0][0], signal)]
+    assert order_writer.calls == [(order_writer.calls[0][0], order)]
+    assert len(fill_writer.calls) == 1
+    signal_context = signal_writer.calls[0][0]
+    order_context = order_writer.calls[0][0]
+    fill_context, actual_portfolio_id, initial_cash, actual_fill, sequence = fill_writer.calls[0]
+    assert signal_context is order_context is fill_context
+    assert signal_context.job_run.job_run_id == job_run.job_run_id
     assert actual_portfolio_id == portfolio_id
     assert initial_cash == Decimal("1000")
     assert actual_fill is fill
     assert sequence == 7
 
 
-def test_paper_cycle_runtime_facade_rejects_non_authoritative_fill_writer() -> None:
+@pytest.mark.parametrize(
+    ("writers", "message"),
+    [
+        ((object(), RecordingOrderWriter(), RecordingFillAccountingWriter()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_SIGNAL_WRITER"),
+        ((RecordingSignalWriter(), object(), RecordingFillAccountingWriter()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER"),
+        ((RecordingSignalWriter(), RecordingOrderWriter(), object()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER"),
+    ],
+)
+def test_paper_cycle_runtime_facade_rejects_non_authoritative_writers(writers, message) -> None:
     job_run = make_run()
     repository = FakeJobRunRepository()
     runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
 
-    with pytest.raises(TypeError, match="PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER"):
-        runner.run_runtime(job_run, object(), lambda runtime: None)
+    with pytest.raises(TypeError, match=message):
+        runner.run_runtime(job_run, *writers, lambda runtime: None)
 
     assert repository.completions == []
 
