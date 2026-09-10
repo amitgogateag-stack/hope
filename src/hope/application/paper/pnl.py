@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
@@ -47,9 +48,18 @@ class PaperPnLPersistence(Protocol):
 
 
 class PaperPnLWriter:
-    """Validate deterministic PAPER P&L event identity before persistence."""
+    """Legacy position-scoped PAPER P&L writer retained for historical compatibility.
+
+    New PAPER runtime accounting must use PaperAccountingWriter so realized P&L and
+    commission are derived from the authoritative portfolio fill transition.
+    """
 
     def __init__(self, repository: PaperPnLPersistence) -> None:
+        warnings.warn(
+            "PaperPnLWriter is legacy; new PAPER runtime accounting must use PaperAccountingWriter",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._repository = repository
 
     def record(self, context: PaperCycleContext, event: PaperPnLEvent, *, sequence: int) -> bool:
