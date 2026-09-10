@@ -83,11 +83,12 @@ class PaperCycleRunner:
         self._repository = repository
         self._now = now
 
-    def run(
+    def _run_claimed_cycle(
         self,
         job_run: ScheduledJobRun,
         work: Callable[[PaperCycleContext], None],
     ) -> PaperCycleOutcome:
+        """Internal lifecycle primitive; ordinary PAPER callers must use run_runtime()."""
         if not self._repository.claim(job_run):
             record = self._repository.get_record(job_run.job_run_id)
             if record is None:
@@ -134,7 +135,7 @@ class PaperCycleRunner:
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER")
         if not isinstance(fill_writer, PaperFillAccountingWriter):
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER")
-        return self.run(
+        return self._run_claimed_cycle(
             job_run,
             lambda context: work(
                 PaperRuntimeContext(
