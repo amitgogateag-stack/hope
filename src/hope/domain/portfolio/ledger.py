@@ -33,6 +33,17 @@ class PortfolioState:
         return sum((p.total_commission for p in self.positions.values()), Decimal("0"))
 
 
+@dataclass(frozen=True)
+class PortfolioFillTransition:
+    fill_id: UUID
+    instrument_id: UUID
+    state_before: PortfolioState
+    state_after: PortfolioState
+    realized_pnl_delta: Decimal
+    commission_delta: Decimal
+    cash_delta: Decimal
+
+
 class PortfolioLedger:
     """Deterministic average-cost portfolio ledger.
 
@@ -98,6 +109,9 @@ class PortfolioLedger:
         return frozenset(self._applied_fill_ids)
 
     def apply_fill(self, fill: Fill) -> PortfolioState:
+        return self.apply_fill_with_transition(fill).state_after
+
+    def apply_fill_with_transition(self, fill: Fill) -> PortfolioFillTransition:
         if fill.fill_id in self._applied_fill_ids:
             raise ValueError("DUPLICATE_FILL")
         if fill.quantity <= 0:
@@ -107,12 +121,15 @@ class PortfolioLedger:
         if fill.commission < 0 or fill.slippage < 0:
             raise ValueError("FILL_COSTS_MUST_BE_NON_NEGATIVE")
 
-        current = self._state.positions.get(fill.instrument_id)
+        state_before = self._state
+        current = state_before.positions.get(fill.instrument_id)
         current_qty = current.quantity if current else Decimal("0")
+        realized_before = current.realized_pnl if current else Decimal("0")
+        commission_before = current.total_commission if current else Decimal("0")
         signed_qty = fill.quantity if fill.side is OrderSide.BUY else -fill.quantity
         new_qty = current_qty + signed_qty
 
-        realized = current.realized_pnl if current else Decimal("0")
+        realized = realized_before
         avg_price = current.average_price if current else Decimal("0")
 
         # Same-direction increase, or opening a new position.
@@ -138,13 +155,13 @@ class PortfolioLedger:
         cash_delta = -consideration if fill.side is OrderSide.BUY else consideration
         cash_delta -= fill.commission
 
-        positions = dict(self._state.positions)
+        positions = dict(state_before.positions)
         positions[fill.instrument_id] = PositionState(
             instrument_id=fill.instrument_id,
             quantity=new_qty,
             average_price=avg_price,
             realized_pnl=realized,
-            total_commission=(current.total_commission if current else Decimal("0")) + fill.commission,
+            total_commission=commission_before + fill.commission,
         )
         if new_qty == 0:
             # Keep the closed position's realized history for auditability.
@@ -153,12 +170,22 @@ class PortfolioLedger:
                 quantity=Decimal("0"),
                 average_price=Decimal("0"),
                 realized_pnl=realized,
-                total_commission=(current.total_commission if current else Decimal("0")) + fill.commission,
+                total_commission=commission_before + fill.commission,
             )
 
-        self._state = PortfolioState(self._state.cash + cash_delta, positions)
+        state_after = PortfolioState(state_before.cash + cash_delta, positions)
+        self._state = state_after
         self._applied_fill_ids.add(fill.fill_id)
-        return self._state
+        position_after = state_after.positions[fill.instrument_id]
+        return PortfolioFillTransition(
+            fill_id=fill.fill_id,
+            instrument_id=fill.instrument_id,
+            state_before=state_before,
+            state_after=state_after,
+            realized_pnl_delta=position_after.realized_pnl - realized_before,
+            commission_delta=position_after.total_commission - commission_before,
+            cash_delta=state_after.cash - state_before.cash,
+        )
 
     def unrealized_pnl(self, marks: dict[UUID, Decimal]) -> Decimal:
         total = Decimal("0")
