@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperCycleOutcome
+from hope.application.paper.jobs import PaperSignalPersistenceJob
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, run_paper_once
@@ -98,14 +99,8 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
 
     registry = PaperJobRegistry(
         [
-            PaperJobDefinition(
-                signal_run.job_key,
-                lambda context: context.record_signal(signal),
-            ),
-            PaperJobDefinition(
-                order_run.job_key,
-                lambda context: context.record_order(order),
-            ),
+            PaperJobDefinition(signal_run.job_key, PaperSignalPersistenceJob(signal)),
+            PaperJobDefinition(order_run.job_key, lambda context: context.record_order(order)),
             PaperJobDefinition(
                 fill_run.job_key,
                 lambda context: context.record_fill(
