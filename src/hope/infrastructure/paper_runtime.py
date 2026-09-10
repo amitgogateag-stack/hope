@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable
+from types import MappingProxyType
+from typing import Callable, Mapping
 
 from sqlalchemy import Connection, Engine
 
@@ -14,6 +15,33 @@ from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
+
+
+PaperJobWork = Callable[[PaperRuntimeContext], None]
+
+
+class PaperJobRegistry:
+    """Immutable allow-list mapping scheduled PAPER job keys to approved work handlers."""
+
+    def __init__(self, handlers: Mapping[str, PaperJobWork]) -> None:
+        normalized: dict[str, PaperJobWork] = {}
+        for job_key, handler in handlers.items():
+            key = job_key.strip()
+            if not key:
+                raise ValueError("PAPER_JOB_KEY_REQUIRED")
+            if key != job_key:
+                raise ValueError("PAPER_JOB_KEY_NOT_CANONICAL")
+            if not callable(handler):
+                raise TypeError("PAPER_JOB_HANDLER_MUST_BE_CALLABLE")
+            normalized[key] = handler
+        self._handlers = MappingProxyType(normalized)
+
+    def resolve(self, job_run: ScheduledJobRun) -> PaperJobWork:
+        """Resolve only an explicitly registered handler for this durable job identity."""
+        handler = self._handlers.get(job_run.job_key)
+        if handler is None:
+            raise RuntimeError("PAPER_JOB_NOT_REGISTERED")
+        return handler
 
 
 class SqlAlchemyPaperRuntime:
@@ -35,12 +63,12 @@ class SqlAlchemyPaperRuntime:
             SqlAlchemyPaperFillAccountingRepository(connection)
         )
 
-    def run(
+    def _run_registered(
         self,
         job_run: ScheduledJobRun,
-        work: Callable[[PaperRuntimeContext], None],
+        work: PaperJobWork,
     ) -> PaperCycleOutcome:
-        """Run one PAPER job through the authoritative durable writer set."""
+        """Internal execution primitive; one-shot callers must resolve work via the registry."""
         return self._runner.run_runtime(
             job_run,
             self._signal_writer,
@@ -57,23 +85,27 @@ class SqlAlchemyPaperRuntime:
 def run_paper_once(
     engine: Engine,
     job_run: ScheduledJobRun,
-    work: Callable[[PaperRuntimeContext], None],
+    registry: PaperJobRegistry,
     *,
     now: Callable[[], datetime],
 ) -> PaperCycleOutcome:
-    """Execute exactly one PAPER job and durably preserve its terminal lifecycle state.
+    """Execute exactly one registered PAPER job and durably preserve terminal state.
 
-    Application work errors are re-raised only after the transaction commits the runner's
-    FAILED terminal record. Database/commit failures remain fail-closed and are not converted
-    into application success.
+    Unknown jobs fail before any lifecycle claim. Application work errors are re-raised only
+    after the transaction commits the runner's FAILED terminal record. Database/commit failures
+    remain fail-closed and are not converted into application success.
     """
+    if not isinstance(registry, PaperJobRegistry):
+        raise TypeError("PAPER_ONE_SHOT_REQUIRES_JOB_REGISTRY")
+    work = registry.resolve(job_run)
+
     outcome: PaperCycleOutcome | None = None
     work_error: Exception | None = None
 
     with engine.begin() as connection:
         runtime = SqlAlchemyPaperRuntime(connection, now=now)
         try:
-            outcome = runtime.run(job_run, work)
+            outcome = runtime._run_registered(job_run, work)
         except Exception as exc:
             work_error = exc
 

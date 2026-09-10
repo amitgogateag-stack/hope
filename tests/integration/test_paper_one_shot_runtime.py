@@ -7,7 +7,7 @@ from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
-from hope.infrastructure.paper_runtime import run_paper_once
+from hope.infrastructure.paper_runtime import PaperJobRegistry, run_paper_once
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -42,11 +42,14 @@ def test_run_paper_once_commits_successful_terminal_state() -> None:
     _prepare_job(engine, job_run)
     completed_at = job_run.scheduled_for + timedelta(minutes=1)
     calls = []
+    registry = PaperJobRegistry(
+        {job_run.job_key: lambda runtime: calls.append(runtime.cycle.job_run.job_run_id)}
+    )
 
     outcome = run_paper_once(
         engine,
         job_run,
-        lambda runtime: calls.append(runtime.cycle.job_run.job_run_id),
+        registry,
         now=lambda: completed_at,
     )
 
@@ -75,8 +78,10 @@ def test_run_paper_once_commits_failed_terminal_state_before_reraising() -> None
         calls.append(runtime.cycle.job_run.job_run_id)
         raise ValueError("paper-one-shot-boom")
 
+    registry = PaperJobRegistry({job_run.job_key: fail})
+
     with pytest.raises(ValueError, match="paper-one-shot-boom"):
-        run_paper_once(engine, job_run, fail, now=lambda: completed_at)
+        run_paper_once(engine, job_run, registry, now=lambda: completed_at)
 
     assert calls == [job_run.job_run_id]
     with engine.connect() as connection:
@@ -89,7 +94,29 @@ def test_run_paper_once_commits_failed_terminal_state_before_reraising() -> None
     outcome = run_paper_once(
         engine,
         job_run,
-        lambda runtime: pytest.fail("terminal failed job must not replay"),
+        registry,
         now=lambda: completed_at + timedelta(minutes=1),
     )
     assert outcome is PaperCycleOutcome.SKIPPED_TERMINAL
+    assert calls == [job_run.job_run_id]
+
+
+@pytest.mark.integration
+def test_run_paper_once_rejects_unregistered_job_before_lifecycle_claim() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-unregistered",
+        datetime(2026, 9, 10, 13, 32, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_NOT_REGISTERED"):
+        run_paper_once(
+            engine,
+            job_run,
+            PaperJobRegistry({}),
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
