@@ -8,12 +8,12 @@ from hope.domain.market_data.context import PITMarketContext, build_pit_market_c
 from hope.domain.market_data.models import MarketBar
 
 
-def make_bar(instrument_id, event_time, available_time, close):
+def make_bar(instrument_id, event_time, available_time, close, *, ingestion_time=None):
     return MarketBar(
         instrument_id=str(instrument_id),
         event_time=event_time,
         available_time=available_time,
-        ingestion_time=available_time,
+        ingestion_time=ingestion_time or available_time,
         open=Decimal(str(close)),
         high=Decimal(str(close)),
         low=Decimal(str(close)),
@@ -46,6 +46,22 @@ def test_context_excludes_future_event_even_if_already_available():
     assert context.bars == ()
 
 
+def test_context_excludes_bar_ingested_after_as_of():
+    instrument = uuid4()
+    t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    late_ingestion = make_bar(
+        instrument,
+        t0 - timedelta(minutes=2),
+        t0 - timedelta(minutes=1),
+        "999",
+        ingestion_time=t0 + timedelta(minutes=1),
+    )
+
+    context = build_pit_market_context([late_ingestion], t0)
+
+    assert context.bars == ()
+
+
 def test_context_rejects_naive_as_of():
     with pytest.raises(ValueError, match="timezone-aware"):
         PITMarketContext(as_of=datetime(2026, 1, 2, 14, 30), bars=())
@@ -59,6 +75,21 @@ def test_context_rejects_direct_injection_of_unavailable_bar():
 
     with pytest.raises(ValueError, match="PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION"):
         PITMarketContext(as_of=t0, bars=(future_bar,))
+
+
+def test_context_rejects_direct_injection_of_late_ingestion():
+    instrument = uuid4()
+    t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
+    bar = make_bar(
+        instrument,
+        t0 - timedelta(minutes=2),
+        t0 - timedelta(minutes=1),
+        "999",
+        ingestion_time=t0 + timedelta(minutes=1),
+    )
+
+    with pytest.raises(ValueError, match="PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION"):
+        PITMarketContext(as_of=t0, bars=(bar,))
 
 
 def test_context_is_immutable():

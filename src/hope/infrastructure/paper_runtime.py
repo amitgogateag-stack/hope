@@ -14,9 +14,9 @@ from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner, PaperRuntimeContext
 from hope.application.paper.signals import PaperSignalWriter
-from hope.domain.market_data.context import PITMarketContext
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
@@ -36,18 +36,23 @@ class ConnectionBoundPaperJob(Protocol):
 
 @dataclass(frozen=True)
 class DurableUniversePaperStrategyDecision:
-    """Bind one strategy decision to the exact persisted universe version inside its transaction."""
+    """Bind one strategy decision to persisted universe and market-data inputs."""
 
     strategy: Strategy
-    market_context: PITMarketContext
+    dataset_version_id: UUID
+    as_of: datetime
     universe_version_id: UUID
     parameters: ParameterSnapshot
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
             raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_STRATEGY")
-        if not isinstance(self.market_context, PITMarketContext):
-            raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_PIT_MARKET_CONTEXT")
+        if not isinstance(self.dataset_version_id, UUID):
+            raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_DATASET_VERSION_ID")
+        if not isinstance(self.as_of, datetime):
+            raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_AS_OF")
+        if self.as_of.tzinfo is None or self.as_of.utcoffset() is None:
+            raise ValueError("PAPER_DURABLE_DECISION_REQUIRES_AWARE_AS_OF")
         if not isinstance(self.universe_version_id, UUID):
             raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_UNIVERSE_VERSION_ID")
         if not isinstance(self.parameters, ParameterSnapshot):
@@ -57,11 +62,17 @@ class DurableUniversePaperStrategyDecision:
         snapshot = UniverseSnapshotRepository(connection).get(self.universe_version_id)
         if snapshot is None:
             raise RuntimeError("PAPER_DURABLE_DECISION_UNIVERSE_NOT_FOUND")
+        market_context = PITMarketContextRepository(connection).get(
+            self.dataset_version_id,
+            as_of=self.as_of,
+            instrument_ids=tuple(member.instrument_id for member in snapshot.members),
+        )
         return PaperStrategyDecisionJob(
             self.strategy,
-            self.market_context,
+            market_context,
             snapshot,
             self.parameters,
+            dataset_version_id=self.dataset_version_id,
         )
 
 

@@ -10,9 +10,9 @@ from hope.domain.market_data.models import MarketBar
 class PITMarketContext(BaseModel):
     """Immutable market information that was available at one decision time.
 
-    A context may contain only bars whose event and availability timestamps are
-    both at or before ``as_of``. Bars are ordered deterministically by event
-    time, availability time, ingestion time, and instrument id.
+    A context may contain only bars whose event, availability, and ingestion
+    timestamps are all at or before ``as_of``. Bars are ordered deterministically
+    by event time, availability time, ingestion time, and instrument id.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -25,7 +25,11 @@ class PITMarketContext(BaseModel):
         if self.as_of.tzinfo is None:
             raise ValueError("PIT context timestamp must be timezone-aware")
         for bar in self.bars:
-            if bar.event_time > self.as_of or bar.available_time > self.as_of:
+            if (
+                bar.event_time > self.as_of
+                or bar.available_time > self.as_of
+                or bar.ingestion_time > self.as_of
+            ):
                 raise ValueError("PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION")
         if tuple(self.bars) != tuple(
             sorted(
@@ -51,7 +55,11 @@ def build_pit_market_context(bars: tuple[MarketBar, ...] | list[MarketBar], as_o
     visible = tuple(
         bar
         for bar in bars
-        if bar.event_time <= as_of and bar.available_time <= as_of
+        if (
+            bar.event_time <= as_of
+            and bar.available_time <= as_of
+            and bar.ingestion_time <= as_of
+        )
     )
     visible = tuple(
         sorted(

@@ -42,6 +42,7 @@ class PaperStrategyDecisionJob:
     market_context: PITMarketContext
     universe: UniverseSnapshot
     parameters: ParameterSnapshot
+    dataset_version_id: UUID | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -54,6 +55,8 @@ class PaperStrategyDecisionJob:
             raise ValueError("PAPER_DECISION_JOB_REQUIRES_PIT_CERTIFIED_UNIVERSE")
         if not isinstance(self.parameters, ParameterSnapshot):
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_PARAMETER_SNAPSHOT")
+        if self.dataset_version_id is not None and not isinstance(self.dataset_version_id, UUID):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_DATASET_VERSION_ID")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
         as_of = self.market_context.as_of
@@ -67,6 +70,7 @@ class PaperStrategyDecisionJob:
             self.market_context,
             self.universe,
             self.parameters,
+            dataset_version_id=self.dataset_version_id,
         )
         signals = self.strategy.generate_signals(
             self.market_context,
