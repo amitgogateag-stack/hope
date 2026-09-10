@@ -8,21 +8,12 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
-from hope.application.paper import (
-    PaperCycleContext,
-    PaperCycleOutcome,
-    PaperCycleRunner,
-    PaperFillAccountingWriter,
-    PaperOrderWriter,
-    PaperSignalWriter,
-)
+from hope.application.paper import PaperCycleContext, PaperCycleOutcome
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
+from hope.infrastructure.paper_runtime import SqlAlchemyPaperRuntime
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
-from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
-from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
-from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
 UTC = timezone.utc
 INPUTS_HASH = "f" * 64
@@ -105,35 +96,23 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
             {"id": instrument_id},
         )
 
-        jobs = SqlAlchemyJobRunRepository(connection)
-        signal_writer = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection))
-        order_writer = PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection))
-        fill_writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
-        runner = PaperCycleRunner(
-            jobs,
+        runtime = SqlAlchemyPaperRuntime(
+            connection,
             now=lambda: fill_run.scheduled_for + timedelta(minutes=1),
         )
+        jobs = SqlAlchemyJobRunRepository(connection)
 
-        assert runner.run_runtime(
+        assert runtime.run(
             signal_run,
-            signal_writer,
-            order_writer,
-            fill_writer,
-            lambda runtime: runtime.record_signal(signal),
+            lambda context: context.record_signal(signal),
         ) is PaperCycleOutcome.EXECUTED
-        assert runner.run_runtime(
+        assert runtime.run(
             order_run,
-            signal_writer,
-            order_writer,
-            fill_writer,
-            lambda runtime: runtime.record_order(order),
+            lambda context: context.record_order(order),
         ) is PaperCycleOutcome.EXECUTED
-        assert runner.run_runtime(
+        assert runtime.run(
             fill_run,
-            signal_writer,
-            order_writer,
-            fill_writer,
-            lambda runtime: runtime.record_fill(
+            lambda context: context.record_fill(
                 portfolio_id,
                 Decimal("1000"),
                 fill,
