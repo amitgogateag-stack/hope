@@ -1,6 +1,7 @@
 from hope.application.paper.accounting import PaperAccountingPersistence, PaperAccountingWriter
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.effects import PaperEffect, PaperEffectType, create_paper_effect
+from hope.application.paper.fill_accounting import PaperFillAccountingPersistence, PaperFillAccountingWriter
 from hope.application.paper.fills import PaperFillPersistence, PaperFillWriter, paper_fill_payload_hash
 from hope.application.paper.orders import PaperOrderPersistence, PaperOrderWriter, paper_order_payload_hash
 from hope.application.paper.pnl import PaperPnLEvent, PaperPnLPersistence, paper_pnl_payload_hash
@@ -15,6 +16,8 @@ __all__ = [
     "PaperCycleRunner",
     "PaperEffect",
     "PaperEffectType",
+    "PaperFillAccountingPersistence",
+    "PaperFillAccountingWriter",
     "PaperFillPersistence",
     "PaperFillWriter",
     "PaperOrderPersistence",
