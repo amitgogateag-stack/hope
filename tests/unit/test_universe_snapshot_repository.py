@@ -90,5 +90,5 @@ def test_universe_snapshot_repository_fails_closed_on_member_count_mismatch() ->
             )
         )
 
-        with pytest.raises(ValueError, match="declared_member_count"):
+        with pytest.raises(ValueError, match="declared member count"):
             UniverseSnapshotRepository(connection).get(version_id)
