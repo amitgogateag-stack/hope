@@ -5,6 +5,7 @@ from datetime import timezone
 from decimal import Decimal
 from uuid import UUID
 
+from hope.application.paper.provenance import paper_decision_inputs_hash
 from hope.application.paper.runner import PaperRuntimeContext
 from hope.domain.execution.models import Environment, Order
 from hope.domain.execution.simulator import Fill
@@ -61,6 +62,12 @@ class PaperStrategyDecisionJob:
         if as_of.astimezone(timezone.utc) > runtime.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_DECISION_AFTER_JOB_SCHEDULE")
 
+        expected_inputs_hash = paper_decision_inputs_hash(
+            self.strategy,
+            self.market_context,
+            self.universe,
+            self.parameters,
+        )
         signals = self.strategy.generate_signals(
             self.market_context,
             self.universe,
@@ -79,6 +86,8 @@ class PaperStrategyDecisionJob:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH")
             if signal.strategy_version != self.strategy.version:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
+            if signal.inputs_hash != expected_inputs_hash:
+                raise ValueError("PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH")
 
         for signal in signals:
             runtime.record_signal(signal)
