@@ -5,7 +5,8 @@ from uuid import uuid4
 import pytest
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperEffectType, PaperFillWriter, paper_fill_payload_hash
+from hope.application.paper import PaperCycleContext, PaperEffectType, paper_fill_payload_hash
+from hope.application.paper.fills import PaperFillWriter
 from hope.domain.execution import Fill, OrderSide
 
 UTC = timezone.utc

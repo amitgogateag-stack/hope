@@ -11,11 +11,11 @@ from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import (
     PaperCycleContext,
     PaperFillAccountingWriter,
-    PaperFillWriter,
     PaperOrderWriter,
     PaperSignalWriter,
 )
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
+from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
