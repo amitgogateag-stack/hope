@@ -33,11 +33,13 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "010_job_run_lifecycle.sql",
             "011_paper_effect_idempotency.sql",
             "012_paper_portfolio_state.sql",
+            "013_paper_portfolio_pnl_events.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='job_runs'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='paper_effects'")).scalar_one() == 1
+        assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='paper_portfolio_pnl_events'")).scalar_one() == 1
         assert connection.execute(
             text(
                 "SELECT 1 FROM information_schema.columns "
