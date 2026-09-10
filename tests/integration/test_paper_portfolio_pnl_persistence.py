@@ -60,8 +60,8 @@ def persist_fill(connection, context, instrument_id, side, price, decision_minut
         side,
         Decimal("1"),
         Decimal(price),
-        Decimal("0"),
         Decimal("0.25"),
+        Decimal("0"),
         "paper-accounting-cost-v1",
         decision,
     )
