@@ -173,3 +173,50 @@ def test_paper_portfolio_restore_rejects_incomplete_application_history():
 
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT"):
             repository.load_ledger(portfolio_id)
+
+
+@pytest.mark.integration
+def test_paper_portfolio_rejects_fill_time_regression_without_state_mutation():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run("paper-portfolio-chronology", datetime(2026, 9, 9, 23, 45, tzinfo=UTC))
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id,'PAPER-CHRONO','TEST','ACTIVE')"),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+        earlier = persist_fill(
+            connection, context, instrument_id,
+            side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"), sequence=0, decision_minute=46,
+        )
+        later = persist_fill(
+            connection, context, instrument_id,
+            side=OrderSide.SELL, quantity=Decimal("1"), price=Decimal("110"), sequence=0, decision_minute=48,
+        )
+        repository = SqlAlchemyPaperPortfolioRepository(connection)
+        assert repository.apply_fill(portfolio_id, Decimal("1000"), later)
+        before = connection.execute(
+            text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).one()
+
+        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_FILL_TIME_REGRESSION"):
+            repository.apply_fill(portfolio_id, Decimal("1000"), earlier)
+
+        after = connection.execute(
+            text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).one()
+        assert after == before
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 1

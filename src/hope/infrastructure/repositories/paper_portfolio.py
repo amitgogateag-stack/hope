@@ -109,24 +109,38 @@ class SqlAlchemyPaperPortfolioRepository:
             for row in rows
         }
 
+    def _load_application_history(self, portfolio_id: UUID, version: int):
+        applications = self._connection.execute(
+            select(
+                self._applications.c.fill_id,
+                self._applications.c.application_sequence,
+                self._fills.c.filled_at,
+            )
+            .select_from(
+                self._applications.join(
+                    self._fills,
+                    self._applications.c.fill_id == self._fills.c.fill_id,
+                )
+            )
+            .where(self._applications.c.portfolio_id == portfolio_id)
+            .order_by(self._applications.c.application_sequence)
+        ).mappings().all()
+        expected_sequences = list(range(1, version + 1))
+        actual_sequences = [row["application_sequence"] for row in applications]
+        if actual_sequences != expected_sequences:
+            raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT")
+        for previous, current in zip(applications, applications[1:]):
+            if current["filled_at"] < previous["filled_at"]:
+                raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_TIME_REGRESSION")
+        return applications
+
     def load_ledger(self, portfolio_id: UUID) -> PortfolioLedger | None:
         portfolio = self._connection.execute(
             select(self._portfolios).where(self._portfolios.c.portfolio_id == portfolio_id)
         ).mappings().one_or_none()
         if portfolio is None:
             return None
-        applications = self._connection.execute(
-            select(
-                self._applications.c.fill_id,
-                self._applications.c.application_sequence,
-            )
-            .where(self._applications.c.portfolio_id == portfolio_id)
-            .order_by(self._applications.c.application_sequence)
-        ).mappings().all()
-        expected_sequences = list(range(1, portfolio["version"] + 1))
-        actual_sequences = [row["application_sequence"] for row in applications]
-        if actual_sequences != expected_sequences:
-            raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT")
+        applications = self._load_application_history(portfolio_id, portfolio["version"])
         state = PortfolioState(portfolio["cash"], self._load_positions(portfolio_id))
         return PortfolioLedger.from_state(
             state,
@@ -138,17 +152,15 @@ class SqlAlchemyPaperPortfolioRepository:
         with self._connection.begin_nested():
             self._assert_tracked_fill(fill)
             portfolio = self._ensure_and_lock_portfolio(portfolio_id, initial_cash)
-            existing = self._connection.execute(
-                select(self._applications.c.fill_id).where(
-                    self._applications.c.portfolio_id == portfolio_id,
-                    self._applications.c.fill_id == fill.fill_id,
-                )
-            ).scalar_one_or_none()
-            if existing is not None:
+            applications = self._load_application_history(portfolio_id, portfolio["version"])
+            if any(row["fill_id"] == fill.fill_id for row in applications):
                 return False
+            if applications and fill.fill_time < applications[-1]["filled_at"]:
+                raise ValueError("PAPER_PORTFOLIO_FILL_TIME_REGRESSION")
 
             ledger = PortfolioLedger.from_state(
-                PortfolioState(portfolio["cash"], self._load_positions(portfolio_id))
+                PortfolioState(portfolio["cash"], self._load_positions(portfolio_id)),
+                applied_fill_ids=[row["fill_id"] for row in applications],
             )
             state = ledger.apply_fill(fill)
             position = state.positions[fill.instrument_id]
