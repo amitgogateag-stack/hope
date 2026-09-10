@@ -11,7 +11,7 @@ from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperCycleOutcome
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
-from hope.infrastructure.paper_runtime import SqlAlchemyPaperRuntime
+from hope.infrastructure.paper_runtime import PaperJobRegistry, run_paper_once
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -96,30 +96,26 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
             {"id": instrument_id},
         )
 
-        runtime = SqlAlchemyPaperRuntime(
-            connection,
-            now=lambda: fill_run.scheduled_for + timedelta(minutes=1),
-        )
-        jobs = SqlAlchemyJobRunRepository(connection)
-
-        assert runtime.run(
-            signal_run,
-            lambda context: context.record_signal(signal),
-        ) is PaperCycleOutcome.EXECUTED
-        assert runtime.run(
-            order_run,
-            lambda context: context.record_order(order),
-        ) is PaperCycleOutcome.EXECUTED
-        assert runtime.run(
-            fill_run,
-            lambda context: context.record_fill(
+    registry = PaperJobRegistry(
+        {
+            signal_run.job_key: lambda context: context.record_signal(signal),
+            order_run.job_key: lambda context: context.record_order(order),
+            fill_run.job_key: lambda context: context.record_fill(
                 portfolio_id,
                 Decimal("1000"),
                 fill,
                 sequence=0,
             ),
-        ) is PaperCycleOutcome.EXECUTED
+        }
+    )
+    now = lambda: fill_run.scheduled_for + timedelta(minutes=1)
 
+    assert run_paper_once(engine, signal_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+    assert run_paper_once(engine, order_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+    assert run_paper_once(engine, fill_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+
+    with engine.connect() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
         assert connection.execute(
             text("SELECT count(*) FROM signals WHERE signal_id=:id"),
             {"id": signal.signal_id},
