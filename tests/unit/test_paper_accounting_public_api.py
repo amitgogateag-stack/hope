@@ -10,3 +10,6 @@ def test_paper_public_api_exposes_authoritative_accounting_writer_only() -> None
     assert "PaperFillAccountingWriter" in paper.__all__
     assert "PaperFillWriter" not in paper.__all__
     assert not hasattr(paper, "PaperFillWriter")
+    assert callable(paper.PaperCycleRunner.run_runtime)
+    assert "PaperRuntimeContext" not in paper.__all__
+    assert not hasattr(paper, "PaperRuntimeContext")
