@@ -108,7 +108,7 @@ def _insert_durable_decision_inputs(engine, as_of):
             text(
                 "INSERT INTO dataset_versions("
                 "dataset_version_id, dataset_id, version, vintage_label, immutable"
-                ") VALUES (:dataset_version_id, :dataset_id, 'v1', 'paper-test', TRUE)"
+                ") VALUES (:dataset_version_id, :dataset_id, 'v1', 'paper-test', FALSE)"
             ),
             {"dataset_version_id": dataset_version_id, "dataset_id": dataset_id},
         )
@@ -147,6 +147,13 @@ def _insert_durable_decision_inputs(engine, as_of):
                 "available_time": as_of - timedelta(minutes=1),
                 "ingestion_time": as_of + timedelta(minutes=1),
             },
+        )
+        connection.execute(
+            text(
+                "UPDATE dataset_versions SET immutable = TRUE "
+                "WHERE dataset_version_id = :dataset_version_id"
+            ),
+            {"dataset_version_id": dataset_version_id},
         )
     return universe_id, universe_version_id, instrument_id, dataset_version_id
 
