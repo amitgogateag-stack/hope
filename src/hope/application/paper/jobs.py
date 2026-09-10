@@ -8,7 +8,10 @@ from uuid import UUID
 from hope.application.paper.runner import PaperRuntimeContext
 from hope.domain.execution.models import Environment, Order
 from hope.domain.execution.simulator import Fill
+from hope.domain.market_data.context import PITMarketContext
 from hope.domain.signal.models import Signal
+from hope.domain.strategy.models import ParameterSnapshot, Strategy
+from hope.domain.universe.models import UniverseVersion
 
 
 @dataclass(frozen=True)
@@ -28,6 +31,57 @@ class PaperSignalPersistenceJob:
         if decision_time.astimezone(timezone.utc) > runtime.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE")
         runtime.record_signal(self.signal)
+
+
+@dataclass(frozen=True)
+class PaperStrategyDecisionJob:
+    """Generate and persist PAPER signals from one explicit PIT-safe strategy decision."""
+
+    strategy: Strategy
+    market_context: PITMarketContext
+    universe: UniverseVersion
+    parameters: ParameterSnapshot
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.strategy, Strategy):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_STRATEGY")
+        if not isinstance(self.market_context, PITMarketContext):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_PIT_MARKET_CONTEXT")
+        if not isinstance(self.universe, UniverseVersion):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_UNIVERSE_VERSION")
+        if not self.universe.pit_certified:
+            raise ValueError("PAPER_DECISION_JOB_REQUIRES_PIT_CERTIFIED_UNIVERSE")
+        if not isinstance(self.parameters, ParameterSnapshot):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_PARAMETER_SNAPSHOT")
+
+    def __call__(self, runtime: PaperRuntimeContext) -> None:
+        as_of = self.market_context.as_of
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("PAPER_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if as_of.astimezone(timezone.utc) > runtime.cycle.job_run.scheduled_for:
+            raise ValueError("PAPER_DECISION_AFTER_JOB_SCHEDULE")
+
+        signals = self.strategy.generate_signals(
+            self.market_context,
+            self.universe,
+            self.parameters,
+        )
+        if not isinstance(signals, tuple):
+            raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
+
+        for signal in signals:
+            if not isinstance(signal, Signal):
+                raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
+            decision_time = signal.decision_time
+            if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+                raise ValueError("PAPER_STRATEGY_SIGNAL_TIME_MUST_BE_TIMEZONE_AWARE")
+            if decision_time != as_of:
+                raise ValueError("PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH")
+            if signal.strategy_version != self.strategy.version:
+                raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
+
+        for signal in signals:
+            runtime.record_signal(signal)
 
 
 @dataclass(frozen=True)
