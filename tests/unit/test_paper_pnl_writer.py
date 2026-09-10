@@ -5,7 +5,8 @@ from uuid import uuid4
 import pytest
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperEffectType, PaperPnLEvent, PaperPnLWriter, paper_pnl_payload_hash
+from hope.application.paper import PaperCycleContext, PaperEffectType, PaperPnLEvent, paper_pnl_payload_hash
+from hope.application.paper.pnl import PaperPnLWriter
 
 
 UTC = timezone.utc
