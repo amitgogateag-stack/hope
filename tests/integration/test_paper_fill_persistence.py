@@ -53,6 +53,8 @@ def test_paper_fill_is_durable_and_idempotent_across_scheduled_cycles():
         assert jobs.complete(create_job_run_completion(first, JobRunStatus.SUCCEEDED, first.scheduled_for + timedelta(seconds=30)))
         assert jobs.claim(second); assert fw.record(c2, fill, sequence=0) is False
         assert connection.execute(text("SELECT count(*) FROM fills WHERE fill_id=:id"), {"id": fill.fill_id}).scalar_one() == 1
+        stored_cost_model = connection.execute(text("SELECT cost_model_version FROM fills WHERE fill_id=:id"), {"id": fill.fill_id}).scalar_one()
+        assert stored_cost_model == "cost-v1"
         effect = connection.execute(text("SELECT job_run_id FROM paper_effects WHERE effect_type='FILL' AND entity_id=:id"), {"id": fill.fill_id}).scalar_one()
         assert effect == first.job_run_id
 

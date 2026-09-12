@@ -27,6 +27,7 @@ class SqlAlchemyPaperFillRepository:
             Column("slippage", Numeric, nullable=False),
             Column("transaction_cost", Numeric, nullable=False),
             Column("filled_at", DateTime(timezone=True), nullable=False),
+            Column("cost_model_version", String, nullable=True),
         )
         self._orders = Table(
             "orders", metadata,
@@ -83,6 +84,7 @@ class SqlAlchemyPaperFillRepository:
             or row["slippage"] != fill.slippage
             or row["transaction_cost"] != fill.commission
             or row["filled_at"] != fill.fill_time
+            or row["cost_model_version"] != fill.cost_model_version
         ):
             raise ValueError("PAPER_FILL_IDENTITY_CONFLICT")
 
@@ -129,6 +131,7 @@ class SqlAlchemyPaperFillRepository:
                     slippage=fill.slippage,
                     transaction_cost=fill.commission,
                     filled_at=fill.fill_time,
+                    cost_model_version=fill.cost_model_version,
                 ).on_conflict_do_nothing(index_elements=["fill_id"]).returning(self._fills.c.fill_id)
             ).scalar_one_or_none()
             if inserted_id is None:
