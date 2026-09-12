@@ -26,7 +26,7 @@ def test_experiment_invalidations_are_append_only() -> None:
             strategy_id, strategy_version_id = uuid4(), uuid4()
             dataset_id, dataset_version_id = uuid4(), uuid4()
             universe_id, universe_version_id = uuid4(), uuid4()
-            config_hash = "i" * 64
+            config_hash = "d" * 64
             experiment_id = "EXP-INVALIDATION-IMMUTABLE"
 
             connection.execute(text(
