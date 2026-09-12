@@ -1,5 +1,5 @@
 -- Experiment identity and provenance are historical facts.
--- Lifecycle status may evolve, but the inputs that define an experiment may not.
+-- The experiment row remains append-only; lifecycle changes are represented by separate events.
 
 CREATE OR REPLACE FUNCTION hope_guard_experiment_provenance()
 RETURNS trigger LANGUAGE plpgsql AS $$
