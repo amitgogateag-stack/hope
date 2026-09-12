@@ -179,8 +179,8 @@ def test_paper_portfolio_restore_rejects_incomplete_application_history():
         assert repository.apply_fill(portfolio_id, Decimal("1000"), second)
 
         connection.execute(
-            text("DELETE FROM paper_portfolio_fill_applications WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"),
-            {"portfolio_id": portfolio_id, "fill_id": first.fill_id},
+            text("UPDATE paper_portfolios SET version = 3 WHERE portfolio_id=:portfolio_id"),
+            {"portfolio_id": portfolio_id},
         )
 
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT"):
