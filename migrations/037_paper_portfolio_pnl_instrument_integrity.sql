@@ -12,9 +12,13 @@ BEGIN
     WHERE f.fill_id = NEW.fill_id;
 
     IF fill_instrument IS DISTINCT FROM NEW.instrument_id THEN
-        RAISE EXCEPTION 'PAPER_PORTFOLIO_PNL_INSTRUMENT_MISMATCH: fill % instrument % vs pnl instrument %',
-            NEW.fill_id, fill_instrument, NEW.instrument_id
-            USING ERRCODE = '23514';
+        RAISE EXCEPTION USING
+            ERRCODE = '23514',
+            MESSAGE = concat(
+                'PAPER_PORTFOLIO_PNL_INSTRUMENT_MISMATCH: fill ', NEW.fill_id,
+                ' instrument ', fill_instrument,
+                ' vs pnl instrument ', NEW.instrument_id
+            );
     END IF;
     RETURN NEW;
 END;
