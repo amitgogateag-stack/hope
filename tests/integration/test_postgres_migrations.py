@@ -40,6 +40,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "017_dataset_metadata_immutability.sql",
             "018_experiment_dataset_freeze.sql",
             "019_configuration_snapshot_immutability.sql",
+            "020_strategy_version_immutability.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
