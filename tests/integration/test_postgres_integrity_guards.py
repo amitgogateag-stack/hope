@@ -113,6 +113,14 @@ def test_postgres_migrations_and_integrity_guards() -> None:
             """), {"id": universe_version_id, "universe_id": universe_id})
 
             connection.execute(text("""
+                INSERT INTO universe_members(universe_version_id, instrument_id)
+                VALUES (:universe_version_id, :instrument_id)
+            """), {
+                "universe_version_id": universe_version_id,
+                "instrument_id": instrument_id,
+            })
+
+            connection.execute(text("""
                 INSERT INTO configuration_snapshots(configuration_hash, canonical_json)
                 VALUES (:hash, '{}'::jsonb)
             """), {"hash": configuration_hash})
