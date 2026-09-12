@@ -4,13 +4,13 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, ProgrammingError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
 @pytest.mark.integration
-def test_experiment_provenance_is_immutable_while_status_may_advance() -> None:
+def test_experiment_provenance_and_history_are_immutable() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -45,9 +45,12 @@ def test_experiment_provenance_is_immutable_while_status_may_advance() -> None:
                 with connection.begin_nested():
                     connection.execute(text("DELETE FROM experiments WHERE experiment_id = 'EXP-PROVENANCE-IMMUTABLE'"))
 
-            connection.execute(text("UPDATE experiments SET status = 'COMPLETED' WHERE experiment_id = 'EXP-PROVENANCE-IMMUTABLE'"))
+            with pytest.raises(ProgrammingError, match="experiment history is immutable"):
+                with connection.begin_nested():
+                    connection.execute(text("UPDATE experiments SET status = 'COMPLETED' WHERE experiment_id = 'EXP-PROVENANCE-IMMUTABLE'"))
+
             stored = connection.execute(text("SELECT hypothesis, status FROM experiments WHERE experiment_id = 'EXP-PROVENANCE-IMMUTABLE'" )).one()
             assert stored.hypothesis == "original hypothesis"
-            assert stored.status == "COMPLETED"
+            assert stored.status == "CREATED"
         finally:
             transaction.rollback()
