@@ -22,7 +22,7 @@ BEGIN
     WHERE universe_version_id = NEW.universe_version_id;
 
     IF actual_count <> declared_count THEN
-        RAISE EXCEPTION 'EXPERIMENT_UNIVERSE_MEMBER_COUNT_MISMATCH: declared %, actual %', declared_count, actual_count
+        RAISE EXCEPTION 'EXPERIMENT_UNIVERSE_MEMBER_COUNT_MISMATCH: declared %%, actual %%', declared_count, actual_count
             USING ERRCODE = '23514';
     END IF;
 
