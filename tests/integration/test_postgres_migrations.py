@@ -51,6 +51,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "028_signal_immutability.sql",
             "029_fill_immutability.sql",
             "030_order_immutability.sql",
+            "031_paper_effect_immutability.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
