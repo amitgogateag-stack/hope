@@ -137,6 +137,16 @@ def test_market_data_staging_seals_once_and_then_becomes_immutable() -> None:
                         {"version_id": dataset_version_id},
                     )
 
+            with pytest.raises(IntegrityError, match="DATASET_VERSION_IMMUTABLE"):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "DELETE FROM dataset_versions "
+                            "WHERE dataset_version_id = :version_id"
+                        ),
+                        {"version_id": dataset_version_id},
+                    )
+
             immutable = connection.execute(
                 text(
                     "SELECT immutable FROM dataset_versions "
