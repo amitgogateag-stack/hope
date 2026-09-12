@@ -1,5 +1,6 @@
 import os
 from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -81,10 +82,10 @@ def test_fills_are_append_only_execution_history() -> None:
                 {"id": fill_id},
             ).one()
             assert stored.order_id == order_id
-            assert stored.quantity == 1
-            assert stored.fill_price == 101.25
-            assert stored.slippage == 0.10
-            assert stored.transaction_cost == 0.25
+            assert stored.quantity == Decimal("1")
+            assert stored.fill_price == Decimal("101.25")
+            assert stored.slippage == Decimal("0.10")
+            assert stored.transaction_cost == Decimal("0.25")
             assert stored.filled_at == filled_at
         finally:
             transaction.rollback()
