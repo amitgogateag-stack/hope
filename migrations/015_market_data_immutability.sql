@@ -14,7 +14,7 @@ BEGIN
         WHERE dataset_version_id = NEW.dataset_version_id;
 
         IF version_immutable IS TRUE THEN
-            RAISE EXCEPTION 'MARKET_BAR_IMMUTABLE_DATASET_VERSION: dataset version % is sealed', NEW.dataset_version_id
+            RAISE EXCEPTION 'MARKET_BAR_IMMUTABLE_DATASET_VERSION: dataset version %% is sealed', NEW.dataset_version_id
                 USING ERRCODE = '23514';
         END IF;
         RETURN NEW;
@@ -35,14 +35,14 @@ RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
     IF TG_OP = 'DELETE' THEN
         IF OLD.immutable IS TRUE THEN
-            RAISE EXCEPTION 'DATASET_VERSION_IMMUTABLE: sealed dataset version % cannot be deleted', OLD.dataset_version_id
+            RAISE EXCEPTION 'DATASET_VERSION_IMMUTABLE: sealed dataset version %% cannot be deleted', OLD.dataset_version_id
                 USING ERRCODE = '23514';
         END IF;
         RETURN OLD;
     END IF;
 
     IF OLD.immutable IS TRUE THEN
-        RAISE EXCEPTION 'DATASET_VERSION_IMMUTABLE: sealed dataset version % cannot be modified or reopened', OLD.dataset_version_id
+        RAISE EXCEPTION 'DATASET_VERSION_IMMUTABLE: sealed dataset version %% cannot be modified or reopened', OLD.dataset_version_id
             USING ERRCODE = '23514';
     END IF;
 
