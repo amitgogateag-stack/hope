@@ -12,7 +12,7 @@ BEGIN
         WHERE dataset_id = OLD.dataset_id
           AND immutable IS TRUE
     ) THEN
-        RAISE EXCEPTION 'DATASET_METADATA_IMMUTABLE: dataset % backs a sealed version', OLD.dataset_id
+        RAISE EXCEPTION 'DATASET_METADATA_IMMUTABLE: dataset %% backs a sealed version', OLD.dataset_id
             USING ERRCODE = '23514';
     END IF;
 
