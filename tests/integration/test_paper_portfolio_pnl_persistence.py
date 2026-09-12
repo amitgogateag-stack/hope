@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
@@ -117,3 +118,33 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
         assert row["instrument_id"] == instrument_id
         assert row["realized_pnl_delta"] == Decimal("10")
         assert row["commission_delta"] == Decimal("0.25")
+
+        with pytest.raises(IntegrityError, match="PAPER_PORTFOLIO_PNL_EVENT_IMMUTABLE"):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "UPDATE paper_portfolio_pnl_events SET realized_pnl_delta=999 "
+                        "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+                    ),
+                    {"portfolio_id": portfolio_id, "fill_id": sell.fill_id},
+                )
+
+        with pytest.raises(IntegrityError, match="PAPER_PORTFOLIO_PNL_EVENT_IMMUTABLE"):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "DELETE FROM paper_portfolio_pnl_events "
+                        "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+                    ),
+                    {"portfolio_id": portfolio_id, "fill_id": sell.fill_id},
+                )
+
+        durable = connection.execute(
+            text(
+                "SELECT realized_pnl_delta, commission_delta FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": sell.fill_id},
+        ).mappings().one()
+        assert durable["realized_pnl_delta"] == Decimal("10")
+        assert durable["commission_delta"] == Decimal("0.25")
