@@ -41,8 +41,8 @@ def test_terminal_job_run_history_cannot_be_modified_or_deleted() -> None:
         with pytest.raises(IntegrityError, match="JOB_RUN_TERMINAL_IMMUTABLE"):
             with connection.begin_nested():
                 connection.execute(
-                    text("UPDATE job_runs SET job_key=:job_key WHERE job_run_id=:job_run_id"),
-                    {"job_run_id": job_run.job_run_id, "job_key": "rewritten-terminal-job"},
+                    text("UPDATE job_runs SET created_at=created_at + interval '1 second' WHERE job_run_id=:job_run_id"),
+                    {"job_run_id": job_run.job_run_id},
                 )
 
         with pytest.raises(IntegrityError, match="JOB_RUN_TERMINAL_IMMUTABLE"):
