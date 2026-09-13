@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, Table, Uuid, BigInteger, select, update
+from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, String, Table, Uuid, BigInteger, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.paper.effects import PaperEffectType
@@ -53,6 +53,7 @@ class SqlAlchemyPaperPortfolioRepository:
             Column("slippage", Numeric, nullable=False),
             Column("transaction_cost", Numeric, nullable=False),
             Column("filled_at", DateTime(timezone=True), nullable=False),
+            Column("cost_model_version", String, nullable=True),
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
@@ -74,6 +75,7 @@ class SqlAlchemyPaperPortfolioRepository:
             or row["slippage"] != fill.slippage
             or row["transaction_cost"] != fill.commission
             or row["filled_at"] != fill.fill_time
+            or row["cost_model_version"] != fill.cost_model_version
         ):
             raise ValueError("PAPER_PORTFOLIO_FILL_DURABLE_STATE_CONFLICT")
 
