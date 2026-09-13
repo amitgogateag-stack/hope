@@ -14,6 +14,7 @@ class PortfolioRiskReason(StrEnum):
     MAX_DAILY_LOSS = "MAX_DAILY_LOSS_REACHED"
     MAX_DRAWDOWN = "MAX_DRAWDOWN_REACHED"
     MAX_POSITION_NOTIONAL = "MAX_POSITION_NOTIONAL_EXCEEDED"
+    MAX_STRATEGY_EXPOSURE = "MAX_STRATEGY_EXPOSURE_EXCEEDED"
     MAX_GROSS_EXPOSURE = "MAX_GROSS_EXPOSURE_EXCEEDED"
     MAX_OPEN_POSITIONS = "MAX_OPEN_POSITIONS_EXCEEDED"
 
@@ -23,7 +24,7 @@ class PortfolioRiskLimits(BaseModel):
 
     Threshold selection is intentionally external to this model. HOPE validates and
     applies the configured limits deterministically but does not invent leverage,
-    loss, or drawdown percentages.
+    loss, drawdown, or strategy-allocation percentages.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -33,12 +34,14 @@ class PortfolioRiskLimits(BaseModel):
     max_open_positions: int = Field(ge=1)
     max_daily_loss: Decimal | None = Field(default=None, gt=0)
     max_drawdown: Decimal | None = Field(default=None, gt=0)
+    max_strategy_exposure: Decimal | None = Field(default=None, gt=0)
 
     @field_validator(
         "max_position_notional",
         "max_gross_exposure",
         "max_daily_loss",
         "max_drawdown",
+        "max_strategy_exposure",
     )
     @classmethod
     def require_finite_limits(cls, value: Decimal | None) -> Decimal | None:
@@ -54,15 +57,25 @@ class PortfolioEntryRiskRequest(BaseModel):
 
     signal_id: UUID
     instrument_id: UUID
+    strategy_version: str = Field(min_length=1)
     proposed_quantity: Decimal = Field(gt=0)
     reference_price: Decimal = Field(gt=0)
     current_instrument_exposure: Decimal = Field(ge=0)
+    current_strategy_exposure: Decimal = Field(default=Decimal("0"), ge=0)
     opens_new_position: bool
+
+    @field_validator("strategy_version")
+    @classmethod
+    def require_canonical_strategy_version(cls, value: str) -> str:
+        if value.strip() != value or not value.strip():
+            raise ValueError("PORTFOLIO_RISK_STRATEGY_VERSION_NOT_CANONICAL")
+        return value
 
     @field_validator(
         "proposed_quantity",
         "reference_price",
         "current_instrument_exposure",
+        "current_strategy_exposure",
     )
     @classmethod
     def require_finite_request_numerics(cls, value: Decimal) -> Decimal:
@@ -77,6 +90,10 @@ class PortfolioEntryRiskRequest(BaseModel):
     @property
     def resulting_instrument_exposure(self) -> Decimal:
         return self.current_instrument_exposure + self.proposed_notional
+
+    @property
+    def resulting_strategy_exposure(self) -> Decimal:
+        return self.current_strategy_exposure + self.proposed_notional
 
 
 class PortfolioRiskSnapshot(BaseModel):
@@ -129,6 +146,12 @@ class PortfolioRiskEngine:
 
         if request.resulting_instrument_exposure > self._limits.max_position_notional:
             return self._reject(request.signal_id, PortfolioRiskReason.MAX_POSITION_NOTIONAL)
+
+        if (
+            self._limits.max_strategy_exposure is not None
+            and request.resulting_strategy_exposure > self._limits.max_strategy_exposure
+        ):
+            return self._reject(request.signal_id, PortfolioRiskReason.MAX_STRATEGY_EXPOSURE)
 
         if snapshot.gross_exposure + request.proposed_notional > self._limits.max_gross_exposure:
             return self._reject(request.signal_id, PortfolioRiskReason.MAX_GROSS_EXPOSURE)

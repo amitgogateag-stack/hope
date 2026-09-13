@@ -32,9 +32,11 @@ def request(**overrides) -> PortfolioEntryRiskRequest:
     values = {
         "signal_id": SIGNAL_ID,
         "instrument_id": INSTRUMENT_ID,
+        "strategy_version": "strategy-v1",
         "proposed_quantity": Decimal("10"),
         "reference_price": Decimal("1000"),
         "current_instrument_exposure": Decimal("0"),
+        "current_strategy_exposure": Decimal("0"),
         "opens_new_position": True,
     }
     values.update(overrides)
@@ -104,6 +106,28 @@ def test_portfolio_risk_rejects_resulting_position_notional_over_limit():
     assert assessment.approved_quantity == 0
 
 
+def test_portfolio_risk_rejects_resulting_strategy_exposure_over_limit():
+    assessment = PortfolioRiskEngine(
+        limits(max_strategy_exposure=Decimal("40000"))
+    ).assess_entry(
+        request(current_strategy_exposure=Decimal("35000")),
+        snapshot(),
+    )
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == PortfolioRiskReason.MAX_STRATEGY_EXPOSURE
+    assert assessment.approved_quantity == 0
+
+
+def test_portfolio_risk_strategy_budget_is_optional():
+    assessment = PortfolioRiskEngine(limits()).assess_entry(
+        request(current_strategy_exposure=Decimal("999999")),
+        snapshot(),
+    )
+
+    assert assessment.decision is RiskDecision.APPROVE
+
+
 def test_portfolio_risk_rejects_resulting_gross_exposure_over_limit():
     assessment = PortfolioRiskEngine(limits()).assess_entry(
         request(),
@@ -138,6 +162,7 @@ def test_portfolio_risk_allows_addition_at_position_count_limit():
     "max_gross_exposure",
     "max_daily_loss",
     "max_drawdown",
+    "max_strategy_exposure",
 ])
 def test_portfolio_risk_limits_reject_non_finite_numerics(field):
     values = {
@@ -154,10 +179,17 @@ def test_portfolio_risk_limits_reject_non_finite_numerics(field):
     "proposed_quantity",
     "reference_price",
     "current_instrument_exposure",
+    "current_strategy_exposure",
 ])
 def test_portfolio_risk_request_rejects_non_finite_numerics(field):
     with pytest.raises(ValidationError):
         request(**{field: Decimal("Infinity")})
+
+
+@pytest.mark.parametrize("strategy_version", ["", " ", " strategy-v1", "strategy-v1 "])
+def test_portfolio_risk_request_requires_canonical_strategy_version(strategy_version):
+    with pytest.raises(ValidationError, match="PORTFOLIO_RISK_STRATEGY_VERSION_NOT_CANONICAL"):
+        request(strategy_version=strategy_version)
 
 
 @pytest.mark.parametrize("field", [
