@@ -83,6 +83,22 @@ def test_quote_prices_must_be_finite(bid: Decimal, ask: Decimal):
         ExecutionQuote(uuid4(), quote_time, bid, ask)
 
 
+@pytest.mark.parametrize(
+    ("commission_rate", "slippage_bps"),
+    [
+        (Decimal("NaN"), Decimal("0")),
+        (Decimal("Infinity"), Decimal("0")),
+        (Decimal("-Infinity"), Decimal("0")),
+        (Decimal("0"), Decimal("NaN")),
+        (Decimal("0"), Decimal("Infinity")),
+        (Decimal("0"), Decimal("-Infinity")),
+    ],
+)
+def test_cost_model_values_must_be_finite(commission_rate: Decimal, slippage_bps: Decimal):
+    with pytest.raises(ValueError, match="COST_MODEL_VALUES_MUST_BE_FINITE"):
+        CostModel("v1", commission_rate, slippage_bps)
+
+
 def test_simulator_supports_partial_fill_quantity():
     order = make_order()
     quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)

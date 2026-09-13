@@ -40,6 +40,8 @@ class CostModel:
     def __post_init__(self) -> None:
         if not self.version:
             raise ValueError("COST_MODEL_VERSION_REQUIRED")
+        if not self.commission_rate.is_finite() or not self.slippage_bps.is_finite():
+            raise ValueError("COST_MODEL_VALUES_MUST_BE_FINITE")
         if self.commission_rate < 0 or self.slippage_bps < 0:
             raise ValueError("COST_MODEL_VALUES_MUST_BE_NON_NEGATIVE")
 
