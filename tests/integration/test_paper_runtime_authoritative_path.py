@@ -10,11 +10,18 @@ from sqlalchemy import create_engine, text
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperCycleOutcome
 from hope.application.paper.jobs import (
+    PaperEntryOrderDecisionJob,
     PaperFillAccountingJob,
-    PaperOrderPersistenceJob,
     PaperSignalPersistenceJob,
 )
-from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.domain.execution import Fill, OrderSide
+from hope.domain.risk.inputs import PortfolioEntryRiskInputs
+from hope.domain.risk.portfolio import (
+    PortfolioEntryRiskRequest,
+    PortfolioRiskEngine,
+    PortfolioRiskLimits,
+    PortfolioRiskSnapshot,
+)
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, run_paper_once
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -25,7 +32,7 @@ INPUTS_HASH = "f" * 64
 
 
 @pytest.mark.integration
-def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_runs() -> None:
+def test_authoritative_paper_runtime_persists_signal_risk_order_and_fill_in_separate_runs() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -38,8 +45,8 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
         "paper-runtime-signal",
         datetime(2026, 9, 10, 6, 0, tzinfo=UTC),
     )
-    order_run = create_scheduled_job_run(
-        "paper-runtime-order",
+    risk_order_run = create_scheduled_job_run(
+        "paper-runtime-risk-order",
         datetime(2026, 9, 10, 6, 1, tzinfo=UTC),
     )
     fill_run = create_scheduled_job_run(
@@ -48,7 +55,7 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
     )
 
     signal_context = PaperCycleContext(signal_run)
-    order_context = PaperCycleContext(order_run)
+    risk_order_context = PaperCycleContext(risk_order_run)
     fill_context = PaperCycleContext(fill_run)
     decision_time = datetime(2026, 9, 10, 5, 59, tzinfo=UTC)
     signal_id = signal_context.signal_id(
@@ -68,18 +75,35 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
         conviction=Decimal("0.8"),
         inputs_hash=INPUTS_HASH,
     )
-    order = Order(
-        order_id=order_context.order_id(signal_id),
-        signal_id=signal_id,
-        instrument_id=instrument_id,
-        side=OrderSide.BUY,
-        quantity=Decimal("1"),
-        environment=Environment.PAPER,
-        signal_type=SignalType.ENTRY,
+    risk_inputs = PortfolioEntryRiskInputs(
+        request=PortfolioEntryRiskRequest(
+            signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id,
+            strategy_version=signal.strategy_version,
+            proposed_quantity=Decimal("1"),
+            reference_price=Decimal("100"),
+            current_instrument_exposure=Decimal("0"),
+            current_strategy_exposure=Decimal("0"),
+            opens_new_position=True,
+        ),
+        snapshot=PortfolioRiskSnapshot(
+            gross_exposure=Decimal("0"),
+            open_positions=0,
+            current_daily_loss=Decimal("0"),
+            current_drawdown=Decimal("0"),
+        ),
     )
+    risk_engine = PortfolioRiskEngine(
+        PortfolioRiskLimits(
+            max_position_notional=Decimal("1000"),
+            max_gross_exposure=Decimal("5000"),
+            max_open_positions=5,
+        )
+    )
+    order_id = risk_order_context.order_id(signal_id)
     fill = Fill(
         fill_context.fill_id(signal_id, 0),
-        order.order_id,
+        order_id,
         signal_id,
         instrument_id,
         OrderSide.BUY,
@@ -104,7 +128,15 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
     registry = PaperJobRegistry(
         [
             PaperJobDefinition(signal_run.job_key, PaperSignalPersistenceJob(signal)),
-            PaperJobDefinition(order_run.job_key, PaperOrderPersistenceJob(order)),
+            PaperJobDefinition(
+                risk_order_run.job_key,
+                PaperEntryOrderDecisionJob(
+                    signal,
+                    risk_inputs,
+                    risk_engine,
+                    OrderSide.BUY,
+                ),
+            ),
             PaperJobDefinition(
                 fill_run.job_key,
                 PaperFillAccountingJob(
@@ -119,7 +151,7 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
     now = lambda: fill_run.scheduled_for + timedelta(minutes=1)
 
     assert run_paper_once(engine, signal_run, registry, now=now) is PaperCycleOutcome.EXECUTED
-    assert run_paper_once(engine, order_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+    assert run_paper_once(engine, risk_order_run, registry, now=now) is PaperCycleOutcome.EXECUTED
     assert run_paper_once(engine, fill_run, registry, now=now) is PaperCycleOutcome.EXECUTED
 
     with engine.connect() as connection:
@@ -128,9 +160,19 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
             text("SELECT count(*) FROM signals WHERE signal_id=:id"),
             {"id": signal.signal_id},
         ).scalar_one() == 1
+        risk_row = connection.execute(
+            text(
+                "SELECT decision, reason_code, approved_quantity "
+                "FROM paper_risk_assessments WHERE signal_id=:id"
+            ),
+            {"id": signal.signal_id},
+        ).mappings().one()
+        assert risk_row["decision"] == "APPROVE"
+        assert risk_row["reason_code"] == "PORTFOLIO_RISK_APPROVED"
+        assert risk_row["approved_quantity"] == Decimal("1")
         assert connection.execute(
             text("SELECT count(*) FROM orders WHERE order_id=:id"),
-            {"id": order.order_id},
+            {"id": order_id},
         ).scalar_one() == 1
         assert connection.execute(
             text("SELECT count(*) FROM fills WHERE fill_id=:id"),
@@ -152,16 +194,17 @@ def test_authoritative_paper_runtime_persists_signal_order_and_fill_in_separate_
                 ),
                 {
                     "signal_id": signal.signal_id,
-                    "order_id": order.order_id,
+                    "order_id": order_id,
                     "fill_id": fill.fill_id,
                 },
             ).all()
         )
         assert effect_jobs["SIGNAL"] == signal_run.job_run_id
-        assert effect_jobs["ORDER"] == order_run.job_run_id
+        assert effect_jobs["RISK"] == risk_order_run.job_run_id
+        assert effect_jobs["ORDER"] == risk_order_run.job_run_id
         assert effect_jobs["FILL"] == fill_run.job_run_id
 
-        for run in (signal_run, order_run, fill_run):
+        for run in (signal_run, risk_order_run, fill_run):
             record = jobs.get_record(run.job_run_id)
             assert record is not None
             assert record.status is JobRunStatus.SUCCEEDED
