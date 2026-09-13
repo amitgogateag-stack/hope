@@ -30,16 +30,18 @@ def build_portfolio_entry_risk_inputs(
     reference_price: Decimal,
     portfolio_state: PortfolioState,
     marks: dict[UUID, Decimal],
-    current_strategy_exposure: Decimal = Decimal("0"),
+    current_strategy_exposure: Decimal,
     concentration: PortfolioConcentrationContext | None = None,
-    current_daily_loss: Decimal = Decimal("0"),
-    current_drawdown: Decimal = Decimal("0"),
+    current_daily_loss: Decimal,
+    current_drawdown: Decimal,
 ) -> PortfolioEntryRiskInputs:
     """Build risk inputs while deriving portfolio exposure from ledger state.
 
     Portfolio-wide and target-position exposure facts are never caller supplied.
-    Strategy/concentration exposure and loss/drawdown remain explicit because the
+    Strategy exposure and loss/drawdown remain explicit required inputs because the
     current portfolio ledger cannot authoritatively derive that lineage/history.
+    Concentration stays optional because the risk engine fails closed when a
+    configured concentration limit requires missing classification context.
     """
     exposure = derive_portfolio_exposure_state(
         portfolio_state,

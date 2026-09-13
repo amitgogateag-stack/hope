@@ -1,4 +1,5 @@
 from decimal import Decimal
+from inspect import Parameter, signature
 from uuid import UUID
 
 import pytest
@@ -40,6 +41,9 @@ def build(**overrides):
             },
         ),
         "marks": {TARGET: Decimal("110"), OTHER: Decimal("50")},
+        "current_strategy_exposure": Decimal("0"),
+        "current_daily_loss": Decimal("0"),
+        "current_drawdown": Decimal("0"),
     }
     values.update(overrides)
     return build_portfolio_entry_risk_inputs(**values)
@@ -88,6 +92,15 @@ def test_risk_input_builder_preserves_explicit_nonledger_risk_context():
     assert inputs.request.concentration == concentration
     assert inputs.snapshot.current_daily_loss == Decimal("700")
     assert inputs.snapshot.current_drawdown == Decimal("1200")
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["current_strategy_exposure", "current_daily_loss", "current_drawdown"],
+)
+def test_risk_input_builder_requires_nonledger_risk_context(field):
+    parameter = signature(build_portfolio_entry_risk_inputs).parameters[field]
+    assert parameter.default is Parameter.empty
 
 
 def test_risk_input_builder_fails_closed_when_open_position_mark_is_missing():
