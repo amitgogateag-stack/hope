@@ -18,12 +18,14 @@ SIGNAL_ID = UUID("11111111-1111-1111-1111-111111111111")
 INSTRUMENT_ID = UUID("22222222-2222-2222-2222-222222222222")
 
 
-def limits() -> PortfolioRiskLimits:
-    return PortfolioRiskLimits(
-        max_position_notional=Decimal("25000"),
-        max_gross_exposure=Decimal("100000"),
-        max_open_positions=5,
-    )
+def limits(**overrides) -> PortfolioRiskLimits:
+    values = {
+        "max_position_notional": Decimal("25000"),
+        "max_gross_exposure": Decimal("100000"),
+        "max_open_positions": 5,
+    }
+    values.update(overrides)
+    return PortfolioRiskLimits(**values)
 
 
 def request(**overrides) -> PortfolioEntryRiskRequest:
@@ -51,6 +53,44 @@ def test_portfolio_risk_approves_request_within_all_limits():
     assert assessment.decision is RiskDecision.APPROVE
     assert assessment.reason_code == PortfolioRiskReason.APPROVED
     assert assessment.approved_quantity == Decimal("10")
+
+
+def test_portfolio_risk_rejects_when_daily_loss_limit_is_reached():
+    assessment = PortfolioRiskEngine(
+        limits(max_daily_loss=Decimal("5000"))
+    ).assess_entry(
+        request(),
+        snapshot(current_daily_loss=Decimal("5000")),
+    )
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == PortfolioRiskReason.MAX_DAILY_LOSS
+    assert assessment.approved_quantity == 0
+
+
+def test_portfolio_risk_rejects_when_drawdown_limit_is_reached():
+    assessment = PortfolioRiskEngine(
+        limits(max_drawdown=Decimal("12000"))
+    ).assess_entry(
+        request(),
+        snapshot(current_drawdown=Decimal("12000")),
+    )
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == PortfolioRiskReason.MAX_DRAWDOWN
+    assert assessment.approved_quantity == 0
+
+
+def test_portfolio_risk_optional_loss_gates_do_not_change_existing_policy():
+    assessment = PortfolioRiskEngine(limits()).assess_entry(
+        request(),
+        snapshot(
+            current_daily_loss=Decimal("999999"),
+            current_drawdown=Decimal("999999"),
+        ),
+    )
+
+    assert assessment.decision is RiskDecision.APPROVE
 
 
 def test_portfolio_risk_rejects_resulting_position_notional_over_limit():
@@ -93,14 +133,21 @@ def test_portfolio_risk_allows_addition_at_position_count_limit():
     assert assessment.decision is RiskDecision.APPROVE
 
 
-@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
-def test_portfolio_risk_limits_reject_non_finite_numerics(value):
+@pytest.mark.parametrize("field", [
+    "max_position_notional",
+    "max_gross_exposure",
+    "max_daily_loss",
+    "max_drawdown",
+])
+def test_portfolio_risk_limits_reject_non_finite_numerics(field):
+    values = {
+        "max_position_notional": Decimal("25000"),
+        "max_gross_exposure": Decimal("100000"),
+        "max_open_positions": 5,
+    }
+    values[field] = Decimal("Infinity")
     with pytest.raises(ValidationError):
-        PortfolioRiskLimits(
-            max_position_notional=Decimal(value),
-            max_gross_exposure=Decimal("100000"),
-            max_open_positions=5,
-        )
+        PortfolioRiskLimits(**values)
 
 
 @pytest.mark.parametrize("field", [
@@ -113,6 +160,11 @@ def test_portfolio_risk_request_rejects_non_finite_numerics(field):
         request(**{field: Decimal("Infinity")})
 
 
-def test_portfolio_risk_snapshot_rejects_non_finite_gross_exposure():
+@pytest.mark.parametrize("field", [
+    "gross_exposure",
+    "current_daily_loss",
+    "current_drawdown",
+])
+def test_portfolio_risk_snapshot_rejects_non_finite_numerics(field):
     with pytest.raises(ValidationError):
-        snapshot(gross_exposure=Decimal("Infinity"))
+        snapshot(**{field: Decimal("Infinity")})

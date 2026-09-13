@@ -11,6 +11,8 @@ from hope.domain.risk.models import RiskAssessment, RiskDecision
 
 class PortfolioRiskReason(StrEnum):
     APPROVED = "PORTFOLIO_RISK_APPROVED"
+    MAX_DAILY_LOSS = "MAX_DAILY_LOSS_REACHED"
+    MAX_DRAWDOWN = "MAX_DRAWDOWN_REACHED"
     MAX_POSITION_NOTIONAL = "MAX_POSITION_NOTIONAL_EXCEEDED"
     MAX_GROSS_EXPOSURE = "MAX_GROSS_EXPOSURE_EXCEEDED"
     MAX_OPEN_POSITIONS = "MAX_OPEN_POSITIONS_EXCEEDED"
@@ -20,8 +22,8 @@ class PortfolioRiskLimits(BaseModel):
     """Explicit absolute portfolio limits for entry-risk evaluation.
 
     Threshold selection is intentionally external to this model. HOPE validates and
-    applies the configured limits deterministically but does not invent leverage or
-    portfolio-risk percentages.
+    applies the configured limits deterministically but does not invent leverage,
+    loss, or drawdown percentages.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -29,11 +31,18 @@ class PortfolioRiskLimits(BaseModel):
     max_position_notional: Decimal = Field(gt=0)
     max_gross_exposure: Decimal = Field(gt=0)
     max_open_positions: int = Field(ge=1)
+    max_daily_loss: Decimal | None = Field(default=None, gt=0)
+    max_drawdown: Decimal | None = Field(default=None, gt=0)
 
-    @field_validator("max_position_notional", "max_gross_exposure")
+    @field_validator(
+        "max_position_notional",
+        "max_gross_exposure",
+        "max_daily_loss",
+        "max_drawdown",
+    )
     @classmethod
-    def require_finite_limits(cls, value: Decimal) -> Decimal:
-        if not value.is_finite():
+    def require_finite_limits(cls, value: Decimal | None) -> Decimal | None:
+        if value is not None and not value.is_finite():
             raise ValueError("PORTFOLIO_RISK_LIMIT_MUST_BE_FINITE")
         return value
 
@@ -77,12 +86,14 @@ class PortfolioRiskSnapshot(BaseModel):
 
     gross_exposure: Decimal = Field(ge=0)
     open_positions: int = Field(ge=0)
+    current_daily_loss: Decimal = Field(default=Decimal("0"), ge=0)
+    current_drawdown: Decimal = Field(default=Decimal("0"), ge=0)
 
-    @field_validator("gross_exposure")
+    @field_validator("gross_exposure", "current_daily_loss", "current_drawdown")
     @classmethod
-    def require_finite_gross_exposure(cls, value: Decimal) -> Decimal:
+    def require_finite_snapshot_numerics(cls, value: Decimal) -> Decimal:
         if not value.is_finite():
-            raise ValueError("PORTFOLIO_GROSS_EXPOSURE_MUST_BE_FINITE")
+            raise ValueError("PORTFOLIO_RISK_SNAPSHOT_NUMERIC_MUST_BE_FINITE")
         return value
 
 
@@ -103,6 +114,18 @@ class PortfolioRiskEngine:
             raise TypeError("PORTFOLIO_ENTRY_RISK_REQUEST_REQUIRED")
         if not isinstance(snapshot, PortfolioRiskSnapshot):
             raise TypeError("PORTFOLIO_RISK_SNAPSHOT_REQUIRED")
+
+        if (
+            self._limits.max_daily_loss is not None
+            and snapshot.current_daily_loss >= self._limits.max_daily_loss
+        ):
+            return self._reject(request.signal_id, PortfolioRiskReason.MAX_DAILY_LOSS)
+
+        if (
+            self._limits.max_drawdown is not None
+            and snapshot.current_drawdown >= self._limits.max_drawdown
+        ):
+            return self._reject(request.signal_id, PortfolioRiskReason.MAX_DRAWDOWN)
 
         if request.resulting_instrument_exposure > self._limits.max_position_notional:
             return self._reject(request.signal_id, PortfolioRiskReason.MAX_POSITION_NOTIONAL)
