@@ -64,6 +64,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "041_fill_cumulative_quantity_integrity.sql",
             "042_fill_cost_model_provenance.sql",
             "043_paper_fill_cost_model_required.sql",
+            "044_paper_portfolio_fill_environment_integrity.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
