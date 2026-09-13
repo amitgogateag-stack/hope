@@ -1,4 +1,5 @@
 from decimal import Decimal
+from inspect import Parameter, signature
 from uuid import UUID
 
 import pytest
@@ -45,7 +46,12 @@ def request(**overrides) -> PortfolioEntryRiskRequest:
 
 
 def snapshot(**overrides) -> PortfolioRiskSnapshot:
-    values = {"gross_exposure": Decimal("50000"), "open_positions": 2}
+    values = {
+        "gross_exposure": Decimal("50000"),
+        "open_positions": 2,
+        "current_daily_loss": Decimal("0"),
+        "current_drawdown": Decimal("0"),
+    }
     values.update(overrides)
     return PortfolioRiskSnapshot(**values)
 
@@ -205,6 +211,18 @@ def test_portfolio_risk_allows_addition_at_position_count_limit():
     )
 
     assert assessment.decision is RiskDecision.APPROVE
+
+
+@pytest.mark.parametrize(
+    ("model", "field"),
+    [
+        (PortfolioEntryRiskRequest, "current_strategy_exposure"),
+        (PortfolioRiskSnapshot, "current_daily_loss"),
+        (PortfolioRiskSnapshot, "current_drawdown"),
+    ],
+)
+def test_portfolio_risk_models_require_nonledger_context(model, field):
+    assert signature(model).parameters[field].default is Parameter.empty
 
 
 @pytest.mark.parametrize("field", [

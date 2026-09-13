@@ -92,7 +92,7 @@ class PortfolioEntryRiskRequest(BaseModel):
     proposed_quantity: Decimal = Field(gt=0)
     reference_price: Decimal = Field(gt=0)
     current_instrument_exposure: Decimal = Field(ge=0)
-    current_strategy_exposure: Decimal = Field(default=Decimal("0"), ge=0)
+    current_strategy_exposure: Decimal = Field(ge=0)
     concentration: PortfolioConcentrationContext | None = None
     opens_new_position: bool
 
@@ -141,8 +141,8 @@ class PortfolioRiskSnapshot(BaseModel):
 
     gross_exposure: Decimal = Field(ge=0)
     open_positions: int = Field(ge=0)
-    current_daily_loss: Decimal = Field(default=Decimal("0"), ge=0)
-    current_drawdown: Decimal = Field(default=Decimal("0"), ge=0)
+    current_daily_loss: Decimal = Field(ge=0)
+    current_drawdown: Decimal = Field(ge=0)
 
     @field_validator("gross_exposure", "current_daily_loss", "current_drawdown")
     @classmethod
