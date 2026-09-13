@@ -37,7 +37,13 @@ def create_order_intent(signal: Signal, risk: RiskAssessment, side: OrderSide, e
 
 
 def materialize_order(intent: OrderIntent, order_id: UUID) -> Order:
-    order = Order(
+    """Materialize an order for the intent's declared execution environment.
+
+    This is a shared research/backtest/PAPER domain primitive. PAPER-only safety is
+    enforced at the PAPER application/persistence boundary, not here, so BACKTEST
+    orders remain valid deterministic simulation evidence.
+    """
+    return Order(
         order_id=order_id,
         signal_id=intent.signal_id,
         instrument_id=intent.instrument_id,
@@ -46,5 +52,3 @@ def materialize_order(intent: OrderIntent, order_id: UUID) -> Order:
         environment=intent.environment,
         signal_type=intent.signal_type,
     )
-    order.assert_paper_safe()
-    return order
