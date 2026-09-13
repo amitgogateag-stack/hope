@@ -6,7 +6,7 @@ BEGIN
         SELECT 1 FROM paper_effects
         WHERE effect_type = 'SIGNAL' AND entity_id = NEW.signal_id
     ) THEN
-        RAISE EXCEPTION 'PAPER_RISK_SOURCE_SIGNAL_UNTRACKED: signal % has no durable SIGNAL effect', NEW.signal_id
+        RAISE EXCEPTION 'PAPER_RISK_SOURCE_SIGNAL_UNTRACKED: signal %% has no durable SIGNAL effect', NEW.signal_id
             USING ERRCODE = '23514';
     END IF;
 
@@ -14,7 +14,7 @@ BEGIN
         SELECT 1 FROM paper_effects
         WHERE effect_type = 'RISK' AND entity_id = NEW.signal_id
     ) THEN
-        RAISE EXCEPTION 'PAPER_RISK_EFFECT_UNTRACKED: signal % has no durable RISK effect', NEW.signal_id
+        RAISE EXCEPTION 'PAPER_RISK_EFFECT_UNTRACKED: signal %% has no durable RISK effect', NEW.signal_id
             USING ERRCODE = '23514';
     END IF;
 
