@@ -23,6 +23,8 @@ class ExecutionQuote:
             raise ValueError("QUOTE_AVAILABLE_TIME_MUST_BE_TIMEZONE_AWARE")
         if available_time < self.event_time:
             raise ValueError("QUOTE_AVAILABLE_TIME_PRECEDES_EVENT_TIME")
+        if not self.bid.is_finite() or not self.ask.is_finite():
+            raise ValueError("QUOTE_PRICES_MUST_BE_FINITE")
         if self.bid <= 0 or self.ask <= 0:
             raise ValueError("QUOTE_PRICES_MUST_BE_POSITIVE")
         if self.ask < self.bid:

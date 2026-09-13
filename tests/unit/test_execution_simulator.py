@@ -66,6 +66,23 @@ def test_crossed_quote_is_rejected():
         ExecutionQuote(uuid4(), quote_time, Decimal("101"), Decimal("100"))
 
 
+@pytest.mark.parametrize(
+    ("bid", "ask"),
+    [
+        (Decimal("NaN"), Decimal("100")),
+        (Decimal("Infinity"), Decimal("100")),
+        (Decimal("-Infinity"), Decimal("100")),
+        (Decimal("99"), Decimal("NaN")),
+        (Decimal("99"), Decimal("Infinity")),
+        (Decimal("99"), Decimal("-Infinity")),
+    ],
+)
+def test_quote_prices_must_be_finite(bid: Decimal, ask: Decimal):
+    quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="QUOTE_PRICES_MUST_BE_FINITE"):
+        ExecutionQuote(uuid4(), quote_time, bid, ask)
+
+
 def test_simulator_supports_partial_fill_quantity():
     order = make_order()
     quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)
