@@ -31,9 +31,10 @@ class Order(BaseModel):
     signal_type: SignalType = SignalType.ENTRY
 
     def assert_paper_safe(self) -> None:
-        # There is intentionally no LIVE environment in v0.1.
-        if self.environment not in Environment:
-            raise ValueError("UNSUPPORTED_EXECUTION_ENVIRONMENT")
+        # There is intentionally no LIVE environment in v0.1, and PAPER-only
+        # runtime boundaries must reject research/backtest environments too.
+        if self.environment is not Environment.PAPER:
+            raise ValueError("PAPER_EXECUTION_REQUIRES_PAPER_ENVIRONMENT")
 
 
 @dataclass(frozen=True)
