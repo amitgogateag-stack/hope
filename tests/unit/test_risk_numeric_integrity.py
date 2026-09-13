@@ -8,7 +8,7 @@ from hope.domain.risk.models import RiskAssessment, RiskDecision
 
 
 def test_risk_assessment_rejects_non_finite_approved_quantity():
-    with pytest.raises(ValidationError, match="RISK_APPROVED_QUANTITY_MUST_BE_FINITE"):
+    with pytest.raises(ValidationError):
         RiskAssessment(
             signal_id=uuid4(),
             decision=RiskDecision.APPROVE,

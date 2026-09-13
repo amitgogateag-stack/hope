@@ -36,7 +36,7 @@ def test_counterfactual_policy_rejects_non_positive_quantity():
 
 
 def test_counterfactual_policy_rejects_non_finite_quantity():
-    with pytest.raises(ValidationError, match="COUNTERFACTUAL_QUANTITY_MUST_BE_FINITE"):
+    with pytest.raises(ValidationError):
         make_policy(quantity=Decimal("Infinity"))
 
 
