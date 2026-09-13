@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Protocol
+from typing import Literal, Protocol
 from uuid import UUID
 
 from sqlalchemy import CHAR, Column, Connection, DateTime, MetaData, String, Table, Uuid, insert, select
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ExperimentRecord(BaseModel):
@@ -18,9 +18,16 @@ class ExperimentRecord(BaseModel):
     dataset_version_id: UUID
     universe_version_id: UUID
     configuration_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
-    environment: str = Field(min_length=1)
-    status: str = Field(min_length=1)
+    environment: Literal["RESEARCH", "BACKTEST", "WALK_FORWARD", "PAPER"]
+    status: Literal["CREATED"]
     created_at: datetime | None = None
+
+    @field_validator("experiment_id", "hypothesis")
+    @classmethod
+    def _require_nonblank_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("EXPERIMENT_TEXT_MUST_BE_NONBLANK")
+        return value
 
 
 class ExperimentRepository(Protocol):
