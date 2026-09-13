@@ -37,3 +37,13 @@ def test_risk_rejection_accepts_zero_approved_quantity():
 
     assert assessment.approved is False
     assert assessment.approved_quantity == 0
+
+
+def test_risk_approval_requires_positive_approved_quantity():
+    with pytest.raises(ValidationError, match="RISK_APPROVAL_REQUIRES_POSITIVE_QUANTITY"):
+        RiskAssessment(
+            signal_id=uuid4(),
+            decision=RiskDecision.APPROVE,
+            reason_code="OK",
+            approved_quantity=Decimal("0"),
+        )

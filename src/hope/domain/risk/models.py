@@ -24,9 +24,11 @@ class RiskAssessment(BaseModel):
         return value
 
     @model_validator(mode="after")
-    def require_rejection_has_zero_quantity(self) -> "RiskAssessment":
+    def require_decision_quantity_consistency(self) -> "RiskAssessment":
         if self.decision is RiskDecision.REJECT and self.approved_quantity != 0:
             raise ValueError("RISK_REJECTION_REQUIRES_ZERO_QUANTITY")
+        if self.decision is RiskDecision.APPROVE and self.approved_quantity <= 0:
+            raise ValueError("RISK_APPROVAL_REQUIRES_POSITIVE_QUANTITY")
         return self
 
     @property
