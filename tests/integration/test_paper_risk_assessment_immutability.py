@@ -8,7 +8,9 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.application.jobs import create_scheduled_job_run
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
 
 @pytest.mark.integration
@@ -28,6 +30,7 @@ def test_paper_risk_assessment_cannot_be_modified_or_deleted() -> None:
             instrument_id = uuid4()
             signal_id = uuid4()
             decision_time = datetime(2026, 9, 13, 16, 0, tzinfo=timezone.utc)
+            job_run = create_scheduled_job_run("paper-risk-immutability", decision_time)
             connection.execute(
                 text(
                     "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
@@ -42,6 +45,24 @@ def test_paper_risk_assessment_cannot_be_modified_or_deleted() -> None:
                 ),
                 {"signal_id": signal_id, "instrument_id": instrument_id, "decision_time": decision_time},
             )
+
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(job_run) is True
+            for effect_type, payload_hash in (("SIGNAL", "a" * 64), ("RISK", "b" * 64)):
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) "
+                        "VALUES (:effect_id, :job_run_id, :effect_type, :signal_id, :payload_hash)"
+                    ),
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": job_run.job_run_id,
+                        "effect_type": effect_type,
+                        "signal_id": signal_id,
+                        "payload_hash": payload_hash,
+                    },
+                )
+
             connection.execute(
                 text(
                     "INSERT INTO paper_risk_assessments"
