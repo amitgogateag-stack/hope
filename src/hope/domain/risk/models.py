@@ -1,7 +1,7 @@
 from enum import StrEnum
 from decimal import Decimal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class RiskDecision(StrEnum):
@@ -22,6 +22,12 @@ class RiskAssessment(BaseModel):
         if not value.is_finite():
             raise ValueError("RISK_APPROVED_QUANTITY_MUST_BE_FINITE")
         return value
+
+    @model_validator(mode="after")
+    def require_rejection_has_zero_quantity(self) -> "RiskAssessment":
+        if self.decision is RiskDecision.REJECT and self.approved_quantity != 0:
+            raise ValueError("RISK_REJECTION_REQUIRES_ZERO_QUANTITY")
+        return self
 
     @property
     def approved(self) -> bool:

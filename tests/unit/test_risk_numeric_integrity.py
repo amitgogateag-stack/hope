@@ -15,3 +15,25 @@ def test_risk_assessment_rejects_non_finite_approved_quantity():
             reason_code="OK",
             approved_quantity=Decimal("Infinity"),
         )
+
+
+def test_risk_rejection_requires_zero_approved_quantity():
+    with pytest.raises(ValidationError, match="RISK_REJECTION_REQUIRES_ZERO_QUANTITY"):
+        RiskAssessment(
+            signal_id=uuid4(),
+            decision=RiskDecision.REJECT,
+            reason_code="BLOCKED",
+            approved_quantity=Decimal("1"),
+        )
+
+
+def test_risk_rejection_accepts_zero_approved_quantity():
+    assessment = RiskAssessment(
+        signal_id=uuid4(),
+        decision=RiskDecision.REJECT,
+        reason_code="BLOCKED",
+        approved_quantity=Decimal("0"),
+    )
+
+    assert assessment.approved is False
+    assert assessment.approved_quantity == 0
