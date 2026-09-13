@@ -9,6 +9,7 @@ from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.fills import PaperFillWriter, paper_fill_payload_hash
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
@@ -95,9 +96,10 @@ def test_paper_fill_legacy_missing_cost_provenance_fails_closed():
         jobs = SqlAlchemyJobRunRepository(connection); assert jobs.claim(run)
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        fill_effect = create_paper_effect(run, PaperEffectType.FILL, fill.fill_id, paper_fill_payload_hash(fill))
         connection.execute(
             text("INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) VALUES (:effect_id, :job_run_id, 'FILL', :fill_id, :payload_hash)"),
-            {"effect_id": uuid4(), "job_run_id": run.job_run_id, "fill_id": fill.fill_id, "payload_hash": paper_fill_payload_hash(fill)},
+            {"effect_id": fill_effect.effect_id, "job_run_id": run.job_run_id, "fill_id": fill.fill_id, "payload_hash": fill_effect.payload_hash},
         )
         connection.execute(
             text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:fill_id, :order_id, :quantity, :price, :slippage, :commission, :filled_at, NULL)"),
