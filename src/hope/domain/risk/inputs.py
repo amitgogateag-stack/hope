@@ -6,6 +6,7 @@ from uuid import UUID
 
 from hope.domain.portfolio.ledger import PortfolioState
 from hope.domain.risk.exposure import derive_portfolio_exposure_state
+from hope.domain.risk.performance import derive_portfolio_risk_performance_state
 from hope.domain.risk.portfolio import (
     PortfolioConcentrationContext,
     PortfolioEntryRiskRequest,
@@ -31,22 +32,29 @@ def build_portfolio_entry_risk_inputs(
     portfolio_state: PortfolioState,
     marks: dict[UUID, Decimal],
     current_strategy_exposure: Decimal,
+    session_start_equity: Decimal,
+    peak_equity: Decimal,
     concentration: PortfolioConcentrationContext | None = None,
-    current_daily_loss: Decimal,
-    current_drawdown: Decimal,
 ) -> PortfolioEntryRiskInputs:
-    """Build risk inputs while deriving portfolio exposure from ledger state.
+    """Build risk inputs while deriving portfolio exposure and performance state.
 
     Portfolio-wide and target-position exposure facts are never caller supplied.
-    Strategy exposure and loss/drawdown remain explicit required inputs because the
-    current portfolio ledger cannot authoritatively derive that lineage/history.
-    Concentration stays optional because the risk engine fails closed when a
-    configured concentration limit requires missing classification context.
+    Daily loss and drawdown are derived from the same marked portfolio state plus
+    explicit session-start and peak-equity anchors. Strategy exposure remains an
+    explicit required input because the current portfolio ledger cannot recover
+    strategy lineage. Concentration stays optional because the risk engine fails
+    closed when a configured concentration limit requires missing classification.
     """
     exposure = derive_portfolio_exposure_state(
         portfolio_state,
         marks,
         instrument_id,
+    )
+    performance = derive_portfolio_risk_performance_state(
+        portfolio_state,
+        marks,
+        session_start_equity=session_start_equity,
+        peak_equity=peak_equity,
     )
 
     request = PortfolioEntryRiskRequest(
@@ -63,7 +71,7 @@ def build_portfolio_entry_risk_inputs(
     snapshot = PortfolioRiskSnapshot(
         gross_exposure=exposure.gross_exposure,
         open_positions=exposure.open_positions,
-        current_daily_loss=current_daily_loss,
-        current_drawdown=current_drawdown,
+        current_daily_loss=performance.current_daily_loss,
+        current_drawdown=performance.current_drawdown,
     )
     return PortfolioEntryRiskInputs(request=request, snapshot=snapshot)

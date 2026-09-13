@@ -42,8 +42,8 @@ def build(**overrides):
         ),
         "marks": {TARGET: Decimal("110"), OTHER: Decimal("50")},
         "current_strategy_exposure": Decimal("0"),
-        "current_daily_loss": Decimal("0"),
-        "current_drawdown": Decimal("0"),
+        "session_start_equity": Decimal("1130"),
+        "peak_equity": Decimal("1130"),
     }
     values.update(overrides)
     return build_portfolio_entry_risk_inputs(**values)
@@ -67,6 +67,8 @@ def test_risk_input_builder_derives_new_position_when_target_is_flat():
     inputs = build(
         portfolio_state=state,
         marks={OTHER: Decimal("75")},
+        session_start_equity=Decimal("1150"),
+        peak_equity=Decimal("1150"),
     )
 
     assert inputs.request.current_instrument_exposure == 0
@@ -75,7 +77,7 @@ def test_risk_input_builder_derives_new_position_when_target_is_flat():
     assert inputs.snapshot.open_positions == 1
 
 
-def test_risk_input_builder_preserves_explicit_nonledger_risk_context():
+def test_risk_input_builder_derives_loss_and_drawdown_from_equity_anchors():
     concentration = PortfolioConcentrationContext(
         group="technology",
         current_exposure=Decimal("4000"),
@@ -84,8 +86,8 @@ def test_risk_input_builder_preserves_explicit_nonledger_risk_context():
     inputs = build(
         current_strategy_exposure=Decimal("2500"),
         concentration=concentration,
-        current_daily_loss=Decimal("700"),
-        current_drawdown=Decimal("1200"),
+        session_start_equity=Decimal("1830"),
+        peak_equity=Decimal("2330"),
     )
 
     assert inputs.request.current_strategy_exposure == Decimal("2500")
@@ -96,7 +98,7 @@ def test_risk_input_builder_preserves_explicit_nonledger_risk_context():
 
 @pytest.mark.parametrize(
     "field",
-    ["current_strategy_exposure", "current_daily_loss", "current_drawdown"],
+    ["current_strategy_exposure", "session_start_equity", "peak_equity"],
 )
 def test_risk_input_builder_requires_nonledger_risk_context(field):
     parameter = signature(build_portfolio_entry_risk_inputs).parameters[field]
@@ -108,17 +110,20 @@ def test_risk_input_builder_fails_closed_when_open_position_mark_is_missing():
         build(marks={TARGET: Decimal("110")})
 
 
-@pytest.mark.parametrize(
-    ("field", "value"),
-    [
-        ("current_strategy_exposure", Decimal("Infinity")),
-        ("current_daily_loss", Decimal("Infinity")),
-        ("current_drawdown", Decimal("Infinity")),
-    ],
-)
-def test_risk_input_builder_keeps_explicit_context_validation(field, value):
+def test_risk_input_builder_keeps_strategy_exposure_validation():
     with pytest.raises(ValidationError):
-        build(**{field: value})
+        build(current_strategy_exposure=Decimal("Infinity"))
+
+
+@pytest.mark.parametrize("field", ["session_start_equity", "peak_equity"])
+def test_risk_input_builder_rejects_nonfinite_equity_anchors(field):
+    with pytest.raises(ValueError, match="PORTFOLIO_RISK_EQUITY_ANCHOR_MUST_BE_FINITE"):
+        build(**{field: Decimal("Infinity")})
+
+
+def test_risk_input_builder_rejects_inconsistent_peak_equity():
+    with pytest.raises(ValueError, match="PORTFOLIO_RISK_PEAK_EQUITY_INCONSISTENT"):
+        build(peak_equity=Decimal("1129"))
 
 
 def test_risk_input_builder_rejects_invalid_strategy_version_through_request_contract():
