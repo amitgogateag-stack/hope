@@ -15,6 +15,8 @@ class PortfolioRiskReason(StrEnum):
     MAX_DRAWDOWN = "MAX_DRAWDOWN_REACHED"
     MAX_POSITION_NOTIONAL = "MAX_POSITION_NOTIONAL_EXCEEDED"
     MAX_STRATEGY_EXPOSURE = "MAX_STRATEGY_EXPOSURE_EXCEEDED"
+    CONCENTRATION_CONTEXT_REQUIRED = "CONCENTRATION_CONTEXT_REQUIRED"
+    MAX_CONCENTRATION_EXPOSURE = "MAX_CONCENTRATION_EXPOSURE_EXCEEDED"
     MAX_GROSS_EXPOSURE = "MAX_GROSS_EXPOSURE_EXCEEDED"
     MAX_OPEN_POSITIONS = "MAX_OPEN_POSITIONS_EXCEEDED"
 
@@ -24,7 +26,7 @@ class PortfolioRiskLimits(BaseModel):
 
     Threshold selection is intentionally external to this model. HOPE validates and
     applies the configured limits deterministically but does not invent leverage,
-    loss, drawdown, or strategy-allocation percentages.
+    loss, drawdown, strategy-allocation, or concentration percentages.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -35,6 +37,7 @@ class PortfolioRiskLimits(BaseModel):
     max_daily_loss: Decimal | None = Field(default=None, gt=0)
     max_drawdown: Decimal | None = Field(default=None, gt=0)
     max_strategy_exposure: Decimal | None = Field(default=None, gt=0)
+    max_concentration_exposure: Decimal | None = Field(default=None, gt=0)
 
     @field_validator(
         "max_position_notional",
@@ -42,11 +45,39 @@ class PortfolioRiskLimits(BaseModel):
         "max_daily_loss",
         "max_drawdown",
         "max_strategy_exposure",
+        "max_concentration_exposure",
     )
     @classmethod
     def require_finite_limits(cls, value: Decimal | None) -> Decimal | None:
         if value is not None and not value.is_finite():
             raise ValueError("PORTFOLIO_RISK_LIMIT_MUST_BE_FINITE")
+        return value
+
+
+class PortfolioConcentrationContext(BaseModel):
+    """Externally resolved exposure context for one concentration group.
+
+    The group may represent a sector, industry, theme, country, or another validated
+    classification. Taxonomy ownership intentionally remains outside the risk engine.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    group: str = Field(min_length=1)
+    current_exposure: Decimal = Field(ge=0)
+
+    @field_validator("group")
+    @classmethod
+    def require_canonical_group(cls, value: str) -> str:
+        if value.strip() != value or not value.strip():
+            raise ValueError("PORTFOLIO_RISK_CONCENTRATION_GROUP_NOT_CANONICAL")
+        return value
+
+    @field_validator("current_exposure")
+    @classmethod
+    def require_finite_exposure(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("PORTFOLIO_RISK_CONCENTRATION_EXPOSURE_MUST_BE_FINITE")
         return value
 
 
@@ -62,6 +93,7 @@ class PortfolioEntryRiskRequest(BaseModel):
     reference_price: Decimal = Field(gt=0)
     current_instrument_exposure: Decimal = Field(ge=0)
     current_strategy_exposure: Decimal = Field(default=Decimal("0"), ge=0)
+    concentration: PortfolioConcentrationContext | None = None
     opens_new_position: bool
 
     @field_validator("strategy_version")
@@ -94,6 +126,12 @@ class PortfolioEntryRiskRequest(BaseModel):
     @property
     def resulting_strategy_exposure(self) -> Decimal:
         return self.current_strategy_exposure + self.proposed_notional
+
+    @property
+    def resulting_concentration_exposure(self) -> Decimal | None:
+        if self.concentration is None:
+            return None
+        return self.concentration.current_exposure + self.proposed_notional
 
 
 class PortfolioRiskSnapshot(BaseModel):
@@ -152,6 +190,19 @@ class PortfolioRiskEngine:
             and request.resulting_strategy_exposure > self._limits.max_strategy_exposure
         ):
             return self._reject(request.signal_id, PortfolioRiskReason.MAX_STRATEGY_EXPOSURE)
+
+        if self._limits.max_concentration_exposure is not None:
+            resulting_concentration = request.resulting_concentration_exposure
+            if resulting_concentration is None:
+                return self._reject(
+                    request.signal_id,
+                    PortfolioRiskReason.CONCENTRATION_CONTEXT_REQUIRED,
+                )
+            if resulting_concentration > self._limits.max_concentration_exposure:
+                return self._reject(
+                    request.signal_id,
+                    PortfolioRiskReason.MAX_CONCENTRATION_EXPOSURE,
+                )
 
         if snapshot.gross_exposure + request.proposed_notional > self._limits.max_gross_exposure:
             return self._reject(request.signal_id, PortfolioRiskReason.MAX_GROSS_EXPOSURE)

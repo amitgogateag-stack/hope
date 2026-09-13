@@ -6,6 +6,7 @@ from pydantic import ValidationError
 
 from hope.domain.risk.models import RiskDecision
 from hope.domain.risk.portfolio import (
+    PortfolioConcentrationContext,
     PortfolioEntryRiskRequest,
     PortfolioRiskEngine,
     PortfolioRiskLimits,
@@ -47,6 +48,12 @@ def snapshot(**overrides) -> PortfolioRiskSnapshot:
     values = {"gross_exposure": Decimal("50000"), "open_positions": 2}
     values.update(overrides)
     return PortfolioRiskSnapshot(**values)
+
+
+def concentration(**overrides) -> PortfolioConcentrationContext:
+    values = {"group": "sector:technology", "current_exposure": Decimal("20000")}
+    values.update(overrides)
+    return PortfolioConcentrationContext(**values)
 
 
 def test_portfolio_risk_approves_request_within_all_limits():
@@ -128,6 +135,49 @@ def test_portfolio_risk_strategy_budget_is_optional():
     assert assessment.decision is RiskDecision.APPROVE
 
 
+def test_portfolio_risk_requires_concentration_context_when_limit_is_enabled():
+    assessment = PortfolioRiskEngine(
+        limits(max_concentration_exposure=Decimal("50000"))
+    ).assess_entry(request(), snapshot())
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == PortfolioRiskReason.CONCENTRATION_CONTEXT_REQUIRED
+    assert assessment.approved_quantity == 0
+
+
+def test_portfolio_risk_rejects_resulting_concentration_exposure_over_limit():
+    assessment = PortfolioRiskEngine(
+        limits(max_concentration_exposure=Decimal("25000"))
+    ).assess_entry(
+        request(concentration=concentration(current_exposure=Decimal("20000"))),
+        snapshot(),
+    )
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == PortfolioRiskReason.MAX_CONCENTRATION_EXPOSURE
+    assert assessment.approved_quantity == 0
+
+
+def test_portfolio_risk_allows_concentration_at_limit():
+    assessment = PortfolioRiskEngine(
+        limits(max_concentration_exposure=Decimal("30000"))
+    ).assess_entry(
+        request(concentration=concentration(current_exposure=Decimal("20000"))),
+        snapshot(),
+    )
+
+    assert assessment.decision is RiskDecision.APPROVE
+
+
+def test_portfolio_risk_concentration_control_is_optional():
+    assessment = PortfolioRiskEngine(limits()).assess_entry(
+        request(concentration=concentration(current_exposure=Decimal("999999"))),
+        snapshot(),
+    )
+
+    assert assessment.decision is RiskDecision.APPROVE
+
+
 def test_portfolio_risk_rejects_resulting_gross_exposure_over_limit():
     assessment = PortfolioRiskEngine(limits()).assess_entry(
         request(),
@@ -163,6 +213,7 @@ def test_portfolio_risk_allows_addition_at_position_count_limit():
     "max_daily_loss",
     "max_drawdown",
     "max_strategy_exposure",
+    "max_concentration_exposure",
 ])
 def test_portfolio_risk_limits_reject_non_finite_numerics(field):
     values = {
@@ -190,6 +241,17 @@ def test_portfolio_risk_request_rejects_non_finite_numerics(field):
 def test_portfolio_risk_request_requires_canonical_strategy_version(strategy_version):
     with pytest.raises(ValidationError):
         request(strategy_version=strategy_version)
+
+
+@pytest.mark.parametrize("group", ["", " ", " sector:technology", "sector:technology "])
+def test_portfolio_risk_concentration_requires_canonical_group(group):
+    with pytest.raises(ValidationError):
+        concentration(group=group)
+
+
+def test_portfolio_risk_concentration_rejects_non_finite_exposure():
+    with pytest.raises(ValidationError):
+        concentration(current_exposure=Decimal("Infinity"))
 
 
 @pytest.mark.parametrize("field", [
