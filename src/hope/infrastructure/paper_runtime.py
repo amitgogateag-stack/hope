@@ -12,6 +12,7 @@ from hope.application.jobs import ScheduledJobRun
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.paper.orders import PaperOrderWriter
+from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner, PaperRuntimeContext
 from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
@@ -19,6 +20,7 @@ from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
 
@@ -131,6 +133,7 @@ class SqlAlchemyPaperRuntime:
             now=now,
         )
         self._signal_writer = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection))
+        self._risk_writer = PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection))
         self._order_writer = PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection))
         self._fill_writer = PaperFillAccountingWriter(
             SqlAlchemyPaperFillAccountingRepository(connection)
@@ -145,6 +148,7 @@ class SqlAlchemyPaperRuntime:
         return self._runner.run_runtime(
             job_run,
             self._signal_writer,
+            self._risk_writer,
             self._order_writer,
             self._fill_writer,
             work,

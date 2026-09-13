@@ -16,9 +16,11 @@ from hope.application.jobs import (
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.orders import PaperOrderWriter
+from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.execution.models import Order
 from hope.domain.execution.simulator import Fill
+from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
 
 
@@ -45,11 +47,15 @@ class PaperRuntimeContext:
 
     cycle: PaperCycleContext
     _signal_writer: PaperSignalWriter
+    _risk_writer: PaperRiskWriter
     _order_writer: PaperOrderWriter
     _fill_writer: PaperFillAccountingWriter
 
     def record_signal(self, signal: Signal) -> bool:
         return self._signal_writer.record(self.cycle, signal)
+
+    def record_risk(self, assessment: RiskAssessment) -> bool:
+        return self._risk_writer.record(self.cycle, assessment)
 
     def record_order(self, order: Order) -> bool:
         return self._order_writer.record(self.cycle, order)
@@ -124,6 +130,7 @@ class PaperCycleRunner:
         self,
         job_run: ScheduledJobRun,
         signal_writer: PaperSignalWriter,
+        risk_writer: PaperRiskWriter,
         order_writer: PaperOrderWriter,
         fill_writer: PaperFillAccountingWriter,
         work: Callable[[PaperRuntimeContext], None],
@@ -131,6 +138,8 @@ class PaperCycleRunner:
         """Run ordinary PAPER work through separate authoritative durable boundaries."""
         if not isinstance(signal_writer, PaperSignalWriter):
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_SIGNAL_WRITER")
+        if not isinstance(risk_writer, PaperRiskWriter):
+            raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_RISK_WRITER")
         if not isinstance(order_writer, PaperOrderWriter):
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER")
         if not isinstance(fill_writer, PaperFillAccountingWriter):
@@ -141,6 +150,7 @@ class PaperCycleRunner:
                 PaperRuntimeContext(
                     context,
                     signal_writer,
+                    risk_writer,
                     order_writer,
                     fill_writer,
                 )

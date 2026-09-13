@@ -10,6 +10,7 @@ from hope.application.paper import (
     PaperCycleRunner,
     PaperFillAccountingWriter,
     PaperOrderWriter,
+    PaperRiskWriter,
     PaperSignalWriter,
 )
 
@@ -47,6 +48,15 @@ class RecordingSignalWriter(PaperSignalWriter):
 
     def record(self, context, signal) -> bool:
         self.calls.append((context, signal))
+        return True
+
+
+class RecordingRiskWriter(PaperRiskWriter):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def record(self, context, assessment) -> bool:
+        self.calls.append((context, assessment))
         return True
 
 
@@ -167,6 +177,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     job_run = make_run()
     repository = FakeJobRunRepository()
     signal_writer = RecordingSignalWriter()
+    risk_writer = RecordingRiskWriter()
     order_writer = RecordingOrderWriter()
     fill_writer = RecordingFillAccountingWriter()
     runner = PaperCycleRunner(
@@ -175,11 +186,13 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     )
     portfolio_id = UUID(int=1)
     signal = object()
+    risk = object()
     order = object()
     fill = object()
 
     def work(runtime) -> None:
         assert runtime.record_signal(signal) is True
+        assert runtime.record_risk(risk) is True
         assert runtime.record_order(order) is True
         assert runtime.record_fill(
             portfolio_id,
@@ -191,6 +204,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     outcome = runner.run_runtime(
         job_run,
         signal_writer,
+        risk_writer,
         order_writer,
         fill_writer,
         work,
@@ -198,12 +212,14 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
 
     assert outcome is PaperCycleOutcome.EXECUTED
     assert signal_writer.calls == [(signal_writer.calls[0][0], signal)]
+    assert risk_writer.calls == [(risk_writer.calls[0][0], risk)]
     assert order_writer.calls == [(order_writer.calls[0][0], order)]
     assert len(fill_writer.calls) == 1
     signal_context = signal_writer.calls[0][0]
+    risk_context = risk_writer.calls[0][0]
     order_context = order_writer.calls[0][0]
     fill_context, actual_portfolio_id, initial_cash, actual_fill, sequence = fill_writer.calls[0]
-    assert signal_context is order_context is fill_context
+    assert signal_context is risk_context is order_context is fill_context
     assert signal_context.job_run.job_run_id == job_run.job_run_id
     assert actual_portfolio_id == portfolio_id
     assert initial_cash == Decimal("1000")
@@ -214,9 +230,22 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
 @pytest.mark.parametrize(
     ("writers", "message"),
     [
-        ((object(), RecordingOrderWriter(), RecordingFillAccountingWriter()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_SIGNAL_WRITER"),
-        ((RecordingSignalWriter(), object(), RecordingFillAccountingWriter()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER"),
-        ((RecordingSignalWriter(), RecordingOrderWriter(), object()), "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER"),
+        (
+            (object(), RecordingRiskWriter(), RecordingOrderWriter(), RecordingFillAccountingWriter()),
+            "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_SIGNAL_WRITER",
+        ),
+        (
+            (RecordingSignalWriter(), object(), RecordingOrderWriter(), RecordingFillAccountingWriter()),
+            "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_RISK_WRITER",
+        ),
+        (
+            (RecordingSignalWriter(), RecordingRiskWriter(), object(), RecordingFillAccountingWriter()),
+            "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER",
+        ),
+        (
+            (RecordingSignalWriter(), RecordingRiskWriter(), RecordingOrderWriter(), object()),
+            "PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER",
+        ),
     ],
 )
 def test_paper_cycle_runtime_facade_rejects_non_authoritative_writers(writers, message) -> None:

@@ -5,6 +5,7 @@ from hope.application.paper.fill_accounting import PaperFillAccountingPersistenc
 from hope.application.paper.fills import PaperFillPersistence, paper_fill_payload_hash
 from hope.application.paper.orders import PaperOrderPersistence, PaperOrderWriter, paper_order_payload_hash
 from hope.application.paper.pnl import PaperPnLEvent, PaperPnLPersistence, paper_pnl_payload_hash
+from hope.application.paper.risk import PaperRiskPersistence, PaperRiskWriter, paper_risk_payload_hash
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner
 from hope.application.paper.signals import PaperSignalPersistence, PaperSignalWriter, paper_signal_payload_hash
 
@@ -23,11 +24,14 @@ __all__ = [
     "PaperOrderWriter",
     "PaperPnLEvent",
     "PaperPnLPersistence",
+    "PaperRiskPersistence",
+    "PaperRiskWriter",
     "PaperSignalPersistence",
     "PaperSignalWriter",
     "create_paper_effect",
     "paper_fill_payload_hash",
     "paper_order_payload_hash",
     "paper_pnl_payload_hash",
+    "paper_risk_payload_hash",
     "paper_signal_payload_hash",
 ]
