@@ -7,12 +7,16 @@ from uuid import UUID
 
 from hope.application.paper.provenance import paper_decision_inputs_hash
 from hope.application.paper.runner import PaperRuntimeContext
+from hope.application.trading.risk import assess_portfolio_entry_signal
 from hope.application.universe.snapshot import UniverseSnapshot
-from hope.domain.execution.models import Environment, Order
+from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.market_data.context import PITMarketContext
+from hope.domain.risk.inputs import PortfolioEntryRiskInputs
+from hope.domain.risk.portfolio import PortfolioRiskEngine
 from hope.domain.signal.models import Signal
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
+from hope.domain.trading.kernel import create_order_intent, materialize_order
 
 
 @dataclass(frozen=True)
@@ -100,6 +104,49 @@ class PaperStrategyDecisionJob:
 
         for signal in signals:
             runtime.record_signal(signal)
+
+
+@dataclass(frozen=True)
+class PaperEntryOrderDecisionJob:
+    """Risk-assess one persisted ENTRY signal before materializing any PAPER order."""
+
+    signal: Signal
+    risk_inputs: PortfolioEntryRiskInputs
+    risk_engine: PortfolioRiskEngine
+    side: OrderSide
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.signal, Signal):
+            raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_SIGNAL")
+        if not isinstance(self.risk_inputs, PortfolioEntryRiskInputs):
+            raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_INPUTS")
+        if not isinstance(self.risk_engine, PortfolioRiskEngine):
+            raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_ENGINE")
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE")
+
+    def __call__(self, runtime: PaperRuntimeContext) -> None:
+        assessment = assess_portfolio_entry_signal(
+            self.signal,
+            self.risk_inputs,
+            self.risk_engine,
+        )
+        runtime.record_risk(assessment)
+
+        intent = create_order_intent(
+            self.signal,
+            assessment,
+            self.side,
+            Environment.PAPER,
+        )
+        if intent is None:
+            return
+
+        order = materialize_order(
+            intent,
+            runtime.cycle.order_id(self.signal.signal_id),
+        )
+        runtime.record_order(order)
 
 
 @dataclass(frozen=True)
