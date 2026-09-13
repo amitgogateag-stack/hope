@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
@@ -101,10 +102,9 @@ def test_paper_fill_legacy_missing_cost_provenance_fails_closed():
             text("INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) VALUES (:effect_id, :job_run_id, 'FILL', :fill_id, :payload_hash)"),
             {"effect_id": fill_effect.effect_id, "job_run_id": run.job_run_id, "fill_id": fill.fill_id, "payload_hash": fill_effect.payload_hash},
         )
-        connection.execute(
-            text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:fill_id, :order_id, :quantity, :price, :slippage, :commission, :filled_at, NULL)"),
-            {"fill_id": fill.fill_id, "order_id": fill.order_id, "quantity": fill.quantity, "price": fill.price, "slippage": fill.slippage, "commission": fill.commission, "filled_at": fill.fill_time},
-        )
-        fw = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
-        with pytest.raises(ValueError, match="PAPER_FILL_IDENTITY_CONFLICT"):
-            fw.record(context, fill, sequence=0)
+        with pytest.raises(IntegrityError, match="PAPER_FILL_COST_MODEL_VERSION_REQUIRED"):
+            with connection.begin_nested():
+                connection.execute(
+                    text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:fill_id, :order_id, :quantity, :price, :slippage, :commission, :filled_at, NULL)"),
+                    {"fill_id": fill.fill_id, "order_id": fill.order_id, "quantity": fill.quantity, "price": fill.price, "slippage": fill.slippage, "commission": fill.commission, "filled_at": fill.fill_time},
+                )

@@ -33,7 +33,7 @@ def test_paper_portfolio_pnl_event_time_must_match_fill_time() -> None:
             connection.execute(text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id, 'PNL-TIME-INTEGRITY', 'TEST', 'ACTIVE')"), {"id": instrument_id})
             connection.execute(text("INSERT INTO signals(signal_id, instrument_id, decision_time, state) VALUES (:id, :instrument_id, :t, 'SIGNAL')"), {"id": signal_id, "instrument_id": instrument_id, "t": fill_time})
             connection.execute(text("INSERT INTO orders(order_id, signal_id, instrument_id, environment, side, quantity) VALUES (:id, :signal_id, :instrument_id, 'PAPER', 'BUY', 1)"), {"id": order_id, "signal_id": signal_id, "instrument_id": instrument_id})
-            connection.execute(text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) VALUES (:id, :order_id, 1, 100, 0, 0.25, :t)"), {"id": fill_id, "order_id": order_id, "t": fill_time})
+            connection.execute(text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0.25, :t, 'test-cost-v1')"), {"id": fill_id, "order_id": order_id, "t": fill_time})
             connection.execute(text("INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash) VALUES (:id, 1000, 900)"), {"id": portfolio_id})
             connection.execute(text("INSERT INTO paper_portfolio_fill_applications(portfolio_id, fill_id, application_sequence, applied_at) VALUES (:portfolio_id, :fill_id, 1, :t)"), {"portfolio_id": portfolio_id, "fill_id": fill_id, "t": fill_time})
 

@@ -43,7 +43,7 @@ def test_paper_portfolio_pnl_instrument_must_match_applied_fill_order() -> None:
                 {"order_id": order_id, "signal_id": signal_id, "instrument_id": instrument_id},
             )
             connection.execute(
-                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) VALUES (:fill_id, :order_id, 1, 100, 0, 0.25, :event_time)"),
+                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:fill_id, :order_id, 1, 100, 0, 0.25, :event_time, 'test-cost-v1')"),
                 {"fill_id": fill_id, "order_id": order_id, "event_time": event_time},
             )
             connection.execute(

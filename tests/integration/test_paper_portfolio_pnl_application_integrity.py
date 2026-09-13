@@ -63,8 +63,8 @@ def test_paper_portfolio_pnl_requires_durably_applied_fill() -> None:
             )
             connection.execute(
                 text(
-                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) "
-                    "VALUES (:fill_id, :order_id, 1, 100, 0, 0.25, :filled_at)"
+                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                    "VALUES (:fill_id, :order_id, 1, 100, 0, 0.25, :filled_at, 'test-cost-v1')"
                 ),
                 {"fill_id": fill_id, "order_id": order_id, "filled_at": event_time},
             )

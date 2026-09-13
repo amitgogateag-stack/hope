@@ -54,8 +54,8 @@ def test_fill_slippage_and_transaction_cost_must_be_nonnegative() -> None:
                 with connection.begin_nested():
                     connection.execute(
                         text(
-                            "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) "
-                            "VALUES (:fill_id, :order_id, 1, 100, -0.01, 0.25, :t)"
+                            "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                            "VALUES (:fill_id, :order_id, 1, 100, -0.01, 0.25, :t, 'test-cost-v1')"
                         ),
                         {"fill_id": uuid4(), "order_id": order_id, "t": fill_time},
                     )
@@ -64,8 +64,8 @@ def test_fill_slippage_and_transaction_cost_must_be_nonnegative() -> None:
                 with connection.begin_nested():
                     connection.execute(
                         text(
-                            "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) "
-                            "VALUES (:fill_id, :order_id, 1, 100, 0.01, -0.25, :t)"
+                            "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                            "VALUES (:fill_id, :order_id, 1, 100, 0.01, -0.25, :t, 'test-cost-v1')"
                         ),
                         {"fill_id": uuid4(), "order_id": order_id, "t": fill_time},
                     )
@@ -73,8 +73,8 @@ def test_fill_slippage_and_transaction_cost_must_be_nonnegative() -> None:
             valid_fill_id = uuid4()
             connection.execute(
                 text(
-                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) "
-                    "VALUES (:fill_id, :order_id, 1, 100, 0, 0, :t)"
+                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                    "VALUES (:fill_id, :order_id, 1, 100, 0, 0, :t, 'test-cost-v1')"
                 ),
                 {"fill_id": valid_fill_id, "order_id": order_id, "t": fill_time},
             )

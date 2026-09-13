@@ -41,19 +41,19 @@ def test_fill_cumulative_quantity_cannot_exceed_source_order() -> None:
                 {"id": order_id, "signal_id": signal_id, "instrument_id": instrument_id},
             )
             connection.execute(
-                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) VALUES (:id, :order_id, 1.25, 100, 0, 0, :t)"),
+                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1.25, 100, 0, 0, :t, 'test-cost-v1')"),
                 {"id": uuid4(), "order_id": order_id, "t": fill_time},
             )
 
             with pytest.raises(IntegrityError, match="FILL_CUMULATIVE_QUANTITY_EXCEEDS_ORDER"):
                 with connection.begin_nested():
                     connection.execute(
-                        text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) VALUES (:id, :order_id, 1, 100, 0, 0, :t)"),
+                        text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0, :t, 'test-cost-v1')"),
                         {"id": uuid4(), "order_id": order_id, "t": fill_time},
                     )
 
             connection.execute(
-                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) VALUES (:id, :order_id, 0.75, 100, 0, 0, :t)"),
+                text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 0.75, 100, 0, 0, :t, 'test-cost-v1')"),
                 {"id": uuid4(), "order_id": order_id, "t": fill_time},
             )
             filled_quantity = connection.execute(

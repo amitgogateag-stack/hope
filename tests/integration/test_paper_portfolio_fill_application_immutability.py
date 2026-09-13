@@ -54,8 +54,8 @@ def test_paper_portfolio_fill_applications_are_append_only_history() -> None:
             )
             connection.execute(
                 text(
-                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, filled_at) "
-                    "VALUES (:id, :order_id, 1, 100, :filled_at)"
+                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, filled_at, cost_model_version) "
+                    "VALUES (:id, :order_id, 1, 100, :filled_at, 'test-cost-v1')"
                 ),
                 {"id": fill_id, "order_id": order_id, "filled_at": event_time},
             )

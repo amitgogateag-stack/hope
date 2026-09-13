@@ -54,8 +54,8 @@ def test_fills_are_append_only_execution_history() -> None:
             )
             connection.execute(
                 text(
-                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at) "
-                    "VALUES (:id, :order_id, 1, 101.25, 0.10, 0.25, :filled_at)"
+                    "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                    "VALUES (:id, :order_id, 1, 101.25, 0.10, 0.25, :filled_at, 'test-cost-v1')"
                 ),
                 {"id": fill_id, "order_id": order_id, "filled_at": filled_at},
             )
