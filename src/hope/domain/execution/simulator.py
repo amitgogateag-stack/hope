@@ -79,6 +79,8 @@ def simulate_market_fill(
     if fill_id is None:
         raise ValueError("FILL_ID_REQUIRED")
     fill_quantity = order.quantity if quantity is None else quantity
+    if not fill_quantity.is_finite():
+        raise ValueError("FILL_QUANTITY_MUST_BE_FINITE")
     if fill_quantity <= 0:
         raise ValueError("FILL_QUANTITY_MUST_BE_POSITIVE")
     if fill_quantity > order.quantity:
