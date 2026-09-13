@@ -1,7 +1,7 @@
 from enum import StrEnum
 from decimal import Decimal
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class RiskDecision(StrEnum):
@@ -15,6 +15,13 @@ class RiskAssessment(BaseModel):
     decision: RiskDecision
     reason_code: str = Field(min_length=1)
     approved_quantity: Decimal = Field(ge=0)
+
+    @field_validator("approved_quantity")
+    @classmethod
+    def require_finite_approved_quantity(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("RISK_APPROVED_QUANTITY_MUST_BE_FINITE")
+        return value
 
     @property
     def approved(self) -> bool:

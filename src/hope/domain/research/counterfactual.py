@@ -29,6 +29,13 @@ class CounterfactualAcceptancePolicy(BaseModel):
             raise ValueError("COUNTERFACTUAL_POLICY_IDENTIFIER_REQUIRED")
         return value
 
+    @field_validator("quantity")
+    @classmethod
+    def require_finite_quantity(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("COUNTERFACTUAL_QUANTITY_MUST_BE_FINITE")
+        return value
+
     @field_validator("holding_period")
     @classmethod
     def require_positive_holding_period(cls, value: timedelta) -> timedelta:

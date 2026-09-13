@@ -35,6 +35,11 @@ def test_counterfactual_policy_rejects_non_positive_quantity():
         make_policy(quantity=Decimal("0"))
 
 
+def test_counterfactual_policy_rejects_non_finite_quantity():
+    with pytest.raises(ValidationError, match="COUNTERFACTUAL_QUANTITY_MUST_BE_FINITE"):
+        make_policy(quantity=Decimal("Infinity"))
+
+
 def test_counterfactual_policy_rejects_non_positive_holding_period():
     with pytest.raises(ValidationError, match="COUNTERFACTUAL_HOLDING_PERIOD_MUST_BE_POSITIVE"):
         make_policy(holding_period=timedelta(0))
