@@ -46,6 +46,8 @@ def value_portfolio(
         if instrument_id not in marks:
             raise KeyError(f"MISSING_MARK:{instrument_id}")
         mark = marks[instrument_id]
+        if not mark.is_finite():
+            raise ValueError("MARK_PRICE_MUST_BE_FINITE")
         if mark <= 0:
             raise ValueError("MARK_PRICE_MUST_BE_POSITIVE")
         market_value += position.quantity * mark

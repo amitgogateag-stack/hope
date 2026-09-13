@@ -19,7 +19,7 @@ class DataQualityState(StrEnum):
 
 
 class MarketBar(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=False)
     instrument_id: str = Field(min_length=1)
     event_time: datetime
     available_time: datetime
