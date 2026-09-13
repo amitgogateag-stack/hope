@@ -23,6 +23,12 @@ class PaperPortfolioPnLEvent:
     commission_delta: Decimal
     event_time: datetime
 
+    def __post_init__(self) -> None:
+        if not self.realized_pnl_delta.is_finite():
+            raise ValueError("PAPER_PORTFOLIO_PNL_REALIZED_DELTA_INVALID")
+        if not self.commission_delta.is_finite() or self.commission_delta < 0:
+            raise ValueError("PAPER_PORTFOLIO_PNL_COMMISSION_DELTA_INVALID")
+
 
 def paper_portfolio_pnl_event_id(portfolio_id: UUID, fill_id: UUID) -> UUID:
     return uuid5(NAMESPACE_URL, f"hope:paper:portfolio-pnl:{portfolio_id}:{fill_id}")

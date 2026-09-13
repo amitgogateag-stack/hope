@@ -114,6 +114,12 @@ class PortfolioLedger:
     def apply_fill_with_transition(self, fill: Fill) -> PortfolioFillTransition:
         if fill.fill_id in self._applied_fill_ids:
             raise ValueError("DUPLICATE_FILL")
+        if not fill.quantity.is_finite():
+            raise ValueError("FILL_QUANTITY_MUST_BE_FINITE")
+        if not fill.price.is_finite():
+            raise ValueError("FILL_PRICE_MUST_BE_FINITE")
+        if not fill.commission.is_finite() or not fill.slippage.is_finite():
+            raise ValueError("FILL_COSTS_MUST_BE_FINITE")
         if fill.quantity <= 0:
             raise ValueError("FILL_QUANTITY_MUST_BE_POSITIVE")
         if fill.price <= 0:
@@ -195,6 +201,8 @@ class PortfolioLedger:
             if instrument_id not in marks:
                 raise KeyError(f"MISSING_MARK:{instrument_id}")
             mark = marks[instrument_id]
+            if not mark.is_finite():
+                raise ValueError("MARK_PRICE_MUST_BE_FINITE")
             if mark <= 0:
                 raise ValueError("MARK_PRICE_MUST_BE_POSITIVE")
             if position.quantity > 0:
