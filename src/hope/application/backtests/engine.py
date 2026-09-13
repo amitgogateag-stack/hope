@@ -111,6 +111,8 @@ class DeterministicBacktest:
             raise ValueError("EXECUTION_LATENCY_MUST_BE_NON_NEGATIVE")
         if order_submission_delay < timedelta(0):
             raise ValueError("ORDER_SUBMISSION_DELAY_MUST_BE_NON_NEGATIVE")
+        if max_fill_quantity is not None and not max_fill_quantity.is_finite():
+            raise ValueError("MAX_FILL_QUANTITY_MUST_BE_FINITE")
         if max_fill_quantity is not None and max_fill_quantity <= 0:
             raise ValueError("MAX_FILL_QUANTITY_MUST_BE_POSITIVE")
 
