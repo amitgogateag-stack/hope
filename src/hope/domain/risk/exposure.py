@@ -17,7 +17,7 @@ class PortfolioExposureState:
     opens_new_position: bool
 
 
-def derive_portfolio_exposure(
+def derive_portfolio_exposure_state(
     state: PortfolioState,
     marks: dict[UUID, Decimal],
     target_instrument_id: UUID,
@@ -68,3 +68,12 @@ def derive_portfolio_exposure(
         open_positions=open_positions,
         opens_new_position=opens_new_position,
     )
+
+
+def derive_portfolio_exposure(
+    state: PortfolioState,
+    marks: dict[UUID, Decimal],
+    target_instrument_id: UUID,
+) -> PortfolioExposureState:
+    """Backward-compatible alias for the canonical exposure-state derivation."""
+    return derive_portfolio_exposure_state(state, marks, target_instrument_id)
