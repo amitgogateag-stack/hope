@@ -9,7 +9,7 @@ from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
-from hope.application.paper.fills import PaperFillWriter
+from hope.application.paper.fills import PaperFillWriter, paper_fill_payload_hash
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -80,3 +80,29 @@ def test_paper_fill_requires_tracked_order_and_rolls_back_failed_fill_effect():
         with pytest.raises(ValueError, match="PAPER_FILL_SOURCE_ORDER_UNTRACKED"):
             fw.record(context, broken, sequence=0)
         assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE effect_type='FILL' AND entity_id=:id"), {"id": fill.fill_id}).scalar_one() == 0
+
+
+@pytest.mark.integration
+def test_paper_fill_legacy_missing_cost_provenance_fails_closed():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url: pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url); migrations_dir = Path(__file__).parents[2] / "migrations"; instrument_id = uuid4()
+    run = create_scheduled_job_run("paper-fill-legacy-cost", datetime(2026, 9, 9, 23, 45, tzinfo=UTC)); context = PaperCycleContext(run)
+    signal, order, fill = make_chain(context, instrument_id)
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id,'PAPER-FILL-LEGACY-COST','TEST','ACTIVE')"), {"id": instrument_id})
+        jobs = SqlAlchemyJobRunRepository(connection); assert jobs.claim(run)
+        PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
+        PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        connection.execute(
+            text("INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) VALUES (:effect_id, :job_run_id, 'FILL', :fill_id, :payload_hash)"),
+            {"effect_id": uuid4(), "job_run_id": run.job_run_id, "fill_id": fill.fill_id, "payload_hash": paper_fill_payload_hash(fill)},
+        )
+        connection.execute(
+            text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:fill_id, :order_id, :quantity, :price, :slippage, :commission, :filled_at, NULL)"),
+            {"fill_id": fill.fill_id, "order_id": fill.order_id, "quantity": fill.quantity, "price": fill.price, "slippage": fill.slippage, "commission": fill.commission, "filled_at": fill.fill_time},
+        )
+        fw = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
+        with pytest.raises(ValueError, match="PAPER_FILL_IDENTITY_CONFLICT"):
+            fw.record(context, fill, sequence=0)
