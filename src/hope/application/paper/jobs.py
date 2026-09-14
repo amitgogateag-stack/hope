@@ -126,6 +126,12 @@ class PaperEntryOrderDecisionJob:
             raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
+        decision_time = self.signal.decision_time
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+            raise ValueError("PAPER_ENTRY_RISK_SIGNAL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if decision_time.astimezone(timezone.utc) > runtime.cycle.job_run.scheduled_for:
+            raise ValueError("PAPER_ENTRY_RISK_SIGNAL_AFTER_JOB_SCHEDULE")
+
         assessment = assess_portfolio_entry_signal(
             self.signal,
             self.risk_inputs,

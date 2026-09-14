@@ -165,3 +165,32 @@ def test_paper_entry_order_job_requires_typed_dependencies() -> None:
         PaperEntryOrderDecisionJob(signal, inputs, object(), OrderSide.BUY)
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE"):
         PaperEntryOrderDecisionJob(signal, inputs, engine, object())
+
+
+def test_paper_entry_order_job_rejects_naive_signal_time_before_any_effect() -> None:
+    signal = _signal().model_copy(
+        update={"decision_time": datetime(2026, 9, 13, 15, 0)}
+    )
+    runtime = _runtime()
+    job = PaperEntryOrderDecisionJob(signal, _inputs(signal), _engine(), OrderSide.BUY)
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_ENTRY_RISK_SIGNAL_TIME_MUST_BE_TIMEZONE_AWARE",
+    ):
+        job(runtime)
+
+    assert runtime.events == []
+
+
+def test_paper_entry_order_job_rejects_future_signal_before_any_effect() -> None:
+    signal = _signal().model_copy(
+        update={"decision_time": datetime(2026, 9, 13, 15, 2, tzinfo=UTC)}
+    )
+    runtime = _runtime()
+    job = PaperEntryOrderDecisionJob(signal, _inputs(signal), _engine(), OrderSide.BUY)
+
+    with pytest.raises(ValueError, match="PAPER_ENTRY_RISK_SIGNAL_AFTER_JOB_SCHEDULE"):
+        job(runtime)
+
+    assert runtime.events == []
