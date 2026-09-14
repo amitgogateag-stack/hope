@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 class UniverseVersion(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     universe_id: UUID
     version: str
@@ -25,11 +25,18 @@ class UniverseVersion(BaseModel):
 
 
 class UniverseMember(BaseModel):
-    model_config = ConfigDict(frozen=True)
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
     instrument_id: UUID
     valid_from: datetime | None = None
     valid_to: datetime | None = None
+
+    @field_validator("valid_from", "valid_to")
+    @classmethod
+    def require_aware_interval_time(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("UNIVERSE_MEMBER_TIME_MUST_BE_TIMEZONE_AWARE")
+        return value
 
     @model_validator(mode="after")
     def validate_interval(self) -> "UniverseMember":

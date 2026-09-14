@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 from uuid import UUID
 
 import pytest
@@ -76,9 +76,10 @@ def test_universe_snapshot_rejects_invalid_membership_before_hashing() -> None:
 
 def test_universe_snapshot_rejects_naive_membership_times() -> None:
     version_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
-    naive = UniverseMember(
+    naive = UniverseMember.model_construct(
         instrument_id=UUID("11111111-1111-1111-1111-111111111111"),
         valid_from=datetime(2026, 1, 1),
+        valid_to=None,
     )
 
     with pytest.raises(ValueError, match="UNIVERSE_SNAPSHOT_VALID_FROM_MUST_BE_TIMEZONE_AWARE"):
@@ -103,3 +104,42 @@ def test_universe_version_identity_must_be_canonical(version) -> None:
             version=version,
             declared_member_count=0,
         )
+
+
+class MissingOffsetTimezone(tzinfo):
+    def utcoffset(self, dt):
+        return None
+
+
+@pytest.mark.parametrize("field", ["valid_from", "valid_to"])
+@pytest.mark.parametrize(
+    "value",
+    [
+        datetime(2026, 1, 1),
+        datetime(2026, 1, 1, tzinfo=MissingOffsetTimezone()),
+    ],
+)
+def test_universe_member_requires_unambiguous_aware_interval_times(field, value) -> None:
+    values = {
+        "instrument_id": UUID("11111111-1111-1111-1111-111111111111"),
+        field: value,
+    }
+    with pytest.raises(ValueError, match="UNIVERSE_MEMBER_TIME_MUST_BE_TIMEZONE_AWARE"):
+        UniverseMember(**values)
+
+
+@pytest.mark.parametrize("model", [UniverseVersion, UniverseMember])
+def test_universe_models_forbid_undeclared_fields(model) -> None:
+    if model is UniverseVersion:
+        values = {
+            "universe_id": UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            "version": "u1",
+            "declared_member_count": 0,
+        }
+    else:
+        values = {
+            "instrument_id": UUID("11111111-1111-1111-1111-111111111111"),
+        }
+
+    with pytest.raises(ValueError, match="extra_forbidden"):
+        model(**values, undeclared="must-fail")
