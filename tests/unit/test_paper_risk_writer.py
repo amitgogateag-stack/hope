@@ -71,6 +71,11 @@ def test_paper_risk_payload_hash_changes_with_decision_material():
 
 
 def test_paper_risk_payload_hash_rejects_noncanonical_reason():
-    value = assessment(reason=" OK ")
+    value = RiskAssessment.model_construct(
+        signal_id=uuid4(),
+        decision=RiskDecision.APPROVE,
+        reason_code=" OK ",
+        approved_quantity=Decimal("2"),
+    )
     with pytest.raises(ValueError, match="PAPER_RISK_REASON_CODE_NOT_CANONICAL"):
         paper_risk_payload_hash(value)
