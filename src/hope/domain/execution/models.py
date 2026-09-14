@@ -21,7 +21,7 @@ class OrderSide(StrEnum):
 
 
 class Order(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", allow_inf_nan=True)
     order_id: UUID
     signal_id: UUID
     instrument_id: UUID

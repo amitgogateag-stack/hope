@@ -62,28 +62,6 @@ class Fill:
     cost_model_version: str
     fill_time: datetime | None = None
 
-    def __post_init__(self) -> None:
-        if not self.quantity.is_finite():
-            raise ValueError("FILL_QUANTITY_MUST_BE_FINITE")
-        if self.quantity <= 0:
-            raise ValueError("FILL_QUANTITY_MUST_BE_POSITIVE")
-        if not self.price.is_finite():
-            raise ValueError("FILL_PRICE_MUST_BE_FINITE")
-        if self.price <= 0:
-            raise ValueError("FILL_PRICE_MUST_BE_POSITIVE")
-        if not self.commission.is_finite() or not self.slippage.is_finite():
-            raise ValueError("FILL_COSTS_MUST_BE_FINITE")
-        if self.commission < 0 or self.slippage < 0:
-            raise ValueError("FILL_COSTS_MUST_BE_NON_NEGATIVE")
-        if not self.cost_model_version.strip():
-            raise ValueError("FILL_COST_MODEL_VERSION_REQUIRED")
-        if self.cost_model_version != self.cost_model_version.strip():
-            raise ValueError("FILL_COST_MODEL_VERSION_NOT_CANONICAL")
-        if self.fill_time is not None and (
-            self.fill_time.tzinfo is None or self.fill_time.utcoffset() is None
-        ):
-            raise ValueError("FILL_TIME_MUST_BE_TIMEZONE_AWARE")
-
 
 def simulate_market_fill(
     order: Order,
