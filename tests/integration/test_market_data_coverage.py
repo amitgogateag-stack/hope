@@ -30,6 +30,7 @@ def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys
             instrument_id = uuid4()
             dataset_id = uuid4()
             dataset_version_id = uuid4()
+            duplicate_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
             t1 = t0 + timedelta(minutes=1)
             t2 = t1 + timedelta(minutes=1)
@@ -52,9 +53,15 @@ def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys
                 text(
                     "INSERT INTO dataset_versions("
                     "dataset_version_id, dataset_id, version, vintage_label, immutable"
-                    ") VALUES (:version_id, :dataset_id, 'v1', 'staging', FALSE)"
+                    ") VALUES "
+                    "(:version_id, :dataset_id, 'v1', 'staging', FALSE), "
+                    "(:duplicate_version_id, :dataset_id, 'v2', 'staging', FALSE)"
                 ),
-                {"version_id": dataset_version_id, "dataset_id": dataset_id},
+                {
+                    "version_id": dataset_version_id,
+                    "duplicate_version_id": duplicate_version_id,
+                    "dataset_id": dataset_id,
+                },
             )
 
             requests = (
@@ -86,18 +93,13 @@ def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys
                     requests,
                     identity_map=identity_map,
                 )
-            connection.execute(
-                text(
-                    "DELETE FROM market_bars WHERE dataset_version_id = :version_id "
-                    "AND event_time = :event_time"
-                ),
-                {"version_id": dataset_version_id, "event_time": t2},
-            )
 
+            _insert_bar(connection, duplicate_version_id, instrument_id, t0, t0, t0)
+            _insert_bar(connection, duplicate_version_id, instrument_id, t1, t1, t1)
             shifted = t0 + timedelta(seconds=1)
             _insert_bar(
                 connection,
-                dataset_version_id,
+                duplicate_version_id,
                 instrument_id,
                 t0,
                 shifted,
@@ -105,7 +107,7 @@ def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys
             )
             with pytest.raises(ValueError, match="DUPLICATE_LOGICAL_KEY"):
                 verifier.verify(
-                    dataset_version_id,
+                    duplicate_version_id,
                     requests,
                     identity_map=identity_map,
                 )

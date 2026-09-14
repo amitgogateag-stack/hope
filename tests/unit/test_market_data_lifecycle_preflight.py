@@ -23,6 +23,11 @@ class NoCallSink:
         raise AssertionError("sink must not be called")
 
 
+class NoCallCoverageVerifier:
+    def verify(self, dataset_version_id, requests, *, identity_map):  # pragma: no cover
+        raise AssertionError("coverage verifier must not be called")
+
+
 class NoCallSealer:
     def seal(self, dataset_version_id):  # pragma: no cover - must never run
         raise AssertionError("sealer must not be called")
@@ -50,6 +55,7 @@ def test_lifecycle_rejects_nonhomogeneous_windows_before_provider_call() -> None
         ingest_and_seal_market_data_windows(
             provider,
             NoCallSink(),
+            NoCallCoverageVerifier(),
             NoCallSealer(),
             uuid4(),
             (first, second),
@@ -74,6 +80,7 @@ def test_lifecycle_rejects_invalid_dataset_identity_before_provider_call() -> No
         ingest_and_seal_market_data_windows(
             provider,
             NoCallSink(),
+            NoCallCoverageVerifier(),
             NoCallSealer(),
             "not-a-uuid",  # type: ignore[arg-type]
             (request,),
