@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class DataQualityState(StrEnum):
@@ -30,6 +30,13 @@ class MarketBar(BaseModel):
     low: Decimal = Field(gt=0)
     close: Decimal = Field(gt=0)
     volume: Decimal = Field(ge=0)
+
+    @field_validator("instrument_id")
+    @classmethod
+    def validate_instrument_id(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("MARKET_BAR_INSTRUMENT_ID_NOT_CANONICAL")
+        return value
 
     @model_validator(mode="after")
     def validate_temporal_and_ohlc(self):
