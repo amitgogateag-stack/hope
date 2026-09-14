@@ -13,6 +13,7 @@ from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.market_data.context import PITMarketContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.risk.portfolio import PortfolioRiskEngine
 from hope.domain.signal.models import Signal
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
@@ -157,17 +158,27 @@ class PaperEntryOrderDecisionJob:
 
 @dataclass(frozen=True)
 class PaperOrderPersistenceJob:
-    """Persist one already-decided PAPER order through the authoritative runtime boundary."""
+    """Persist one risk-approved PAPER order through the authoritative runtime boundary."""
 
     order: Order
+    assessment: RiskAssessment
 
     def __post_init__(self) -> None:
         if not isinstance(self.order, Order):
             raise TypeError("PAPER_ORDER_JOB_REQUIRES_ORDER")
         if self.order.environment is not Environment.PAPER:
             raise ValueError("PAPER_ORDER_JOB_REQUIRES_PAPER_ENVIRONMENT")
+        if not isinstance(self.assessment, RiskAssessment):
+            raise TypeError("PAPER_ORDER_JOB_REQUIRES_RISK_ASSESSMENT")
+        if self.assessment.signal_id != self.order.signal_id:
+            raise ValueError("PAPER_ORDER_JOB_RISK_SIGNAL_MISMATCH")
+        if self.assessment.decision is not RiskDecision.APPROVE:
+            raise ValueError("PAPER_ORDER_JOB_REQUIRES_RISK_APPROVAL")
+        if self.assessment.approved_quantity != self.order.quantity:
+            raise ValueError("PAPER_ORDER_JOB_RISK_QUANTITY_MISMATCH")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
+        runtime.record_risk(self.assessment)
         runtime.record_order(self.order)
 
 

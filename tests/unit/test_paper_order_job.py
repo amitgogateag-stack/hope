@@ -8,6 +8,7 @@ from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.jobs import PaperOrderPersistenceJob
 from hope.domain.execution.models import Environment, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import SignalType
 
 
@@ -17,7 +18,12 @@ UTC = timezone.utc
 class _Runtime:
     def __init__(self, job_run) -> None:
         self.cycle = PaperCycleContext(job_run)
+        self.recorded_risk = []
         self.recorded = []
+
+    def record_risk(self, assessment: RiskAssessment) -> bool:
+        self.recorded_risk.append(assessment)
+        return True
 
     def record_order(self, order: Order) -> bool:
         self.recorded.append(order)
@@ -38,9 +44,18 @@ def _order(job_run, *, environment: Environment = Environment.PAPER) -> Order:
     )
 
 
+def _assessment(order: Order, *, decision: RiskDecision = RiskDecision.APPROVE) -> RiskAssessment:
+    return RiskAssessment(
+        signal_id=order.signal_id,
+        decision=decision,
+        reason_code="PORTFOLIO_RISK_APPROVED" if decision is RiskDecision.APPROVE else "RISK_REJECTED",
+        approved_quantity=order.quantity if decision is RiskDecision.APPROVE else Decimal("0"),
+    )
+
+
 def test_paper_order_persistence_job_requires_order_model() -> None:
     with pytest.raises(TypeError, match="PAPER_ORDER_JOB_REQUIRES_ORDER"):
-        PaperOrderPersistenceJob(object())
+        PaperOrderPersistenceJob(object(), object())
 
 
 def test_paper_order_persistence_job_requires_paper_environment() -> None:
@@ -50,7 +65,39 @@ def test_paper_order_persistence_job_requires_paper_environment() -> None:
     )
 
     with pytest.raises(ValueError, match="PAPER_ORDER_JOB_REQUIRES_PAPER_ENVIRONMENT"):
-        PaperOrderPersistenceJob(_order(job_run, environment=Environment.BACKTEST))
+        order = _order(job_run, environment=Environment.BACKTEST)
+        PaperOrderPersistenceJob(order, _assessment(order))
+
+
+def test_paper_order_persistence_job_requires_risk_assessment() -> None:
+    job_run = create_scheduled_job_run(
+        "paper-order-persist",
+        datetime(2026, 9, 10, 14, 0, tzinfo=UTC),
+    )
+
+    with pytest.raises(TypeError, match="PAPER_ORDER_JOB_REQUIRES_RISK_ASSESSMENT"):
+        PaperOrderPersistenceJob(_order(job_run), object())
+
+
+def test_paper_order_persistence_job_rejects_nonmatching_risk() -> None:
+    job_run = create_scheduled_job_run(
+        "paper-order-persist",
+        datetime(2026, 9, 10, 14, 0, tzinfo=UTC),
+    )
+    order = _order(job_run)
+
+    with pytest.raises(ValueError, match="PAPER_ORDER_JOB_RISK_SIGNAL_MISMATCH"):
+        PaperOrderPersistenceJob(
+            order,
+            _assessment(order).model_copy(update={"signal_id": uuid4()}),
+        )
+    with pytest.raises(ValueError, match="PAPER_ORDER_JOB_REQUIRES_RISK_APPROVAL"):
+        PaperOrderPersistenceJob(order, _assessment(order, decision=RiskDecision.REJECT))
+    with pytest.raises(ValueError, match="PAPER_ORDER_JOB_RISK_QUANTITY_MISMATCH"):
+        PaperOrderPersistenceJob(
+            order,
+            _assessment(order).model_copy(update={"approved_quantity": Decimal("2")}),
+        )
 
 
 def test_paper_order_persistence_job_records_decided_order() -> None:
@@ -60,7 +107,9 @@ def test_paper_order_persistence_job_records_decided_order() -> None:
     )
     order = _order(job_run)
     runtime = _Runtime(job_run)
+    assessment = _assessment(order)
 
-    PaperOrderPersistenceJob(order)(runtime)
+    PaperOrderPersistenceJob(order, assessment)(runtime)
 
+    assert runtime.recorded_risk == [assessment]
     assert runtime.recorded == [order]
