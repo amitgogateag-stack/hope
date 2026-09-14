@@ -1,7 +1,9 @@
 from datetime import datetime
 from enum import StrEnum
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from hope.domain.execution.models import Environment
 
 
 class AuditEventType(StrEnum):
@@ -26,5 +28,21 @@ class AuditEvent(BaseModel):
     order_id: UUID | None = None
     fill_id: UUID | None = None
     instrument_id: UUID | None = None
-    environment: str = Field(min_length=1)
+    environment: Environment
     payload_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+    @field_validator("event_time")
+    @classmethod
+    def require_aware_event_time(cls, value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            raise ValueError("AUDIT_EVENT_TIME_MUST_BE_TIMEZONE_AWARE")
+        return value
+
+    @field_validator("environment", mode="before")
+    @classmethod
+    def require_supported_environment(cls, value: object) -> object:
+        try:
+            Environment(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("AUDIT_EVENT_ENVIRONMENT_UNSUPPORTED") from exc
+        return value

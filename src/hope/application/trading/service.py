@@ -133,7 +133,7 @@ class TradingKernel:
             order_id=order_id,
             fill_id=fill_id,
             instrument_id=instrument_id,
-            environment=environment.value,
+            environment=environment,
             payload_hash=payload_hash,
         )
 

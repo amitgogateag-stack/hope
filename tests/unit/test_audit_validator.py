@@ -9,6 +9,29 @@ def event(kind, t, **refs):
                       environment="PAPER", payload_hash="a" * 64, **refs)
 
 
+def test_audit_event_requires_timezone_aware_time():
+    with pytest.raises(ValueError, match="AUDIT_EVENT_TIME_MUST_BE_TIMEZONE_AWARE"):
+        event(
+            AuditEventType.SIGNAL_ACCEPTED,
+            datetime(2026, 8, 29, 13, 0),
+            signal_id=uuid4(),
+            instrument_id=uuid4(),
+        )
+
+
+def test_audit_event_rejects_unsupported_environment():
+    with pytest.raises(ValueError, match="AUDIT_EVENT_ENVIRONMENT_UNSUPPORTED"):
+        AuditEvent(
+            event_id=uuid4(),
+            event_type=AuditEventType.SIGNAL_ACCEPTED,
+            event_time=datetime(2026, 8, 29, 13, 0, tzinfo=timezone.utc),
+            signal_id=uuid4(),
+            instrument_id=uuid4(),
+            environment="LIVE",
+            payload_hash="a" * 64,
+        )
+
+
 def test_audit_sequence_requires_causal_order():
     t = datetime(2026, 8, 29, 13, 0, tzinfo=timezone.utc)
     sid, iid, oid, fid = uuid4(), uuid4(), uuid4(), uuid4()
