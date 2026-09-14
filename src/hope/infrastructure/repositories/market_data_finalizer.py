@@ -7,14 +7,16 @@ from uuid import UUID
 from sqlalchemy import Connection, text
 
 from hope.infrastructure.market_data.provider import MarketDataRequest
+from hope.infrastructure.repositories.market_data_manifest import manifest_expected_keys
 
 
 class SqlAlchemyMarketDataVersionFinalizer:
-    """Atomically prove persisted coverage and seal one market-data version.
+    """Atomically prove persisted coverage against the durable manifest and seal.
 
-    The dataset-version row is locked before coverage is read and remains locked
-    through the immutable transition. This closes the race where another writer
-    could append staging data after coverage verification but before sealing.
+    The dataset-version row is locked before manifest/coverage is read and stays
+    locked through the immutable transition. Completeness is defined exclusively
+    by the previously persisted coverage manifest, never by the request subset
+    supplied to the lifecycle call being finalized.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -32,7 +34,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
         if not requests:
             raise ValueError("MARKET_DATA_FINALIZE_WINDOWS_REQUIRED")
 
-        expected: set[tuple[UUID, datetime]] = set()
+        requested: set[tuple[UUID, datetime]] = set()
         for request in requests:
             for source_symbol, event_time in request.expected_keys:
                 identity_key = (request.source, source_symbol)
@@ -41,7 +43,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 instrument_id = identity_map[identity_key]
                 if not isinstance(instrument_id, UUID):
                     raise TypeError("MARKET_DATA_FINALIZE_IDENTITY_MAP_INVALID")
-                expected.add((instrument_id, event_time))
+                requested.add((instrument_id, event_time))
 
         with self._connection.begin_nested():
             version = self._connection.execute(
@@ -61,6 +63,20 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 raise ValueError("MARKET_DATA_DATASET_VERSION_ALREADY_IMMUTABLE")
             if not version["pit_certified"]:
                 raise ValueError("MARKET_DATA_DATASET_NOT_PIT_CERTIFIED")
+
+            manifest = self._connection.execute(
+                text(
+                    "SELECT manifest FROM market_data_coverage_manifests "
+                    "WHERE dataset_version_id = :version_id"
+                ),
+                {"version_id": dataset_version_id},
+            ).scalar_one_or_none()
+            if manifest is None:
+                raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_REQUIRED")
+
+            expected = manifest_expected_keys(manifest)
+            if not requested.issubset(expected):
+                raise ValueError("MARKET_DATA_REQUEST_OUTSIDE_DECLARED_MANIFEST")
 
             rows = self._connection.execute(
                 text(
