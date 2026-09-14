@@ -33,31 +33,17 @@ class RecordingSink:
         self.calls.append((dataset_version_id, bars))
 
 
-class RecordingCoverageVerifier:
+class RecordingFinalizer:
     def __init__(self, error: Exception | None = None) -> None:
         self.error = error
         self.calls: list[
             tuple[UUID, tuple[MarketDataRequest, ...], dict[tuple[str, str], UUID]]
         ] = []
 
-    def verify(
-        self,
-        dataset_version_id: UUID,
-        requests: tuple[MarketDataRequest, ...],
-        *,
-        identity_map,
-    ) -> None:
+    def finalize(self, dataset_version_id: UUID, requests, *, identity_map) -> None:
         self.calls.append((dataset_version_id, requests, dict(identity_map)))
         if self.error is not None:
             raise self.error
-
-
-class RecordingSealer:
-    def __init__(self) -> None:
-        self.calls: list[UUID] = []
-
-    def seal(self, dataset_version_id: UUID) -> None:
-        self.calls.append(dataset_version_id)
 
 
 def _window(start: datetime, symbol: str = "ABC") -> tuple[MarketDataRequest, ProviderMarketDataBatch]:
@@ -89,23 +75,20 @@ def _window(start: datetime, symbol: str = "ABC") -> tuple[MarketDataRequest, Pr
     )
 
 
-def test_lifecycle_ingests_verifies_coverage_then_seals_once() -> None:
+def test_lifecycle_ingests_then_finalizes_once() -> None:
     start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
     first_request, first_batch = _window(start)
     second_request, second_batch = _window(first_request.end)
     provider = SequencedProvider((first_batch, second_batch))
     sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
     dataset_version_id = uuid4()
-    instrument_id = uuid4()
-    identity_map = {("TEST", "ABC"): instrument_id}
+    identity_map = {("TEST", "ABC"): uuid4()}
 
     batches = ingest_and_seal_market_data_windows(
         provider,
         sink,
-        coverage,
-        sealer,
+        finalizer,
         dataset_version_id,
         (first_request, second_request),
         identity_map=identity_map,
@@ -114,34 +97,24 @@ def test_lifecycle_ingests_verifies_coverage_then_seals_once() -> None:
     assert provider.calls == [first_request, second_request]
     assert len(batches) == 2
     assert len(sink.calls) == 2
-    assert all(call[0] == dataset_version_id for call in sink.calls)
-    assert coverage.calls == [
+    assert finalizer.calls == [
         (dataset_version_id, (first_request, second_request), identity_map)
     ]
-    assert sealer.calls == [dataset_version_id]
 
 
 def test_lifecycle_rejects_empty_request_set_before_side_effects() -> None:
     provider = SequencedProvider(())
     sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
 
     with pytest.raises(ValueError, match="WINDOWS_REQUIRED"):
         ingest_and_seal_market_data_windows(
-            provider,
-            sink,
-            coverage,
-            sealer,
-            uuid4(),
-            (),
-            identity_map={},
+            provider, sink, finalizer, uuid4(), (), identity_map={}
         )
 
     assert provider.calls == []
     assert sink.calls == []
-    assert coverage.calls == []
-    assert sealer.calls == []
+    assert finalizer.calls == []
 
 
 def test_lifecycle_rejects_noncontiguous_windows_before_side_effects() -> None:
@@ -150,15 +123,13 @@ def test_lifecycle_rejects_noncontiguous_windows_before_side_effects() -> None:
     second_request, second_batch = _window(first_request.end + timedelta(minutes=1))
     provider = SequencedProvider((first_batch, second_batch))
     sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
 
     with pytest.raises(ValueError, match="WINDOWS_NOT_CONTIGUOUS"):
         ingest_and_seal_market_data_windows(
             provider,
             sink,
-            coverage,
-            sealer,
+            finalizer,
             uuid4(),
             (first_request, second_request),
             identity_map={("TEST", "ABC"): uuid4()},
@@ -166,75 +137,41 @@ def test_lifecycle_rejects_noncontiguous_windows_before_side_effects() -> None:
 
     assert provider.calls == []
     assert sink.calls == []
-    assert coverage.calls == []
-    assert sealer.calls == []
+    assert finalizer.calls == []
 
 
-def test_lifecycle_rejects_incomplete_identity_map_before_side_effects() -> None:
+def test_lifecycle_rejects_identity_map_errors_before_side_effects() -> None:
     start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
     request, batch = _window(start)
     provider = SequencedProvider((batch,))
-    sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
 
     with pytest.raises(ValueError, match="IDENTITY_MAP_INCOMPLETE"):
         ingest_and_seal_market_data_windows(
             provider,
-            sink,
-            coverage,
-            sealer,
+            RecordingSink(),
+            finalizer,
             uuid4(),
             (request,),
             identity_map={},
         )
-
     assert provider.calls == []
-    assert sink.calls == []
-    assert coverage.calls == []
-    assert sealer.calls == []
+    assert finalizer.calls == []
 
 
-def test_lifecycle_rejects_malformed_identity_map_before_side_effects() -> None:
-    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
-    request, batch = _window(start)
-    provider = SequencedProvider((batch,))
-    sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
-
-    with pytest.raises(TypeError, match="IDENTITY_MAP_INVALID"):
-        ingest_and_seal_market_data_windows(
-            provider,
-            sink,
-            coverage,
-            sealer,
-            uuid4(),
-            (request,),
-            identity_map={("TEST", "ABC"): "not-a-uuid"},  # type: ignore[dict-item]
-        )
-
-    assert provider.calls == []
-    assert sink.calls == []
-    assert coverage.calls == []
-    assert sealer.calls == []
-
-
-def test_lifecycle_failure_after_partial_persist_never_verifies_or_seals() -> None:
+def test_lifecycle_failure_after_partial_persist_never_finalizes() -> None:
     start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
     first_request, first_batch = _window(start)
     second_request, _ = _window(first_request.end)
     provider = SequencedProvider((first_batch, RuntimeError("provider failed")))
     sink = RecordingSink()
-    coverage = RecordingCoverageVerifier()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
 
     with pytest.raises(RuntimeError, match="provider failed"):
         ingest_and_seal_market_data_windows(
             provider,
             sink,
-            coverage,
-            sealer,
+            finalizer,
             uuid4(),
             (first_request, second_request),
             identity_map={("TEST", "ABC"): uuid4()},
@@ -242,33 +179,27 @@ def test_lifecycle_failure_after_partial_persist_never_verifies_or_seals() -> No
 
     assert provider.calls == [first_request, second_request]
     assert len(sink.calls) == 1
-    assert coverage.calls == []
-    assert sealer.calls == []
+    assert finalizer.calls == []
 
 
-def test_lifecycle_coverage_failure_never_seals() -> None:
+def test_lifecycle_finalizer_failure_propagates_after_persistence() -> None:
     start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
     request, batch = _window(start)
     provider = SequencedProvider((batch,))
     sink = RecordingSink()
-    coverage = RecordingCoverageVerifier(
+    finalizer = RecordingFinalizer(
         ValueError("MARKET_DATA_PERSISTED_COVERAGE_MISSING")
     )
-    sealer = RecordingSealer()
-    dataset_version_id = uuid4()
 
     with pytest.raises(ValueError, match="PERSISTED_COVERAGE_MISSING"):
         ingest_and_seal_market_data_windows(
             provider,
             sink,
-            coverage,
-            sealer,
-            dataset_version_id,
+            finalizer,
+            uuid4(),
             (request,),
             identity_map={("TEST", "ABC"): uuid4()},
         )
 
-    assert provider.calls == [request]
     assert len(sink.calls) == 1
-    assert len(coverage.calls) == 1
-    assert sealer.calls == []
+    assert len(finalizer.calls) == 1

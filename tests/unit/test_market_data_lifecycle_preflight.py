@@ -13,24 +13,19 @@ class NoCallProvider:
     def __init__(self) -> None:
         self.calls = 0
 
-    def fetch_bars(self, request: MarketDataRequest):  # pragma: no cover - must never run
+    def fetch_bars(self, request: MarketDataRequest):  # pragma: no cover
         self.calls += 1
         raise AssertionError("provider must not be called")
 
 
 class NoCallSink:
-    def append(self, dataset_version_id, bars):  # pragma: no cover - must never run
+    def append(self, dataset_version_id, bars):  # pragma: no cover
         raise AssertionError("sink must not be called")
 
 
-class NoCallCoverageVerifier:
-    def verify(self, dataset_version_id, requests, *, identity_map):  # pragma: no cover
-        raise AssertionError("coverage verifier must not be called")
-
-
-class NoCallSealer:
-    def seal(self, dataset_version_id):  # pragma: no cover - must never run
-        raise AssertionError("sealer must not be called")
+class NoCallFinalizer:
+    def finalize(self, dataset_version_id, requests, *, identity_map):  # pragma: no cover
+        raise AssertionError("finalizer must not be called")
 
 
 def test_lifecycle_rejects_nonhomogeneous_windows_before_provider_call() -> None:
@@ -55,8 +50,7 @@ def test_lifecycle_rejects_nonhomogeneous_windows_before_provider_call() -> None
         ingest_and_seal_market_data_windows(
             provider,
             NoCallSink(),
-            NoCallCoverageVerifier(),
-            NoCallSealer(),
+            NoCallFinalizer(),
             uuid4(),
             (first, second),
             identity_map={("TEST", "ABC"): uuid4(), ("TEST", "XYZ"): uuid4()},
@@ -80,8 +74,7 @@ def test_lifecycle_rejects_invalid_dataset_identity_before_provider_call() -> No
         ingest_and_seal_market_data_windows(
             provider,
             NoCallSink(),
-            NoCallCoverageVerifier(),
-            NoCallSealer(),
+            NoCallFinalizer(),
             "not-a-uuid",  # type: ignore[arg-type]
             (request,),
             identity_map={("TEST", "ABC"): uuid4()},

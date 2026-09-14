@@ -31,19 +31,11 @@ class RecordingSink:
         self.calls.append((dataset_version_id, bars))
 
 
-class RecordingCoverage:
+class RecordingFinalizer:
     def __init__(self) -> None:
         self.calls = 0
 
-    def verify(self, dataset_version_id, requests, *, identity_map) -> None:
-        self.calls += 1
-
-
-class RecordingSealer:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def seal(self, dataset_version_id: UUID) -> None:
+    def finalize(self, dataset_version_id, requests, *, identity_map) -> None:
         self.calls += 1
 
 
@@ -89,14 +81,12 @@ def test_lifecycle_calendar_allows_closed_market_gap() -> None:
     )
     provider = SequencedProvider((first_batch, second_batch))
     sink = RecordingSink()
-    coverage = RecordingCoverage()
-    sealer = RecordingSealer()
+    finalizer = RecordingFinalizer()
 
     ingest_and_seal_market_data_windows(
         provider,
         sink,
-        coverage,
-        sealer,
+        finalizer,
         uuid4(),
         (first_request, second_request),
         identity_map={("TEST", "ABC"): uuid4()},
@@ -105,8 +95,7 @@ def test_lifecycle_calendar_allows_closed_market_gap() -> None:
 
     assert provider.calls == [first_request, second_request]
     assert len(sink.calls) == 2
-    assert coverage.calls == 1
-    assert sealer.calls == 1
+    assert finalizer.calls == 1
 
 
 def test_lifecycle_calendar_rejects_skipped_trading_slot_before_provider_call() -> None:
@@ -123,8 +112,7 @@ def test_lifecycle_calendar_rejects_skipped_trading_slot_before_provider_call() 
         ingest_and_seal_market_data_windows(
             provider,
             RecordingSink(),
-            RecordingCoverage(),
-            RecordingSealer(),
+            RecordingFinalizer(),
             uuid4(),
             (first_request, second_request),
             identity_map={("TEST", "ABC"): uuid4()},
@@ -146,8 +134,7 @@ def test_lifecycle_calendar_rejects_off_session_request_before_provider_call() -
         ingest_and_seal_market_data_windows(
             provider,
             RecordingSink(),
-            RecordingCoverage(),
-            RecordingSealer(),
+            RecordingFinalizer(),
             uuid4(),
             (request,),
             identity_map={("TEST", "ABC"): uuid4()},

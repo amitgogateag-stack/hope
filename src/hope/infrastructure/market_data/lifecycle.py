@@ -11,8 +11,8 @@ from hope.infrastructure.market_data.provider import MarketDataProvider, MarketD
 
 
 @runtime_checkable
-class MarketDataCoverageVerifier(Protocol):
-    def verify(
+class MarketDataVersionFinalizer(Protocol):
+    def finalize(
         self,
         dataset_version_id: UUID,
         requests: tuple[MarketDataRequest, ...],
@@ -22,30 +22,24 @@ class MarketDataCoverageVerifier(Protocol):
         ...
 
 
-@runtime_checkable
-class MarketDataVersionSealer(Protocol):
-    def seal(self, dataset_version_id: UUID) -> None:
-        ...
-
-
 def ingest_and_seal_market_data_windows(
     provider: MarketDataProvider,
     sink: MarketBarSink,
-    coverage_verifier: MarketDataCoverageVerifier,
-    sealer: MarketDataVersionSealer,
+    finalizer: MarketDataVersionFinalizer,
     dataset_version_id: UUID,
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
     session_calendar: MarketSessionCalendar | None = None,
 ) -> tuple[NormalizedMarketBarBatch, ...]:
-    """Ingest a deterministic request set, verify persisted coverage, then seal.
+    """Ingest deterministic windows, then atomically verify coverage and seal.
 
     Without a session calendar, windows must remain exactly contiguous. With a
     trusted calendar, closed-market gaps are allowed only when no expected slot
     exists between windows, and every requested event slot must be an in-session
-    interval-grid timestamp. This preserves fail-closed completeness while
-    allowing real overnight/weekend/holiday boundaries.
+    interval-grid timestamp. The finalizer owns the database lock spanning
+    persisted-coverage verification through sealing so no staging write can slip
+    between those two checks.
     """
 
     if not isinstance(dataset_version_id, UUID):
@@ -63,7 +57,8 @@ def ingest_and_seal_market_data_windows(
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_NOT_HOMOGENEOUS")
         if session_calendar is not None:
             requested_times = tuple(
-                event_time for _, event_time in request.expected_keys[::len(request.source_symbols)]
+                event_time
+                for _, event_time in request.expected_keys[:: len(request.source_symbols)]
             )
             expected_times = session_calendar.expected_times(
                 request.start,
@@ -105,10 +100,9 @@ def ingest_and_seal_market_data_windows(
         )
         for request in requests
     )
-    coverage_verifier.verify(
+    finalizer.finalize(
         dataset_version_id,
         requests,
         identity_map=identity_map,
     )
-    sealer.seal(dataset_version_id)
     return batches
