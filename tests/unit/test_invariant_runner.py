@@ -80,6 +80,25 @@ def test_runner_rejects_duplicate_result_ids() -> None:
         InvariantRunner([duplicate_one, duplicate_two]).run(InvariantContext())
 
 
+@pytest.mark.parametrize("invariant_id", [" I-1", "I-1 "])
+def test_invariant_result_id_must_be_canonical(invariant_id) -> None:
+    with pytest.raises(ValueError, match="INVARIANT_ID_NOT_CANONICAL"):
+        InvariantResult(
+            invariant_id=invariant_id,
+            status=ValidationStatus.PASS,
+            message="ok",
+        )
+
+
+def test_invariant_result_id_must_be_nonblank() -> None:
+    with pytest.raises(ValueError, match="INVARIANT_ID_REQUIRED"):
+        InvariantResult(
+            invariant_id="   ",
+            status=ValidationStatus.PASS,
+            message="ok",
+        )
+
+
 def test_invariant_008_rejects_unknown_trade_signal_reference() -> None:
     context = InvariantContext(trade_signal_ids=("missing",), known_signal_ids=("s1",))
     result = InvariantRunner().run(context).results[7]
