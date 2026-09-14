@@ -421,3 +421,55 @@ def test_backtest_emits_one_valuation_per_clock_time_for_same_time_multi_instrum
     result = backtest().run(bars, no_strategy, no_risk, OrderSide.BUY)
 
     assert tuple(valuation.as_of for valuation in result.valuations) == (first, second)
+
+def test_backtest_processes_quote_when_ingestion_lags_provider_availability():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    ingested = second + timedelta(minutes=5)
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=second,
+        available_time=second,
+        ingestion_time=ingested,
+        open=Decimal("120"),
+        high=Decimal("121"),
+        low=Decimal("119"),
+        close=Decimal("120"),
+        volume=Decimal("1000"),
+    )
+    signal = Signal(
+        signal_id=UUID("88888888-8888-8888-8888-888888888888"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=first,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="6" * 64,
+    )
+    assessment = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+
+    result = backtest().run(
+        (bar(first), delayed),
+        lambda context: signal if context.as_of == first else None,
+        lambda _signal: assessment,
+        OrderSide.BUY,
+    )
+
+    assert tuple(valuation.as_of for valuation in result.valuations) == (
+        first,
+        second,
+        ingested,
+    )
+    assert result.valuations[1].market_value == Decimal("100")
+    assert result.valuations[2].market_value == Decimal("120")
+    assert len(result.events) == 1
+    assert result.events[0].event_time == ingested
+    assert result.events[0].result.fill is not None
+    assert result.events[0].result.fill.fill_time == ingested
+    assert result.unfilled_order_ids == ()
+

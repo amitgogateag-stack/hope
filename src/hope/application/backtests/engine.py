@@ -154,7 +154,11 @@ class DeterministicBacktest:
         submitted_signal_ids: set[UUID] = set()
 
         event_times = {bar.event_time for bar in ordered}
-        clock_times = sorted(event_times | {bar.available_time for bar in ordered})
+        clock_times = sorted(
+            event_times
+            | {bar.available_time for bar in ordered}
+            | {bar.ingestion_time for bar in ordered}
+        )
 
         for current_time in clock_times:
             current_bars = tuple(
