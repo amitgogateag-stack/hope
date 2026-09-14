@@ -30,6 +30,8 @@ def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() 
             good_version_id = uuid4()
             empty_version_id = uuid4()
             non_pit_version_id = uuid4()
+            fake_sealed_empty_version_id = uuid4()
+            fake_sealed_non_pit_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
 
             connection.execute(
@@ -57,12 +59,16 @@ def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() 
                     "INSERT INTO dataset_versions(dataset_version_id, dataset_id, version, vintage_label, immutable) VALUES "
                     "(:good, :pit_id, 'good', 'staging', FALSE), "
                     "(:empty, :pit_id, 'empty', 'staging', FALSE), "
-                    "(:non_pit, :non_pit_id, 'non-pit', 'staging', FALSE)"
+                    "(:non_pit, :non_pit_id, 'non-pit', 'staging', FALSE), "
+                    "(:fake_empty, :pit_id, 'fake-empty', 'sealed', TRUE), "
+                    "(:fake_non_pit, :non_pit_id, 'fake-non-pit', 'sealed', TRUE)"
                 ),
                 {
                     "good": good_version_id,
                     "empty": empty_version_id,
                     "non_pit": non_pit_version_id,
+                    "fake_empty": fake_sealed_empty_version_id,
+                    "fake_non_pit": fake_sealed_non_pit_version_id,
                     "pit_id": pit_dataset_id,
                     "non_pit_id": non_pit_dataset_id,
                 },
@@ -83,6 +89,10 @@ def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() 
                 sealer.seal(empty_version_id)
             with pytest.raises(ValueError, match="MARKET_DATA_DATASET_NOT_PIT_CERTIFIED"):
                 sealer.seal(non_pit_version_id)
+            with pytest.raises(ValueError, match="MARKET_DATA_DATASET_VERSION_EMPTY"):
+                sealer.seal(fake_sealed_empty_version_id)
+            with pytest.raises(ValueError, match="MARKET_DATA_DATASET_NOT_PIT_CERTIFIED"):
+                sealer.seal(fake_sealed_non_pit_version_id)
 
             sealer.seal(good_version_id)
             sealer.seal(good_version_id)

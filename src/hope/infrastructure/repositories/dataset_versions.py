@@ -10,8 +10,10 @@ class SqlAlchemyMarketDataVersionSealer:
 
     A version may be sealed only when it belongs to a PIT-certified dataset and
     already contains market bars. The row is locked during validation/sealing.
-    Exact retries after a successful seal are no-ops; other immutable versions
-    are rejected rather than silently reclassified as market-data evidence.
+    Exact retries after a successful seal are no-ops only when the sealed
+    version still satisfies the same evidence requirements; other immutable
+    versions are rejected rather than silently reclassified as market-data
+    evidence.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -35,9 +37,7 @@ class SqlAlchemyMarketDataVersionSealer:
 
             if row is None:
                 raise ValueError("MARKET_DATA_DATASET_VERSION_NOT_FOUND")
-            if row["immutable"]:
-                if row["vintage_label"] == "sealed":
-                    return
+            if row["immutable"] and row["vintage_label"] != "sealed":
                 raise ValueError("MARKET_DATA_DATASET_VERSION_ALREADY_IMMUTABLE")
             if not row["pit_certified"]:
                 raise ValueError("MARKET_DATA_DATASET_NOT_PIT_CERTIFIED")
@@ -51,6 +51,9 @@ class SqlAlchemyMarketDataVersionSealer:
             ).scalar_one()
             if bar_count <= 0:
                 raise ValueError("MARKET_DATA_DATASET_VERSION_EMPTY")
+
+            if row["immutable"]:
+                return
 
             self._connection.execute(
                 text(
