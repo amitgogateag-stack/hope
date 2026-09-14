@@ -43,6 +43,19 @@ class MarketDataRequest:
             raise ValueError("MARKET_DATA_WINDOW_INVALID")
         if self.interval <= timedelta(0):
             raise ValueError("MARKET_DATA_INTERVAL_MUST_BE_POSITIVE")
+        if (self.end - self.start) % self.interval != timedelta(0):
+            raise ValueError("MARKET_DATA_WINDOW_NOT_ALIGNED_TO_INTERVAL")
+
+    @property
+    def expected_keys(self) -> tuple[tuple[str, datetime], ...]:
+        """Exact source-symbol/event-time grid required for a complete response."""
+
+        keys: list[tuple[str, datetime]] = []
+        event_time = self.start
+        while event_time < self.end:
+            keys.extend((symbol, event_time) for symbol in self.source_symbols)
+            event_time += self.interval
+        return tuple(keys)
 
 
 @dataclass(frozen=True)
@@ -80,6 +93,12 @@ class ProviderMarketDataBatch:
             for bar in self.bars
         ):
             raise ValueError("PROVIDER_RETURNED_BAR_OFF_INTERVAL_GRID")
+
+        actual_keys = tuple((bar.source_symbol, bar.event_time) for bar in self.bars)
+        if len(set(actual_keys)) != len(actual_keys):
+            raise ValueError("PROVIDER_RETURNED_DUPLICATE_BAR_KEY")
+        if set(actual_keys) != set(self.request.expected_keys):
+            raise ValueError("PROVIDER_RESPONSE_INCOMPLETE")
 
 
 @runtime_checkable

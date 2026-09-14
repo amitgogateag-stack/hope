@@ -12,7 +12,7 @@ from hope.infrastructure.market_data.provider import (
 
 
 START = datetime(2026, 9, 14, 13, 0, tzinfo=timezone.utc)
-END = START + timedelta(hours=1)
+END = START + timedelta(minutes=1)
 
 
 def request() -> MarketDataRequest:
@@ -25,12 +25,17 @@ def request() -> MarketDataRequest:
     )
 
 
-def bar(*, source: str = "TEST", symbol: str = "ABC") -> RawMarketBar:
+def bar(
+    *,
+    source: str = "TEST",
+    symbol: str = "ABC",
+    event_time: datetime = START,
+) -> RawMarketBar:
     return RawMarketBar(
         source=source,
         source_symbol=symbol,
-        event_time=START,
-        available_time=START,
+        event_time=event_time,
+        available_time=event_time,
         ingestion_time=END,
         open="100",
         high="101",
@@ -74,6 +79,34 @@ def test_request_rejects_naive_window() -> None:
         )
 
 
+def test_request_requires_window_aligned_to_interval() -> None:
+    with pytest.raises(ValueError, match="WINDOW_NOT_ALIGNED_TO_INTERVAL"):
+        MarketDataRequest(
+            source="TEST",
+            source_symbols=("ABC",),
+            start=START,
+            end=START + timedelta(seconds=90),
+            interval=timedelta(minutes=1),
+        )
+
+
+def test_request_expected_keys_are_deterministic_symbol_time_grid() -> None:
+    asked = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC", "XYZ"),
+        start=START,
+        end=START + timedelta(minutes=2),
+        interval=timedelta(minutes=1),
+    )
+
+    assert asked.expected_keys == (
+        ("ABC", START),
+        ("XYZ", START),
+        ("ABC", START + timedelta(minutes=1)),
+        ("XYZ", START + timedelta(minutes=1)),
+    )
+
+
 def test_provider_batch_rejects_unrequested_symbol() -> None:
     with pytest.raises(ValueError, match="UNREQUESTED_SYMBOL"):
         ProviderMarketDataBatch(
@@ -85,16 +118,11 @@ def test_provider_batch_rejects_unrequested_symbol() -> None:
 
 
 def test_provider_batch_rejects_out_of_window_bar() -> None:
-    invalid = bar()
-    invalid = RawMarketBar(
-        **{**invalid.__dict__, "event_time": END}
-    )
-
     with pytest.raises(ValueError, match="OUTSIDE_REQUEST_WINDOW"):
         ProviderMarketDataBatch(
             source="TEST",
             request=request(),
-            bars=(invalid,),
+            bars=(bar(event_time=END),),
             fetched_at=END,
         )
 
@@ -110,33 +138,79 @@ def test_provider_batch_requires_completed_closed_window() -> None:
 
 
 def test_provider_batch_rejects_naive_bar_event_time() -> None:
-    invalid = bar()
-    invalid = RawMarketBar(
-        **{**invalid.__dict__, "event_time": START.replace(tzinfo=None)}
-    )
-
     with pytest.raises(ValueError, match="BAR_EVENT_TIME_MUST_BE_TIMEZONE_AWARE"):
         ProviderMarketDataBatch(
             source="TEST",
             request=request(),
-            bars=(invalid,),
+            bars=(bar(event_time=START.replace(tzinfo=None)),),
             fetched_at=END,
         )
 
 
 def test_provider_batch_rejects_bar_off_interval_grid() -> None:
-    invalid = bar()
-    invalid = RawMarketBar(
-        **{**invalid.__dict__, "event_time": START + timedelta(seconds=30)}
-    )
-
     with pytest.raises(ValueError, match="BAR_OFF_INTERVAL_GRID"):
         ProviderMarketDataBatch(
             source="TEST",
             request=request(),
-            bars=(invalid,),
+            bars=(bar(event_time=START + timedelta(seconds=30)),),
             fetched_at=END,
         )
+
+
+def test_provider_batch_rejects_duplicate_source_bar_key() -> None:
+    with pytest.raises(ValueError, match="DUPLICATE_BAR_KEY"):
+        ProviderMarketDataBatch(
+            source="TEST",
+            request=request(),
+            bars=(bar(), bar()),
+            fetched_at=END,
+        )
+
+
+def test_provider_batch_rejects_partial_response() -> None:
+    asked = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC", "XYZ"),
+        start=START,
+        end=START + timedelta(minutes=2),
+        interval=timedelta(minutes=1),
+    )
+    complete_except_one = (
+        bar(symbol="ABC", event_time=START),
+        bar(symbol="XYZ", event_time=START),
+        bar(symbol="ABC", event_time=START + timedelta(minutes=1)),
+    )
+
+    with pytest.raises(ValueError, match="RESPONSE_INCOMPLETE"):
+        ProviderMarketDataBatch(
+            source="TEST",
+            request=asked,
+            bars=complete_except_one,
+            fetched_at=asked.end,
+        )
+
+
+def test_provider_batch_accepts_complete_multi_symbol_grid() -> None:
+    asked = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC", "XYZ"),
+        start=START,
+        end=START + timedelta(minutes=2),
+        interval=timedelta(minutes=1),
+    )
+    bars = tuple(
+        bar(symbol=symbol, event_time=event_time)
+        for symbol, event_time in asked.expected_keys
+    )
+
+    batch = ProviderMarketDataBatch(
+        source="TEST",
+        request=asked,
+        bars=bars,
+        fetched_at=asked.end,
+    )
+
+    assert tuple((item.source_symbol, item.event_time) for item in batch.bars) == asked.expected_keys
 
 
 def test_fetch_fails_closed_on_provider_request_mismatch() -> None:
@@ -152,7 +226,7 @@ def test_fetch_fails_closed_on_provider_request_mismatch() -> None:
         ProviderMarketDataBatch(
             source="TEST",
             request=different,
-            bars=(bar(),),
+            bars=(bar(), bar(event_time=START + timedelta(minutes=1))),
             fetched_at=different.end,
         )
     )
