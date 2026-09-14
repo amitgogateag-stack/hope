@@ -65,3 +65,10 @@ def test_payload_hash_rejects_invalid_numeric_content(field, value, code):
     context = make_context(); fill = make_fill(context)
     with pytest.raises(ValueError, match=code):
         paper_fill_payload_hash(fill.__class__(**{**fill.__dict__, field: value}))
+
+
+def test_payload_hash_rejects_noncanonical_cost_model_version():
+    context = make_context(); fill = make_fill(context)
+    malformed = fill.__class__(**{**fill.__dict__, "cost_model_version": " cost-v1 "})
+    with pytest.raises(ValueError, match="PAPER_FILL_COST_MODEL_VERSION_NOT_CANONICAL"):
+        paper_fill_payload_hash(malformed)

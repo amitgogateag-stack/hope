@@ -99,6 +99,13 @@ def test_cost_model_values_must_be_finite(commission_rate: Decimal, slippage_bps
         CostModel("v1", commission_rate, slippage_bps)
 
 
+def test_cost_model_version_must_be_canonical():
+    with pytest.raises(ValueError, match="COST_MODEL_VERSION_REQUIRED"):
+        CostModel("   ")
+    with pytest.raises(ValueError, match="COST_MODEL_VERSION_NOT_CANONICAL"):
+        CostModel(" v1 ")
+
+
 def test_simulator_supports_partial_fill_quantity():
     order = make_order()
     quote_time = datetime(2026, 1, 1, 14, 1, tzinfo=timezone.utc)

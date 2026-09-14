@@ -92,6 +92,8 @@ class ExecutionSession:
                 raise ExecutionSessionError(f"FILL_{field_name}_MUST_BE_FINITE")
         if not fill.cost_model_version.strip():
             raise ExecutionSessionError("FILL_COST_MODEL_VERSION_REQUIRED")
+        if fill.cost_model_version != fill.cost_model_version.strip():
+            raise ExecutionSessionError("FILL_COST_MODEL_VERSION_NOT_CANONICAL")
         if fill.fill_time is None:
             raise ExecutionSessionError("FILL_TIME_REQUIRED")
         if fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:

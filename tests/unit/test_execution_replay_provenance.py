@@ -36,3 +36,28 @@ def test_replay_requires_cost_model_provenance_before_mutation():
 
     with pytest.raises(ExecutionReplayError, match="FILL_COST_MODEL_VERSION_REQUIRED"):
         replay_order(order, [malformed], initial_cash=Decimal("10000"))
+
+
+def test_replay_requires_canonical_cost_model_provenance_before_mutation():
+    order = Order(
+        order_id=uuid4(),
+        signal_id=uuid4(),
+        instrument_id=uuid4(),
+        side=OrderSide.BUY,
+        quantity=Decimal("10"),
+        environment=Environment.PAPER,
+    )
+    quote = ExecutionQuote(order.instrument_id, BASE_TIME, Decimal("100"), Decimal("101"))
+    timeline = ExecutionTimeline.from_decision(BASE_TIME, latency=timedelta(0))
+    fill = simulate_market_fill(
+        order,
+        quote,
+        uuid4(),
+        CostModel("restart-test"),
+        Decimal("4"),
+        timeline=timeline,
+    )
+    malformed = replace(fill, cost_model_version=" restart-test ")
+
+    with pytest.raises(ExecutionReplayError, match="FILL_COST_MODEL_VERSION_NOT_CANONICAL"):
+        replay_order(order, [malformed], initial_cash=Decimal("10000"))

@@ -20,11 +20,13 @@ def paper_fill_payload_hash(fill: Fill) -> str:
         raise ValueError("PAPER_FILL_SLIPPAGE_INVALID")
     if not fill.cost_model_version.strip():
         raise ValueError("PAPER_FILL_COST_MODEL_VERSION_REQUIRED")
+    if fill.cost_model_version != fill.cost_model_version.strip():
+        raise ValueError("PAPER_FILL_COST_MODEL_VERSION_NOT_CANONICAL")
     if fill.fill_time is None or fill.fill_time.tzinfo is None or fill.fill_time.utcoffset() is None:
         raise ValueError("PAPER_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
     canonical = "|".join((str(fill.fill_id), str(fill.order_id), str(fill.signal_id), str(fill.instrument_id), fill.side.value,
         format(fill.quantity.normalize(), "f"), format(fill.price.normalize(), "f"), format(fill.commission.normalize(), "f"),
-        format(fill.slippage.normalize(), "f"), fill.cost_model_version.strip(), fill.fill_time.astimezone(timezone.utc).isoformat()))
+        format(fill.slippage.normalize(), "f"), fill.cost_model_version, fill.fill_time.astimezone(timezone.utc).isoformat()))
     return sha256(canonical.encode("utf-8")).hexdigest()
 
 

@@ -114,6 +114,18 @@ def test_fill_requires_cost_model_version_before_state_mutation():
     assert session.state == before
 
 
+def test_fill_requires_canonical_cost_model_version_before_state_mutation():
+    order = make_order("10")
+    session = ExecutionSession(OrderLifecycle(order), PortfolioLedger(Decimal("10000")))
+    malformed = replace(make_fill(order, "1"), cost_model_version=" test ")
+    before = session.state
+
+    with pytest.raises(ExecutionSessionError, match="FILL_COST_MODEL_VERSION_NOT_CANONICAL"):
+        session.apply_fill(malformed)
+
+    assert session.state == before
+
+
 def test_partial_fill_can_be_cancelled_without_portfolio_mutation_and_blocks_later_fill():
     order = make_order("10")
     session = ExecutionSession(OrderLifecycle(order), PortfolioLedger(Decimal("10000")))

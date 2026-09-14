@@ -48,6 +48,13 @@ def test_new_paper_fill_requires_cost_model_version() -> None:
                         {"id": uuid4(), "order_id": order_id, "t": fill_time},
                     )
 
+            with pytest.raises(IntegrityError, match="PAPER_FILL_COST_MODEL_VERSION_NOT_CANONICAL"):
+                with connection.begin_nested():
+                    connection.execute(
+                        text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0.25, :t, ' paper-cost-v1 ' )"),
+                        {"id": uuid4(), "order_id": order_id, "t": fill_time},
+                    )
+
             fill_id = uuid4()
             connection.execute(
                 text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0.25, :t, 'paper-cost-v1')"),

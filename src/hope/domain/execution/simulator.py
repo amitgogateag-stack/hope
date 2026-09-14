@@ -38,8 +38,10 @@ class CostModel:
     slippage_bps: Decimal = Decimal("0")
 
     def __post_init__(self) -> None:
-        if not self.version:
+        if not self.version.strip():
             raise ValueError("COST_MODEL_VERSION_REQUIRED")
+        if self.version != self.version.strip():
+            raise ValueError("COST_MODEL_VERSION_NOT_CANONICAL")
         if not self.commission_rate.is_finite() or not self.slippage_bps.is_finite():
             raise ValueError("COST_MODEL_VALUES_MUST_BE_FINITE")
         if self.commission_rate < 0 or self.slippage_bps < 0:
