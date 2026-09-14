@@ -52,12 +52,12 @@ def test_paper_signal_persistence_job_records_decided_signal() -> None:
     assert runtime.recorded == [signal]
 
 
-def test_paper_signal_persistence_job_rejects_naive_decision_time() -> None:
+def test_signal_domain_rejects_naive_time_before_paper_job_boundary() -> None:
     scheduled_for = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-signal-persist", scheduled_for)
     runtime = _Runtime(job_run)
 
-    with pytest.raises(ValueError, match="PAPER_SIGNAL_DECISION_TIME_MUST_BE_TIMEZONE_AWARE"):
+    with pytest.raises(ValueError, match="SIGNAL_DECISION_TIME_MUST_BE_TIMEZONE_AWARE"):
         PaperSignalPersistenceJob(_signal(datetime(2026, 9, 10, 13, 59)))(runtime)
 
     assert runtime.recorded == []
