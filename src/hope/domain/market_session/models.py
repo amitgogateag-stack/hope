@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Market(StrEnum):
@@ -22,6 +22,15 @@ class MarketContext(BaseModel):
     session_state: SessionState
     session_id: str = Field(min_length=1)
     is_trading_session: bool
+
+    @field_validator("session_id")
+    @classmethod
+    def require_canonical_session_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("MARKET_SESSION_ID_REQUIRED")
+        if value != value.strip():
+            raise ValueError("MARKET_SESSION_ID_NOT_CANONICAL")
+        return value
 
     @model_validator(mode="after")
     def validate_session(self):

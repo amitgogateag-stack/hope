@@ -27,3 +27,27 @@ def test_market_context_rejects_timezone_without_utc_offset():
             session_id="x",
             is_trading_session=False,
         )
+
+
+@pytest.mark.parametrize("session_id", ["", "   "])
+def test_market_context_requires_nonblank_session_id(session_id):
+    with pytest.raises(ValueError, match="MARKET_SESSION_ID_REQUIRED"):
+        MarketContext(
+            market=Market.USA,
+            as_of=datetime(2026, 8, 29, tzinfo=timezone.utc),
+            session_state=SessionState.CLOSED,
+            session_id=session_id,
+            is_trading_session=False,
+        )
+
+
+@pytest.mark.parametrize("session_id", [" 2026-08-29", "2026-08-29 "])
+def test_market_context_requires_canonical_session_id(session_id):
+    with pytest.raises(ValueError, match="MARKET_SESSION_ID_NOT_CANONICAL"):
+        MarketContext(
+            market=Market.INDIA,
+            as_of=datetime(2026, 8, 29, tzinfo=timezone.utc),
+            session_state=SessionState.CLOSED,
+            session_id=session_id,
+            is_trading_session=False,
+        )
