@@ -20,13 +20,21 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
     def declare(
         self,
         dataset_version_id: UUID,
+        universe_version_id: UUID,
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
     ) -> None:
         if not isinstance(dataset_version_id, UUID):
             raise TypeError("MARKET_DATA_MANIFEST_REQUIRES_DATASET_VERSION_ID")
-        payload = build_market_data_manifest(requests, identity_map=identity_map)
+        if not isinstance(universe_version_id, UUID):
+            raise TypeError("MARKET_DATA_MANIFEST_REQUIRES_UNIVERSE_VERSION_ID")
+
+        payload = build_market_data_manifest(
+            universe_version_id,
+            requests,
+            identity_map=identity_map,
+        )
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         manifest_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -43,15 +51,51 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
             if version["immutable"]:
                 raise ValueError("MARKET_DATA_MANIFEST_DATASET_VERSION_IMMUTABLE")
 
+            universe = self._connection.execute(
+                text(
+                    "SELECT pit_certified, declared_member_count FROM universe_versions "
+                    "WHERE universe_version_id = :universe_version_id FOR SHARE"
+                ),
+                {"universe_version_id": universe_version_id},
+            ).mappings().one_or_none()
+            if universe is None:
+                raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_VERSION_NOT_FOUND")
+            if not universe["pit_certified"]:
+                raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_NOT_PIT_CERTIFIED")
+
+            member_rows = self._connection.execute(
+                text(
+                    "SELECT instrument_id, valid_from, valid_to FROM universe_members "
+                    "WHERE universe_version_id = :universe_version_id"
+                ),
+                {"universe_version_id": universe_version_id},
+            ).mappings().all()
+            if len(member_rows) != universe["declared_member_count"]:
+                raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_CARDINALITY_MISMATCH")
+
+            memberships = {
+                row["instrument_id"]: (row["valid_from"], row["valid_to"])
+                for row in member_rows
+            }
+            _validate_requested_membership(
+                requests,
+                identity_map=identity_map,
+                memberships=memberships,
+            )
+
             existing = self._connection.execute(
                 text(
-                    "SELECT manifest_hash FROM market_data_coverage_manifests "
+                    "SELECT manifest_hash, universe_version_id "
+                    "FROM market_data_coverage_manifests "
                     "WHERE dataset_version_id = :version_id"
                 ),
                 {"version_id": dataset_version_id},
-            ).scalar_one_or_none()
+            ).mappings().one_or_none()
             if existing is not None:
-                if existing != manifest_hash:
+                if (
+                    existing["manifest_hash"] != manifest_hash
+                    or existing["universe_version_id"] != universe_version_id
+                ):
                     raise ValueError("MARKET_DATA_MANIFEST_CONFLICT")
                 return
 
@@ -68,11 +112,14 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
             self._connection.execute(
                 text(
                     "INSERT INTO market_data_coverage_manifests("
-                    "dataset_version_id, manifest_hash, manifest"
-                    ") VALUES (:version_id, :manifest_hash, CAST(:manifest AS JSONB))"
+                    "dataset_version_id, universe_version_id, manifest_hash, manifest"
+                    ") VALUES ("
+                    ":version_id, :universe_version_id, :manifest_hash, CAST(:manifest AS JSONB)"
+                    ")"
                 ),
                 {
                     "version_id": dataset_version_id,
+                    "universe_version_id": universe_version_id,
                     "manifest_hash": manifest_hash,
                     "manifest": canonical,
                 },
@@ -80,10 +127,13 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
 
 
 def build_market_data_manifest(
+    universe_version_id: UUID,
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
 ) -> dict[str, object]:
+    if not isinstance(universe_version_id, UUID):
+        raise TypeError("MARKET_DATA_MANIFEST_REQUIRES_UNIVERSE_VERSION_ID")
     if not requests:
         raise ValueError("MARKET_DATA_MANIFEST_WINDOWS_REQUIRED")
 
@@ -112,12 +162,24 @@ def build_market_data_manifest(
                 "instruments": instruments,
             }
         )
-    return {"version": 1, "windows": windows}
+    return {
+        "version": 2,
+        "universe_version_id": str(universe_version_id),
+        "windows": windows,
+    }
+
+
+def manifest_universe_version_id(manifest: Mapping[str, object]) -> UUID:
+    if manifest.get("version") != 2:
+        raise ValueError("MARKET_DATA_MANIFEST_VERSION_UNSUPPORTED")
+    try:
+        return UUID(str(manifest["universe_version_id"]))
+    except (KeyError, ValueError) as exc:
+        raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
 
 
 def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, datetime]]:
-    if manifest.get("version") != 1:
-        raise ValueError("MARKET_DATA_MANIFEST_VERSION_UNSUPPORTED")
+    manifest_universe_version_id(manifest)
     raw_windows = manifest.get("windows")
     if not isinstance(raw_windows, list) or not raw_windows:
         raise ValueError("MARKET_DATA_MANIFEST_INVALID")
@@ -152,3 +214,22 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
             expected.update((instrument_id, cursor) for instrument_id in instrument_ids)
             cursor += interval
     return expected
+
+
+def _validate_requested_membership(
+    requests: tuple[MarketDataRequest, ...],
+    *,
+    identity_map: Mapping[tuple[str, str], UUID],
+    memberships: Mapping[UUID, tuple[datetime | None, datetime | None]],
+) -> None:
+    for request in requests:
+        for source_symbol, event_time in request.expected_keys:
+            instrument_id = identity_map[(request.source, source_symbol)]
+            interval = memberships.get(instrument_id)
+            if interval is None:
+                raise ValueError("MARKET_DATA_MANIFEST_INSTRUMENT_NOT_IN_UNIVERSE")
+            valid_from, valid_to = interval
+            if valid_from is not None and event_time < valid_from:
+                raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")
+            if valid_to is not None and event_time >= valid_to:
+                raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")

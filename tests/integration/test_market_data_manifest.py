@@ -15,7 +15,7 @@ from hope.infrastructure.repositories.market_data_manifest import (
 
 
 @pytest.mark.integration
-def test_market_data_manifest_is_durable_idempotent_and_conflict_rejecting() -> None:
+def test_market_data_manifest_binds_pit_universe_and_freezes_membership() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -31,9 +31,13 @@ def test_market_data_manifest_is_durable_idempotent_and_conflict_rejecting() -> 
             instrument_id = uuid4()
             dataset_id = uuid4()
             version_id = uuid4()
+            invalid_version_id = uuid4()
             late_version_id = uuid4()
+            universe_id = uuid4()
+            universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
             t1 = t0 + timedelta(minutes=1)
+            t2 = t1 + timedelta(minutes=1)
             identity_map = {("TEST", "ABC"): instrument_id}
 
             connection.execute(
@@ -52,69 +56,99 @@ def test_market_data_manifest_is_durable_idempotent_and_conflict_rejecting() -> 
             )
             connection.execute(
                 text(
-                    "INSERT INTO dataset_versions("
-                    "dataset_version_id, dataset_id, version, vintage_label, immutable"
-                    ") VALUES "
-                    "(:version_id, :dataset_id, 'v1', 'staging', FALSE), "
-                    "(:late_version_id, :dataset_id, 'v2', 'staging', FALSE)"
+                    "INSERT INTO dataset_versions(dataset_version_id, dataset_id, version, vintage_label, immutable) "
+                    "VALUES (:v1, :dataset_id, 'v1', 'staging', FALSE), "
+                    "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
+                    "(:v3, :dataset_id, 'v3', 'staging', FALSE)"
+                ),
+                {"v1": version_id, "v2": invalid_version_id, "v3": late_version_id, "dataset_id": dataset_id},
+            )
+            connection.execute(
+                text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"),
+                {"id": universe_id, "name": f"manifest-universe-{universe_id}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_versions(universe_version_id, universe_id, version, pit_certified, declared_member_count) "
+                    "VALUES (:version_id, :universe_id, 'v1', TRUE, 1)"
+                ),
+                {"version_id": universe_version_id, "universe_id": universe_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_members(universe_version_id, instrument_id, valid_from, valid_to) "
+                    "VALUES (:universe_version_id, :instrument_id, :valid_from, :valid_to)"
                 ),
                 {
-                    "version_id": version_id,
-                    "late_version_id": late_version_id,
-                    "dataset_id": dataset_id,
+                    "universe_version_id": universe_version_id,
+                    "instrument_id": instrument_id,
+                    "valid_from": t0,
+                    "valid_to": t2,
                 },
             )
 
             repo = SqlAlchemyMarketDataCoverageManifestRepository(connection)
             declared = (_request(t0), _request(t1))
-            repo.declare(version_id, declared, identity_map=identity_map)
-            repo.declare(version_id, declared, identity_map=identity_map)
+            repo.declare(version_id, universe_version_id, declared, identity_map=identity_map)
+            repo.declare(version_id, universe_version_id, declared, identity_map=identity_map)
 
             stored = connection.execute(
                 text(
-                    "SELECT manifest_hash, manifest FROM market_data_coverage_manifests "
+                    "SELECT universe_version_id, manifest_hash, manifest FROM market_data_coverage_manifests "
                     "WHERE dataset_version_id = :version_id"
                 ),
                 {"version_id": version_id},
             ).mappings().one()
+            assert stored["universe_version_id"] == universe_version_id
             assert len(stored["manifest_hash"]) == 64
-            assert stored["manifest"]["version"] == 1
-            assert len(stored["manifest"]["windows"]) == 2
+            assert stored["manifest"]["version"] == 2
+            assert stored["manifest"]["universe_version_id"] == str(universe_version_id)
 
             with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_CONFLICT"):
                 repo.declare(
                     version_id,
+                    universe_version_id,
                     (_request(t0),),
                     identity_map=identity_map,
                 )
 
-            with pytest.raises(IntegrityError, match="MARKET_DATA_MANIFEST_IMMUTABLE"):
-                with connection.begin_nested():
+            with pytest.raises(ValueError, match="REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP"):
+                repo.declare(
+                    invalid_version_id,
+                    universe_version_id,
+                    (_request(t2),),
+                    identity_map=identity_map,
+                )
+
+            savepoint = connection.begin_nested()
+            try:
+                with pytest.raises(IntegrityError, match="MARKET_DATA_MANIFEST_UNIVERSE_MEMBERSHIP_IMMUTABLE"):
                     connection.execute(
                         text(
-                            "UPDATE market_data_coverage_manifests "
-                            "SET manifest_hash = :hash WHERE dataset_version_id = :version_id"
+                            "UPDATE universe_members SET valid_to = :new_valid_to "
+                            "WHERE universe_version_id = :universe_version_id AND instrument_id = :instrument_id"
                         ),
-                        {"hash": "0" * 64, "version_id": version_id},
+                        {
+                            "new_valid_to": t2 + timedelta(minutes=1),
+                            "universe_version_id": universe_version_id,
+                            "instrument_id": instrument_id,
+                        },
                     )
+            finally:
+                savepoint.rollback()
 
             connection.execute(
                 text(
-                    "INSERT INTO market_bars("
-                    "dataset_version_id, instrument_id, event_time, available_time, ingestion_time, "
-                    "open, high, low, close, volume) VALUES ("
-                    ":version_id, :instrument_id, :event_time, :event_time, :event_time, "
-                    "100, 101, 99, 100, 1000)"
+                    "INSERT INTO market_bars(dataset_version_id, instrument_id, event_time, available_time, ingestion_time, "
+                    "open, high, low, close, volume) VALUES "
+                    "(:version_id, :instrument_id, :event_time, :event_time, :event_time, 100, 101, 99, 100, 1000)"
                 ),
-                {
-                    "version_id": late_version_id,
-                    "instrument_id": instrument_id,
-                    "event_time": t0,
-                },
+                {"version_id": late_version_id, "instrument_id": instrument_id, "event_time": t0},
             )
             with pytest.raises(ValueError, match="REQUIRES_EMPTY_STAGING_VERSION"):
                 repo.declare(
                     late_version_id,
+                    universe_version_id,
                     (_request(t0),),
                     identity_map=identity_map,
                 )
