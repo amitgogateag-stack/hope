@@ -22,7 +22,7 @@ class PITMarketContext(BaseModel):
 
     @model_validator(mode="after")
     def validate_point_in_time(self) -> "PITMarketContext":
-        if self.as_of.tzinfo is None:
+        if self.as_of.tzinfo is None or self.as_of.utcoffset() is None:
             raise ValueError("PIT context timestamp must be timezone-aware")
         for bar in self.bars:
             if (
@@ -50,7 +50,7 @@ class PITMarketContext(BaseModel):
 
 def build_pit_market_context(bars: tuple[MarketBar, ...] | list[MarketBar], as_of: datetime) -> PITMarketContext:
     """Build a PIT-safe context by excluding information unavailable at ``as_of``."""
-    if as_of.tzinfo is None:
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("PIT context timestamp must be timezone-aware")
     visible = tuple(
         bar

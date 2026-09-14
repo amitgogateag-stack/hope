@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from decimal import Decimal
 from uuid import uuid4
 
@@ -6,6 +6,11 @@ import pytest
 
 from hope.domain.market_data.context import PITMarketContext, build_pit_market_context
 from hope.domain.market_data.models import MarketBar
+
+
+class MissingOffsetTimezone(tzinfo):
+    def utcoffset(self, dt):
+        return None
 
 
 def make_bar(instrument_id, event_time, available_time, close, *, ingestion_time=None):
@@ -49,8 +54,7 @@ def test_context_excludes_future_event_even_if_already_available():
 def test_context_excludes_bar_ingested_after_as_of():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
-    late_ingestion = make_bar(
-        instrument,
+    late_ingestion = make_bar(J        instrument,
         t0 - timedelta(minutes=2),
         t0 - timedelta(minutes=1),
         "999",
@@ -65,6 +69,17 @@ def test_context_excludes_bar_ingested_after_as_of():
 def test_context_rejects_naive_as_of():
     with pytest.raises(ValueError, match="timezone-aware"):
         PITMarketContext(as_of=datetime(2026, 1, 2, 14, 30), bars=())
+
+
+@pytest.mark.parametrize("factory", [PITMarketContext, build_pit_market_context])
+def test_context_rejects_timezone_without_utc_offset(factory):
+    as_of = datetime(2026, 1, 2, 14, 30, tzinfo=MissingOffsetTimezone())
+
+    with pytest.raises(ValueError, match="timezone-aware"):
+        if factory is PITMarketContext:
+            factory(as_of=as_of, bars=())
+        else:
+            factory((), as_of)
 
 
 def test_context_rejects_direct_injection_of_unavailable_bar():

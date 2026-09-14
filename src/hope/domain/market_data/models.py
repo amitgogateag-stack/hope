@@ -41,7 +41,10 @@ class MarketBar(BaseModel):
     @model_validator(mode="after")
     def validate_temporal_and_ohlc(self):
         timestamps = (self.event_time, self.available_time, self.effective_time, self.ingestion_time)
-        if any(t is not None and t.tzinfo is None for t in timestamps):
+        if any(
+            t is not None and (t.tzinfo is None or t.utcoffset() is None)
+            for t in timestamps
+        ):
             raise ValueError("HOPE timestamps must be timezone-aware")
         if self.available_time < self.event_time:
             raise ValueError("available_time cannot precede event_time")
