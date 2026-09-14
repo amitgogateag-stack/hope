@@ -93,7 +93,12 @@ def validate_bars(
                 if session_calendar is None:
                     if delta != expected_interval:
                         gap_keys.add((bar.instrument_id, previous, event_time))
-                elif session_calendar.expected_intermediate_times(previous, event_time, expected_interval):
+                elif session_calendar.shares_session(previous, event_time):
+                    if delta != expected_interval:
+                        gap_keys.add((bar.instrument_id, previous, event_time))
+                elif session_calendar.expected_intermediate_times(
+                    previous, event_time, expected_interval
+                ):
                     gap_keys.add((bar.instrument_id, previous, event_time))
         last_by_instrument[bar.instrument_id] = event_time
 

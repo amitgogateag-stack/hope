@@ -105,3 +105,29 @@ def test_session_calendar_rejects_bar_outside_declared_session():
     report = validate_bars((bar(event_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc), available_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc), ingestion_time=datetime(2026, 8, 28, 9, tzinfo=timezone.utc)),), session_calendar=calendar)
     assert report.states == (DataQualityState.INCOMPLETE_SESSION,)
     assert report.safe is False
+
+def test_session_calendar_rejects_sub_interval_cadence() -> None:
+    first = bar()
+    early = bar(
+        event_time=first.event_time + timedelta(seconds=30),
+        available_time=first.available_time + timedelta(seconds=30),
+        ingestion_time=first.ingestion_time + timedelta(seconds=30),
+    )
+    calendar = MarketSessionCalendar(
+        sessions=(
+            (
+                datetime(2026, 8, 28, 10, tzinfo=timezone.utc),
+                datetime(2026, 8, 28, 16, tzinfo=timezone.utc),
+            ),
+        )
+    )
+
+    report = validate_bars(
+        (first, early),
+        expected_interval=timedelta(minutes=1),
+        session_calendar=calendar,
+    )
+
+    assert report.gap_keys == (("X", first.event_time, early.event_time),)
+    assert report.safe is False
+

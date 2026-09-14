@@ -34,6 +34,15 @@ class MarketSessionCalendar:
         value = _aware(event_time)
         return any(start <= value < end for start, end in self.sessions)
 
+    def shares_session(self, first: datetime, second: datetime) -> bool:
+        """Return whether both timestamps belong to the same declared session."""
+        left = _aware(first)
+        right = _aware(second)
+        return any(
+            start <= left < end and start <= right < end
+            for start, end in self.sessions
+        )
+
     def expected_intermediate_times(
         self,
         previous: datetime,
