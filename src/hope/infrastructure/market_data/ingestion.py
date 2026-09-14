@@ -56,7 +56,11 @@ class NormalizedMarketBarBatch:
 
     @property
     def safe_to_persist(self) -> bool:
-        return self.input_count > 0 and not self.rejections
+        return (
+            self.input_count > 0
+            and not self.rejections
+            and len(self.bars) == self.input_count
+        )
 
 
 def normalize_source_bars(
