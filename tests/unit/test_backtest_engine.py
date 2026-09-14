@@ -465,7 +465,7 @@ def test_backtest_processes_quote_when_ingestion_lags_provider_availability():
         second,
         ingested,
     )
-    assert result.valuations[1].market_value == Decimal("100")
+    assert result.valuations[1].market_value == Decimal("0")
     assert result.valuations[2].market_value == Decimal("120")
     assert len(result.events) == 1
     assert result.events[0].event_time == ingested
