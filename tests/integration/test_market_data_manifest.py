@@ -88,8 +88,8 @@ def test_market_data_manifest_is_durable_idempotent_and_conflict_rejecting() -> 
                     identity_map=identity_map,
                 )
 
-            with connection.begin_nested():
-                with pytest.raises(IntegrityError, match="MARKET_DATA_MANIFEST_IMMUTABLE"):
+            with pytest.raises(IntegrityError, match="MARKET_DATA_MANIFEST_IMMUTABLE"):
+                with connection.begin_nested():
                     connection.execute(
                         text(
                             "UPDATE market_data_coverage_manifests "
