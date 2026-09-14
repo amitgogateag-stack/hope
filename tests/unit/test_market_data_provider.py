@@ -153,7 +153,7 @@ def test_fetch_fails_closed_on_provider_request_mismatch() -> None:
             source="TEST",
             request=different,
             bars=(bar(),),
-            fetched_at=END,
+            fetched_at=different.end,
         )
     )
 
