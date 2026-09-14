@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Mapping
 from uuid import UUID
@@ -64,15 +66,21 @@ class SqlAlchemyMarketDataVersionFinalizer:
             if not version["pit_certified"]:
                 raise ValueError("MARKET_DATA_DATASET_NOT_PIT_CERTIFIED")
 
-            manifest = self._connection.execute(
+            manifest_row = self._connection.execute(
                 text(
-                    "SELECT manifest FROM market_data_coverage_manifests "
+                    "SELECT manifest_hash, manifest FROM market_data_coverage_manifests "
                     "WHERE dataset_version_id = :version_id"
                 ),
                 {"version_id": dataset_version_id},
-            ).scalar_one_or_none()
-            if manifest is None:
+            ).mappings().one_or_none()
+            if manifest_row is None:
                 raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_REQUIRED")
+
+            manifest = manifest_row["manifest"]
+            canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+            actual_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+            if actual_hash != manifest_row["manifest_hash"]:
+                raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_HASH_MISMATCH")
 
             expected = manifest_expected_keys(manifest)
             if not requested.issubset(expected):

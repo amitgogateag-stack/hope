@@ -1,3 +1,4 @@
+import json
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,6 +14,7 @@ from hope.infrastructure.repositories.market_data_finalizer import (
 )
 from hope.infrastructure.repositories.market_data_manifest import (
     SqlAlchemyMarketDataCoverageManifestRepository,
+    build_market_data_manifest,
 )
 
 
@@ -34,6 +36,7 @@ def test_market_data_finalizer_uses_manifest_not_current_request_subset() -> Non
             dataset_id = uuid4()
             version_id = uuid4()
             undeclared_version_id = uuid4()
+            corrupt_manifest_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
             t1 = t0 + timedelta(minutes=1)
             full_requests = (_request(t0), _request(t1))
@@ -59,18 +62,44 @@ def test_market_data_finalizer_uses_manifest_not_current_request_subset() -> Non
                     "dataset_version_id, dataset_id, version, vintage_label, immutable"
                     ") VALUES "
                     "(:version_id, :dataset_id, 'v1', 'staging', FALSE), "
-                    "(:undeclared, :dataset_id, 'v2', 'staging', FALSE)"
+                    "(:undeclared, :dataset_id, 'v2', 'staging', FALSE), "
+                    "(:corrupt, :dataset_id, 'v3', 'staging', FALSE)"
                 ),
                 {
                     "version_id": version_id,
                     "undeclared": undeclared_version_id,
+                    "corrupt": corrupt_manifest_version_id,
                     "dataset_id": dataset_id,
+                },
+            )
+
+            corrupt_payload = build_market_data_manifest(
+                (_request(t0),), identity_map=identity_map
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_data_coverage_manifests("
+                    "dataset_version_id, manifest_hash, manifest"
+                    ") VALUES (:version_id, :manifest_hash, CAST(:manifest AS JSONB))"
+                ),
+                {
+                    "version_id": corrupt_manifest_version_id,
+                    "manifest_hash": "0" * 64,
+                    "manifest": json.dumps(corrupt_payload),
                 },
             )
 
             manifest = SqlAlchemyMarketDataCoverageManifestRepository(connection)
             manifest.declare(version_id, full_requests, identity_map=identity_map)
             finalizer = SqlAlchemyMarketDataVersionFinalizer(connection)
+
+            _insert_bar(connection, corrupt_manifest_version_id, instrument_id, t0)
+            with pytest.raises(ValueError, match="MANIFEST_HASH_MISMATCH"):
+                finalizer.finalize(
+                    corrupt_manifest_version_id,
+                    (_request(t0),),
+                    identity_map=identity_map,
+                )
 
             _insert_bar(connection, version_id, instrument_id, t0)
             with pytest.raises(ValueError, match="PERSISTED_COVERAGE_MISSING"):
