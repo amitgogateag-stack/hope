@@ -39,6 +39,7 @@ def test_calendar_rejects_non_positive_interval():
     with pytest.raises(ValueError, match="EXPECTED_INTERVAL_MUST_BE_POSITIVE"):
         calendar.expected_intermediate_times(dt(10), dt(11), timedelta(0))
 
+
 def test_calendar_identifies_timestamps_in_the_same_session():
     calendar = MarketSessionCalendar(
         sessions=((dt(10), dt(16)), (dt(10, day=29), dt(16, day=29)))
@@ -46,6 +47,7 @@ def test_calendar_identifies_timestamps_in_the_same_session():
 
     assert calendar.shares_session(dt(10), dt(15, 59))
     assert not calendar.shares_session(dt(15, 59), dt(10, day=29))
+
 
 def test_calendar_anchors_interval_grid_to_session_open():
     calendar = MarketSessionCalendar(sessions=((dt(10), dt(16)),))
@@ -56,3 +58,17 @@ def test_calendar_anchors_interval_grid_to_session_open():
         timedelta(minutes=1),
     )
 
+
+def test_calendar_expected_times_excludes_closed_market_gap():
+    calendar = MarketSessionCalendar(
+        sessions=(
+            (dt(10), dt(16)),
+            (dt(10, day=29), dt(16, day=29)),
+        )
+    )
+
+    assert calendar.expected_times(
+        dt(15, 59),
+        dt(10, 2, day=29),
+        timedelta(minutes=1),
+    ) == (dt(15, 59), dt(10, day=29), dt(10, 1, day=29))

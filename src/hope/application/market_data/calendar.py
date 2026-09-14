@@ -57,6 +57,28 @@ class MarketSessionCalendar:
             for start, end in self.sessions
         )
 
+    def expected_times(
+        self,
+        start: datetime,
+        end: datetime,
+        interval: timedelta,
+    ) -> tuple[datetime, ...]:
+        """Return declared in-session grid timestamps in ``[start, end)``."""
+        start = _aware(start)
+        end = _aware(end)
+        if interval <= timedelta(0):
+            raise ValueError("EXPECTED_INTERVAL_MUST_BE_POSITIVE")
+        if end <= start:
+            return ()
+
+        expected: list[datetime] = []
+        cursor = start
+        while cursor < end:
+            if self.contains(cursor) and self.is_on_interval_grid(cursor, interval):
+                expected.append(cursor)
+            cursor += interval
+        return tuple(expected)
+
     def expected_intermediate_times(
         self,
         previous: datetime,
@@ -70,14 +92,7 @@ class MarketSessionCalendar:
             raise ValueError("EXPECTED_INTERVAL_MUST_BE_POSITIVE")
         if current <= previous:
             return ()
-
-        expected: list[datetime] = []
-        cursor = previous + interval
-        while cursor < current:
-            if self.contains(cursor):
-                expected.append(cursor)
-            cursor += interval
-        return tuple(expected)
+        return self.expected_times(previous + interval, current, interval)
 
 
 def _aware(value: datetime) -> datetime:

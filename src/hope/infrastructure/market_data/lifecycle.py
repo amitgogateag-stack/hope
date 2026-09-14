@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
+from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.infrastructure.market_data.ingestion import NormalizedMarketBarBatch
 from hope.infrastructure.market_data.persistence import MarketBarSink
 from hope.infrastructure.market_data.pipeline import ingest_market_data_window
@@ -36,15 +37,15 @@ def ingest_and_seal_market_data_windows(
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
+    session_calendar: MarketSessionCalendar | None = None,
 ) -> tuple[NormalizedMarketBarBatch, ...]:
     """Ingest a deterministic request set, verify persisted coverage, then seal.
 
-    Lifecycle preflight is completed before the provider is called so malformed
-    request sets or identity maps cannot leave a partially written dataset.
-    After all windows persist, the database-backed coverage verifier must prove
-    that the persisted logical instrument/time grid exactly matches the request
-    set before the version is allowed to seal. If any step fails, the version
-    remains staging; exact retries rely on append idempotency.
+    Without a session calendar, windows must remain exactly contiguous. With a
+    trusted calendar, closed-market gaps are allowed only when no expected slot
+    exists between windows, and every requested event slot must be an in-session
+    interval-grid timestamp. This preserves fail-closed completeness while
+    allowing real overnight/weekend/holiday boundaries.
     """
 
     if not isinstance(dataset_version_id, UUID):
@@ -60,10 +61,29 @@ def ingest_and_seal_market_data_windows(
             or request.interval != first.interval
         ):
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_NOT_HOMOGENEOUS")
+        if session_calendar is not None:
+            requested_times = tuple(
+                event_time for _, event_time in request.expected_keys[::len(request.source_symbols)]
+            )
+            expected_times = session_calendar.expected_times(
+                request.start,
+                request.end,
+                request.interval,
+            )
+            if requested_times != expected_times:
+                raise ValueError("MARKET_DATA_LIFECYCLE_WINDOW_OUTSIDE_SESSION")
 
     for previous, current in zip(requests, requests[1:]):
-        if current.start != previous.end:
+        if current.start == previous.end:
+            continue
+        if session_calendar is None:
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_NOT_CONTIGUOUS")
+        if session_calendar.expected_times(
+            previous.end,
+            current.start,
+            previous.interval,
+        ):
+            raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_SKIP_TRADING_SLOTS")
 
     required_identity_keys = {
         (request.source, symbol)
