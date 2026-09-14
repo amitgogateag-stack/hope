@@ -139,6 +139,10 @@ def build_market_data_manifest(
 
     windows: list[dict[str, object]] = []
     for request in requests:
+        interval_seconds = request.interval.total_seconds()
+        if not interval_seconds.is_integer():
+            raise ValueError("MARKET_DATA_MANIFEST_INTERVAL_REQUIRES_WHOLE_SECONDS")
+
         instruments: list[dict[str, str]] = []
         for symbol in request.source_symbols:
             key = (request.source, symbol)
@@ -158,7 +162,7 @@ def build_market_data_manifest(
                 "source": request.source,
                 "start": request.start.isoformat(),
                 "end": request.end.isoformat(),
-                "interval_seconds": int(request.interval.total_seconds()),
+                "interval_seconds": int(interval_seconds),
                 "instruments": instruments,
             }
         )
