@@ -131,3 +131,28 @@ def test_session_calendar_rejects_sub_interval_cadence() -> None:
     assert report.gap_keys == (("X", first.event_time, early.event_time),)
     assert report.safe is False
 
+def test_session_calendar_rejects_first_bar_off_interval_grid() -> None:
+    off_grid = bar(
+        event_time=datetime(2026, 8, 28, 10, 0, 30, tzinfo=timezone.utc),
+        available_time=datetime(2026, 8, 28, 10, 0, 30, tzinfo=timezone.utc),
+        ingestion_time=datetime(2026, 8, 28, 10, 0, 30, tzinfo=timezone.utc),
+    )
+    calendar = MarketSessionCalendar(
+        sessions=(
+            (
+                datetime(2026, 8, 28, 10, tzinfo=timezone.utc),
+                datetime(2026, 8, 28, 16, tzinfo=timezone.utc),
+            ),
+        )
+    )
+
+    report = validate_bars(
+        (off_grid,),
+        expected_interval=timedelta(minutes=1),
+        session_calendar=calendar,
+    )
+
+    assert report.states == (DataQualityState.CADENCE_MISMATCH,)
+    assert report.invalid_indices == (0,)
+    assert report.safe is False
+

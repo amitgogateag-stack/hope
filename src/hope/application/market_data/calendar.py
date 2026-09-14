@@ -43,6 +43,20 @@ class MarketSessionCalendar:
             for start, end in self.sessions
         )
 
+    def is_on_interval_grid(
+        self,
+        event_time: datetime,
+        interval: timedelta,
+    ) -> bool:
+        """Return whether an in-session timestamp aligns to its session open."""
+        value = _aware(event_time)
+        if interval <= timedelta(0):
+            raise ValueError("EXPECTED_INTERVAL_MUST_BE_POSITIVE")
+        return any(
+            start <= value < end and (value - start) % interval == timedelta(0)
+            for start, end in self.sessions
+        )
+
     def expected_intermediate_times(
         self,
         previous: datetime,

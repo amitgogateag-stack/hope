@@ -103,8 +103,16 @@ def validate_bars(
         last_by_instrument[bar.instrument_id] = event_time
 
         state = validate_bar(bar, expected_latest_event_time=expected_latest_event_time)
-        if session_calendar is not None and not session_calendar.contains(event_time):
-            state = DataQualityState.INCOMPLETE_SESSION
+        if session_calendar is not None:
+            if not session_calendar.contains(event_time):
+                state = DataQualityState.INCOMPLETE_SESSION
+            elif (
+                expected_interval is not None
+                and not session_calendar.is_on_interval_grid(
+                    event_time, expected_interval
+                )
+            ):
+                state = DataQualityState.CADENCE_MISMATCH
         states.append(state)
 
     present = {bar.instrument_id for bar in bars}
