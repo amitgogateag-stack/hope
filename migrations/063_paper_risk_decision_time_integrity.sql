@@ -16,7 +16,7 @@ BEGIN
 
     IF source_decision_time > risk_job_scheduled_for THEN
         RAISE EXCEPTION
-            'PAPER_RISK_DECISION_AFTER_JOB_SCHEDULE: signal % decision time % exceeds job schedule %',
+            'PAPER_RISK_DECISION_AFTER_JOB_SCHEDULE: signal %% decision time %% exceeds job schedule %%',
             NEW.signal_id, source_decision_time, risk_job_scheduled_for
             USING ERRCODE = '23514';
     END IF;
