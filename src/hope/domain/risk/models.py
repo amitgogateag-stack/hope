@@ -16,6 +16,13 @@ class RiskAssessment(BaseModel):
     reason_code: str = Field(min_length=1)
     approved_quantity: Decimal = Field(ge=0)
 
+    @field_validator("reason_code")
+    @classmethod
+    def require_canonical_reason_code(cls, value: str) -> str:
+        if value != value.strip():
+            raise ValueError("RISK_REASON_CODE_NOT_CANONICAL")
+        return value
+
     @field_validator("approved_quantity")
     @classmethod
     def require_finite_approved_quantity(cls, value: Decimal) -> Decimal:

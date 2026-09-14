@@ -47,3 +47,13 @@ def test_risk_approval_requires_positive_approved_quantity():
             reason_code="OK",
             approved_quantity=Decimal("0"),
         )
+
+
+def test_risk_reason_code_must_be_canonical():
+    with pytest.raises(ValidationError, match="RISK_REASON_CODE_NOT_CANONICAL"):
+        RiskAssessment(
+            signal_id=uuid4(),
+            decision=RiskDecision.APPROVE,
+            reason_code=" APPROVED ",
+            approved_quantity=Decimal("1"),
+        )
