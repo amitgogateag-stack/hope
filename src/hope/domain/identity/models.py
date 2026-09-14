@@ -1,6 +1,6 @@
 from enum import StrEnum
 from uuid import UUID
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class IdentityStatus(StrEnum):
@@ -15,18 +15,36 @@ class IdentityStatus(StrEnum):
 class Instrument(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     instrument_id: UUID
-    canonical_symbol: str = Field(min_length=1)
-    exchange: str = Field(min_length=1)
+    canonical_symbol: str
+    exchange: str
     status: IdentityStatus = IdentityStatus.ACTIVE
+
+    @field_validator("canonical_symbol", "exchange")
+    @classmethod
+    def require_canonical_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("INSTRUMENT_IDENTITY_REQUIRED")
+        if value != value.strip():
+            raise ValueError("INSTRUMENT_IDENTITY_NOT_CANONICAL")
+        return value
 
 
 class IdentityMapping(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
-    source_symbol: str = Field(min_length=1)
-    broker_instrument_id: str = Field(min_length=1)
+    source_symbol: str
+    broker_instrument_id: str
     canonical_instrument_id: UUID | None = None
     status: IdentityStatus
     reason: str | None = None
+
+    @field_validator("source_symbol", "broker_instrument_id")
+    @classmethod
+    def require_canonical_mapping_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("IDENTITY_MAPPING_VALUE_REQUIRED")
+        if value != value.strip():
+            raise ValueError("IDENTITY_MAPPING_VALUE_NOT_CANONICAL")
+        return value
 
     @model_validator(mode="after")
     def validate_mapping_state(self):
