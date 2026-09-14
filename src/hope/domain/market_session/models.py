@@ -1,6 +1,6 @@
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 
 class Market(StrEnum):
@@ -20,7 +20,7 @@ class MarketContext(BaseModel):
     market: Market
     as_of: datetime
     session_state: SessionState
-    session_id: str = Field(min_length=1)
+    session_id: str
     is_trading_session: bool
 
     @field_validator("session_id")
