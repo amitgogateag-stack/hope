@@ -3,16 +3,25 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class UniverseVersion(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     universe_id: UUID
-    version: str = Field(min_length=1)
+    version: str
     declared_member_count: int = Field(ge=0)
     pit_certified: bool = False
+
+    @field_validator("version")
+    @classmethod
+    def require_canonical_version(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("UNIVERSE_VERSION_REQUIRED")
+        if value != value.strip():
+            raise ValueError("UNIVERSE_VERSION_NOT_CANONICAL")
+        return value
 
 
 class UniverseMember(BaseModel):

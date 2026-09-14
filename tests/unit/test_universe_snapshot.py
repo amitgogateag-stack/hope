@@ -83,3 +83,23 @@ def test_universe_snapshot_rejects_naive_membership_times() -> None:
 
     with pytest.raises(ValueError, match="UNIVERSE_SNAPSHOT_VALID_FROM_MUST_BE_TIMEZONE_AWARE"):
         UniverseSnapshot(version_id, _version(declared_member_count=1), (naive,))
+
+
+@pytest.mark.parametrize("version", ["", "   "])
+def test_universe_version_identity_must_be_nonblank(version) -> None:
+    with pytest.raises(ValueError, match="UNIVERSE_VERSION_REQUIRED"):
+        UniverseVersion(
+            universe_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            version=version,
+            declared_member_count=0,
+        )
+
+
+@pytest.mark.parametrize("version", [" u1", "u1 "])
+def test_universe_version_identity_must_be_canonical(version) -> None:
+    with pytest.raises(ValueError, match="UNIVERSE_VERSION_NOT_CANONICAL"):
+        UniverseVersion(
+            universe_id=UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"),
+            version=version,
+            declared_member_count=0,
+        )
