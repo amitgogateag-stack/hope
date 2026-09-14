@@ -10,6 +10,18 @@ from hope.infrastructure.market_data.provider import MarketDataProvider, MarketD
 
 
 @runtime_checkable
+class MarketDataCoverageVerifier(Protocol):
+    def verify(
+        self,
+        dataset_version_id: UUID,
+        requests: tuple[MarketDataRequest, ...],
+        *,
+        identity_map: Mapping[tuple[str, str], UUID],
+    ) -> None:
+        ...
+
+
+@runtime_checkable
 class MarketDataVersionSealer(Protocol):
     def seal(self, dataset_version_id: UUID) -> None:
         ...
@@ -18,18 +30,21 @@ class MarketDataVersionSealer(Protocol):
 def ingest_and_seal_market_data_windows(
     provider: MarketDataProvider,
     sink: MarketBarSink,
+    coverage_verifier: MarketDataCoverageVerifier,
     sealer: MarketDataVersionSealer,
     dataset_version_id: UUID,
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
 ) -> tuple[NormalizedMarketBarBatch, ...]:
-    """Ingest a deterministic contiguous request set, then seal exactly once.
+    """Ingest a deterministic request set, verify persisted coverage, then seal.
 
     Lifecycle preflight is completed before the provider is called so malformed
     request sets or identity maps cannot leave a partially written dataset.
-    If a later provider/persistence step fails, the version remains staging and
-    is never sealed; exact retries rely on the append sink's idempotency.
+    After all windows persist, the database-backed coverage verifier must prove
+    that the persisted logical instrument/time grid exactly matches the request
+    set before the version is allowed to seal. If any step fails, the version
+    remains staging; exact retries rely on append idempotency.
     """
 
     if not isinstance(dataset_version_id, UUID):
@@ -69,6 +84,11 @@ def ingest_and_seal_market_data_windows(
             identity_map=identity_map,
         )
         for request in requests
+    )
+    coverage_verifier.verify(
+        dataset_version_id,
+        requests,
+        identity_map=identity_map,
     )
     sealer.seal(dataset_version_id)
     return batches
