@@ -1,5 +1,7 @@
 from uuid import uuid4
 
+import pytest
+from pydantic import ValidationError
 from sqlalchemy import CHAR, Column, DateTime, MetaData, String, Table, Uuid, create_engine
 
 from hope.infrastructure.repositories.experiments import ExperimentRecord, SqlAlchemyExperimentRepository
@@ -60,3 +62,42 @@ def test_experiment_round_trip_and_invalidation_are_append_only() -> None:
         stored_after = repo.get(experiment.experiment_id)
         assert stored_after is not None
         assert stored_after.model_copy(update={"created_at": None}) == experiment
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "error_code"),
+    [
+        ("experiment_id", "   ", "EXPERIMENT_ID_REQUIRED"),
+        ("experiment_id", " EXP-TEST-001", "EXPERIMENT_ID_NOT_CANONICAL"),
+        ("experiment_id", "EXP-TEST-001 ", "EXPERIMENT_ID_NOT_CANONICAL"),
+        ("hypothesis", "   ", "EXPERIMENT_HYPOTHESIS_REQUIRED"),
+        ("hypothesis", " A deterministic test hypothesis.", "EXPERIMENT_HYPOTHESIS_NOT_CANONICAL"),
+        ("hypothesis", "A deterministic test hypothesis. ", "EXPERIMENT_HYPOTHESIS_NOT_CANONICAL"),
+    ],
+)
+def test_experiment_record_requires_canonical_durable_text(
+    field_name,
+    value,
+    error_code,
+) -> None:
+    values = make_experiment().model_dump()
+    values[field_name] = value
+
+    with pytest.raises(ValidationError, match=error_code):
+        ExperimentRecord(**values)
+
+
+@pytest.mark.parametrize("reason", [" MIXED_VINTAGE", "MIXED_VINTAGE "])
+def test_experiment_invalidation_reason_must_be_canonical(reason) -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    with engine.begin() as connection:
+        create_test_schema(connection)
+        repo = SqlAlchemyExperimentRepository(connection)
+        experiment = make_experiment()
+        repo.create(experiment)
+
+        with pytest.raises(
+            ValueError,
+            match="EXPERIMENT_INVALIDATION_REASON_NOT_CANONICAL",
+        ):
+            repo.invalidate(experiment.experiment_id, reason)

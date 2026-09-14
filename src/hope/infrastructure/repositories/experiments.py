@@ -12,8 +12,8 @@ class ExperimentRecord(BaseModel):
     """Persistence-shaped experiment record matching migrations/001_initial.sql."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
-    experiment_id: str = Field(min_length=1)
-    hypothesis: str = Field(min_length=1)
+    experiment_id: str
+    hypothesis: str
     strategy_version_id: UUID
     dataset_version_id: UUID
     universe_version_id: UUID
@@ -22,11 +22,22 @@ class ExperimentRecord(BaseModel):
     status: Literal["CREATED"]
     created_at: datetime | None = None
 
-    @field_validator("experiment_id", "hypothesis")
+    @field_validator("experiment_id")
     @classmethod
-    def _require_nonblank_text(cls, value: str) -> str:
+    def _require_canonical_experiment_id(cls, value: str) -> str:
         if not value.strip():
-            raise ValueError("EXPERIMENT_TEXT_MUST_BE_NONBLANK")
+            raise ValueError("EXPERIMENT_ID_REQUIRED")
+        if value != value.strip():
+            raise ValueError("EXPERIMENT_ID_NOT_CANONICAL")
+        return value
+
+    @field_validator("hypothesis")
+    @classmethod
+    def _require_canonical_hypothesis(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("EXPERIMENT_HYPOTHESIS_REQUIRED")
+        if value != value.strip():
+            raise ValueError("EXPERIMENT_HYPOTHESIS_NOT_CANONICAL")
         return value
 
 
@@ -81,7 +92,9 @@ class SqlAlchemyExperimentRepository:
 
     def invalidate(self, experiment_id: str, reason: str) -> None:
         if not reason.strip():
-            raise ValueError("invalidation reason must not be empty")
+            raise ValueError("EXPERIMENT_INVALIDATION_REASON_REQUIRED")
+        if reason != reason.strip():
+            raise ValueError("EXPERIMENT_INVALIDATION_REASON_NOT_CANONICAL")
         if self.get(experiment_id) is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
         self._connection.execute(
