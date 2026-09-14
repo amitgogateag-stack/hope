@@ -56,10 +56,15 @@ class NormalizedMarketBarBatch:
 
     @property
     def safe_to_persist(self) -> bool:
+        logical_keys = {
+            (bar.instrument_id, bar.event_time)
+            for bar in self.bars
+        }
         return (
             self.input_count > 0
             and not self.rejections
             and len(self.bars) == self.input_count
+            and len(logical_keys) == len(self.bars)
         )
 
 
