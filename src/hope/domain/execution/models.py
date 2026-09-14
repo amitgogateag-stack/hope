@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, field_validator
 from uuid import UUID
 from decimal import Decimal
 
@@ -26,9 +26,18 @@ class Order(BaseModel):
     signal_id: UUID
     instrument_id: UUID
     side: OrderSide
-    quantity: Decimal = Field(gt=0)
+    quantity: Decimal
     environment: Environment
     signal_type: SignalType = SignalType.ENTRY
+
+    @field_validator("quantity")
+    @classmethod
+    def require_valid_quantity(cls, value: Decimal) -> Decimal:
+        if not value.is_finite():
+            raise ValueError("ORDER_QUANTITY_MUST_BE_FINITE")
+        if value <= 0:
+            raise ValueError("ORDER_QUANTITY_MUST_BE_POSITIVE")
+        return value
 
     def assert_paper_safe(self) -> None:
         # There is intentionally no LIVE environment in v0.1, and PAPER-only
