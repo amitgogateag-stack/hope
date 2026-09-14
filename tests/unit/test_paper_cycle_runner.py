@@ -13,6 +13,9 @@ from hope.application.paper import (
     PaperRiskWriter,
     PaperSignalWriter,
 )
+from hope.domain.execution.models import Environment, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
+from hope.domain.signal.models import SignalType
 
 
 UTC = timezone.utc
@@ -186,8 +189,22 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     )
     portfolio_id = UUID(int=1)
     signal = object()
-    risk = object()
-    order = object()
+    signal_id = UUID(int=2)
+    risk = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="PORTFOLIO_RISK_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+    order = Order(
+        order_id=UUID(int=3),
+        signal_id=signal_id,
+        instrument_id=UUID(int=4),
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
     fill = object()
 
     def work(runtime) -> None:
@@ -225,6 +242,115 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     assert initial_cash == Decimal("1000")
     assert actual_fill is fill
     assert sequence == 7
+
+
+def test_paper_cycle_runtime_rejects_order_without_runtime_risk_approval() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    order_writer = RecordingOrderWriter()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+    order = Order(
+        order_id=UUID(int=5),
+        signal_id=UUID(int=6),
+        instrument_id=UUID(int=7),
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+
+    with pytest.raises(ValueError, match="PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL"):
+        runner.run_runtime(
+            job_run,
+            RecordingSignalWriter(),
+            RecordingRiskWriter(),
+            order_writer,
+            RecordingFillAccountingWriter(),
+            lambda runtime: runtime.record_order(order),
+        )
+
+    assert order_writer.calls == []
+    assert repository.completions[0].status is JobRunStatus.FAILED
+
+
+def test_paper_cycle_runtime_rejects_order_quantity_beyond_runtime_approval() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    order_writer = RecordingOrderWriter()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+    signal_id = UUID(int=8)
+    assessment = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="PORTFOLIO_RISK_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+    order = Order(
+        order_id=UUID(int=9),
+        signal_id=signal_id,
+        instrument_id=UUID(int=10),
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+
+    def work(runtime) -> None:
+        runtime.record_risk(assessment)
+        runtime.record_order(order)
+
+    with pytest.raises(ValueError, match="PAPER_ORDER_RUNTIME_RISK_QUANTITY_MISMATCH"):
+        runner.run_runtime(
+            job_run,
+            RecordingSignalWriter(),
+            RecordingRiskWriter(),
+            order_writer,
+            RecordingFillAccountingWriter(),
+            work,
+        )
+
+    assert order_writer.calls == []
+    assert repository.completions[0].status is JobRunStatus.FAILED
+
+
+def test_paper_cycle_runtime_rejects_order_after_risk_rejection() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    order_writer = RecordingOrderWriter()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+    signal_id = UUID(int=11)
+    assessment = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.REJECT,
+        reason_code="PORTFOLIO_RISK_REJECTED",
+        approved_quantity=Decimal("0"),
+    )
+    order = Order(
+        order_id=UUID(int=12),
+        signal_id=signal_id,
+        instrument_id=UUID(int=13),
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+
+    def work(runtime) -> None:
+        runtime.record_risk(assessment)
+        runtime.record_order(order)
+
+    with pytest.raises(ValueError, match="PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL"):
+        runner.run_runtime(
+            job_run,
+            RecordingSignalWriter(),
+            RecordingRiskWriter(),
+            order_writer,
+            RecordingFillAccountingWriter(),
+            work,
+        )
+
+    assert order_writer.calls == []
+    assert repository.completions[0].status is JobRunStatus.FAILED
 
 
 @pytest.mark.parametrize(

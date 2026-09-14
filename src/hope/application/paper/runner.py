@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
@@ -20,7 +20,7 @@ from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.execution.models import Order
 from hope.domain.execution.simulator import Fill
-from hope.domain.risk.models import RiskAssessment
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal
 
 
@@ -50,14 +50,28 @@ class PaperRuntimeContext:
     _risk_writer: PaperRiskWriter
     _order_writer: PaperOrderWriter
     _fill_writer: PaperFillAccountingWriter
+    _approved_quantities: dict[UUID, Decimal] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def record_signal(self, signal: Signal) -> bool:
         return self._signal_writer.record(self.cycle, signal)
 
     def record_risk(self, assessment: RiskAssessment) -> bool:
-        return self._risk_writer.record(self.cycle, assessment)
+        recorded = self._risk_writer.record(self.cycle, assessment)
+        if assessment.decision is RiskDecision.APPROVE:
+            self._approved_quantities[assessment.signal_id] = assessment.approved_quantity
+        return recorded
 
     def record_order(self, order: Order) -> bool:
+        approved_quantity = self._approved_quantities.get(order.signal_id)
+        if approved_quantity is None:
+            raise ValueError("PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL")
+        if approved_quantity != order.quantity:
+            raise ValueError("PAPER_ORDER_RUNTIME_RISK_QUANTITY_MISMATCH")
         return self._order_writer.record(self.cycle, order)
 
     def record_fill(
