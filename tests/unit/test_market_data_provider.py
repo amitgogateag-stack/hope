@@ -99,6 +99,46 @@ def test_provider_batch_rejects_out_of_window_bar() -> None:
         )
 
 
+def test_provider_batch_requires_completed_closed_window() -> None:
+    with pytest.raises(ValueError, match="FETCH_PRECEDES_CLOSED_WINDOW"):
+        ProviderMarketDataBatch(
+            source="TEST",
+            request=request(),
+            bars=(bar(),),
+            fetched_at=END - timedelta(microseconds=1),
+        )
+
+
+def test_provider_batch_rejects_naive_bar_event_time() -> None:
+    invalid = bar()
+    invalid = RawMarketBar(
+        **{**invalid.__dict__, "event_time": START.replace(tzinfo=None)}
+    )
+
+    with pytest.raises(ValueError, match="BAR_EVENT_TIME_MUST_BE_TIMEZONE_AWARE"):
+        ProviderMarketDataBatch(
+            source="TEST",
+            request=request(),
+            bars=(invalid,),
+            fetched_at=END,
+        )
+
+
+def test_provider_batch_rejects_bar_off_interval_grid() -> None:
+    invalid = bar()
+    invalid = RawMarketBar(
+        **{**invalid.__dict__, "event_time": START + timedelta(seconds=30)}
+    )
+
+    with pytest.raises(ValueError, match="BAR_OFF_INTERVAL_GRID"):
+        ProviderMarketDataBatch(
+            source="TEST",
+            request=request(),
+            bars=(invalid,),
+            fetched_at=END,
+        )
+
+
 def test_fetch_fails_closed_on_provider_request_mismatch() -> None:
     asked = request()
     different = MarketDataRequest(

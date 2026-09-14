@@ -57,16 +57,29 @@ class ProviderMarketDataBatch:
             raise ValueError("PROVIDER_BATCH_SOURCE_MISMATCH")
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() is None:
             raise ValueError("PROVIDER_FETCH_TIME_MUST_BE_TIMEZONE_AWARE")
+        if self.fetched_at < self.request.end:
+            raise ValueError("PROVIDER_FETCH_PRECEDES_CLOSED_WINDOW")
         if any(bar.source != self.source for bar in self.bars):
             raise ValueError("PROVIDER_BAR_SOURCE_MISMATCH")
         requested_symbols = set(self.request.source_symbols)
         if any(bar.source_symbol not in requested_symbols for bar in self.bars):
             raise ValueError("PROVIDER_RETURNED_UNREQUESTED_SYMBOL")
         if any(
+            bar.event_time.tzinfo is None or bar.event_time.utcoffset() is None
+            for bar in self.bars
+        ):
+            raise ValueError("PROVIDER_BAR_EVENT_TIME_MUST_BE_TIMEZONE_AWARE")
+        if any(
             bar.event_time < self.request.start or bar.event_time >= self.request.end
             for bar in self.bars
         ):
             raise ValueError("PROVIDER_RETURNED_BAR_OUTSIDE_REQUEST_WINDOW")
+        if any(
+            (bar.event_time - self.request.start) % self.request.interval
+            != timedelta(0)
+            for bar in self.bars
+        ):
+            raise ValueError("PROVIDER_RETURNED_BAR_OFF_INTERVAL_GRID")
 
 
 @runtime_checkable
