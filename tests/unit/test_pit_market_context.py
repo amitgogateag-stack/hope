@@ -54,7 +54,8 @@ def test_context_excludes_future_event_even_if_already_available():
 def test_context_excludes_bar_ingested_after_as_of():
     instrument = uuid4()
     t0 = datetime(2026, 1, 2, 14, 30, tzinfo=timezone.utc)
-    late_ingestion = make_bar(J        instrument,
+    late_ingestion = make_bar(
+        instrument,
         t0 - timedelta(minutes=2),
         t0 - timedelta(minutes=1),
         "999",
