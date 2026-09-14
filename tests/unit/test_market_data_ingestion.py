@@ -62,6 +62,20 @@ def test_unresolved_identity_is_quarantined() -> None:
     assert result.rejections[0].reason is IngestionRejectionReason.UNRESOLVED_INSTRUMENT
 
 
+def test_malformed_resolved_identity_is_quarantined() -> None:
+    result = normalize_source_bars(
+        [raw_bar()],
+        identity_map={("TEST", "ABC"): "not-a-uuid"},  # type: ignore[dict-item]
+    )
+
+    assert not result.safe_to_persist
+    assert result.bars == ()
+    assert (
+        result.rejections[0].reason
+        is IngestionRejectionReason.INVALID_INSTRUMENT_IDENTITY
+    )
+
+
 def test_duplicate_source_keys_quarantine_every_copy() -> None:
     instrument_id = uuid4()
     item = raw_bar()

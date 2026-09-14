@@ -16,6 +16,7 @@ from hope.domain.market_data.models import MarketBar
 class IngestionRejectionReason(StrEnum):
     INVALID_SOURCE_IDENTITY = "INVALID_SOURCE_IDENTITY"
     UNRESOLVED_INSTRUMENT = "UNRESOLVED_INSTRUMENT"
+    INVALID_INSTRUMENT_IDENTITY = "INVALID_INSTRUMENT_IDENTITY"
     DUPLICATE_SOURCE_BAR = "DUPLICATE_SOURCE_BAR"
     INVALID_TIMESTAMP = "INVALID_TIMESTAMP"
     INVALID_NUMERIC = "INVALID_NUMERIC"
@@ -153,8 +154,11 @@ def _preflight_rejection(
         return IngestionRejectionReason.INVALID_SOURCE_IDENTITY
     if counts[(raw.source, raw.source_symbol, raw.event_time)] > 1:
         return IngestionRejectionReason.DUPLICATE_SOURCE_BAR
-    if (raw.source, raw.source_symbol) not in identity_map:
+    identity_key = (raw.source, raw.source_symbol)
+    if identity_key not in identity_map:
         return IngestionRejectionReason.UNRESOLVED_INSTRUMENT
+    if not isinstance(identity_map[identity_key], UUID):
+        return IngestionRejectionReason.INVALID_INSTRUMENT_IDENTITY
 
     timestamps = (
         raw.event_time,
