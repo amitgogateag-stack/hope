@@ -90,10 +90,11 @@ def test_invariant_result_id_must_be_canonical(invariant_id) -> None:
         )
 
 
-def test_invariant_result_id_must_be_nonblank() -> None:
+@pytest.mark.parametrize("invariant_id", ["", "   "])
+def test_invariant_result_id_must_be_nonblank(invariant_id) -> None:
     with pytest.raises(ValueError, match="INVARIANT_ID_REQUIRED"):
         InvariantResult(
-            invariant_id="   ",
+            invariant_id=invariant_id,
             status=ValidationStatus.PASS,
             message="ok",
         )

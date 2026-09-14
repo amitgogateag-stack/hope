@@ -1,5 +1,5 @@
 from enum import StrEnum
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 class ValidationStatus(StrEnum):
     PASS = "PASS"
@@ -8,7 +8,7 @@ class ValidationStatus(StrEnum):
 
 class InvariantResult(BaseModel):
     model_config = ConfigDict(frozen=True)
-    invariant_id: str = Field(min_length=1)
+    invariant_id: str
     status: ValidationStatus
     message: str
 
