@@ -7,7 +7,7 @@ import pytest
 from hope.application.trading.service import TradingKernel
 from hope.domain.audit.models import AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
-from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.models import Environment, ExecutionCancellation, OrderSide
 from hope.domain.execution.simulator import CostModel, ExecutionQuote
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger
@@ -182,3 +182,46 @@ def test_partially_filled_order_cancels_only_remaining_quantity_without_portfoli
         )
 
     assert ledger.state == state_before_cancellation
+
+
+def test_noncanonical_cancellation_reason_cannot_mutate_order_lifecycle():
+    decision = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    timeline = ExecutionTimeline.from_decision(decision, latency=timedelta(0))
+    kernel = TradingKernel(PortfolioLedger(Decimal("10000")))
+    submission = submit(kernel, decision, timeline)
+
+    with pytest.raises(ValueError, match="EXECUTION_CANCELLATION_REASON_NOT_CANONICAL"):
+        kernel.cancel_order(
+            submission.intent,
+            ORDER_ID,
+            decision_time=decision,
+            timeline=timeline,
+            cancellation_time=decision + timedelta(minutes=1),
+            reason_code=" PADDED ",
+        )
+
+    fill_time = decision + timedelta(minutes=2)
+    accepted = kernel.execute_order(
+        submission.intent,
+        ORDER_ID,
+        ExecutionQuote(INSTRUMENT_ID, fill_time, Decimal("100"), Decimal("100")),
+        CostModel(version="test"),
+        decision_time=decision,
+        fill_id=FILL_ID,
+        timeline=timeline.with_fill_time(fill_time),
+        quantity=Decimal("1"),
+    )
+    assert accepted.fill is not None
+
+
+def test_execution_cancellation_model_rejects_noncanonical_reason():
+    with pytest.raises(ValueError, match="EXECUTION_CANCELLATION_REASON_NOT_CANONICAL"):
+        ExecutionCancellation(
+            order_id=ORDER_ID,
+            signal_id=SIGNAL_ID,
+            instrument_id=INSTRUMENT_ID,
+            environment=Environment.BACKTEST,
+            reason_code=" PADDED ",
+            cancellation_time=datetime(2026, 1, 5, 14, 30, tzinfo=UTC),
+            cancelled_quantity=Decimal("1"),
+        )

@@ -314,6 +314,8 @@ class TradingKernel:
             raise ValueError("EXECUTION_REJECTION_PRECEDES_ORDER_TIME")
         if not reason_code.strip():
             raise ValueError("EXECUTION_REJECTION_REASON_REQUIRED")
+        if reason_code != reason_code.strip():
+            raise ValueError("EXECUTION_REJECTION_REASON_NOT_CANONICAL")
 
         expected_order = materialize_order(intent, order_id)
         session = self._execution_sessions.get(order_id)
@@ -371,6 +373,8 @@ class TradingKernel:
             raise ValueError("EXECUTION_CANCELLATION_PRECEDES_ORDER_TIME")
         if not reason_code.strip():
             raise ValueError("EXECUTION_CANCELLATION_REASON_REQUIRED")
+        if reason_code != reason_code.strip():
+            raise ValueError("EXECUTION_CANCELLATION_REASON_NOT_CANONICAL")
 
         expected_order = materialize_order(intent, order_id)
         session = self._execution_sessions.get(order_id)

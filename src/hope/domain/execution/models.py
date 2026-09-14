@@ -51,6 +51,8 @@ class ExecutionRejection:
     def __post_init__(self) -> None:
         if not self.reason_code.strip():
             raise ValueError("EXECUTION_REJECTION_REASON_REQUIRED")
+        if self.reason_code != self.reason_code.strip():
+            raise ValueError("EXECUTION_REJECTION_REASON_NOT_CANONICAL")
         if self.rejection_time.tzinfo is None or self.rejection_time.utcoffset() is None:
             raise ValueError("EXECUTION_REJECTION_TIME_MUST_BE_TIMEZONE_AWARE")
 
@@ -70,6 +72,8 @@ class ExecutionCancellation:
     def __post_init__(self) -> None:
         if not self.reason_code.strip():
             raise ValueError("EXECUTION_CANCELLATION_REASON_REQUIRED")
+        if self.reason_code != self.reason_code.strip():
+            raise ValueError("EXECUTION_CANCELLATION_REASON_NOT_CANONICAL")
         if self.cancellation_time.tzinfo is None or self.cancellation_time.utcoffset() is None:
             raise ValueError("EXECUTION_CANCELLATION_TIME_MUST_BE_TIMEZONE_AWARE")
         if not self.cancelled_quantity.is_finite():

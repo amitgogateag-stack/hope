@@ -7,7 +7,7 @@ import pytest
 from hope.application.trading.service import TradingKernel
 from hope.domain.audit.models import AuditEventType
 from hope.domain.audit.validator import validate_audit_sequence
-from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.execution.models import Environment, ExecutionRejection, OrderSide
 from hope.domain.execution.simulator import CostModel, ExecutionQuote
 from hope.domain.execution.timeline import ExecutionTimeline
 from hope.domain.portfolio.ledger import PortfolioLedger
@@ -151,3 +151,55 @@ def test_partially_filled_order_cannot_be_misclassified_as_execution_rejected():
 
     assert ledger.state.positions[INSTRUMENT_ID].quantity == Decimal("4")
     assert ledger.state.cash == Decimal("9600")
+
+
+def test_noncanonical_rejection_reason_cannot_mutate_order_lifecycle():
+    decision = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    signal = make_signal(decision)
+    timeline = ExecutionTimeline.from_decision(decision, latency=timedelta(0))
+    kernel = TradingKernel(PortfolioLedger(Decimal("10000")))
+    submission = kernel.process(
+        signal,
+        make_risk(signal),
+        OrderSide.BUY,
+        Environment.BACKTEST,
+        None,
+        None,
+        order_id=ORDER_ID,
+        timeline=timeline,
+    )
+
+    with pytest.raises(ValueError, match="EXECUTION_REJECTION_REASON_NOT_CANONICAL"):
+        kernel.reject_order(
+            submission.intent,
+            ORDER_ID,
+            decision_time=decision,
+            timeline=timeline,
+            rejection_time=decision + timedelta(minutes=1),
+            reason_code=" PADDED ",
+        )
+
+    fill_time = decision + timedelta(minutes=2)
+    accepted = kernel.execute_order(
+        submission.intent,
+        ORDER_ID,
+        ExecutionQuote(INSTRUMENT_ID, fill_time, Decimal("100"), Decimal("100")),
+        CostModel(version="test"),
+        decision_time=decision,
+        fill_id=FILL_ID,
+        timeline=timeline.with_fill_time(fill_time),
+        quantity=Decimal("1"),
+    )
+    assert accepted.fill is not None
+
+
+def test_execution_rejection_model_rejects_noncanonical_reason():
+    with pytest.raises(ValueError, match="EXECUTION_REJECTION_REASON_NOT_CANONICAL"):
+        ExecutionRejection(
+            order_id=ORDER_ID,
+            signal_id=SIGNAL_ID,
+            instrument_id=INSTRUMENT_ID,
+            environment=Environment.BACKTEST,
+            reason_code=" PADDED ",
+            rejection_time=datetime(2026, 1, 5, 14, 30, tzinfo=UTC),
+        )
