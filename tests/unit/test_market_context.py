@@ -1,6 +1,11 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
 import pytest
 from hope.domain.market_session import Market, MarketContext, SessionState
+
+
+class MissingOffsetTimezone(tzinfo):
+    def utcoffset(self, dt):
+        return None
 
 
 def test_open_session_must_be_trading_session():
@@ -11,3 +16,14 @@ def test_open_session_must_be_trading_session():
 def test_market_context_requires_timezone():
     with pytest.raises(ValueError, match="timezone-aware"):
         MarketContext(market=Market.INDIA, as_of=datetime(2026, 8, 29), session_state=SessionState.CLOSED, session_id="x", is_trading_session=False)
+
+
+def test_market_context_rejects_timezone_without_utc_offset():
+    with pytest.raises(ValueError, match="timezone-aware"):
+        MarketContext(
+            market=Market.USA,
+            as_of=datetime(2026, 8, 29, tzinfo=MissingOffsetTimezone()),
+            session_state=SessionState.CLOSED,
+            session_id="x",
+            is_trading_session=False,
+        )

@@ -25,7 +25,7 @@ class MarketContext(BaseModel):
 
     @model_validator(mode="after")
     def validate_session(self):
-        if self.as_of.tzinfo is None:
+        if self.as_of.tzinfo is None or self.as_of.utcoffset() is None:
             raise ValueError("market context timestamp must be timezone-aware")
         if self.session_state is SessionState.OPEN and not self.is_trading_session:
             raise ValueError("OPEN session must be a trading session")
