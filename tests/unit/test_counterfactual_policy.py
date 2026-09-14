@@ -53,6 +53,23 @@ def test_counterfactual_policy_rejects_blank_identity_and_unknown_fields():
         make_policy(hidden_execution_shortcut=True)
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    [
+        ("policy_id", " risk-override-diagnostic"),
+        ("policy_id", "risk-override-diagnostic "),
+        ("version", " 1"),
+        ("version", "1 "),
+    ],
+)
+def test_counterfactual_policy_identity_must_be_canonical(field_name, value):
+    with pytest.raises(
+        ValidationError,
+        match="COUNTERFACTUAL_POLICY_IDENTIFIER_NOT_CANONICAL",
+    ):
+        make_policy(**{field_name: value})
+
+
 def test_counterfactual_policy_forbids_alternate_execution_assumptions():
     with pytest.raises(ValidationError):
         make_policy(execution_assumption="FRICTIONLESS")

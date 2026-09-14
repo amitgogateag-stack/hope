@@ -27,6 +27,8 @@ class CounterfactualAcceptancePolicy(BaseModel):
     def require_nonblank_identifier(cls, value: str) -> str:
         if not value.strip():
             raise ValueError("COUNTERFACTUAL_POLICY_IDENTIFIER_REQUIRED")
+        if value != value.strip():
+            raise ValueError("COUNTERFACTUAL_POLICY_IDENTIFIER_NOT_CANONICAL")
         return value
 
     @field_validator("quantity")
