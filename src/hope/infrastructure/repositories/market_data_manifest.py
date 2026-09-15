@@ -335,20 +335,32 @@ def manifest_expected_keys_for_requests(
     return expected
 
 
+def validate_manifest_membership(
+    expected_keys: set[tuple[UUID, datetime]],
+    *,
+    memberships: Mapping[UUID, tuple[datetime | None, datetime | None]],
+) -> None:
+    """Prove every declared bar belongs to the bound PIT universe interval."""
+    for instrument_id, event_time in expected_keys:
+        interval = memberships.get(instrument_id)
+        if interval is None:
+            raise ValueError("MARKET_DATA_MANIFEST_INSTRUMENT_NOT_IN_UNIVERSE")
+        valid_from, valid_to = interval
+        if valid_from is not None and event_time < valid_from:
+            raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")
+        if valid_to is not None and event_time >= valid_to:
+            raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")
+
+
 def _validate_requested_membership(
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
     memberships: Mapping[UUID, tuple[datetime | None, datetime | None]],
 ) -> None:
-    for request in requests:
-        for source_symbol, event_time in request.expected_keys:
-            instrument_id = identity_map[(request.source, source_symbol)]
-            interval = memberships.get(instrument_id)
-            if interval is None:
-                raise ValueError("MARKET_DATA_MANIFEST_INSTRUMENT_NOT_IN_UNIVERSE")
-            valid_from, valid_to = interval
-            if valid_from is not None and event_time < valid_from:
-                raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")
-            if valid_to is not None and event_time >= valid_to:
-                raise ValueError("MARKET_DATA_MANIFEST_REQUEST_OUTSIDE_UNIVERSE_MEMBERSHIP")
+    expected_keys = {
+        (identity_map[(request.source, source_symbol)], event_time)
+        for request in requests
+        for source_symbol, event_time in request.expected_keys
+    }
+    validate_manifest_membership(expected_keys, memberships=memberships)

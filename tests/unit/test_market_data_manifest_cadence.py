@@ -7,6 +7,7 @@ from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.repositories.market_data_manifest import (
     build_market_data_manifest,
     manifest_expected_keys_for_requests,
+    validate_manifest_membership,
 )
 
 
@@ -145,6 +146,26 @@ def test_manifest_parser_rejects_dataset_source_mismatch() -> None:
             (request,),
             identity_map={("TEST", "ABC"): instrument_id},
             expected_source="OTHER",
+        )
+
+
+def test_manifest_membership_rejects_undeclared_instrument() -> None:
+    with pytest.raises(ValueError, match="INSTRUMENT_NOT_IN_UNIVERSE"):
+        validate_manifest_membership(
+            {(uuid4(), datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc))},
+            memberships={},
+        )
+
+
+def test_manifest_membership_rejects_event_outside_valid_interval() -> None:
+    instrument_id = uuid4()
+    event_time = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    with pytest.raises(ValueError, match="OUTSIDE_UNIVERSE_MEMBERSHIP"):
+        validate_manifest_membership(
+            {(instrument_id, event_time)},
+            memberships={
+                instrument_id: (event_time + timedelta(minutes=1), None),
+            },
         )
 
 

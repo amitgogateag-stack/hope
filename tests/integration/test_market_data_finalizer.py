@@ -38,6 +38,8 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
             corrupt_manifest_version_id = uuid4()
             non_staging_version_id = uuid4()
             wrong_source_manifest_version_id = uuid4()
+            outsider_manifest_version_id = uuid4()
+            outsider_instrument_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -50,6 +52,10 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                 {"id": instrument_id, "symbol": f"FINALIZE-{instrument_id}"},
             )
             connection.execute(
+                text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id, :symbol, 'TEST', 'ACTIVE')"),
+                {"id": outsider_instrument_id, "symbol": f"OUTSIDER-{outsider_instrument_id}"},
+            )
+            connection.execute(
                 text("INSERT INTO datasets(dataset_id, name, source, pit_certified) VALUES (:id, :name, 'TEST', TRUE)"),
                 {"id": dataset_id, "name": f"finalize-{dataset_id}"},
             )
@@ -60,7 +66,8 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
                     "(:v3, :dataset_id, 'v3', 'staging', FALSE), "
                     "(:v4, :dataset_id, 'v4', 'draft', FALSE), "
-                    "(:v5, :dataset_id, 'v5', 'staging', FALSE)"
+                    "(:v5, :dataset_id, 'v5', 'staging', FALSE), "
+                    "(:v6, :dataset_id, 'v6', 'staging', FALSE)"
                 ),
                 {
                     "v1": version_id,
@@ -68,6 +75,7 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "v3": corrupt_manifest_version_id,
                     "v4": non_staging_version_id,
                     "v5": wrong_source_manifest_version_id,
+                    "v6": outsider_manifest_version_id,
                     "dataset_id": dataset_id,
                 },
             )
@@ -92,6 +100,33 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "instrument_id": instrument_id,
                     "valid_from": t0,
                     "valid_to": t1 + timedelta(minutes=1),
+                },
+            )
+            outsider_request = _request(t0, symbol="OUT")
+            outsider_identity_map = {("TEST", "OUT"): outsider_instrument_id}
+            outsider_payload = build_market_data_manifest(
+                universe_version_id,
+                (outsider_request,),
+                identity_map=outsider_identity_map,
+            )
+            outsider_canonical = json.dumps(
+                outsider_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_data_coverage_manifests("
+                    "dataset_version_id, universe_version_id, manifest_hash, manifest"
+                    ") VALUES (:version_id, :universe_version_id, :manifest_hash, CAST(:manifest AS JSONB))"
+                ),
+                {
+                    "version_id": outsider_manifest_version_id,
+                    "universe_version_id": universe_version_id,
+                    "manifest_hash": hashlib.sha256(
+                        outsider_canonical.encode("utf-8")
+                    ).hexdigest(),
+                    "manifest": outsider_canonical,
                 },
             )
 
@@ -164,6 +199,25 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     identity_map=wrong_source_identity_map,
                 )
 
+            _insert_bar(
+                connection,
+                outsider_manifest_version_id,
+                outsider_instrument_id,
+                t0,
+            )
+            with pytest.raises(ValueError, match="INSTRUMENT_NOT_IN_UNIVERSE"):
+                finalizer.preflight(
+                    outsider_manifest_version_id,
+                    (outsider_request,),
+                    identity_map=outsider_identity_map,
+                )
+            with pytest.raises(ValueError, match="INSTRUMENT_NOT_IN_UNIVERSE"):
+                finalizer.finalize(
+                    outsider_manifest_version_id,
+                    (outsider_request,),
+                    identity_map=outsider_identity_map,
+                )
+
             _insert_bar(connection, corrupt_manifest_version_id, instrument_id, t0)
             with pytest.raises(ValueError, match="MANIFEST_HASH_MISMATCH"):
                 finalizer.finalize(corrupt_manifest_version_id, (_request(t0),), identity_map=identity_map)
@@ -189,10 +243,15 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
             transaction.rollback()
 
 
-def _request(start: datetime, *, source: str = "TEST") -> MarketDataRequest:
+def _request(
+    start: datetime,
+    *,
+    source: str = "TEST",
+    symbol: str = "ABC",
+) -> MarketDataRequest:
     return MarketDataRequest(
         source=source,
-        source_symbols=("ABC",),
+        source_symbols=(symbol,),
         start=start,
         end=start + timedelta(minutes=1),
         interval=timedelta(minutes=1),

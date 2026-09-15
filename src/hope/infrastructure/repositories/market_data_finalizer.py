@@ -13,6 +13,7 @@ from hope.infrastructure.repositories.market_data_manifest import (
     build_market_data_manifest,
     manifest_expected_keys_for_requests,
     manifest_universe_version_id,
+    validate_manifest_membership,
 )
 
 
@@ -97,15 +98,28 @@ class SqlAlchemyMarketDataVersionFinalizer:
             ).mappings().one_or_none()
             if universe is None or not universe["pit_certified"]:
                 raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_NOT_PIT_CERTIFIED")
-            actual_member_count = self._connection.execute(
+            member_rows = self._connection.execute(
                 text(
-                    "SELECT count(*) FROM universe_members "
+                    "SELECT instrument_id, valid_from, valid_to FROM universe_members "
                     "WHERE universe_version_id = :universe_version_id"
                 ),
                 {"universe_version_id": universe_version_id},
-            ).scalar_one()
-            if actual_member_count != universe["declared_member_count"]:
+            ).mappings().all()
+            if len(member_rows) != universe["declared_member_count"]:
                 raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_CARDINALITY_MISMATCH")
+            expected = manifest_expected_keys_for_requests(
+                manifest,
+                requests,
+                identity_map=identity_map,
+                expected_source=version["source"],
+            )
+            validate_manifest_membership(
+                expected,
+                memberships={
+                    row["instrument_id"]: (row["valid_from"], row["valid_to"])
+                    for row in member_rows
+                },
+            )
 
     def finalize(
         self,
@@ -178,14 +192,14 @@ class SqlAlchemyMarketDataVersionFinalizer:
             ).mappings().one_or_none()
             if universe is None or not universe["pit_certified"]:
                 raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_NOT_PIT_CERTIFIED")
-            actual_member_count = self._connection.execute(
+            member_rows = self._connection.execute(
                 text(
-                    "SELECT count(*) FROM universe_members "
+                    "SELECT instrument_id, valid_from, valid_to FROM universe_members "
                     "WHERE universe_version_id = :universe_version_id"
                 ),
                 {"universe_version_id": manifest_universe_id},
-            ).scalar_one()
-            if actual_member_count != universe["declared_member_count"]:
+            ).mappings().all()
+            if len(member_rows) != universe["declared_member_count"]:
                 raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_CARDINALITY_MISMATCH")
 
             expected = manifest_expected_keys_for_requests(
@@ -193,6 +207,13 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 requests,
                 identity_map=identity_map,
                 expected_source=version["source"],
+            )
+            validate_manifest_membership(
+                expected,
+                memberships={
+                    row["instrument_id"]: (row["valid_from"], row["valid_to"])
+                    for row in member_rows
+                },
             )
             if not requested.issubset(expected):
                 raise ValueError("MARKET_DATA_REQUEST_OUTSIDE_DECLARED_MANIFEST")
