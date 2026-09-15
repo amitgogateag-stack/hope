@@ -33,6 +33,7 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership() -> Non
             version_id = uuid4()
             invalid_version_id = uuid4()
             late_version_id = uuid4()
+            non_staging_version_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -59,9 +60,16 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership() -> Non
                     "INSERT INTO dataset_versions(dataset_version_id, dataset_id, version, vintage_label, immutable) "
                     "VALUES (:v1, :dataset_id, 'v1', 'staging', FALSE), "
                     "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
-                    "(:v3, :dataset_id, 'v3', 'staging', FALSE)"
+                    "(:v3, :dataset_id, 'v3', 'staging', FALSE), "
+                    "(:v4, :dataset_id, 'v4', 'draft', FALSE)"
                 ),
-                {"v1": version_id, "v2": invalid_version_id, "v3": late_version_id, "dataset_id": dataset_id},
+                {
+                    "v1": version_id,
+                    "v2": invalid_version_id,
+                    "v3": late_version_id,
+                    "v4": non_staging_version_id,
+                    "dataset_id": dataset_id,
+                },
             )
             connection.execute(
                 text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"),
@@ -88,6 +96,14 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership() -> Non
             )
 
             repo = SqlAlchemyMarketDataCoverageManifestRepository(connection)
+            with pytest.raises(ValueError, match="MANIFEST_REQUIRES_STAGING_VERSION"):
+                repo.declare(
+                    non_staging_version_id,
+                    universe_version_id,
+                    (_request(t0),),
+                    identity_map=identity_map,
+                )
+
             declared = (_request(t0), _request(t1))
             repo.declare(version_id, universe_version_id, declared, identity_map=identity_map)
             repo.declare(version_id, universe_version_id, declared, identity_map=identity_map)

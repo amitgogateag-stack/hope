@@ -35,6 +35,7 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
             version_id = uuid4()
             undeclared_version_id = uuid4()
             corrupt_manifest_version_id = uuid4()
+            non_staging_version_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -55,9 +56,16 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "INSERT INTO dataset_versions(dataset_version_id, dataset_id, version, vintage_label, immutable) VALUES "
                     "(:v1, :dataset_id, 'v1', 'staging', FALSE), "
                     "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
-                    "(:v3, :dataset_id, 'v3', 'staging', FALSE)"
+                    "(:v3, :dataset_id, 'v3', 'staging', FALSE), "
+                    "(:v4, :dataset_id, 'v4', 'draft', FALSE)"
                 ),
-                {"v1": version_id, "v2": undeclared_version_id, "v3": corrupt_manifest_version_id, "dataset_id": dataset_id},
+                {
+                    "v1": version_id,
+                    "v2": undeclared_version_id,
+                    "v3": corrupt_manifest_version_id,
+                    "v4": non_staging_version_id,
+                    "dataset_id": dataset_id,
+                },
             )
             connection.execute(
                 text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"),
@@ -110,6 +118,13 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                 identity_map=identity_map,
             )
             finalizer = SqlAlchemyMarketDataVersionFinalizer(connection)
+
+            with pytest.raises(ValueError, match="FINALIZE_REQUIRES_STAGING_VERSION"):
+                finalizer.finalize(
+                    non_staging_version_id,
+                    (_request(t0),),
+                    identity_map=identity_map,
+                )
 
             _insert_bar(connection, corrupt_manifest_version_id, instrument_id, t0)
             with pytest.raises(ValueError, match="MANIFEST_HASH_MISMATCH"):

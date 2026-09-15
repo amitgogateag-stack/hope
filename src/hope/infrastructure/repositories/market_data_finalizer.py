@@ -59,6 +59,8 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 raise ValueError("MARKET_DATA_DATASET_VERSION_ALREADY_IMMUTABLE")
             if not version["pit_certified"]:
                 raise ValueError("MARKET_DATA_DATASET_NOT_PIT_CERTIFIED")
+            if not version["immutable"] and version["vintage_label"] != "staging":
+                raise ValueError("MARKET_DATA_FINALIZE_REQUIRES_STAGING_VERSION")
 
             manifest_row = self._connection.execute(
                 text(

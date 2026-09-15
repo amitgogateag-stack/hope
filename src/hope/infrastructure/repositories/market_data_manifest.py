@@ -41,7 +41,7 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
         with self._connection.begin_nested():
             version = self._connection.execute(
                 text(
-                    "SELECT immutable FROM dataset_versions "
+                    "SELECT immutable, vintage_label FROM dataset_versions "
                     "WHERE dataset_version_id = :version_id FOR UPDATE"
                 ),
                 {"version_id": dataset_version_id},
@@ -50,6 +50,8 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
                 raise ValueError("MARKET_DATA_MANIFEST_DATASET_VERSION_NOT_FOUND")
             if version["immutable"]:
                 raise ValueError("MARKET_DATA_MANIFEST_DATASET_VERSION_IMMUTABLE")
+            if version["vintage_label"] != "staging":
+                raise ValueError("MARKET_DATA_MANIFEST_REQUIRES_STAGING_VERSION")
 
             universe = self._connection.execute(
                 text(
