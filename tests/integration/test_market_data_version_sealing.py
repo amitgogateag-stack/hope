@@ -5,9 +5,11 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.dataset_versions import SqlAlchemyMarketDataVersionSealer
+from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
 
 
 @pytest.mark.integration
@@ -98,6 +100,28 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                 sealer.seal(good_version_id)
             with pytest.raises(ValueError, match="MANIFEST_BACKED_FINALIZER_REQUIRED"):
                 sealer.seal(good_version_id)
+
+            # Direct SQL cannot manufacture a sealed market-data version around
+            # the manifest-backed finalizer once market bars exist.
+            with pytest.raises(IntegrityError, match="FINALIZATION_REQUIRES_COVERAGE_MANIFEST"):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE dataset_versions SET immutable = TRUE, vintage_label = 'sealed' "
+                            "WHERE dataset_version_id = :version_id"
+                        ),
+                        {"version_id": good_version_id},
+                    )
+
+            # A row inserted already immutable is not sufficient evidence for
+            # PIT consumption: the context boundary requires a durable manifest.
+            context_repository = PITMarketContextRepository(connection)
+            with pytest.raises(ValueError, match="MANIFEST_BACKED_SEALED_VERSION"):
+                context_repository.get(
+                    fake_sealed_empty_version_id,
+                    as_of=t0,
+                    instrument_ids=(),
+                )
 
             sealed = connection.execute(
                 text(

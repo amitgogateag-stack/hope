@@ -11,7 +11,7 @@ from hope.domain.market_data.models import MarketBar
 
 
 class PITMarketContextRepository:
-    """Authoritative PIT context loader from one immutable, PIT-certified dataset version."""
+    """Authoritative PIT context loader from verified manifest-backed evidence."""
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
@@ -34,7 +34,9 @@ class PITMarketContextRepository:
 
         dataset = self._connection.execute(
             text(
-                "SELECT dv.immutable, d.pit_certified "
+                "SELECT dv.immutable, dv.vintage_label, d.pit_certified, "
+                "EXISTS(SELECT 1 FROM market_data_coverage_manifests m "
+                "WHERE m.dataset_version_id = dv.dataset_version_id) AS manifest_backed "
                 "FROM dataset_versions dv "
                 "JOIN datasets d ON d.dataset_id = dv.dataset_id "
                 "WHERE dv.dataset_version_id = :dataset_version_id"
@@ -47,6 +49,8 @@ class PITMarketContextRepository:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_IMMUTABLE_DATASET_VERSION")
         if not dataset["pit_certified"]:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_PIT_CERTIFIED_DATASET")
+        if dataset["vintage_label"] != "sealed" or not dataset["manifest_backed"]:
+            raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
 
         if not instrument_ids:
             return PITMarketContext(as_of=as_of, bars=())

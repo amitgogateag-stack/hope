@@ -19,3 +19,12 @@ def test_experiment_invalidation_is_append_only_event():
     sql = (ROOT / "migrations/003_experiment_invalidation_events.sql").read_text()
     assert "experiment_invalidations" in sql
     assert "REFERENCES experiments(experiment_id)" in sql
+
+
+def test_market_data_finalization_requires_manifest_backed_exact_coverage():
+    sql = (ROOT / "migrations/068_market_data_finalization_integrity.sql").read_text()
+    assert "hope_guard_market_data_version_finalization" in sql
+    assert "MARKET_DATA_FINALIZATION_REQUIRES_COVERAGE_MANIFEST" in sql
+    assert "MARKET_DATA_FINALIZATION_COVERAGE_MISMATCH" in sql
+    assert "MARKET_DATA_FINALIZATION_REQUIRES_PIT_UNIVERSE" in sql
+    assert "BEFORE UPDATE ON dataset_versions" in sql
