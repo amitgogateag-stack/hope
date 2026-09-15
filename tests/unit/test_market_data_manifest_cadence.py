@@ -4,7 +4,10 @@ from uuid import uuid4
 import pytest
 
 from hope.infrastructure.market_data.provider import MarketDataRequest
-from hope.infrastructure.repositories.market_data_manifest import build_market_data_manifest
+from hope.infrastructure.repositories.market_data_manifest import (
+    build_market_data_manifest,
+    manifest_expected_keys_for_requests,
+)
 
 
 def test_manifest_rejects_fractional_second_cadence_without_truncation() -> None:
@@ -93,3 +96,28 @@ def test_manifest_parser_rejects_symbol_identity_drift_between_windows() -> None
 
     with pytest.raises(ValueError, match="IDENTITY_BINDING_CONFLICT"):
         manifest_expected_keys(manifest)
+
+
+def test_manifest_request_rejects_swapped_source_identity_bindings() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC", "XYZ"),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    abc_id = uuid4()
+    xyz_id = uuid4()
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): abc_id, ("TEST", "XYZ"): xyz_id},
+    )
+
+    with pytest.raises(ValueError, match="IDENTITY_BINDING_MISMATCH"):
+        manifest_expected_keys_for_requests(
+            manifest,
+            (request,),
+            identity_map={("TEST", "ABC"): xyz_id, ("TEST", "XYZ"): abc_id},
+        )

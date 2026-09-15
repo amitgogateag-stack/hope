@@ -10,7 +10,7 @@ from sqlalchemy import Connection, text
 
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.repositories.market_data_manifest import (
-    manifest_expected_keys,
+    manifest_expected_keys_for_requests,
     manifest_universe_version_id,
 )
 
@@ -100,7 +100,11 @@ class SqlAlchemyMarketDataVersionFinalizer:
             if actual_member_count != universe["declared_member_count"]:
                 raise ValueError("MARKET_DATA_MANIFEST_UNIVERSE_CARDINALITY_MISMATCH")
 
-            expected = manifest_expected_keys(manifest)
+            expected = manifest_expected_keys_for_requests(
+                manifest,
+                requests,
+                identity_map=identity_map,
+            )
             if not requested.issubset(expected):
                 raise ValueError("MARKET_DATA_REQUEST_OUTSIDE_DECLARED_MANIFEST")
 

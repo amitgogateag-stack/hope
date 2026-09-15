@@ -183,6 +183,12 @@ def manifest_universe_version_id(manifest: Mapping[str, object]) -> UUID:
 
 
 def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, datetime]]:
+    return manifest_evidence(manifest)[0]
+
+
+def manifest_evidence(
+    manifest: Mapping[str, object],
+) -> tuple[set[tuple[UUID, datetime]], dict[tuple[str, str], UUID]]:
     manifest_universe_version_id(manifest)
     raw_windows = manifest.get("windows")
     if not isinstance(raw_windows, list) or not raw_windows:
@@ -256,6 +262,24 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
         while cursor < end:
             expected.update((instrument_id, cursor) for instrument_id in instrument_ids)
             cursor += interval
+    return expected, identity_bindings
+
+
+def manifest_expected_keys_for_requests(
+    manifest: Mapping[str, object],
+    requests: tuple[MarketDataRequest, ...],
+    *,
+    identity_map: Mapping[tuple[str, str], UUID],
+) -> set[tuple[UUID, datetime]]:
+    expected, declared_identity_bindings = manifest_evidence(manifest)
+    for request in requests:
+        for source_symbol in request.source_symbols:
+            identity_key = (request.source, source_symbol)
+            if identity_key not in identity_map:
+                raise ValueError("MARKET_DATA_FINALIZE_IDENTITY_MAP_INCOMPLETE")
+            instrument_id = identity_map[identity_key]
+            if declared_identity_bindings.get(identity_key) != instrument_id:
+                raise ValueError("MARKET_DATA_REQUEST_IDENTITY_BINDING_MISMATCH")
     return expected
 
 
