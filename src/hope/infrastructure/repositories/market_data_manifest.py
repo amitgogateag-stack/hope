@@ -138,6 +138,7 @@ def build_market_data_manifest(
         raise ValueError("MARKET_DATA_MANIFEST_WINDOWS_REQUIRED")
 
     windows: list[dict[str, object]] = []
+    declared_keys: set[tuple[UUID, datetime]] = set()
     for request in requests:
         interval_seconds = request.interval.total_seconds()
         if not interval_seconds.is_integer():
@@ -157,6 +158,13 @@ def build_market_data_manifest(
                     "instrument_id": str(instrument_id),
                 }
             )
+        request_keys = {
+            (identity_map[(request.source, source_symbol)], event_time)
+            for source_symbol, event_time in request.expected_keys
+        }
+        if declared_keys.intersection(request_keys):
+            raise ValueError("MARKET_DATA_MANIFEST_DUPLICATE_LOGICAL_KEY")
+        declared_keys.update(request_keys)
         windows.append(
             {
                 "source": request.source,
@@ -260,7 +268,10 @@ def manifest_evidence(
 
         cursor = start
         while cursor < end:
-            expected.update((instrument_id, cursor) for instrument_id in instrument_ids)
+            window_keys = {(instrument_id, cursor) for instrument_id in instrument_ids}
+            if expected.intersection(window_keys):
+                raise ValueError("MARKET_DATA_MANIFEST_DUPLICATE_LOGICAL_KEY")
+            expected.update(window_keys)
             cursor += interval
     return expected, identity_bindings
 

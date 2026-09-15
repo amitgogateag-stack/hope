@@ -121,3 +121,50 @@ def test_manifest_request_rejects_swapped_source_identity_bindings() -> None:
             (request,),
             identity_map={("TEST", "ABC"): xyz_id, ("TEST", "XYZ"): abc_id},
         )
+
+
+def test_manifest_builder_rejects_overlapping_logical_coverage() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=2),
+        interval=timedelta(minutes=1),
+    )
+    overlapping = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start + timedelta(minutes=1),
+        end=start + timedelta(minutes=3),
+        interval=timedelta(minutes=1),
+    )
+
+    with pytest.raises(ValueError, match="DUPLICATE_LOGICAL_KEY"):
+        build_market_data_manifest(
+            uuid4(),
+            (request, overlapping),
+            identity_map={("TEST", "ABC"): uuid4()},
+        )
+
+
+def test_manifest_parser_rejects_overlapping_logical_coverage() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): uuid4()},
+    )
+    manifest["windows"].append(dict(manifest["windows"][0]))
+
+    from hope.infrastructure.repositories.market_data_manifest import manifest_expected_keys
+
+    with pytest.raises(ValueError, match="DUPLICATE_LOGICAL_KEY"):
+        manifest_expected_keys(manifest)
