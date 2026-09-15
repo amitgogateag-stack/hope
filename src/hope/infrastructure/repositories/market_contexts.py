@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime
+from typing import Mapping
 from uuid import UUID
 
 from sqlalchemy import bindparam, text
@@ -8,6 +11,36 @@ from sqlalchemy.engine import Connection
 
 from hope.domain.market_data.context import PITMarketContext
 from hope.domain.market_data.models import MarketBar
+from hope.infrastructure.repositories.market_data_manifest import (
+    manifest_evidence,
+    manifest_universe_version_id,
+)
+
+
+def _verify_read_side_evidence(dataset: Mapping[str, object]) -> None:
+    manifest = dataset.get("manifest")
+    if not isinstance(manifest, dict):
+        raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
+
+    canonical = json.dumps(manifest, sort_keys=True, separators=(",", ":"))
+    actual_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    if dataset.get("manifest_hash") != actual_hash:
+        raise ValueError("PIT_MARKET_CONTEXT_MANIFEST_CHECKSUM_MISMATCH")
+
+    manifest_universe_id = manifest_universe_version_id(manifest)
+    if dataset.get("universe_version_id") != manifest_universe_id:
+        raise ValueError("PIT_MARKET_CONTEXT_MANIFEST_UNIVERSE_MISMATCH")
+    if dataset.get("universe_pit_certified") is not True:
+        raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_PIT_CERTIFIED_UNIVERSE")
+    if dataset.get("actual_member_count") != dataset.get("declared_member_count"):
+        raise ValueError("PIT_MARKET_CONTEXT_UNIVERSE_CARDINALITY_MISMATCH")
+
+    expected_keys, _ = manifest_evidence(
+        manifest,
+        expected_source=dataset.get("source"),
+    )
+    if not expected_keys:
+        raise ValueError("PIT_MARKET_CONTEXT_MANIFEST_EVIDENCE_EMPTY")
 
 
 class PITMarketContextRepository:
@@ -34,11 +67,17 @@ class PITMarketContextRepository:
 
         dataset = self._connection.execute(
             text(
-                "SELECT dv.immutable, dv.vintage_label, d.pit_certified, "
-                "EXISTS(SELECT 1 FROM market_data_coverage_manifests m "
-                "WHERE m.dataset_version_id = dv.dataset_version_id) AS manifest_backed "
+                "SELECT dv.immutable, dv.vintage_label, d.pit_certified, d.source, "
+                "m.manifest, m.manifest_hash, m.universe_version_id, "
+                "uv.pit_certified AS universe_pit_certified, uv.declared_member_count, "
+                "(SELECT count(*) FROM universe_members um "
+                "WHERE um.universe_version_id = m.universe_version_id) AS actual_member_count "
                 "FROM dataset_versions dv "
                 "JOIN datasets d ON d.dataset_id = dv.dataset_id "
+                "LEFT JOIN market_data_coverage_manifests m "
+                "ON m.dataset_version_id = dv.dataset_version_id "
+                "LEFT JOIN universe_versions uv "
+                "ON uv.universe_version_id = m.universe_version_id "
                 "WHERE dv.dataset_version_id = :dataset_version_id"
             ),
             {"dataset_version_id": dataset_version_id},
@@ -49,8 +88,10 @@ class PITMarketContextRepository:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_IMMUTABLE_DATASET_VERSION")
         if not dataset["pit_certified"]:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_PIT_CERTIFIED_DATASET")
-        if dataset["vintage_label"] != "sealed" or not dataset["manifest_backed"]:
+        if dataset["vintage_label"] != "sealed" or dataset["manifest"] is None:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
+
+        _verify_read_side_evidence(dataset)
 
         if not instrument_ids:
             return PITMarketContext(as_of=as_of, bars=())
