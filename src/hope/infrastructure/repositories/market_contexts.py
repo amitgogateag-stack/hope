@@ -61,6 +61,8 @@ def _verify_requested_instruments(
     expected_keys: set[tuple[UUID, datetime]],
     requested_instrument_ids: tuple[UUID, ...],
 ) -> None:
+    if len(set(requested_instrument_ids)) != len(requested_instrument_ids):
+        raise ValueError("PIT_MARKET_CONTEXT_DUPLICATE_REQUESTED_INSTRUMENT")
     declared_instrument_ids = {instrument_id for instrument_id, _ in expected_keys}
     if not set(requested_instrument_ids).issubset(declared_instrument_ids):
         raise ValueError("PIT_MARKET_CONTEXT_INSTRUMENT_OUTSIDE_MANIFEST")

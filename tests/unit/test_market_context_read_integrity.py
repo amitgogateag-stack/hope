@@ -111,6 +111,17 @@ def test_read_side_rejects_requested_instrument_outside_manifest() -> None:
         _verify_requested_instruments(expected_keys, (uuid4(),))
 
 
+def test_read_side_rejects_duplicate_requested_instrument() -> None:
+    expected_keys = _verify_read_side_evidence(_dataset_evidence())
+    declared_instrument_id, _ = next(iter(expected_keys))
+
+    with pytest.raises(ValueError, match="DUPLICATE_REQUESTED_INSTRUMENT"):
+        _verify_requested_instruments(
+            expected_keys,
+            (declared_instrument_id, declared_instrument_id),
+        )
+
+
 def test_read_side_rejects_inexact_persisted_coverage() -> None:
     expected_keys = _verify_read_side_evidence(_dataset_evidence())
     exact_keys = tuple(expected_keys)
