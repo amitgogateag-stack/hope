@@ -54,3 +54,13 @@ def test_market_data_finalization_preserves_provider_identity_continuity():
     assert "count(DISTINCT instrument_id) > 1" in sql
     assert "MARKET_DATA_FINALIZATION_IDENTITY_BINDING_CONFLICT" in sql
     assert "BEFORE UPDATE ON dataset_versions" in sql
+
+
+def test_market_data_finalization_requires_canonical_provider_identity():
+    sql = (
+        ROOT / "migrations/072_market_data_manifest_identity_canonical.sql"
+    ).read_text()
+    assert "w->>'source' IS NULL" in sql
+    assert "w->>'source' <> dataset_source" in sql
+    assert "i->>'source_symbol' <> btrim(i->>'source_symbol')" in sql
+    assert "MARKET_DATA_FINALIZATION_IDENTITY_NOT_CANONICAL" in sql
