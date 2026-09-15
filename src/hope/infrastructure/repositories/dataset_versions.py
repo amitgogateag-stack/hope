@@ -6,14 +6,11 @@ from sqlalchemy import Connection, text
 
 
 class SqlAlchemyMarketDataVersionSealer:
-    """Seal one persisted market-data dataset version exactly once.
+    """Legacy fail-closed boundary for market-data version sealing.
 
-    A version may be sealed only when it belongs to a PIT-certified dataset and
-    already contains market bars. The row is locked during validation/sealing.
-    Exact retries after a successful seal are no-ops only when the sealed
-    version still satisfies the same evidence requirements; other immutable
-    versions are rejected rather than silently reclassified as market-data
-    evidence.
+    New sealing transitions require SqlAlchemyMarketDataVersionFinalizer, which
+    proves exact persisted coverage against an immutable manifest. This class
+    retains validation and safe no-op behavior only for already sealed versions.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -55,11 +52,4 @@ class SqlAlchemyMarketDataVersionSealer:
             if row["immutable"]:
                 return
 
-            self._connection.execute(
-                text(
-                    "UPDATE dataset_versions "
-                    "SET immutable = TRUE, vintage_label = 'sealed' "
-                    "WHERE dataset_version_id = :version_id"
-                ),
-                {"version_id": dataset_version_id},
-            )
+            raise ValueError("MARKET_DATA_MANIFEST_BACKED_FINALIZER_REQUIRED")

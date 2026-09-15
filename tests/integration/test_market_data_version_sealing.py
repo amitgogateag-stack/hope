@@ -11,7 +11,7 @@ from hope.infrastructure.repositories.dataset_versions import SqlAlchemyMarketDa
 
 
 @pytest.mark.integration
-def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() -> None:
+def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -94,8 +94,10 @@ def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() 
             with pytest.raises(ValueError, match="MARKET_DATA_DATASET_NOT_PIT_CERTIFIED"):
                 sealer.seal(fake_sealed_non_pit_version_id)
 
-            sealer.seal(good_version_id)
-            sealer.seal(good_version_id)
+            with pytest.raises(ValueError, match="MANIFEST_BACKED_FINALIZER_REQUIRED"):
+                sealer.seal(good_version_id)
+            with pytest.raises(ValueError, match="MANIFEST_BACKED_FINALIZER_REQUIRED"):
+                sealer.seal(good_version_id)
 
             sealed = connection.execute(
                 text(
@@ -104,7 +106,7 @@ def test_market_data_version_sealer_is_fail_closed_and_exact_retry_idempotent() 
                 ),
                 {"version_id": good_version_id},
             ).mappings().one()
-            assert sealed["immutable"] is True
-            assert sealed["vintage_label"] == "sealed"
+            assert sealed["immutable"] is False
+            assert sealed["vintage_label"] == "staging"
         finally:
             transaction.rollback()
