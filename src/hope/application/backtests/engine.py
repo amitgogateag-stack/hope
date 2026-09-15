@@ -289,7 +289,11 @@ class DeterministicBacktest:
                         instrument_id = UUID(current_bar.instrument_id)
                     except ValueError as exc:
                         raise ValueError("INVALID_BAR_INSTRUMENT_ID") from exc
-                    current_bars_by_instrument[instrument_id] = current_bar
+                    if (
+                        current_bar.available_time <= current_time
+                        and current_bar.ingestion_time <= current_time
+                    ):
+                        current_bars_by_instrument[instrument_id] = current_bar
                 current_instrument_ids = set(current_bars_by_instrument)
 
                 clock_signals: dict[UUID, Signal] = {}

@@ -251,6 +251,39 @@ def test_backtest_context_does_not_advance_past_current_event_for_delayed_data()
     ]
 
 
+def test_backtest_rejects_signal_for_current_bar_that_is_not_yet_visible():
+    first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
+    second = first + timedelta(minutes=1)
+    delayed = MarketBar(
+        instrument_id=INSTRUMENT,
+        event_time=second,
+        available_time=second + timedelta(minutes=5),
+        ingestion_time=second + timedelta(minutes=5),
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=Decimal("1000"),
+    )
+    signal = Signal(
+        signal_id=UUID("99999999-9999-9999-9999-999999999999"),
+        instrument_id=UUID(INSTRUMENT),
+        strategy_version="test",
+        decision_time=second,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash="7" * 64,
+    )
+
+    with pytest.raises(ValueError, match="SIGNAL_INSTRUMENT_NOT_UPDATED_AT_CONTEXT"):
+        backtest().run(
+            (bar(first), delayed),
+            lambda context: signal if context.as_of == second else None,
+            no_risk,
+            OrderSide.BUY,
+        )
+
+
 def test_backtest_valuation_adopts_delayed_mark_when_it_becomes_available():
     first = datetime(2026, 1, 5, 14, 30, tzinfo=UTC)
     second = first + timedelta(minutes=1)
@@ -472,4 +505,3 @@ def test_backtest_processes_quote_when_ingestion_lags_provider_availability():
     assert result.events[0].result.fill is not None
     assert result.events[0].result.fill.fill_time == ingested
     assert result.unfilled_order_ids == ()
-
