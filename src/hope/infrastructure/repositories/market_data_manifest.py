@@ -189,6 +189,7 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
         raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
     expected: set[tuple[UUID, datetime]] = set()
+    identity_bindings: dict[tuple[str, str], UUID] = {}
     for raw_window in raw_windows:
         if not isinstance(raw_window, dict):
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
@@ -235,6 +236,14 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
                 or str(instrument_id) != instrument_id_text
             ):
                 raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+            identity_key = (source, source_symbol)
+            existing_instrument_id = identity_bindings.get(identity_key)
+            if (
+                existing_instrument_id is not None
+                and existing_instrument_id != instrument_id
+            ):
+                raise ValueError("MARKET_DATA_MANIFEST_IDENTITY_BINDING_CONFLICT")
+            identity_bindings[identity_key] = instrument_id
             source_symbols.append(source_symbol)
             instrument_ids.append(instrument_id)
         if (
