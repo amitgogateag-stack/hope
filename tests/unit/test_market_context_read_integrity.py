@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 
 from hope.infrastructure.repositories.market_contexts import (
+    _verify_requested_instruments,
     _verify_read_side_evidence,
     _verify_read_side_membership,
 )
@@ -98,3 +99,12 @@ def test_read_side_rejects_manifest_key_outside_universe_membership() -> None:
                 )
             },
         )
+
+
+def test_read_side_rejects_requested_instrument_outside_manifest() -> None:
+    expected_keys = _verify_read_side_evidence(_dataset_evidence())
+    declared_instrument_id, _ = next(iter(expected_keys))
+
+    _verify_requested_instruments(expected_keys, (declared_instrument_id,))
+    with pytest.raises(ValueError, match="INSTRUMENT_OUTSIDE_MANIFEST"):
+        _verify_requested_instruments(expected_keys, (uuid4(),))

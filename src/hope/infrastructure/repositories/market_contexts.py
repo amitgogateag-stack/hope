@@ -57,6 +57,15 @@ def _verify_read_side_membership(
         raise ValueError("PIT_MARKET_CONTEXT_UNIVERSE_MEMBERSHIP_MISMATCH") from exc
 
 
+def _verify_requested_instruments(
+    expected_keys: set[tuple[UUID, datetime]],
+    requested_instrument_ids: tuple[UUID, ...],
+) -> None:
+    declared_instrument_ids = {instrument_id for instrument_id, _ in expected_keys}
+    if not set(requested_instrument_ids).issubset(declared_instrument_ids):
+        raise ValueError("PIT_MARKET_CONTEXT_INSTRUMENT_OUTSIDE_MANIFEST")
+
+
 class PITMarketContextRepository:
     """Authoritative PIT context loader from verified manifest-backed evidence."""
 
@@ -120,6 +129,7 @@ class PITMarketContextRepository:
                 for row in member_rows
             },
         )
+        _verify_requested_instruments(expected_keys, instrument_ids)
 
         if not instrument_ids:
             return PITMarketContext(as_of=as_of, bars=())
