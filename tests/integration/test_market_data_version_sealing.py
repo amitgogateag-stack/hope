@@ -29,6 +29,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
         transaction = connection.begin()
         try:
             instrument_id = uuid4()
+            alternate_instrument_id = uuid4()
             outsider_instrument_id = uuid4()
             pit_dataset_id = uuid4()
             non_pit_dataset_id = uuid4()
@@ -39,6 +40,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
             fake_sealed_non_pit_version_id = uuid4()
             membership_bypass_version_id = uuid4()
             duplicate_manifest_version_id = uuid4()
+            identity_conflict_version_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -49,6 +51,16 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
                 ),
                 {"instrument_id": instrument_id, "symbol": f"SEAL-{instrument_id}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                    "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
+                ),
+                {
+                    "instrument_id": alternate_instrument_id,
+                    "symbol": f"ALTERNATE-{alternate_instrument_id}",
+                },
             )
             connection.execute(
                 text(
@@ -68,16 +80,20 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                 text(
                     "INSERT INTO universe_versions("
                     "universe_version_id, universe_id, version, pit_certified, declared_member_count"
-                    ") VALUES (:version_id, :universe_id, 'v1', TRUE, 1)"
+                    ") VALUES (:version_id, :universe_id, 'v1', TRUE, 2)"
                 ),
                 {"version_id": universe_version_id, "universe_id": universe_id},
             )
             connection.execute(
                 text(
                     "INSERT INTO universe_members(universe_version_id, instrument_id) "
-                    "VALUES (:version_id, :instrument_id)"
+                    "VALUES (:version_id, :instrument_id), (:version_id, :alternate_instrument_id)"
                 ),
-                {"version_id": universe_version_id, "instrument_id": instrument_id},
+                {
+                    "version_id": universe_version_id,
+                    "instrument_id": instrument_id,
+                    "alternate_instrument_id": alternate_instrument_id,
+                },
             )
             connection.execute(
                 text(
@@ -100,6 +116,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "(:non_pit, :non_pit_id, 'non-pit', 'staging', FALSE), "
                     "(:membership_bypass, :pit_id, 'membership-bypass', 'staging', FALSE), "
                     "(:duplicate_manifest, :pit_id, 'duplicate-manifest', 'staging', FALSE), "
+                    "(:identity_conflict, :pit_id, 'identity-conflict', 'staging', FALSE), "
                     "(:fake_empty, :pit_id, 'fake-empty', 'sealed', TRUE), "
                     "(:fake_non_pit, :non_pit_id, 'fake-non-pit', 'sealed', TRUE)"
                 ),
@@ -109,6 +126,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "non_pit": non_pit_version_id,
                     "membership_bypass": membership_bypass_version_id,
                     "duplicate_manifest": duplicate_manifest_version_id,
+                    "identity_conflict": identity_conflict_version_id,
                     "fake_empty": fake_sealed_empty_version_id,
                     "fake_non_pit": fake_sealed_non_pit_version_id,
                     "pit_id": pit_dataset_id,
@@ -151,6 +169,56 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                         canonical_manifest.encode("utf-8")
                     ).hexdigest(),
                     "manifest": canonical_manifest,
+                },
+            )
+            identity_conflict_manifest = {
+                "version": 2,
+                "universe_version_id": str(universe_version_id),
+                "windows": [
+                    {
+                        "source": "TEST",
+                        "start": t0.isoformat(),
+                        "end": (t0 + timedelta(minutes=1)).isoformat(),
+                        "interval_seconds": 60,
+                        "instruments": [
+                            {
+                                "source_symbol": "SAME",
+                                "instrument_id": str(instrument_id),
+                            }
+                        ],
+                    },
+                    {
+                        "source": "TEST",
+                        "start": (t0 + timedelta(minutes=1)).isoformat(),
+                        "end": (t0 + timedelta(minutes=2)).isoformat(),
+                        "interval_seconds": 60,
+                        "instruments": [
+                            {
+                                "source_symbol": "SAME",
+                                "instrument_id": str(alternate_instrument_id),
+                            }
+                        ],
+                    },
+                ],
+            }
+            identity_conflict_canonical = json.dumps(
+                identity_conflict_manifest, sort_keys=True, separators=(",", ":")
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_data_coverage_manifests("
+                    "dataset_version_id, universe_version_id, manifest_hash, manifest"
+                    ") VALUES ("
+                    ":version_id, :universe_version_id, :manifest_hash, CAST(:manifest AS JSONB)"
+                    ")"
+                ),
+                {
+                    "version_id": identity_conflict_version_id,
+                    "universe_version_id": universe_version_id,
+                    "manifest_hash": hashlib.sha256(
+                        identity_conflict_canonical.encode("utf-8")
+                    ).hexdigest(),
+                    "manifest": identity_conflict_canonical,
                 },
             )
             duplicate_manifest = {
@@ -225,6 +293,24 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "t0": t0,
                 },
             )
+            for event_time, bound_instrument_id in (
+                (t0, instrument_id),
+                (t0 + timedelta(minutes=1), alternate_instrument_id),
+            ):
+                connection.execute(
+                    text(
+                        "INSERT INTO market_bars("
+                        "dataset_version_id, instrument_id, event_time, available_time, ingestion_time, "
+                        "open, high, low, close, volume) VALUES ("
+                        ":version_id, :instrument_id, :event_time, :event_time, :event_time, "
+                        "100, 101, 99, 100, 1000)"
+                    ),
+                    {
+                        "version_id": identity_conflict_version_id,
+                        "instrument_id": bound_instrument_id,
+                        "event_time": event_time,
+                    },
+                )
             connection.execute(
                 text(
                     "INSERT INTO market_bars("
@@ -293,6 +379,20 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                             "WHERE dataset_version_id = :version_id"
                         ),
                         {"version_id": duplicate_manifest_version_id},
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="FINALIZATION_IDENTITY_BINDING_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE dataset_versions "
+                            "SET immutable = TRUE, vintage_label = 'sealed' "
+                            "WHERE dataset_version_id = :version_id"
+                        ),
+                        {"version_id": identity_conflict_version_id},
                     )
 
             # A row inserted already immutable is not sufficient evidence for

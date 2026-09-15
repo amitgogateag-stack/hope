@@ -44,3 +44,13 @@ def test_market_data_finalization_rejects_duplicate_manifest_coverage():
     assert "count(DISTINCT (instrument_id, event_time))" in sql
     assert "MARKET_DATA_FINALIZATION_DUPLICATE_MANIFEST_COVERAGE" in sql
     assert "BEFORE UPDATE ON dataset_versions" in sql
+
+
+def test_market_data_finalization_preserves_provider_identity_continuity():
+    sql = (
+        ROOT / "migrations/071_market_data_manifest_identity_continuity.sql"
+    ).read_text()
+    assert "GROUP BY source, source_symbol" in sql
+    assert "count(DISTINCT instrument_id) > 1" in sql
+    assert "MARKET_DATA_FINALIZATION_IDENTITY_BINDING_CONFLICT" in sql
+    assert "BEFORE UPDATE ON dataset_versions" in sql
