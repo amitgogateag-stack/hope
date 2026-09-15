@@ -158,11 +158,14 @@ def build_market_data_manifest(
                     "instrument_id": str(instrument_id),
                 }
             )
-        request_keys = {
+        request_keys = tuple(
             (identity_map[(request.source, source_symbol)], event_time)
             for source_symbol, event_time in request.expected_keys
-        }
-        if declared_keys.intersection(request_keys):
+        )
+        if (
+            len(set(request_keys)) != len(request_keys)
+            or declared_keys.intersection(request_keys)
+        ):
             raise ValueError("MARKET_DATA_MANIFEST_DUPLICATE_LOGICAL_KEY")
         declared_keys.update(request_keys)
         windows.append(

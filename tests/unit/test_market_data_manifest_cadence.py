@@ -237,3 +237,25 @@ def test_manifest_parser_rejects_noncanonical_timestamp_text() -> None:
 
     with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_INVALID"):
         manifest_expected_keys(manifest)
+
+
+def test_manifest_builder_rejects_source_aliases_for_one_instrument() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC", "XYZ"),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    instrument_id = uuid4()
+
+    with pytest.raises(ValueError, match="DUPLICATE_LOGICAL_KEY"):
+        build_market_data_manifest(
+            uuid4(),
+            (request,),
+            identity_map={
+                ("TEST", "ABC"): instrument_id,
+                ("TEST", "XYZ"): instrument_id,
+            },
+        )
