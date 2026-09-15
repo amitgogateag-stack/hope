@@ -122,6 +122,30 @@ def test_lifecycle_calendar_rejects_skipped_trading_slot_before_provider_call() 
     assert provider.calls == []
 
 
+def test_lifecycle_calendar_rejects_reverse_order_before_provider_call() -> None:
+    first_start = datetime(2026, 9, 14, 10, 1, tzinfo=timezone.utc)
+    second_start = datetime(2026, 9, 14, 10, 0, tzinfo=timezone.utc)
+    first_request, first_batch = _request(first_start)
+    second_request, second_batch = _request(second_start)
+    calendar = MarketSessionCalendar(
+        sessions=((datetime(2026, 9, 14, 10, tzinfo=timezone.utc), datetime(2026, 9, 14, 16, tzinfo=timezone.utc)),)
+    )
+    provider = SequencedProvider((first_batch, second_batch))
+
+    with pytest.raises(ValueError, match="WINDOWS_OVERLAP_OR_OUT_OF_ORDER"):
+        ingest_and_seal_market_data_windows(
+            provider,
+            RecordingSink(),
+            RecordingFinalizer(),
+            uuid4(),
+            (first_request, second_request),
+            identity_map={("TEST", "ABC"): uuid4()},
+            session_calendar=calendar,
+        )
+
+    assert provider.calls == []
+
+
 def test_lifecycle_calendar_rejects_off_session_request_before_provider_call() -> None:
     request_start = datetime(2026, 9, 14, 16, 0, tzinfo=timezone.utc)
     request, batch = _request(request_start)

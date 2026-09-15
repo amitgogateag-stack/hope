@@ -69,6 +69,8 @@ def ingest_and_seal_market_data_windows(
                 raise ValueError("MARKET_DATA_LIFECYCLE_WINDOW_OUTSIDE_SESSION")
 
     for previous, current in zip(requests, requests[1:]):
+        if current.start < previous.end:
+            raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_OVERLAP_OR_OUT_OF_ORDER")
         if current.start == previous.end:
             continue
         if session_calendar is None:
