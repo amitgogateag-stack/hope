@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,7 +7,14 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
+from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.market_data_finalizer import (
+    SqlAlchemyMarketDataVersionFinalizer,
+)
+from hope.infrastructure.repositories.market_data_manifest import (
+    SqlAlchemyMarketDataCoverageManifestRepository,
+)
 
 
 @pytest.mark.integration
@@ -27,14 +34,44 @@ def test_market_data_staging_seals_once_and_then_becomes_immutable() -> None:
             instrument_id = uuid4()
             dataset_id = uuid4()
             dataset_version_id = uuid4()
+            universe_id = uuid4()
+            universe_version_id = uuid4()
             t0 = datetime(2026, 9, 10, 14, 30, tzinfo=timezone.utc)
+            source_symbol = f"IMM-{instrument_id}"
+            request = MarketDataRequest(
+                source="TEST",
+                source_symbols=(source_symbol,),
+                start=t0,
+                end=t0 + timedelta(minutes=1),
+                interval=timedelta(minutes=1),
+            )
+            identity_map = {("TEST", source_symbol): instrument_id}
 
             connection.execute(
                 text(
                     "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
                     "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
                 ),
-                {"instrument_id": instrument_id, "symbol": f"IMM-{instrument_id}"},
+                {"instrument_id": instrument_id, "symbol": source_symbol},
+            )
+            connection.execute(
+                text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"),
+                {"id": universe_id, "name": f"immutability-{universe_id}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_versions("
+                    "universe_version_id, universe_id, version, pit_certified, declared_member_count"
+                    ") VALUES (:version_id, :universe_id, 'v1', TRUE, 1)"
+                ),
+                {"version_id": universe_version_id, "universe_id": universe_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_members(universe_version_id, instrument_id) "
+                    "VALUES (:version_id, :instrument_id)"
+                ),
+                {"version_id": universe_version_id, "instrument_id": instrument_id},
             )
             connection.execute(
                 text(
@@ -50,6 +87,12 @@ def test_market_data_staging_seals_once_and_then_becomes_immutable() -> None:
                     ") VALUES (:version_id, :dataset_id, 'v1', 'staging', FALSE)"
                 ),
                 {"version_id": dataset_version_id, "dataset_id": dataset_id},
+            )
+            SqlAlchemyMarketDataCoverageManifestRepository(connection).declare(
+                dataset_version_id,
+                universe_version_id,
+                (request,),
+                identity_map=identity_map,
             )
 
             connection.execute(
@@ -89,12 +132,10 @@ def test_market_data_staging_seals_once_and_then_becomes_immutable() -> None:
                         {"version_id": dataset_version_id},
                     )
 
-            connection.execute(
-                text(
-                    "UPDATE dataset_versions SET immutable = TRUE, vintage_label = 'sealed' "
-                    "WHERE dataset_version_id = :version_id"
-                ),
-                {"version_id": dataset_version_id},
+            SqlAlchemyMarketDataVersionFinalizer(connection).finalize(
+                dataset_version_id,
+                (request,),
+                identity_map=identity_map,
             )
 
             with pytest.raises(IntegrityError, match="MARKET_BAR_IMMUTABLE_DATASET_VERSION"):

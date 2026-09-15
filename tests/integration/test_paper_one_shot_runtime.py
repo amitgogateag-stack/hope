@@ -15,8 +15,15 @@ from hope.infrastructure.paper_runtime import (
     PaperJobRegistry,
     run_paper_once,
 )
+from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.market_data_finalizer import (
+    SqlAlchemyMarketDataVersionFinalizer,
+)
+from hope.infrastructure.repositories.market_data_manifest import (
+    SqlAlchemyMarketDataCoverageManifestRepository,
+)
 
 
 UTC = timezone.utc
@@ -70,13 +77,25 @@ def _insert_durable_decision_inputs(engine, as_of):
     instrument_id = uuid4()
     dataset_id = uuid4()
     dataset_version_id = uuid4()
+    source_symbol = f"PAPER-{instrument_id}"
+    requests = tuple(
+        MarketDataRequest(
+            source="TEST",
+            source_symbols=(source_symbol,),
+            start=event_time,
+            end=event_time + timedelta(minutes=1),
+            interval=timedelta(minutes=1),
+        )
+        for event_time in (as_of - timedelta(minutes=5), as_of - timedelta(minutes=2))
+    )
+    identity_map = {("TEST", source_symbol): instrument_id}
     with engine.begin() as connection:
         connection.execute(
             text(
                 "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
                 "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
             ),
-            {"instrument_id": instrument_id, "symbol": f"PAPER-{instrument_id}"},
+            {"instrument_id": instrument_id, "symbol": source_symbol},
         )
         connection.execute(
             text("INSERT INTO universes(universe_id, name) VALUES (:universe_id, :name)"),
@@ -108,9 +127,15 @@ def _insert_durable_decision_inputs(engine, as_of):
             text(
                 "INSERT INTO dataset_versions("
                 "dataset_version_id, dataset_id, version, vintage_label, immutable"
-                ") VALUES (:dataset_version_id, :dataset_id, 'v1', 'paper-test', FALSE)"
+                ") VALUES (:dataset_version_id, :dataset_id, 'v1', 'staging', FALSE)"
             ),
             {"dataset_version_id": dataset_version_id, "dataset_id": dataset_id},
+        )
+        SqlAlchemyMarketDataCoverageManifestRepository(connection).declare(
+            dataset_version_id,
+            universe_version_id,
+            requests,
+            identity_map=identity_map,
         )
         connection.execute(
             text(
@@ -148,12 +173,10 @@ def _insert_durable_decision_inputs(engine, as_of):
                 "ingestion_time": as_of + timedelta(minutes=1),
             },
         )
-        connection.execute(
-            text(
-                "UPDATE dataset_versions SET immutable = TRUE "
-                "WHERE dataset_version_id = :dataset_version_id"
-            ),
-            {"dataset_version_id": dataset_version_id},
+        SqlAlchemyMarketDataVersionFinalizer(connection).finalize(
+            dataset_version_id,
+            requests,
+            identity_map=identity_map,
         )
     return universe_id, universe_version_id, instrument_id, dataset_version_id
 
