@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 
@@ -165,3 +165,89 @@ def test_market_data_staging_seals_once_and_then_becomes_immutable() -> None:
             assert bar_count == 1
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+def test_market_bar_insert_serializes_with_dataset_sealing_lock() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    instrument_id = uuid4()
+    dataset_id = uuid4()
+    dataset_version_id = uuid4()
+    event_time = datetime(2026, 9, 15, 14, 30, tzinfo=timezone.utc)
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {"instrument_id": instrument_id, "symbol": f"LOCK-{instrument_id}"},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO datasets(dataset_id, name, source, pit_certified) "
+                "VALUES (:dataset_id, :name, 'TEST', TRUE)"
+            ),
+            {"dataset_id": dataset_id, "name": f"lock-{dataset_id}"},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO dataset_versions("
+                "dataset_version_id, dataset_id, version, vintage_label, immutable"
+                ") VALUES (:version_id, :dataset_id, 'v1', 'staging', FALSE)"
+            ),
+            {"version_id": dataset_version_id, "dataset_id": dataset_id},
+        )
+
+    with engine.connect() as sealing, engine.connect() as writer:
+        sealing_transaction = sealing.begin()
+        writer_transaction = writer.begin()
+        try:
+            sealing.execute(
+                text(
+                    "SELECT immutable FROM dataset_versions "
+                    "WHERE dataset_version_id = :version_id FOR UPDATE"
+                ),
+                {"version_id": dataset_version_id},
+            )
+            writer.execute(text("SET LOCAL lock_timeout = '250ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                writer.execute(
+                    text(
+                        "INSERT INTO market_bars("
+                        "dataset_version_id, instrument_id, event_time, available_time, "
+                        "ingestion_time, open, high, low, close, volume"
+                        ") VALUES ("
+                        ":version_id, :instrument_id, :event_time, :event_time, "
+                        ":event_time, 100, 101, 99, 100, 1000)"
+                    ),
+                    {
+                        "version_id": dataset_version_id,
+                        "instrument_id": instrument_id,
+                        "event_time": event_time,
+                    },
+                )
+        finally:
+            writer_transaction.rollback()
+            sealing_transaction.rollback()
+
+    with engine.begin() as connection:
+        connection.execute(
+            text("DELETE FROM dataset_versions WHERE dataset_version_id = :version_id"),
+            {"version_id": dataset_version_id},
+        )
+        connection.execute(
+            text("DELETE FROM datasets WHERE dataset_id = :dataset_id"),
+            {"dataset_id": dataset_id},
+        )
+        connection.execute(
+            text("DELETE FROM instruments WHERE instrument_id = :instrument_id"),
+            {"instrument_id": instrument_id},
+        )
