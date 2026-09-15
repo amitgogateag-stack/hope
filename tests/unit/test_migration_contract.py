@@ -76,3 +76,15 @@ def test_market_data_finalization_preserves_request_window_contract():
     assert "[+-][0-9]{2}:[0-9]{2}" in sql
     assert "MARKET_DATA_FINALIZATION_WINDOW_CONTRACT_INVALID" in sql
     assert "BEFORE UPDATE ON dataset_versions" in sql
+
+
+def test_market_data_finalization_requires_nonempty_manifest_structure():
+    sql = (
+        ROOT / "migrations/074_market_data_manifest_structure.sql"
+    ).read_text()
+    assert "jsonb_typeof(manifest_doc->'windows') <> 'array'" in sql
+    assert "jsonb_array_length(manifest_doc->'windows') = 0" in sql
+    assert "jsonb_typeof(w->'instruments') <> 'array'" in sql
+    assert "jsonb_array_length(w->'instruments') = 0" in sql
+    assert "MARKET_DATA_FINALIZATION_MANIFEST_STRUCTURE_INVALID" in sql
+    assert "BEFORE UPDATE ON dataset_versions" in sql
