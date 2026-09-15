@@ -193,25 +193,55 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
         if not isinstance(raw_window, dict):
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
         try:
+            source = raw_window["source"]
             start = datetime.fromisoformat(str(raw_window["start"]))
             end = datetime.fromisoformat(str(raw_window["end"]))
             interval = timedelta(seconds=int(raw_window["interval_seconds"]))
             instruments = raw_window["instruments"]
         except (KeyError, TypeError, ValueError) as exc:
             raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
-        if start.tzinfo is None or end.tzinfo is None or end <= start or interval <= timedelta(0):
+        if (
+            not isinstance(source, str)
+            or not source
+            or source != source.strip()
+            or start.tzinfo is None
+            or start.utcoffset() is None
+            or end.tzinfo is None
+            or end.utcoffset() is None
+            or end <= start
+            or interval <= timedelta(0)
+            or (end - start) % interval != timedelta(0)
+        ):
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
         if not isinstance(instruments, list) or not instruments:
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
         instrument_ids: list[UUID] = []
+        source_symbols: list[str] = []
         for instrument in instruments:
             if not isinstance(instrument, dict):
                 raise ValueError("MARKET_DATA_MANIFEST_INVALID")
             try:
-                instrument_ids.append(UUID(str(instrument["instrument_id"])))
+                source_symbol = instrument["source_symbol"]
+                instrument_id_text = instrument["instrument_id"]
+                instrument_id = UUID(str(instrument_id_text))
             except (KeyError, ValueError) as exc:
                 raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
+            if (
+                not isinstance(source_symbol, str)
+                or not source_symbol
+                or source_symbol != source_symbol.strip()
+                or not isinstance(instrument_id_text, str)
+                or str(instrument_id) != instrument_id_text
+            ):
+                raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+            source_symbols.append(source_symbol)
+            instrument_ids.append(instrument_id)
+        if (
+            len(set(source_symbols)) != len(source_symbols)
+            or len(set(instrument_ids)) != len(instrument_ids)
+        ):
+            raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
         cursor = start
         while cursor < end:
