@@ -64,3 +64,15 @@ def test_market_data_finalization_requires_canonical_provider_identity():
     assert "w->>'source' <> dataset_source" in sql
     assert "i->>'source_symbol' <> btrim(i->>'source_symbol')" in sql
     assert "MARKET_DATA_FINALIZATION_IDENTITY_NOT_CANONICAL" in sql
+
+
+def test_market_data_finalization_preserves_request_window_contract():
+    sql = (
+        ROOT / "migrations/073_market_data_manifest_window_contract.sql"
+    ).read_text()
+    assert "interval_seconds')::integer <= 0" in sql
+    assert "::timestamptz <=" in sql
+    assert "EXTRACT(EPOCH FROM" in sql
+    assert "[+-][0-9]{2}:[0-9]{2}" in sql
+    assert "MARKET_DATA_FINALIZATION_WINDOW_CONTRACT_INVALID" in sql
+    assert "BEFORE UPDATE ON dataset_versions" in sql
