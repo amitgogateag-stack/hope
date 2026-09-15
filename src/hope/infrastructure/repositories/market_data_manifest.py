@@ -185,9 +185,18 @@ def manifest_universe_version_id(manifest: Mapping[str, object]) -> UUID:
     if manifest.get("version") != 2:
         raise ValueError("MARKET_DATA_MANIFEST_VERSION_UNSUPPORTED")
     try:
-        return UUID(str(manifest["universe_version_id"]))
-    except (KeyError, ValueError) as exc:
+        universe_version_id_text = manifest["universe_version_id"]
+    except KeyError as exc:
         raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
+    if not isinstance(universe_version_id_text, str):
+        raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+    try:
+        universe_version_id = UUID(universe_version_id_text)
+    except ValueError as exc:
+        raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
+    if str(universe_version_id) != universe_version_id_text:
+        raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+    return universe_version_id
 
 
 def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, datetime]]:
@@ -209,16 +218,31 @@ def manifest_evidence(
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
         try:
             source = raw_window["source"]
-            start = datetime.fromisoformat(str(raw_window["start"]))
-            end = datetime.fromisoformat(str(raw_window["end"]))
-            interval = timedelta(seconds=int(raw_window["interval_seconds"]))
+            start_text = raw_window["start"]
+            end_text = raw_window["end"]
+            interval_seconds = raw_window["interval_seconds"]
             instruments = raw_window["instruments"]
-        except (KeyError, TypeError, ValueError) as exc:
+        except KeyError as exc:
+            raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
+        if (
+            not isinstance(start_text, str)
+            or not isinstance(end_text, str)
+            or not isinstance(interval_seconds, int)
+            or isinstance(interval_seconds, bool)
+        ):
+            raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+        try:
+            start = datetime.fromisoformat(start_text)
+            end = datetime.fromisoformat(end_text)
+            interval = timedelta(seconds=interval_seconds)
+        except (ValueError, OverflowError) as exc:
             raise ValueError("MARKET_DATA_MANIFEST_INVALID") from exc
         if (
             not isinstance(source, str)
             or not source
             or source != source.strip()
+            or start.isoformat() != start_text
+            or end.isoformat() != end_text
             or start.tzinfo is None
             or start.utcoffset() is None
             or end.tzinfo is None

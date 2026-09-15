@@ -168,3 +168,72 @@ def test_manifest_parser_rejects_overlapping_logical_coverage() -> None:
 
     with pytest.raises(ValueError, match="DUPLICATE_LOGICAL_KEY"):
         manifest_expected_keys(manifest)
+
+
+@pytest.mark.parametrize("interval_seconds", ("60", 60.5, True))
+def test_manifest_parser_rejects_noninteger_json_cadence(interval_seconds: object) -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): uuid4()},
+    )
+    manifest["windows"][0]["interval_seconds"] = interval_seconds
+
+    from hope.infrastructure.repositories.market_data_manifest import manifest_expected_keys
+
+    with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_INVALID"):
+        manifest_expected_keys(manifest)
+
+
+def test_manifest_parser_rejects_noncanonical_universe_version_id() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): uuid4()},
+    )
+    manifest["universe_version_id"] = "{" + str(manifest["universe_version_id"]) + "}"
+
+    from hope.infrastructure.repositories.market_data_manifest import manifest_expected_keys
+
+    with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_INVALID"):
+        manifest_expected_keys(manifest)
+
+
+def test_manifest_parser_rejects_noncanonical_timestamp_text() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): uuid4()},
+    )
+    manifest["windows"][0]["start"] = str(
+        manifest["windows"][0]["start"]
+    ).replace("+00:00", "Z")
+
+    from hope.infrastructure.repositories.market_data_manifest import manifest_expected_keys
+
+    with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_INVALID"):
+        manifest_expected_keys(manifest)
