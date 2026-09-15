@@ -47,7 +47,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
         with self._connection.begin_nested():
             version = self._connection.execute(
                 text(
-                    "SELECT dv.immutable, dv.vintage_label, d.pit_certified "
+                    "SELECT dv.immutable, dv.vintage_label, d.pit_certified, d.source "
                     "FROM dataset_versions dv JOIN datasets d ON d.dataset_id = dv.dataset_id "
                     "WHERE dv.dataset_version_id = :version_id FOR UPDATE"
                 ),
@@ -106,6 +106,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 manifest,
                 requests,
                 identity_map=identity_map,
+                expected_source=version["source"],
             )
             if not requested.issubset(expected):
                 raise ValueError("MARKET_DATA_REQUEST_OUTSIDE_DECLARED_MANIFEST")

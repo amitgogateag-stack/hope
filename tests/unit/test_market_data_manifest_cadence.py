@@ -123,6 +123,31 @@ def test_manifest_request_rejects_swapped_source_identity_bindings() -> None:
         )
 
 
+def test_manifest_parser_rejects_dataset_source_mismatch() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    request = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    instrument_id = uuid4()
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (request,),
+        identity_map={("TEST", "ABC"): instrument_id},
+    )
+
+    with pytest.raises(ValueError, match="MANIFEST_DATASET_SOURCE_MISMATCH"):
+        manifest_expected_keys_for_requests(
+            manifest,
+            (request,),
+            identity_map={("TEST", "ABC"): instrument_id},
+            expected_source="OTHER",
+        )
+
+
 def test_manifest_builder_rejects_overlapping_logical_coverage() -> None:
     start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
     request = MarketDataRequest(

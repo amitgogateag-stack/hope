@@ -41,8 +41,10 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
         with self._connection.begin_nested():
             version = self._connection.execute(
                 text(
-                    "SELECT immutable, vintage_label FROM dataset_versions "
-                    "WHERE dataset_version_id = :version_id FOR UPDATE"
+                    "SELECT dv.immutable, dv.vintage_label, d.source "
+                    "FROM dataset_versions dv "
+                    "JOIN datasets d ON d.dataset_id = dv.dataset_id "
+                    "WHERE dv.dataset_version_id = :version_id FOR UPDATE"
                 ),
                 {"version_id": dataset_version_id},
             ).mappings().one_or_none()
@@ -52,6 +54,8 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
                 raise ValueError("MARKET_DATA_MANIFEST_DATASET_VERSION_IMMUTABLE")
             if version["vintage_label"] != "staging":
                 raise ValueError("MARKET_DATA_MANIFEST_REQUIRES_STAGING_VERSION")
+            if any(request.source != version["source"] for request in requests):
+                raise ValueError("MARKET_DATA_MANIFEST_DATASET_SOURCE_MISMATCH")
 
             universe = self._connection.execute(
                 text(
@@ -210,6 +214,8 @@ def manifest_expected_keys(manifest: Mapping[str, object]) -> set[tuple[UUID, da
 
 def manifest_evidence(
     manifest: Mapping[str, object],
+    *,
+    expected_source: str | None = None,
 ) -> tuple[set[tuple[UUID, datetime]], dict[tuple[str, str], UUID]]:
     manifest_universe_version_id(manifest)
     raw_windows = manifest.get("windows")
@@ -257,6 +263,8 @@ def manifest_evidence(
             or (end - start) % interval != timedelta(0)
         ):
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
+        if expected_source is not None and source != expected_source:
+            raise ValueError("MARKET_DATA_MANIFEST_DATASET_SOURCE_MISMATCH")
         if not isinstance(instruments, list) or not instruments:
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
@@ -310,8 +318,12 @@ def manifest_expected_keys_for_requests(
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
+    expected_source: str | None = None,
 ) -> set[tuple[UUID, datetime]]:
-    expected, declared_identity_bindings = manifest_evidence(manifest)
+    expected, declared_identity_bindings = manifest_evidence(
+        manifest,
+        expected_source=expected_source,
+    )
     for request in requests:
         for source_symbol in request.source_symbols:
             identity_key = (request.source, source_symbol)

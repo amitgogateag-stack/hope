@@ -96,6 +96,21 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership() -> Non
             )
 
             repo = SqlAlchemyMarketDataCoverageManifestRepository(connection)
+            wrong_source_request = MarketDataRequest(
+                source="OTHER",
+                source_symbols=("ABC",),
+                start=t0,
+                end=t1,
+                interval=timedelta(minutes=1),
+            )
+            with pytest.raises(ValueError, match="MANIFEST_DATASET_SOURCE_MISMATCH"):
+                repo.declare(
+                    invalid_version_id,
+                    universe_version_id,
+                    (wrong_source_request,),
+                    identity_map={("OTHER", "ABC"): instrument_id},
+                )
+
             with pytest.raises(ValueError, match="MANIFEST_REQUIRES_STAGING_VERSION"):
                 repo.declare(
                     non_staging_version_id,

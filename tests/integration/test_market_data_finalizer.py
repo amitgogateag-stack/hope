@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,7 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
             undeclared_version_id = uuid4()
             corrupt_manifest_version_id = uuid4()
             non_staging_version_id = uuid4()
+            wrong_source_manifest_version_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -57,13 +59,15 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "(:v1, :dataset_id, 'v1', 'staging', FALSE), "
                     "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
                     "(:v3, :dataset_id, 'v3', 'staging', FALSE), "
-                    "(:v4, :dataset_id, 'v4', 'draft', FALSE)"
+                    "(:v4, :dataset_id, 'v4', 'draft', FALSE), "
+                    "(:v5, :dataset_id, 'v5', 'staging', FALSE)"
                 ),
                 {
                     "v1": version_id,
                     "v2": undeclared_version_id,
                     "v3": corrupt_manifest_version_id,
                     "v4": non_staging_version_id,
+                    "v5": wrong_source_manifest_version_id,
                     "dataset_id": dataset_id,
                 },
             )
@@ -109,6 +113,33 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     "manifest": json.dumps(corrupt_payload),
                 },
             )
+            wrong_source_request = _request(t0, source="OTHER")
+            wrong_source_identity_map = {("OTHER", "ABC"): instrument_id}
+            wrong_source_payload = build_market_data_manifest(
+                universe_version_id,
+                (wrong_source_request,),
+                identity_map=wrong_source_identity_map,
+            )
+            wrong_source_canonical = json.dumps(
+                wrong_source_payload,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_data_coverage_manifests("
+                    "dataset_version_id, universe_version_id, manifest_hash, manifest"
+                    ") VALUES (:version_id, :universe_version_id, :manifest_hash, CAST(:manifest AS JSONB))"
+                ),
+                {
+                    "version_id": wrong_source_manifest_version_id,
+                    "universe_version_id": universe_version_id,
+                    "manifest_hash": hashlib.sha256(
+                        wrong_source_canonical.encode("utf-8")
+                    ).hexdigest(),
+                    "manifest": wrong_source_canonical,
+                },
+            )
 
             manifest = SqlAlchemyMarketDataCoverageManifestRepository(connection)
             manifest.declare(
@@ -124,6 +155,13 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                     non_staging_version_id,
                     (_request(t0),),
                     identity_map=identity_map,
+                )
+
+            with pytest.raises(ValueError, match="MANIFEST_DATASET_SOURCE_MISMATCH"):
+                finalizer.finalize(
+                    wrong_source_manifest_version_id,
+                    (wrong_source_request,),
+                    identity_map=wrong_source_identity_map,
                 )
 
             _insert_bar(connection, corrupt_manifest_version_id, instrument_id, t0)
@@ -151,9 +189,9 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
             transaction.rollback()
 
 
-def _request(start: datetime) -> MarketDataRequest:
+def _request(start: datetime, *, source: str = "TEST") -> MarketDataRequest:
     return MarketDataRequest(
-        source="TEST",
+        source=source,
         source_symbols=("ABC",),
         start=start,
         end=start + timedelta(minutes=1),
