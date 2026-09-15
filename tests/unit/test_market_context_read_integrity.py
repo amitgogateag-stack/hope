@@ -5,7 +5,10 @@ from uuid import uuid4
 
 import pytest
 
-from hope.infrastructure.repositories.market_contexts import _verify_read_side_evidence
+from hope.infrastructure.repositories.market_contexts import (
+    _verify_read_side_evidence,
+    _verify_read_side_membership,
+)
 
 
 def _dataset_evidence() -> dict[str, object]:
@@ -43,7 +46,9 @@ def _dataset_evidence() -> dict[str, object]:
 
 
 def test_read_side_accepts_canonical_manifest_evidence() -> None:
-    _verify_read_side_evidence(_dataset_evidence())
+    evidence = _dataset_evidence()
+    expected_keys = _verify_read_side_evidence(evidence)
+    assert len(expected_keys) == 1
 
 
 def test_read_side_rejects_manifest_checksum_mismatch() -> None:
@@ -77,3 +82,19 @@ def test_read_side_reparses_manifest_against_dataset_source() -> None:
     evidence["source"] = "OTHER"
     with pytest.raises(ValueError, match="MANIFEST_DATASET_SOURCE_MISMATCH"):
         _verify_read_side_evidence(evidence)
+
+
+def test_read_side_rejects_manifest_key_outside_universe_membership() -> None:
+    expected_keys = _verify_read_side_evidence(_dataset_evidence())
+    instrument_id, event_time = next(iter(expected_keys))
+
+    with pytest.raises(ValueError, match="UNIVERSE_MEMBERSHIP_MISMATCH"):
+        _verify_read_side_membership(
+            expected_keys,
+            {
+                instrument_id: (
+                    event_time + timedelta(seconds=1),
+                    None,
+                )
+            },
+        )

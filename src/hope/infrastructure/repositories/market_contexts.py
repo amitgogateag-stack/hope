@@ -14,10 +14,13 @@ from hope.domain.market_data.models import MarketBar
 from hope.infrastructure.repositories.market_data_manifest import (
     manifest_evidence,
     manifest_universe_version_id,
+    validate_manifest_membership,
 )
 
 
-def _verify_read_side_evidence(dataset: Mapping[str, object]) -> None:
+def _verify_read_side_evidence(
+    dataset: Mapping[str, object],
+) -> set[tuple[UUID, datetime]]:
     manifest = dataset.get("manifest")
     if not isinstance(manifest, dict):
         raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
@@ -41,6 +44,17 @@ def _verify_read_side_evidence(dataset: Mapping[str, object]) -> None:
     )
     if not expected_keys:
         raise ValueError("PIT_MARKET_CONTEXT_MANIFEST_EVIDENCE_EMPTY")
+    return expected_keys
+
+
+def _verify_read_side_membership(
+    expected_keys: set[tuple[UUID, datetime]],
+    memberships: Mapping[UUID, tuple[datetime | None, datetime | None]],
+) -> None:
+    try:
+        validate_manifest_membership(expected_keys, memberships=memberships)
+    except ValueError as exc:
+        raise ValueError("PIT_MARKET_CONTEXT_UNIVERSE_MEMBERSHIP_MISMATCH") from exc
 
 
 class PITMarketContextRepository:
@@ -91,7 +105,21 @@ class PITMarketContextRepository:
         if dataset["vintage_label"] != "sealed" or dataset["manifest"] is None:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
 
-        _verify_read_side_evidence(dataset)
+        expected_keys = _verify_read_side_evidence(dataset)
+        member_rows = self._connection.execute(
+            text(
+                "SELECT instrument_id, valid_from, valid_to FROM universe_members "
+                "WHERE universe_version_id = :universe_version_id"
+            ),
+            {"universe_version_id": dataset["universe_version_id"]},
+        ).mappings()
+        _verify_read_side_membership(
+            expected_keys,
+            {
+                row["instrument_id"]: (row["valid_from"], row["valid_to"])
+                for row in member_rows
+            },
+        )
 
         if not instrument_ids:
             return PITMarketContext(as_of=as_of, bars=())
