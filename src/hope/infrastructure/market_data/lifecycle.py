@@ -12,6 +12,15 @@ from hope.infrastructure.market_data.provider import MarketDataProvider, MarketD
 
 @runtime_checkable
 class MarketDataVersionFinalizer(Protocol):
+    def preflight(
+        self,
+        dataset_version_id: UUID,
+        requests: tuple[MarketDataRequest, ...],
+        *,
+        identity_map: Mapping[tuple[str, str], UUID],
+    ) -> None:
+        ...
+
     def finalize(
         self,
         dataset_version_id: UUID,
@@ -32,18 +41,21 @@ def ingest_and_seal_market_data_windows(
     identity_map: Mapping[tuple[str, str], UUID],
     session_calendar: MarketSessionCalendar | None = None,
 ) -> tuple[NormalizedMarketBarBatch, ...]:
-    """Ingest deterministic windows, then atomically verify coverage and seal.
+    """Ingest deterministic windows only after durable-manifest preflight.
 
     Without a session calendar, windows must remain exactly contiguous. With a
     trusted calendar, closed-market gaps are allowed only when no expected slot
     exists between windows, and every requested event slot must be an in-session
-    interval-grid timestamp. The finalizer owns the database lock spanning
-    persisted-coverage verification through sealing so no staging write can slip
-    between those two checks.
+    interval-grid timestamp. Before the first provider call, the finalizer proves
+    that the runtime request plan exactly matches the persisted immutable coverage
+    manifest. Finalization then revalidates persisted coverage under the database
+    lock spanning verification through sealing.
     """
 
     if not isinstance(dataset_version_id, UUID):
         raise TypeError("MARKET_DATA_LIFECYCLE_REQUIRES_DATASET_VERSION_ID")
+    if not isinstance(requests, tuple):
+        raise TypeError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRED")
 
@@ -91,6 +103,15 @@ def ingest_and_seal_market_data_windows(
         raise ValueError("MARKET_DATA_LIFECYCLE_IDENTITY_MAP_INCOMPLETE")
     if any(not isinstance(identity_map[key], UUID) for key in required_identity_keys):
         raise TypeError("MARKET_DATA_LIFECYCLE_IDENTITY_MAP_INVALID")
+
+    preflight = getattr(finalizer, "preflight", None)
+    if not callable(preflight):
+        raise TypeError("MARKET_DATA_LIFECYCLE_MANIFEST_PREFLIGHT_REQUIRED")
+    preflight(
+        dataset_version_id,
+        requests,
+        identity_map=identity_map,
+    )
 
     batches = tuple(
         ingest_market_data_window(
