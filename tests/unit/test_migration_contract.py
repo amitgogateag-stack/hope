@@ -37,3 +37,10 @@ def test_market_data_finalization_requires_valid_pit_universe_membership():
     assert "e.event_time >= um.valid_from" in sql
     assert "e.event_time < um.valid_to" in sql
     assert "MARKET_DATA_FINALIZATION_UNIVERSE_MEMBERSHIP_MISMATCH" in sql
+
+
+def test_market_data_finalization_rejects_duplicate_manifest_coverage():
+    sql = (ROOT / "migrations/070_market_data_manifest_unique_coverage.sql").read_text()
+    assert "count(DISTINCT (instrument_id, event_time))" in sql
+    assert "MARKET_DATA_FINALIZATION_DUPLICATE_MANIFEST_COVERAGE" in sql
+    assert "BEFORE UPDATE ON dataset_versions" in sql
