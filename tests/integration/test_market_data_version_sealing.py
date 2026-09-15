@@ -1,5 +1,7 @@
+import hashlib
+import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -27,6 +29,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
         transaction = connection.begin()
         try:
             instrument_id = uuid4()
+            outsider_instrument_id = uuid4()
             pit_dataset_id = uuid4()
             non_pit_dataset_id = uuid4()
             good_version_id = uuid4()
@@ -34,6 +37,9 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
             non_pit_version_id = uuid4()
             fake_sealed_empty_version_id = uuid4()
             fake_sealed_non_pit_version_id = uuid4()
+            membership_bypass_version_id = uuid4()
+            universe_id = uuid4()
+            universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
 
             connection.execute(
@@ -42,6 +48,35 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
                 ),
                 {"instrument_id": instrument_id, "symbol": f"SEAL-{instrument_id}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                    "VALUES (:instrument_id, :symbol, 'TEST', 'ACTIVE')"
+                ),
+                {
+                    "instrument_id": outsider_instrument_id,
+                    "symbol": f"OUTSIDER-{outsider_instrument_id}",
+                },
+            )
+            connection.execute(
+                text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"),
+                {"id": universe_id, "name": f"seal-{universe_id}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_versions("
+                    "universe_version_id, universe_id, version, pit_certified, declared_member_count"
+                    ") VALUES (:version_id, :universe_id, 'v1', TRUE, 1)"
+                ),
+                {"version_id": universe_version_id, "universe_id": universe_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_members(universe_version_id, instrument_id) "
+                    "VALUES (:version_id, :instrument_id)"
+                ),
+                {"version_id": universe_version_id, "instrument_id": instrument_id},
             )
             connection.execute(
                 text(
@@ -62,6 +97,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "(:good, :pit_id, 'good', 'staging', FALSE), "
                     "(:empty, :pit_id, 'empty', 'staging', FALSE), "
                     "(:non_pit, :non_pit_id, 'non-pit', 'staging', FALSE), "
+                    "(:membership_bypass, :pit_id, 'membership-bypass', 'staging', FALSE), "
                     "(:fake_empty, :pit_id, 'fake-empty', 'sealed', TRUE), "
                     "(:fake_non_pit, :non_pit_id, 'fake-non-pit', 'sealed', TRUE)"
                 ),
@@ -69,10 +105,49 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     "good": good_version_id,
                     "empty": empty_version_id,
                     "non_pit": non_pit_version_id,
+                    "membership_bypass": membership_bypass_version_id,
                     "fake_empty": fake_sealed_empty_version_id,
                     "fake_non_pit": fake_sealed_non_pit_version_id,
                     "pit_id": pit_dataset_id,
                     "non_pit_id": non_pit_dataset_id,
+                },
+            )
+            manifest = {
+                "version": 2,
+                "universe_version_id": str(universe_version_id),
+                "windows": [
+                    {
+                        "source": "TEST",
+                        "start": t0.isoformat(),
+                        "end": (t0 + timedelta(minutes=1)).isoformat(),
+                        "interval_seconds": 60,
+                        "instruments": [
+                            {
+                                "source_symbol": "OUTSIDER",
+                                "instrument_id": str(outsider_instrument_id),
+                            }
+                        ],
+                    }
+                ],
+            }
+            canonical_manifest = json.dumps(
+                manifest, sort_keys=True, separators=(",", ":")
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_data_coverage_manifests("
+                    "dataset_version_id, universe_version_id, manifest_hash, manifest"
+                    ") VALUES ("
+                    ":version_id, :universe_version_id, :manifest_hash, CAST(:manifest AS JSONB)"
+                    ")"
+                ),
+                {
+                    "version_id": membership_bypass_version_id,
+                    "universe_version_id": universe_version_id,
+                    "manifest_hash": hashlib.sha256(
+                        canonical_manifest.encode("utf-8")
+                    ).hexdigest(),
+                    "manifest": canonical_manifest,
                 },
             )
             connection.execute(
@@ -83,6 +158,19 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                     ":version_id, :instrument_id, :t0, :t0, :t0, 100, 101, 99, 100, 1000)"
                 ),
                 {"version_id": good_version_id, "instrument_id": instrument_id, "t0": t0},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_bars("
+                    "dataset_version_id, instrument_id, event_time, available_time, ingestion_time, "
+                    "open, high, low, close, volume) VALUES ("
+                    ":version_id, :instrument_id, :t0, :t0, :t0, 100, 101, 99, 100, 1000)"
+                ),
+                {
+                    "version_id": membership_bypass_version_id,
+                    "instrument_id": outsider_instrument_id,
+                    "t0": t0,
+                },
             )
 
             sealer = SqlAlchemyMarketDataVersionSealer(connection)
@@ -111,6 +199,20 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                             "WHERE dataset_version_id = :version_id"
                         ),
                         {"version_id": good_version_id},
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="FINALIZATION_UNIVERSE_MEMBERSHIP_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE dataset_versions "
+                            "SET immutable = TRUE, vintage_label = 'sealed' "
+                            "WHERE dataset_version_id = :version_id"
+                        ),
+                        {"version_id": membership_bypass_version_id},
                     )
 
             # A row inserted already immutable is not sufficient evidence for

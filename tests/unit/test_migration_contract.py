@@ -28,3 +28,12 @@ def test_market_data_finalization_requires_manifest_backed_exact_coverage():
     assert "MARKET_DATA_FINALIZATION_COVERAGE_MISMATCH" in sql
     assert "MARKET_DATA_FINALIZATION_REQUIRES_PIT_UNIVERSE" in sql
     assert "BEFORE UPDATE ON dataset_versions" in sql
+
+
+def test_market_data_finalization_requires_valid_pit_universe_membership():
+    sql = (ROOT / "migrations/069_market_data_finalization_membership.sql").read_text()
+    assert "hope_guard_market_data_version_finalization" in sql
+    assert "um.instrument_id = e.instrument_id" in sql
+    assert "e.event_time >= um.valid_from" in sql
+    assert "e.event_time < um.valid_to" in sql
+    assert "MARKET_DATA_FINALIZATION_UNIVERSE_MEMBERSHIP_MISMATCH" in sql
