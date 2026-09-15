@@ -66,6 +66,18 @@ def _verify_requested_instruments(
         raise ValueError("PIT_MARKET_CONTEXT_INSTRUMENT_OUTSIDE_MANIFEST")
 
 
+def _verify_read_side_coverage(
+    expected_keys: set[tuple[UUID, datetime]],
+    persisted_keys: tuple[tuple[UUID, datetime], ...],
+) -> None:
+    persisted_key_set = set(persisted_keys)
+    if (
+        len(persisted_key_set) != len(persisted_keys)
+        or persisted_key_set != expected_keys
+    ):
+        raise ValueError("PIT_MARKET_CONTEXT_PERSISTED_COVERAGE_MISMATCH")
+
+
 class PITMarketContextRepository:
     """Authoritative PIT context loader from verified manifest-backed evidence."""
 
@@ -130,6 +142,20 @@ class PITMarketContextRepository:
             },
         )
         _verify_requested_instruments(expected_keys, instrument_ids)
+        persisted_key_rows = self._connection.execute(
+            text(
+                "SELECT instrument_id, event_time FROM market_bars "
+                "WHERE dataset_version_id = :dataset_version_id"
+            ),
+            {"dataset_version_id": dataset_version_id},
+        ).all()
+        _verify_read_side_coverage(
+            expected_keys,
+            tuple(
+                (row.instrument_id, row.event_time)
+                for row in persisted_key_rows
+            ),
+        )
 
         if not instrument_ids:
             return PITMarketContext(as_of=as_of, bars=())

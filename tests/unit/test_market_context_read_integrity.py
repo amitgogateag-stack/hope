@@ -7,6 +7,7 @@ import pytest
 
 from hope.infrastructure.repositories.market_contexts import (
     _verify_requested_instruments,
+    _verify_read_side_coverage,
     _verify_read_side_evidence,
     _verify_read_side_membership,
 )
@@ -108,3 +109,19 @@ def test_read_side_rejects_requested_instrument_outside_manifest() -> None:
     _verify_requested_instruments(expected_keys, (declared_instrument_id,))
     with pytest.raises(ValueError, match="INSTRUMENT_OUTSIDE_MANIFEST"):
         _verify_requested_instruments(expected_keys, (uuid4(),))
+
+
+def test_read_side_rejects_inexact_persisted_coverage() -> None:
+    expected_keys = _verify_read_side_evidence(_dataset_evidence())
+    exact_keys = tuple(expected_keys)
+    _, event_time = exact_keys[0]
+
+    for persisted_keys in (
+        (),
+        exact_keys + exact_keys,
+        exact_keys + ((uuid4(), event_time),),
+    ):
+        with pytest.raises(ValueError, match="PERSISTED_COVERAGE_MISMATCH"):
+            _verify_read_side_coverage(expected_keys, persisted_keys)
+
+    _verify_read_side_coverage(expected_keys, exact_keys)
