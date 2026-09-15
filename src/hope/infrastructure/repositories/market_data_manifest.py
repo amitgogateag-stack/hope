@@ -335,6 +335,40 @@ def manifest_expected_keys_for_requests(
     return expected
 
 
+def validate_manifest_request_subset(
+    manifest: Mapping[str, object],
+    requests: tuple[MarketDataRequest, ...],
+    *,
+    identity_map: Mapping[tuple[str, str], UUID],
+) -> None:
+    """Require each recovery key to retain its declared window contract."""
+    manifest_evidence(manifest)
+    raw_windows = manifest["windows"]
+    for request in requests:
+        request_interval_seconds = request.interval.total_seconds()
+        for source_symbol, event_time in request.expected_keys:
+            identity_key = (request.source, source_symbol)
+            instrument_id = identity_map.get(identity_key)
+            if not isinstance(instrument_id, UUID):
+                raise ValueError("MARKET_DATA_RECOVERY_REQUEST_CONTRACT_MISMATCH")
+
+            authorized = any(
+                raw_window["source"] == request.source
+                and raw_window["interval_seconds"] == request_interval_seconds
+                and datetime.fromisoformat(raw_window["start"])
+                <= event_time
+                < datetime.fromisoformat(raw_window["end"])
+                and {
+                    "source_symbol": source_symbol,
+                    "instrument_id": str(instrument_id),
+                }
+                in raw_window["instruments"]
+                for raw_window in raw_windows
+            )
+            if not authorized:
+                raise ValueError("MARKET_DATA_RECOVERY_REQUEST_CONTRACT_MISMATCH")
+
+
 def validate_manifest_membership(
     expected_keys: set[tuple[UUID, datetime]],
     *,

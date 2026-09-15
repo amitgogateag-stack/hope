@@ -8,6 +8,7 @@ from hope.infrastructure.repositories.market_data_manifest import (
     build_market_data_manifest,
     manifest_expected_keys_for_requests,
     validate_manifest_membership,
+    validate_manifest_request_subset,
 )
 
 
@@ -166,6 +167,37 @@ def test_manifest_membership_rejects_event_outside_valid_interval() -> None:
             memberships={
                 instrument_id: (event_time + timedelta(minutes=1), None),
             },
+        )
+
+
+def test_manifest_recovery_subset_preserves_declared_cadence() -> None:
+    start = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
+    instrument_id = uuid4()
+    declared = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=1),
+        interval=timedelta(minutes=1),
+    )
+    wider_cadence = MarketDataRequest(
+        source="TEST",
+        source_symbols=("ABC",),
+        start=start,
+        end=start + timedelta(minutes=2),
+        interval=timedelta(minutes=2),
+    )
+    manifest = build_market_data_manifest(
+        uuid4(),
+        (declared,),
+        identity_map={("TEST", "ABC"): instrument_id},
+    )
+
+    with pytest.raises(ValueError, match="RECOVERY_REQUEST_CONTRACT_MISMATCH"):
+        validate_manifest_request_subset(
+            manifest,
+            (wider_cadence,),
+            identity_map={("TEST", "ABC"): instrument_id},
         )
 
 

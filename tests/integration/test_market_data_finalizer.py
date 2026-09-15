@@ -15,6 +15,9 @@ from hope.infrastructure.repositories.market_data_manifest import (
     SqlAlchemyMarketDataCoverageManifestRepository,
     build_market_data_manifest,
 )
+from hope.infrastructure.repositories.market_data_recovery import (
+    SqlAlchemyMarketDataRecoveryAuthorizer,
+)
 
 
 @pytest.mark.integration
@@ -184,6 +187,21 @@ def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
                 identity_map=identity_map,
             )
             finalizer = SqlAlchemyMarketDataVersionFinalizer(connection)
+            recovery = SqlAlchemyMarketDataRecoveryAuthorizer(connection)
+
+            wider_cadence_request = MarketDataRequest(
+                source="TEST",
+                source_symbols=("ABC",),
+                start=t0,
+                end=t0 + timedelta(minutes=2),
+                interval=timedelta(minutes=2),
+            )
+            with pytest.raises(ValueError, match="RECOVERY_REQUEST_CONTRACT_MISMATCH"):
+                recovery.preflight_subset(
+                    version_id,
+                    (wider_cadence_request,),
+                    identity_map=identity_map,
+                )
 
             with pytest.raises(ValueError, match="FINALIZE_REQUIRES_STAGING_VERSION"):
                 finalizer.finalize(

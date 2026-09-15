@@ -13,6 +13,7 @@ from hope.infrastructure.repositories.market_data_manifest import (
     manifest_evidence,
     manifest_universe_version_id,
     validate_manifest_membership,
+    validate_manifest_request_subset,
 )
 
 
@@ -92,6 +93,11 @@ class SqlAlchemyMarketDataRecoveryAuthorizer:
                     requested.add((instrument_id, event_time))
             if not requested.issubset(expected):
                 raise ValueError("MARKET_DATA_RECOVERY_REQUEST_OUTSIDE_DECLARED_MANIFEST")
+            validate_manifest_request_subset(
+                manifest,
+                requests,
+                identity_map=identity_map,
+            )
 
             universe = self._connection.execute(
                 text(
