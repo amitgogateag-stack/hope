@@ -2,13 +2,29 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Callable, Iterable
+from typing import Callable, Iterable
 from uuid import UUID
 
+from hope.application.universe.snapshot import UniverseSnapshot
+from hope.domain.market_data.context import PITMarketContext
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
 
 
-ResearchExecutionHandler = Callable[[CertifiedExecutionPlan, Any], Any]
+@dataclass(frozen=True)
+class CertifiedResearchInputs:
+    """Exact immutable research inputs resolved from experiment provenance."""
+
+    market_context: PITMarketContext
+    universe_snapshot: UniverseSnapshot
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.market_context, PITMarketContext):
+            raise TypeError("CERTIFIED_RESEARCH_INPUTS_REQUIRE_MARKET_CONTEXT")
+        if not isinstance(self.universe_snapshot, UniverseSnapshot):
+            raise TypeError("CERTIFIED_RESEARCH_INPUTS_REQUIRE_UNIVERSE_SNAPSHOT")
+
+
+ResearchExecutionHandler = Callable[[CertifiedExecutionPlan, CertifiedResearchInputs], object]
 
 
 @dataclass(frozen=True)
@@ -68,8 +84,10 @@ class CertifiedResearchExecutor:
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_REGISTRY")
         self._registry = registry
 
-    def execute(self, plan: CertifiedExecutionPlan, context: Any) -> Any:
+    def execute(self, plan: CertifiedExecutionPlan, inputs: CertifiedResearchInputs) -> object:
         if not isinstance(plan, CertifiedExecutionPlan):
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_EXECUTION_PLAN")
+        if not isinstance(inputs, CertifiedResearchInputs):
+            raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_CERTIFIED_INPUTS")
         implementation = self._registry.resolve(plan)
-        return implementation.execute(plan, context)
+        return implementation.execute(plan, inputs)

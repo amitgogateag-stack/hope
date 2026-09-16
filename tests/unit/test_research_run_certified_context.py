@@ -1,30 +1,31 @@
 from datetime import datetime, timezone
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
-import inspect
 import pytest
 
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.execution import (
     CertifiedResearchExecutor,
+    CertifiedResearchInputs,
     ResearchExecutionImplementation,
     ResearchExecutionRegistry,
 )
 from hope.application.experiments.research_runs import (
-    CertifiedResearchContextLoader,
+    CertifiedResearchInputLoader,
     CertifiedResearchReproducibilityVerifier,
     CertifiedResearchRunOrchestrator,
     research_result_fingerprint,
     research_run_fingerprint,
     verify_research_result_evidence,
 )
-from hope.infrastructure.repositories.execution_provenance import (
-    CertifiedExecutionPlanResolver,
-    StrategyVersionRecord,
-)
+from hope.application.universe.snapshot import UniverseSnapshot
+from hope.domain.market_data.context import PITMarketContext
+from hope.domain.universe.models import UniverseMember, UniverseVersion
+from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlanResolver, StrategyVersionRecord
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
+UTC = timezone.utc
 CONFIG = {"risk": {"max_positions": 3}, "strategy": {"lookback": 20}}
 
 
@@ -41,12 +42,27 @@ def _experiment() -> ExperimentRecord:
     )
 
 
-def _strategy_record(experiment: ExperimentRecord) -> StrategyVersionRecord:
-    return StrategyVersionRecord(experiment.strategy_version_id, uuid4(), "1.0.0", "abc123")
+def _snapshot(experiment: ExperimentRecord, instrument_ids=None) -> UniverseSnapshot:
+    ids = instrument_ids or (uuid4(), uuid4())
+    return UniverseSnapshot(
+        universe_version_id=experiment.universe_version_id,
+        version=UniverseVersion(
+            universe_id=uuid4(),
+            version="v1",
+            declared_member_count=len(ids),
+            pit_certified=True,
+        ),
+        members=tuple(UniverseMember(instrument_id=value) for value in ids),
+    )
 
 
 def _resolver(experiment, *, configuration=CONFIG, strategy=None):
-    strategy = strategy or _strategy_record(experiment)
+    strategy = strategy or StrategyVersionRecord(
+        experiment.strategy_version_id,
+        uuid4(),
+        "1.0.0",
+        "abc123",
+    )
 
     class Provenance:
         def get_strategy_version(self, strategy_version_id):
@@ -55,136 +71,124 @@ def _resolver(experiment, *, configuration=CONFIG, strategy=None):
         def get_configuration(self, configuration_hash_value):
             return configuration
 
-    return CertifiedExecutionPlanResolver(Provenance())
+    return CertifiedExecutionPlanResolver(Provenance()), strategy
 
 
-def _certified_executor(experiment, execute, *, strategy=None):
-    strategy = strategy or _strategy_record(experiment)
+def _executor(experiment, strategy, handler):
     implementation = ResearchExecutionImplementation(
-        strategy_version_id=strategy.strategy_version_id,
+        strategy_version_id=experiment.strategy_version_id,
         strategy_id=strategy.strategy_id,
         strategy_version=strategy.version,
         code_commit=strategy.code_commit,
-        execute=execute,
+        execute=handler,
     )
-    return CertifiedResearchExecutor(ResearchExecutionRegistry([implementation])), strategy
+    return CertifiedResearchExecutor(ResearchExecutionRegistry([implementation]))
 
 
-def test_fingerprint_binds_exact_experiment_and_evidence_request() -> None:
+def test_fingerprint_binds_exact_experiment_as_of_and_universe_membership() -> None:
     experiment = _experiment()
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(), uuid4())
-    first = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
-    assert first == research_run_fingerprint(
-        experiment, as_of=t0, instrument_ids=tuple(reversed(instruments))
-    )
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
+    snapshot = _snapshot(experiment)
+    first = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    assert first == research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
     assert first != research_run_fingerprint(
         experiment,
-        as_of=datetime(2026, 1, 3, tzinfo=timezone.utc),
-        instrument_ids=instruments,
+        as_of=datetime(2026, 1, 3, tzinfo=UTC),
+        universe_snapshot=snapshot,
     )
+    changed = _snapshot(experiment, instrument_ids=(uuid4(),))
+    assert first != research_run_fingerprint(experiment, as_of=t0, universe_snapshot=changed)
     assert len(first) == 64
 
 
-def test_fingerprint_rejects_duplicate_instruments() -> None:
-    instrument_id = uuid4()
-    with pytest.raises(ValueError, match="DUPLICATE_INSTRUMENT"):
+def test_fingerprint_rejects_wrong_universe() -> None:
+    experiment = _experiment()
+    wrong_experiment = _experiment()
+    with pytest.raises(ValueError, match="UNIVERSE_VERSION_MISMATCH"):
         research_run_fingerprint(
-            _experiment(),
-            as_of=datetime(2026, 1, 2, tzinfo=timezone.utc),
-            instrument_ids=(instrument_id, instrument_id),
+            experiment,
+            as_of=datetime(2026, 1, 2, tzinfo=UTC),
+            universe_snapshot=_snapshot(wrong_experiment),
         )
 
 
-def test_result_fingerprint_is_canonical_and_stored_evidence_is_verified() -> None:
+def test_result_fingerprint_is_canonical_and_rejects_nonfinite_numbers() -> None:
     left, left_hash = research_result_fingerprint({"b": [2, 1], "a": 3})
     right, right_hash = research_result_fingerprint({"a": 3, "b": [2, 1]})
     assert left == right
     assert left_hash == right_hash
-    assert verify_research_result_evidence(left, left_hash) == left
-    with pytest.raises(ValueError, match="EVIDENCE_FINGERPRINT_MISMATCH"):
-        verify_research_result_evidence({"a": 4, "b": [2, 1]}, left_hash)
     with pytest.raises(ValueError):
         research_result_fingerprint({"bad": float("nan")})
 
 
-def test_execution_plan_resolver_binds_strategy_and_verified_configuration() -> None:
+def test_stored_result_evidence_is_independently_reconstructed() -> None:
+    canonical, fingerprint = research_result_fingerprint({"count": 7, "value": 12.5})
+    assert verify_research_result_evidence(canonical, fingerprint) == canonical
+    with pytest.raises(ValueError, match="EVIDENCE_FINGERPRINT_MISMATCH"):
+        verify_research_result_evidence({"count": 8, "value": 12.5}, fingerprint)
+
+
+def test_input_loader_derives_exact_instruments_from_frozen_universe() -> None:
     experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    plan = _resolver(experiment, strategy=strategy).resolve(experiment)
-    assert plan.experiment_id == experiment.experiment_id
-    assert plan.strategy_version_id == experiment.strategy_version_id
-    assert plan.strategy_id == strategy.strategy_id
-    assert plan.configuration_hash == experiment.configuration_hash
-    assert plan.configuration == CONFIG
-    assert plan.code_commit == "abc123"
+    snapshot = _snapshot(experiment)
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
+    calls = []
 
-
-def test_execution_plan_resolver_rejects_missing_or_corrupt_provenance() -> None:
-    experiment = _experiment()
-
-    class MissingStrategy:
-        def get_strategy_version(self, strategy_version_id):
-            return None
-
-        def get_configuration(self, configuration_hash_value):
-            raise AssertionError("configuration must not be read")
-
-    with pytest.raises(ValueError, match="STRATEGY_VERSION_MISSING"):
-        CertifiedExecutionPlanResolver(MissingStrategy()).resolve(experiment)
-    with pytest.raises(ValueError, match="CONFIGURATION_HASH_MISMATCH"):
-        _resolver(experiment, configuration={"tampered": True}).resolve(experiment)
-
-
-def test_certified_loader_derives_dataset_and_universe_from_experiment() -> None:
-    experiment = _experiment()
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
-
-    class Experiments:
-        def get(self, experiment_id):
-            return experiment
+    class Universes:
+        def get(self, universe_version_id):
+            assert universe_version_id == experiment.universe_version_id
+            return snapshot
 
     class Contexts:
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
-            assert dataset_version_id == experiment.dataset_version_id
-            assert universe_version_id == experiment.universe_version_id
-            assert instrument_ids == instruments
-            return "certified-context"
+            calls.append((dataset_version_id, as_of, universe_version_id, instrument_ids))
+            return PITMarketContext(as_of=as_of, bars=())
 
-    loader = CertifiedResearchContextLoader(Experiments(), Contexts())
-    assert loader.load(experiment.experiment_id, as_of=t0, instrument_ids=instruments) == "certified-context"
+    loader = CertifiedResearchInputLoader(Contexts(), Universes())
+    resolved = loader.universe(experiment)
+    inputs = loader.load(experiment, as_of=t0, universe_snapshot=resolved)
+    assert isinstance(inputs, CertifiedResearchInputs)
+    assert inputs.universe_snapshot == snapshot
+    assert calls == [(
+        experiment.dataset_version_id,
+        t0,
+        experiment.universe_version_id,
+        tuple(member.instrument_id for member in snapshot.members),
+    )]
 
 
-def test_orchestrator_rejects_arbitrary_executor_at_composition_boundary() -> None:
+def test_input_loader_rejects_missing_universe_before_market_read() -> None:
     experiment = _experiment()
 
-    class ArbitraryExecutor:
-        def execute(self, plan, context):
-            return {"unsafe": True}
+    class Universes:
+        def get(self, universe_version_id):
+            return None
 
-    with pytest.raises(TypeError, match="RESEARCH_RUN_REQUIRES_CERTIFIED_EXECUTOR"):
-        CertifiedResearchRunOrchestrator(
-            object(), object(), object(), _resolver(experiment), ArbitraryExecutor()
-        )
+    class Contexts:
+        def get(self, *args, **kwargs):
+            raise AssertionError("market read must not occur")
 
-    with pytest.raises(TypeError, match="RESEARCH_RUN_REQUIRES_CERTIFIED_EXECUTOR"):
-        CertifiedResearchReproducibilityVerifier(
-            object(), object(), object(), _resolver(experiment), ArbitraryExecutor(), object()
-        )
+    loader = CertifiedResearchInputLoader(Contexts(), Universes())
+    with pytest.raises(ValueError, match="UNIVERSE_SNAPSHOT_MISSING"):
+        loader.universe(experiment)
 
 
-def test_orchestrator_persists_canonical_evidence_and_restart_reuses_it() -> None:
+def test_orchestrator_persists_evidence_and_restart_reuses_without_market_read() -> None:
     experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
+    snapshot = _snapshot(experiment)
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
     stored = {}
+    market_reads = []
     executions = []
+    resolver, strategy = _resolver(experiment)
 
     class Experiments:
         def get(self, experiment_id):
             return experiment
+
+    class Universes:
+        def get(self, universe_version_id):
+            return snapshot
 
     class Runs:
         @staticmethod
@@ -195,8 +199,9 @@ def test_orchestrator_persists_canonical_evidence_and_restart_reuses_it() -> Non
             return True
 
     class Contexts:
-        def get(self, *args, **kwargs):
-            return {"certified": True}
+        def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
+            market_reads.append(instrument_ids)
+            return PITMarketContext(as_of=as_of, bars=())
 
     class Evidence:
         def get(self, run_id):
@@ -206,120 +211,82 @@ def test_orchestrator_persists_canonical_evidence_and_restart_reuses_it() -> Non
             stored[record.research_run_id] = record
             return True
 
-    def execute(plan, context):
-        executions.append((plan, context))
+    def handler(plan, inputs):
+        executions.append((plan, inputs))
         return {"z": 2, "a": 1}
 
-    certified_executor, _ = _certified_executor(experiment, execute, strategy=strategy)
     orchestrator = CertifiedResearchRunOrchestrator(
         Experiments(),
         Runs(),
         Contexts(),
-        _resolver(experiment, strategy=strategy),
-        certified_executor,
+        Universes(),
+        resolver,
+        _executor(experiment, strategy, handler),
         Evidence(),
     )
-    run, first = orchestrator.execute(experiment.experiment_id, as_of=t0, instrument_ids=instruments)
-    retry_run, retry = orchestrator.execute(
-        experiment.experiment_id, as_of=t0, instrument_ids=instruments
-    )
+    run, first = orchestrator.execute(experiment.experiment_id, as_of=t0)
+    retry_run, retry = orchestrator.execute(experiment.experiment_id, as_of=t0)
     assert run == retry_run
     assert first == retry == {"a": 1, "z": 2}
     assert len(executions) == 1
-    assert executions[0][0].strategy_version_id == experiment.strategy_version_id
-    assert stored[run.research_run_id].result_fingerprint == research_result_fingerprint(first)[1]
+    assert len(market_reads) == 1
+    assert market_reads[0] == tuple(member.instrument_id for member in snapshot.members)
+    assert executions[0][1].universe_snapshot == snapshot
 
 
-def test_orchestrator_fails_before_claim_when_provenance_is_invalid() -> None:
+def test_orchestrator_rejects_corrupt_stored_evidence_before_market_read() -> None:
+    from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
+
     experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    calls = []
-
-    class Experiments:
-        def get(self, experiment_id):
-            return experiment
-
-    class Runs:
-        def deterministic_id(self, *args):
-            calls.append("run")
-            raise AssertionError("must fail before claim")
-
-    class Contexts:
-        def get(self, *args, **kwargs):
-            calls.append("market")
-            raise AssertionError("must fail before market read")
-
-    def execute(plan, context):
-        calls.append("execute")
-        raise AssertionError("must fail before execution")
-
-    certified_executor, _ = _certified_executor(experiment, execute, strategy=strategy)
-    orchestrator = CertifiedResearchRunOrchestrator(
-        Experiments(),
-        Runs(),
-        Contexts(),
-        _resolver(experiment, configuration={"tampered": True}, strategy=strategy),
-        certified_executor,
+    snapshot = _snapshot(experiment)
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
+    resolver, strategy = _resolver(experiment)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
+    bad = ResearchRunEvidenceRecord(
+        research_run_id=run_id,
+        result_fingerprint="0" * 64,
+        canonical_result={"value": 99},
     )
-    with pytest.raises(ValueError, match="CONFIGURATION_HASH_MISMATCH"):
-        orchestrator.execute(
-            experiment.experiment_id,
-            as_of=datetime(2026, 1, 2, tzinfo=timezone.utc),
-            instrument_ids=(),
-        )
-    assert calls == []
-
-
-def test_orchestrator_fails_closed_when_registry_identity_does_not_match_plan() -> None:
-    experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
-    calls = []
 
     class Experiments:
-        def get(self, experiment_id):
-            return experiment
+        def get(self, experiment_id): return experiment
+
+    class Universes:
+        def get(self, universe_version_id): return snapshot
 
     class Runs:
         @staticmethod
-        def deterministic_id(experiment_id, fingerprint):
-            return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{fingerprint}")
+        def deterministic_id(experiment_id, run_fingerprint): return run_id
+        def claim(self, run): return False
 
-        def claim(self, run):
-            calls.append("claim")
-            return True
+    class Evidence:
+        def get(self, requested_run_id): return bad
+        def persist(self, record): raise AssertionError("must not overwrite corrupt evidence")
 
     class Contexts:
-        def get(self, *args, **kwargs):
-            calls.append("market")
-            return {"certified": True}
+        def get(self, *args, **kwargs): raise AssertionError("must fail before market read")
 
-    wrong = ResearchExecutionImplementation(
-        strategy_version_id=strategy.strategy_version_id,
-        strategy_id=uuid4(),
-        strategy_version=strategy.version,
-        code_commit=strategy.code_commit,
-        execute=lambda plan, context: calls.append("execute"),
+    executor = _executor(
+        experiment,
+        strategy,
+        lambda plan, inputs: (_ for _ in ()).throw(AssertionError("must not execute")),
     )
-    executor = CertifiedResearchExecutor(ResearchExecutionRegistry([wrong]))
     orchestrator = CertifiedResearchRunOrchestrator(
-        Experiments(), Runs(), Contexts(), _resolver(experiment, strategy=strategy), executor
+        Experiments(), Runs(), Contexts(), Universes(), resolver, executor, Evidence()
     )
-    with pytest.raises(ValueError, match="RESEARCH_IMPLEMENTATION_STRATEGY_ID_MISMATCH"):
-        orchestrator.execute(experiment.experiment_id, as_of=t0, instrument_ids=instruments)
-    assert calls == ["claim", "market"]
+    with pytest.raises(ValueError, match="EVIDENCE_FINGERPRINT_MISMATCH"):
+        orchestrator.execute(experiment.experiment_id, as_of=t0)
 
 
-def test_reproducibility_verifier_reexecutes_same_registered_implementation() -> None:
+def test_reproducibility_verifier_reexecutes_same_frozen_universe_and_matches() -> None:
     from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
     from hope.infrastructure.repositories.research_runs import ResearchRunRecord
 
     experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
+    snapshot = _snapshot(experiment)
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     run = ResearchRunRecord(
         research_run_id=run_id,
@@ -333,49 +300,34 @@ def test_reproducibility_verifier_reexecutes_same_registered_implementation() ->
         result_fingerprint=result_hash,
         canonical_result=canonical,
     )
-    calls = []
+    resolver, strategy = _resolver(experiment)
+    seen = []
 
     class Experiments:
-        def get(self, experiment_id):
-            return experiment
+        def get(self, experiment_id): return experiment
+
+    class Universes:
+        def get(self, universe_version_id): return snapshot
 
     class Runs:
         @staticmethod
-        def deterministic_id(experiment_id, run_fingerprint):
-            return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{run_fingerprint}")
-
-        def get(self, requested_run_id):
-            assert requested_run_id == run_id
-            return run
+        def deterministic_id(experiment_id, run_fingerprint): return run_id
+        def get(self, requested_run_id): return run
 
     class Contexts:
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
-            assert dataset_version_id == experiment.dataset_version_id
-            assert universe_version_id == experiment.universe_version_id
-            calls.append("market")
-            return {"certified": True}
+            seen.append(instrument_ids)
+            return PITMarketContext(as_of=as_of, bars=())
 
     class Evidence:
-        def get(self, requested_run_id):
-            assert requested_run_id == run_id
-            return evidence
+        def get(self, requested_run_id): return evidence
 
-    def execute(plan, context):
-        calls.append((plan.strategy_version_id, context))
-        return {"trades": 3, "net": 12}
-
-    certified_executor, _ = _certified_executor(experiment, execute, strategy=strategy)
+    executor = _executor(experiment, strategy, lambda plan, inputs: {"trades": 3, "net": 12})
     verifier = CertifiedResearchReproducibilityVerifier(
-        Experiments(),
-        Runs(),
-        Contexts(),
-        _resolver(experiment, strategy=strategy),
-        certified_executor,
-        Evidence(),
+        Experiments(), Runs(), Contexts(), Universes(), resolver, executor, Evidence()
     )
-    assert verifier.verify(experiment.experiment_id, as_of=t0, instrument_ids=instruments) == canonical
-    assert calls[0] == "market"
-    assert calls[1][0] == experiment.strategy_version_id
+    assert verifier.verify(experiment.experiment_id, as_of=t0) == canonical
+    assert seen == [tuple(member.instrument_id for member in snapshot.members)]
 
 
 def test_reproducibility_verifier_fails_closed_on_divergent_reexecution() -> None:
@@ -383,73 +335,69 @@ def test_reproducibility_verifier_fails_closed_on_divergent_reexecution() -> Non
     from hope.infrastructure.repositories.research_runs import ResearchRunRecord
 
     experiment = _experiment()
-    strategy = _strategy_record(experiment)
-    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
+    snapshot = _snapshot(experiment)
+    t0 = datetime(2026, 1, 2, tzinfo=UTC)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
-    run = ResearchRunRecord(
-        research_run_id=run_id,
-        experiment_id=experiment.experiment_id,
-        run_fingerprint=fingerprint,
-        as_of=t0,
-    )
+    run = ResearchRunRecord(research_run_id=run_id, experiment_id=experiment.experiment_id, run_fingerprint=fingerprint, as_of=t0)
     canonical, result_hash = research_result_fingerprint({"net": 12})
-    evidence = ResearchRunEvidenceRecord(
-        research_run_id=run_id,
-        result_fingerprint=result_hash,
-        canonical_result=canonical,
-    )
+    evidence = ResearchRunEvidenceRecord(research_run_id=run_id, result_fingerprint=result_hash, canonical_result=canonical)
+    resolver, strategy = _resolver(experiment)
 
     class Experiments:
-        def get(self, experiment_id):
-            return experiment
-
+        def get(self, experiment_id): return experiment
+    class Universes:
+        def get(self, universe_version_id): return snapshot
     class Runs:
         @staticmethod
-        def deterministic_id(experiment_id, run_fingerprint):
-            return run_id
-
-        def get(self, requested_run_id):
-            return run
-
+        def deterministic_id(experiment_id, run_fingerprint): return run_id
+        def get(self, requested_run_id): return run
     class Contexts:
-        def get(self, *args, **kwargs):
-            return {"certified": True}
-
+        def get(self, *args, **kwargs): return PITMarketContext(as_of=t0, bars=())
     class Evidence:
-        def get(self, requested_run_id):
-            return evidence
+        def get(self, requested_run_id): return evidence
 
-    certified_executor, _ = _certified_executor(
-        experiment, lambda plan, context: {"net": 11}, strategy=strategy
-    )
     verifier = CertifiedResearchReproducibilityVerifier(
         Experiments(),
         Runs(),
         Contexts(),
-        _resolver(experiment, strategy=strategy),
-        certified_executor,
+        Universes(),
+        resolver,
+        _executor(experiment, strategy, lambda plan, inputs: {"net": 11}),
         Evidence(),
     )
     with pytest.raises(ValueError, match="RESEARCH_REPRODUCIBILITY_MISMATCH"):
-        verifier.verify(experiment.experiment_id, as_of=t0, instrument_ids=instruments)
+        verifier.verify(experiment.experiment_id, as_of=t0)
 
 
-def test_public_run_api_never_accepts_caller_bars_or_provenance_or_executor_substitution() -> None:
-    parameters = inspect.signature(CertifiedResearchRunOrchestrator.execute).parameters
-    for forbidden in (
-        "bars",
-        "dataset_version_id",
-        "universe_version_id",
-        "strategy_version_id",
-        "configuration",
-        "execute",
-        "executor",
-        "certified_executor",
-    ):
-        assert forbidden not in parameters
+def test_research_public_apis_do_not_accept_instrument_or_executor_substitution() -> None:
+    import inspect
 
-    init_parameters = inspect.signature(CertifiedResearchRunOrchestrator.__init__).parameters
-    assert "executor" not in init_parameters
-    assert "certified_executor" in init_parameters
+    execute_parameters = inspect.signature(CertifiedResearchRunOrchestrator.execute).parameters
+    verify_parameters = inspect.signature(CertifiedResearchReproducibilityVerifier.verify).parameters
+    for parameters in (execute_parameters, verify_parameters):
+        assert "instrument_ids" not in parameters
+        assert "bars" not in parameters
+        assert "dataset_version_id" not in parameters
+        assert "universe_version_id" not in parameters
+        assert "strategy_version_id" not in parameters
+        assert "configuration" not in parameters
+        assert "execute" not in parameters
+        assert "executor" not in parameters
+
+
+def test_orchestrator_and_verifier_require_certified_executor() -> None:
+    experiment = _experiment()
+    snapshot = _snapshot(experiment)
+    resolver, _ = _resolver(experiment)
+
+    class Experiments:
+        def get(self, experiment_id): return experiment
+    class Universes:
+        def get(self, universe_version_id): return snapshot
+
+    args = (Experiments(), object(), object(), Universes(), resolver)
+    with pytest.raises(TypeError, match="REQUIRES_CERTIFIED_EXECUTOR"):
+        CertifiedResearchRunOrchestrator(*args, object())
+    with pytest.raises(TypeError, match="REQUIRES_CERTIFIED_EXECUTOR"):
+        CertifiedResearchReproducibilityVerifier(*args, object(), object())

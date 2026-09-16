@@ -1,13 +1,21 @@
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
 
 from hope.application.experiments.execution import (
     CertifiedResearchExecutor,
+    CertifiedResearchInputs,
     ResearchExecutionImplementation,
     ResearchExecutionRegistry,
 )
+from hope.application.universe.snapshot import UniverseSnapshot
+from hope.domain.market_data.context import PITMarketContext
+from hope.domain.universe.models import UniverseMember, UniverseVersion
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
+
+
+UTC = timezone.utc
 
 
 def _plan():
@@ -22,7 +30,25 @@ def _plan():
     )
 
 
-def _implementation(plan, execute=lambda plan, context: (plan, context), **changes):
+def _inputs():
+    universe_id = uuid4()
+    snapshot = UniverseSnapshot(
+        universe_version_id=uuid4(),
+        version=UniverseVersion(
+            universe_id=universe_id,
+            version="v1",
+            declared_member_count=1,
+            pit_certified=True,
+        ),
+        members=(UniverseMember(instrument_id=uuid4()),),
+    )
+    return CertifiedResearchInputs(
+        market_context=PITMarketContext(as_of=datetime(2026, 1, 2, tzinfo=UTC), bars=()),
+        universe_snapshot=snapshot,
+    )
+
+
+def _implementation(plan, execute=lambda plan, inputs: (plan, inputs), **changes):
     values = {
         "strategy_version_id": plan.strategy_version_id,
         "strategy_id": plan.strategy_id,
@@ -38,22 +64,22 @@ def test_certified_executor_runs_only_exact_registered_implementation() -> None:
     plan = _plan()
     calls = []
 
-    def execute(resolved_plan, context):
-        calls.append((resolved_plan, context))
+    def execute(resolved_plan, inputs):
+        calls.append((resolved_plan, inputs))
         return {"ok": True}
 
     executor = CertifiedResearchExecutor(
         ResearchExecutionRegistry([_implementation(plan, execute=execute)])
     )
-    context = {"pit": True}
-    assert executor.execute(plan, context) == {"ok": True}
-    assert calls == [(plan, context)]
+    inputs = _inputs()
+    assert executor.execute(plan, inputs) == {"ok": True}
+    assert calls == [(plan, inputs)]
 
 
 def test_registry_rejects_missing_and_duplicate_strategy_version_identity() -> None:
     plan = _plan()
     with pytest.raises(RuntimeError, match="RESEARCH_IMPLEMENTATION_NOT_REGISTERED"):
-        CertifiedResearchExecutor(ResearchExecutionRegistry([])).execute(plan, object())
+        CertifiedResearchExecutor(ResearchExecutionRegistry([])).execute(plan, _inputs())
 
     implementation = _implementation(plan)
     with pytest.raises(ValueError, match="DUPLICATE_STRATEGY_VERSION_ID"):
@@ -72,7 +98,7 @@ def test_registry_fails_closed_on_strategy_or_commit_identity_mismatch() -> None
             ResearchExecutionRegistry([_implementation(plan, **changes)])
         )
         with pytest.raises(ValueError, match=error):
-            executor.execute(plan, object())
+            executor.execute(plan, _inputs())
 
 
 def test_registry_validates_canonical_definition_and_callable() -> None:
@@ -87,11 +113,17 @@ def test_registry_validates_canonical_definition_and_callable() -> None:
         ResearchExecutionRegistry([object()])
 
 
-def test_certified_executor_rejects_unsealed_inputs() -> None:
+def test_certified_inputs_and_executor_reject_unsealed_inputs() -> None:
     plan = _plan()
     implementation = _implementation(plan)
     with pytest.raises(TypeError, match="REQUIRES_REGISTRY"):
         CertifiedResearchExecutor(object())
     executor = CertifiedResearchExecutor(ResearchExecutionRegistry([implementation]))
     with pytest.raises(TypeError, match="REQUIRES_EXECUTION_PLAN"):
-        executor.execute(object(), object())
+        executor.execute(object(), _inputs())
+    with pytest.raises(TypeError, match="REQUIRES_CERTIFIED_INPUTS"):
+        executor.execute(plan, object())
+    with pytest.raises(TypeError, match="REQUIRE_MARKET_CONTEXT"):
+        CertifiedResearchInputs(object(), _inputs().universe_snapshot)
+    with pytest.raises(TypeError, match="REQUIRE_UNIVERSE_SNAPSHOT"):
+        CertifiedResearchInputs(_inputs().market_context, object())
