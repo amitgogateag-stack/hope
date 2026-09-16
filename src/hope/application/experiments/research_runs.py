@@ -5,6 +5,8 @@ import json
 from datetime import datetime
 from uuid import UUID
 
+from hope.application.backtests.engine import BacktestResult
+from hope.application.backtests.evidence import project_backtest_result
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
@@ -15,6 +17,8 @@ def _canonical_json(value) -> tuple[object, str]:
 
 def research_result_fingerprint(result) -> tuple[object, str]:
     """Return canonical JSON evidence and its deterministic SHA256 identity."""
+    if isinstance(result, BacktestResult):
+        result = project_backtest_result(result)
     canonical, encoded = _canonical_json(result)
     return canonical, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -107,8 +111,6 @@ class CertifiedResearchRunOrchestrator:
         if experiment is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
 
-        # Fail closed before claiming a durable run or reading market data. The
-        # executor never receives caller-selected strategy/config provenance.
         execution_plan = self._execution_plans.resolve(experiment)
 
         fingerprint = research_run_fingerprint(experiment, as_of=as_of, instrument_ids=instrument_ids)
