@@ -299,3 +299,43 @@ def test_paper_strategy_decision_job_rejects_signal_outside_universe() -> None:
         PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
 
     assert runtime.recorded == []
+
+
+@pytest.mark.parametrize("interval_state", ["not_started", "expired"])
+def test_paper_strategy_decision_job_rejects_signal_outside_membership_interval(
+    interval_state: str,
+) -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    instrument_id = uuid4()
+    member = UniverseMember(
+        instrument_id=instrument_id,
+        valid_from=(
+            decision_time + timedelta(seconds=1)
+            if interval_state == "not_started"
+            else None
+        ),
+        valid_to=decision_time if interval_state == "expired" else None,
+    )
+    universe = UniverseSnapshot(uuid4(), _version(), (member,))
+    context = PITMarketContext(as_of=decision_time, bars=())
+    parameters = _Parameters()
+    strategy = _Strategy()
+    inputs_hash = paper_decision_inputs_hash(
+        strategy,
+        context,
+        universe,
+        parameters,
+    )
+    strategy.signals = (
+        _signal(
+            decision_time,
+            instrument_id=instrument_id,
+            inputs_hash=inputs_hash,
+        ),
+    )
+    runtime = _runtime(decision_time)
+
+    with pytest.raises(ValueError, match="OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"):
+        PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
+
+    assert runtime.recorded == []

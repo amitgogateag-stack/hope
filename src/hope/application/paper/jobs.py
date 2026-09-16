@@ -87,7 +87,9 @@ class PaperStrategyDecisionJob:
         if not isinstance(signals, tuple):
             raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
 
-        universe_member_ids = {member.instrument_id for member in self.universe.members}
+        universe_members_by_id = {
+            member.instrument_id: member for member in self.universe.members
+        }
         for signal in signals:
             if not isinstance(signal, Signal):
                 raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
@@ -100,8 +102,19 @@ class PaperStrategyDecisionJob:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
             if signal.inputs_hash != expected_inputs_hash:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH")
-            if signal.instrument_id not in universe_member_ids:
+            member = universe_members_by_id.get(signal.instrument_id)
+            if member is None:
                 raise ValueError("PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE")
+            if (
+                member.valid_from is not None
+                and decision_time < member.valid_from
+            ) or (
+                member.valid_to is not None
+                and decision_time >= member.valid_to
+            ):
+                raise ValueError(
+                    "PAPER_STRATEGY_SIGNAL_OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"
+                )
 
         for signal in signals:
             runtime.record_signal(signal)
