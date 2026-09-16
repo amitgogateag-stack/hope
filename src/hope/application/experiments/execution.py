@@ -95,10 +95,14 @@ class CertifiedResearchExecutor:
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_REGISTRY")
         self._registry = registry
 
-    def execute(self, plan: CertifiedExecutionPlan, inputs: CertifiedResearchInputs) -> object:
+    def validate(self, plan: CertifiedExecutionPlan) -> ResearchExecutionImplementation:
+        """Fail closed on executable provenance before any research side effects or data reads."""
         if not isinstance(plan, CertifiedExecutionPlan):
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_EXECUTION_PLAN")
+        return self._registry.resolve(plan)
+
+    def execute(self, plan: CertifiedExecutionPlan, inputs: CertifiedResearchInputs) -> object:
+        implementation = self.validate(plan)
         if not isinstance(inputs, CertifiedResearchInputs):
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_CERTIFIED_INPUTS")
-        implementation = self._registry.resolve(plan)
         return implementation.execute(plan, inputs)

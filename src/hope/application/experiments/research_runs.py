@@ -158,6 +158,7 @@ class CertifiedResearchRunOrchestrator:
         _require_active_experiment(experiment)
 
         execution_plan = self._execution_plans.resolve(experiment)
+        self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
         fingerprint = research_run_fingerprint(
             experiment,
@@ -245,6 +246,7 @@ class CertifiedResearchReproducibilityVerifier:
         _require_active_experiment(experiment)
 
         execution_plan = self._execution_plans.resolve(experiment)
+        self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
         fingerprint = research_run_fingerprint(
             experiment,
