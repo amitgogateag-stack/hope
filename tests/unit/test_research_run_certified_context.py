@@ -3,7 +3,11 @@ from uuid import uuid4
 
 import pytest
 
-from hope.application.experiments.research_runs import CertifiedResearchContextLoader, research_run_fingerprint
+from hope.application.experiments.research_runs import (
+    CertifiedResearchContextLoader,
+    CertifiedResearchRunOrchestrator,
+    research_run_fingerprint,
+)
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
@@ -78,3 +82,50 @@ def test_certified_loader_rejects_unknown_experiment_before_market_read() -> Non
     loader = CertifiedResearchContextLoader(Experiments(), Contexts())
     with pytest.raises(KeyError, match="unknown experiment"):
         loader.load("missing", as_of=datetime(2026, 1, 2, tzinfo=timezone.utc), instrument_ids=())
+
+
+def test_orchestrator_claims_deterministic_run_and_passes_only_certified_context() -> None:
+    experiment = _experiment()
+    t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    instruments = (uuid4(),)
+    claimed = []
+
+    class Experiments:
+        def get(self, experiment_id):
+            return experiment
+
+    class Runs:
+        @staticmethod
+        def deterministic_id(experiment_id, fingerprint):
+            from uuid import NAMESPACE_URL, uuid5
+            return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{fingerprint}")
+
+        def claim(self, run):
+            claimed.append(run)
+            return True
+
+    class Contexts:
+        def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
+            return {"certified": True, "dataset": dataset_version_id, "universe": universe_version_id}
+
+    orchestrator = CertifiedResearchRunOrchestrator(Experiments(), Runs(), Contexts())
+    run, result = orchestrator.execute(
+        experiment.experiment_id,
+        as_of=t0,
+        instrument_ids=instruments,
+        execute=lambda context: context,
+    )
+
+    assert claimed == [run]
+    assert result["certified"] is True
+    assert result["dataset"] == experiment.dataset_version_id
+    assert result["universe"] == experiment.universe_version_id
+
+
+def test_orchestrator_never_accepts_caller_bars() -> None:
+    import inspect
+
+    parameters = inspect.signature(CertifiedResearchRunOrchestrator.execute).parameters
+    assert "bars" not in parameters
+    assert "dataset_version_id" not in parameters
+    assert "universe_version_id" not in parameters

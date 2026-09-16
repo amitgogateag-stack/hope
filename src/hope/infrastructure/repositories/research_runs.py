@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import UUID
+from uuid import UUID, NAMESPACE_URL, uuid5
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import CHAR, Column, Connection, DateTime, MetaData, String, Table, Uuid, insert, select
+from sqlalchemy import CHAR, Column, Connection, DateTime, MetaData, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 
@@ -51,7 +51,15 @@ class SqlAlchemyResearchRunRepository:
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
+    @staticmethod
+    def deterministic_id(experiment_id: str, run_fingerprint: str) -> UUID:
+        """Stable identity lets a retry after process loss reconstruct the same run."""
+        return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{run_fingerprint}")
+
     def claim(self, run: ResearchRunRecord) -> bool:
+        expected_id = self.deterministic_id(run.experiment_id, run.run_fingerprint)
+        if run.research_run_id != expected_id:
+            raise ValueError("RESEARCH_RUN_ID_NOT_DETERMINISTIC")
         values = run.model_dump(exclude={"created_at"})
         statement = (
             pg_insert(self._runs)

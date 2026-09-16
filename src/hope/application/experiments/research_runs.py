@@ -59,3 +59,41 @@ class CertifiedResearchContextLoader:
             universe_version_id=experiment.universe_version_id,
             instrument_ids=instrument_ids,
         )
+
+
+class CertifiedResearchRunOrchestrator:
+    """Claim a durable research identity and execute only certified PIT evidence.
+
+    The authoritative execution callback receives a PIT context, never arbitrary
+    caller-supplied bars. Exact retries reuse the same deterministic run identity.
+    """
+
+    def __init__(self, experiment_repository, run_repository, market_context_repository) -> None:
+        self._experiments = experiment_repository
+        self._runs = run_repository
+        self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
+
+    def execute(
+        self,
+        experiment_id: str,
+        *,
+        as_of: datetime,
+        instrument_ids: tuple[UUID, ...],
+        execute,
+    ):
+        from hope.infrastructure.repositories.research_runs import ResearchRunRecord
+
+        experiment = self._experiments.get(experiment_id)
+        if experiment is None:
+            raise KeyError(f"unknown experiment: {experiment_id}")
+        fingerprint = research_run_fingerprint(experiment, as_of=as_of, instrument_ids=instrument_ids)
+        run_id = self._runs.deterministic_id(experiment_id, fingerprint)
+        run = ResearchRunRecord(
+            research_run_id=run_id,
+            experiment_id=experiment_id,
+            run_fingerprint=fingerprint,
+            as_of=as_of,
+        )
+        self._runs.claim(run)
+        context = self._contexts.load(experiment_id, as_of=as_of, instrument_ids=instrument_ids)
+        return run, execute(context)
