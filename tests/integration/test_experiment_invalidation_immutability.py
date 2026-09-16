@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.experiments import SqlAlchemyExperimentRepository
 
 
 @pytest.mark.integration
@@ -69,6 +70,10 @@ def test_experiment_invalidations_are_append_only() -> None:
             connection.execute(text(
                 "INSERT INTO experiment_invalidations(experiment_id, reason) VALUES (:experiment_id, 'bad data')"
             ), {"experiment_id": experiment_id})
+
+            projected = SqlAlchemyExperimentRepository(connection).get(experiment_id)
+            assert projected is not None
+            assert projected.invalidated_at is not None
 
             with pytest.raises(IntegrityError, match="EXPERIMENT_INVALIDATION_IMMUTABLE"):
                 with connection.begin_nested():

@@ -32,17 +32,10 @@ def verify_research_result_evidence(canonical_result, result_fingerprint: str) -
     return canonical
 
 
-def _require_certified_universe(
-    experiment: ExperimentRecord,
-    universe_snapshot: UniverseSnapshot,
-) -> UniverseSnapshot:
-    if not isinstance(universe_snapshot, UniverseSnapshot):
-        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
-    if universe_snapshot.universe_version_id != experiment.universe_version_id:
-        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
-    if universe_snapshot.version.pit_certified is not True:
-        raise ValueError("RESEARCH_RUN_UNIVERSE_NOT_PIT_CERTIFIED")
-    return universe_snapshot
+def _require_active_experiment(experiment: ExperimentRecord) -> ExperimentRecord:
+    if experiment.invalidated_at is not None:
+        raise ValueError("RESEARCH_EXPERIMENT_INVALIDATED")
+    return experiment
 
 
 def research_run_fingerprint(
@@ -52,9 +45,15 @@ def research_run_fingerprint(
     universe_snapshot: UniverseSnapshot,
 ) -> str:
     """Bind run identity to the immutable experiment and exact frozen universe membership."""
+    _require_active_experiment(experiment)
     if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("RESEARCH_RUN_AS_OF_MUST_BE_TIMEZONE_AWARE")
-    _require_certified_universe(experiment, universe_snapshot)
+    if not isinstance(universe_snapshot, UniverseSnapshot):
+        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
+    if universe_snapshot.universe_version_id != experiment.universe_version_id:
+        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+    if universe_snapshot.version.pit_certified is not True:
+        raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
 
     payload = {
         "experiment_id": experiment.experiment_id,
@@ -78,10 +77,15 @@ class CertifiedResearchInputLoader:
         self._universes = universe_snapshot_repository
 
     def universe(self, experiment: ExperimentRecord) -> UniverseSnapshot:
+        _require_active_experiment(experiment)
         snapshot = self._universes.get(experiment.universe_version_id)
         if snapshot is None:
             raise ValueError("RESEARCH_RUN_UNIVERSE_SNAPSHOT_MISSING")
-        return _require_certified_universe(experiment, snapshot)
+        if snapshot.universe_version_id != experiment.universe_version_id:
+            raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+        if snapshot.version.pit_certified is not True:
+            raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
+        return snapshot
 
     def load(
         self,
@@ -90,7 +94,11 @@ class CertifiedResearchInputLoader:
         as_of: datetime,
         universe_snapshot: UniverseSnapshot,
     ) -> CertifiedResearchInputs:
-        _require_certified_universe(experiment, universe_snapshot)
+        _require_active_experiment(experiment)
+        if universe_snapshot.universe_version_id != experiment.universe_version_id:
+            raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+        if universe_snapshot.version.pit_certified is not True:
+            raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
         instrument_ids = universe_snapshot.active_instrument_ids(as_of)
         context = self._market_contexts.get(
             experiment.dataset_version_id,
@@ -147,6 +155,7 @@ class CertifiedResearchRunOrchestrator:
         experiment = self._experiments.get(experiment_id)
         if experiment is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
+        _require_active_experiment(experiment)
 
         execution_plan = self._execution_plans.resolve(experiment)
         universe_snapshot = self._inputs.universe(experiment)
@@ -233,6 +242,7 @@ class CertifiedResearchReproducibilityVerifier:
         experiment = self._experiments.get(experiment_id)
         if experiment is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
+        _require_active_experiment(experiment)
 
         execution_plan = self._execution_plans.resolve(experiment)
         universe_snapshot = self._inputs.universe(experiment)

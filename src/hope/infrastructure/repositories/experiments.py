@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
 class ExperimentRecord(BaseModel):
-    """Persistence-shaped experiment record matching migrations/001_initial.sql."""
+    """Persistence-shaped immutable experiment definition plus derived invalidation state."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
     experiment_id: str
@@ -21,6 +21,7 @@ class ExperimentRecord(BaseModel):
     environment: Literal["RESEARCH", "BACKTEST", "WALK_FORWARD", "PAPER"]
     status: Literal["CREATED"]
     created_at: datetime | None = None
+    invalidated_at: datetime | None = None
 
     @field_validator("experiment_id")
     @classmethod
@@ -52,6 +53,8 @@ class SqlAlchemyExperimentRepository:
 
     The experiment definition is immutable. Invalidation is recorded in the
     append-only experiment_invalidations table and never mutates the original.
+    Repository reads project the invalidation timestamp so application services
+    can fail closed even when replaying an already-existing research run.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -80,13 +83,20 @@ class SqlAlchemyExperimentRepository:
         self._metadata = metadata
 
     def create(self, experiment: ExperimentRecord) -> None:
-        values = experiment.model_dump()
+        values = experiment.model_dump(exclude={"invalidated_at"})
         values["created_at"] = datetime.now(timezone.utc)
         self._connection.execute(insert(self._experiments).values(**values))
 
     def get(self, experiment_id: str) -> ExperimentRecord | None:
         row = self._connection.execute(
-            select(self._experiments).where(self._experiments.c.experiment_id == experiment_id)
+            select(self._experiments, self._invalidations.c.invalidated_at)
+            .select_from(
+                self._experiments.outerjoin(
+                    self._invalidations,
+                    self._invalidations.c.experiment_id == self._experiments.c.experiment_id,
+                )
+            )
+            .where(self._experiments.c.experiment_id == experiment_id)
         ).mappings().one_or_none()
         return ExperimentRecord(**row) if row else None
 
