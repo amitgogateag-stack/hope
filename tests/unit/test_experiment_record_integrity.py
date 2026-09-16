@@ -1,6 +1,8 @@
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import pytest
+from pydantic import ValidationError
 
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
@@ -41,4 +43,33 @@ def test_experiment_record_rejects_non_created_status() -> None:
             hypothesis="test hypothesis",
             status="RUNNING",
             **{key: value for key, value in BASE.items() if key != "status"},
+        )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"invalidated_at": datetime(2026, 1, 2, tzinfo=timezone.utc)},
+        {"invalidation_reason": "BAD_DATA"},
+    ],
+)
+def test_experiment_record_requires_complete_invalidation_state(values: dict) -> None:
+    with pytest.raises(ValidationError, match="EXPERIMENT_INVALIDATION_STATE_INCOMPLETE"):
+        ExperimentRecord(
+            experiment_id="exp-1",
+            hypothesis="test hypothesis",
+            **BASE,
+            **values,
+        )
+
+
+@pytest.mark.parametrize("reason", ["", "   ", " BAD_DATA", "BAD_DATA "])
+def test_experiment_record_requires_canonical_invalidation_reason(reason: str) -> None:
+    with pytest.raises(ValidationError, match="EXPERIMENT_INVALIDATION_REASON"):
+        ExperimentRecord(
+            experiment_id="exp-1",
+            hypothesis="test hypothesis",
+            invalidated_at=datetime(2026, 1, 2, tzinfo=timezone.utc),
+            invalidation_reason=reason,
+            **BASE,
         )

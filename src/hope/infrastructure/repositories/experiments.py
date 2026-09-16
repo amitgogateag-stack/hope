@@ -5,7 +5,7 @@ from typing import Literal, Protocol
 from uuid import UUID
 
 from sqlalchemy import CHAR, Column, Connection, DateTime, MetaData, String, Table, Uuid, insert, select
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ExperimentRecord(BaseModel):
@@ -22,6 +22,7 @@ class ExperimentRecord(BaseModel):
     status: Literal["CREATED"]
     created_at: datetime | None = None
     invalidated_at: datetime | None = None
+    invalidation_reason: str | None = None
 
     @field_validator("experiment_id")
     @classmethod
@@ -41,6 +42,23 @@ class ExperimentRecord(BaseModel):
             raise ValueError("EXPERIMENT_HYPOTHESIS_NOT_CANONICAL")
         return value
 
+    @field_validator("invalidation_reason")
+    @classmethod
+    def _require_canonical_invalidation_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        if not value.strip():
+            raise ValueError("EXPERIMENT_INVALIDATION_REASON_REQUIRED")
+        if value != value.strip():
+            raise ValueError("EXPERIMENT_INVALIDATION_REASON_NOT_CANONICAL")
+        return value
+
+    @model_validator(mode="after")
+    def _require_complete_invalidation_state(self) -> "ExperimentRecord":
+        if (self.invalidated_at is None) != (self.invalidation_reason is None):
+            raise ValueError("EXPERIMENT_INVALIDATION_STATE_INCOMPLETE")
+        return self
+
 
 class ExperimentRepository(Protocol):
     def create(self, experiment: ExperimentRecord) -> None: ...
@@ -53,8 +71,8 @@ class SqlAlchemyExperimentRepository:
 
     The experiment definition is immutable. Invalidation is recorded in the
     append-only experiment_invalidations table and never mutates the original.
-    Repository reads project the invalidation timestamp so application services
-    can fail closed even when replaying an already-existing research run.
+    Repository reads project the complete invalidation state so application
+    services can fail closed while preserving the immutable audit reason.
     """
 
     def __init__(self, connection: Connection) -> None:
@@ -83,13 +101,17 @@ class SqlAlchemyExperimentRepository:
         self._metadata = metadata
 
     def create(self, experiment: ExperimentRecord) -> None:
-        values = experiment.model_dump(exclude={"invalidated_at"})
+        values = experiment.model_dump(exclude={"invalidated_at", "invalidation_reason"})
         values["created_at"] = datetime.now(timezone.utc)
         self._connection.execute(insert(self._experiments).values(**values))
 
     def get(self, experiment_id: str) -> ExperimentRecord | None:
         row = self._connection.execute(
-            select(self._experiments, self._invalidations.c.invalidated_at)
+            select(
+                self._experiments,
+                self._invalidations.c.invalidated_at,
+                self._invalidations.c.reason.label("invalidation_reason"),
+            )
             .select_from(
                 self._experiments.outerjoin(
                     self._invalidations,
