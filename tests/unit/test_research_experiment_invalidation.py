@@ -28,6 +28,7 @@ def _invalidated_experiment() -> ExperimentRecord:
         environment="RESEARCH",
         status="CREATED",
         invalidated_at=datetime(2026, 1, 3, tzinfo=UTC),
+        invalidation_reason="TEST_INVALIDATION",
     )
 
 
