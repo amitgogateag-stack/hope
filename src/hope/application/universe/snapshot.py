@@ -47,3 +47,17 @@ class UniverseSnapshot:
                 [member.model_dump(mode="json") for member in ordered]
             ),
         )
+
+    def active_members(self, as_of: datetime) -> tuple[UniverseMember, ...]:
+        """Return members active at ``as_of`` using half-open [valid_from, valid_to) intervals."""
+        _require_timezone_aware(as_of, field_name="AS_OF")
+        return tuple(
+            member
+            for member in self.members
+            if (member.valid_from is None or member.valid_from <= as_of)
+            and (member.valid_to is None or as_of < member.valid_to)
+        )
+
+    def active_instrument_ids(self, as_of: datetime) -> tuple[UUID, ...]:
+        """Return deterministically ordered instrument identities active at ``as_of``."""
+        return tuple(member.instrument_id for member in self.active_members(as_of))

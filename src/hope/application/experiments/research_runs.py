@@ -82,7 +82,7 @@ class CertifiedResearchInputLoader:
         as_of: datetime,
         universe_snapshot: UniverseSnapshot,
     ) -> CertifiedResearchInputs:
-        instrument_ids = tuple(member.instrument_id for member in universe_snapshot.members)
+        instrument_ids = universe_snapshot.active_instrument_ids(as_of)
         context = self._market_contexts.get(
             experiment.dataset_version_id,
             as_of=as_of,

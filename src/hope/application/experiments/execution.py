@@ -23,14 +23,16 @@ class CertifiedResearchInputs:
         if not isinstance(self.universe_snapshot, UniverseSnapshot):
             raise TypeError("CERTIFIED_RESEARCH_INPUTS_REQUIRE_UNIVERSE_SNAPSHOT")
 
-        universe_instruments = {member.instrument_id for member in self.universe_snapshot.members}
+        active_instruments = set(
+            self.universe_snapshot.active_instrument_ids(self.market_context.as_of)
+        )
         for bar in self.market_context.bars:
             try:
                 instrument_id = UUID(bar.instrument_id)
             except ValueError as exc:
                 raise ValueError("CERTIFIED_RESEARCH_INPUT_BAR_INSTRUMENT_ID_INVALID") from exc
-            if instrument_id not in universe_instruments:
-                raise ValueError("CERTIFIED_RESEARCH_INPUT_BAR_OUTSIDE_FROZEN_UNIVERSE")
+            if instrument_id not in active_instruments:
+                raise ValueError("CERTIFIED_RESEARCH_INPUT_BAR_OUTSIDE_ACTIVE_FROZEN_UNIVERSE")
 
 
 ResearchExecutionHandler = Callable[[CertifiedExecutionPlan, CertifiedResearchInputs], object]
