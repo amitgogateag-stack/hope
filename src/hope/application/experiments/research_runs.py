@@ -32,6 +32,19 @@ def verify_research_result_evidence(canonical_result, result_fingerprint: str) -
     return canonical
 
 
+def _require_certified_universe(
+    experiment: ExperimentRecord,
+    universe_snapshot: UniverseSnapshot,
+) -> UniverseSnapshot:
+    if not isinstance(universe_snapshot, UniverseSnapshot):
+        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
+    if universe_snapshot.universe_version_id != experiment.universe_version_id:
+        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+    if universe_snapshot.version.pit_certified is not True:
+        raise ValueError("RESEARCH_RUN_UNIVERSE_NOT_PIT_CERTIFIED")
+    return universe_snapshot
+
+
 def research_run_fingerprint(
     experiment: ExperimentRecord,
     *,
@@ -41,10 +54,7 @@ def research_run_fingerprint(
     """Bind run identity to the immutable experiment and exact frozen universe membership."""
     if as_of.tzinfo is None or as_of.utcoffset() is None:
         raise ValueError("RESEARCH_RUN_AS_OF_MUST_BE_TIMEZONE_AWARE")
-    if not isinstance(universe_snapshot, UniverseSnapshot):
-        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
-    if universe_snapshot.universe_version_id != experiment.universe_version_id:
-        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+    _require_certified_universe(experiment, universe_snapshot)
 
     payload = {
         "experiment_id": experiment.experiment_id,
@@ -71,9 +81,7 @@ class CertifiedResearchInputLoader:
         snapshot = self._universes.get(experiment.universe_version_id)
         if snapshot is None:
             raise ValueError("RESEARCH_RUN_UNIVERSE_SNAPSHOT_MISSING")
-        if snapshot.universe_version_id != experiment.universe_version_id:
-            raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
-        return snapshot
+        return _require_certified_universe(experiment, snapshot)
 
     def load(
         self,
@@ -82,6 +90,7 @@ class CertifiedResearchInputLoader:
         as_of: datetime,
         universe_snapshot: UniverseSnapshot,
     ) -> CertifiedResearchInputs:
+        _require_certified_universe(experiment, universe_snapshot)
         instrument_ids = universe_snapshot.active_instrument_ids(as_of)
         context = self._market_contexts.get(
             experiment.dataset_version_id,
@@ -89,6 +98,8 @@ class CertifiedResearchInputLoader:
             universe_version_id=experiment.universe_version_id,
             instrument_ids=instrument_ids,
         )
+        if context.as_of != as_of:
+            raise ValueError("RESEARCH_RUN_MARKET_CONTEXT_AS_OF_MISMATCH")
         return CertifiedResearchInputs(
             market_context=context,
             universe_snapshot=universe_snapshot,
