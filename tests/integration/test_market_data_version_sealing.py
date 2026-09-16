@@ -547,6 +547,7 @@ def test_legacy_market_data_version_sealer_cannot_bypass_manifest() -> None:
                 context_repository.get(
                     fake_sealed_empty_version_id,
                     as_of=t0,
+                    universe_version_id=uuid4(),
                     instrument_ids=(),
                 )
 

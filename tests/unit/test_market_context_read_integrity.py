@@ -10,6 +10,7 @@ from hope.infrastructure.repositories.market_contexts import (
     _verify_read_side_coverage,
     _verify_read_side_evidence,
     _verify_read_side_membership,
+    _verify_requested_universe,
 )
 
 
@@ -100,6 +101,17 @@ def test_read_side_rejects_manifest_key_outside_universe_membership() -> None:
                 )
             },
         )
+
+
+def test_read_side_rejects_requested_universe_mismatch() -> None:
+    manifest_universe_version_id = uuid4()
+
+    _verify_requested_universe(
+        manifest_universe_version_id,
+        manifest_universe_version_id,
+    )
+    with pytest.raises(ValueError, match="REQUESTED_UNIVERSE_MISMATCH"):
+        _verify_requested_universe(manifest_universe_version_id, uuid4())
 
 
 def test_read_side_rejects_requested_instrument_outside_manifest() -> None:

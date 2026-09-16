@@ -67,6 +67,7 @@ class DurableUniversePaperStrategyDecision:
         market_context = PITMarketContextRepository(connection).get(
             self.dataset_version_id,
             as_of=self.as_of,
+            universe_version_id=self.universe_version_id,
             instrument_ids=tuple(member.instrument_id for member in snapshot.members),
         )
         return PaperStrategyDecisionJob(

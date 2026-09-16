@@ -57,6 +57,14 @@ def _verify_read_side_membership(
         raise ValueError("PIT_MARKET_CONTEXT_UNIVERSE_MEMBERSHIP_MISMATCH") from exc
 
 
+def _verify_requested_universe(
+    manifest_universe_version_id: UUID,
+    requested_universe_version_id: UUID,
+) -> None:
+    if manifest_universe_version_id != requested_universe_version_id:
+        raise ValueError("PIT_MARKET_CONTEXT_REQUESTED_UNIVERSE_MISMATCH")
+
+
 def _verify_requested_instruments(
     expected_keys: set[tuple[UUID, datetime]],
     requested_instrument_ids: tuple[UUID, ...],
@@ -91,12 +99,15 @@ class PITMarketContextRepository:
         dataset_version_id: UUID,
         *,
         as_of: datetime,
+        universe_version_id: UUID,
         instrument_ids: tuple[UUID, ...],
     ) -> PITMarketContext:
         if not isinstance(dataset_version_id, UUID):
             raise TypeError("PIT_MARKET_CONTEXT_REPOSITORY_REQUIRES_DATASET_VERSION_ID")
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("PIT_MARKET_CONTEXT_REPOSITORY_REQUIRES_AWARE_AS_OF")
+        if not isinstance(universe_version_id, UUID):
+            raise TypeError("PIT_MARKET_CONTEXT_REPOSITORY_REQUIRES_UNIVERSE_VERSION_ID")
         if not isinstance(instrument_ids, tuple) or any(
             not isinstance(instrument_id, UUID) for instrument_id in instrument_ids
         ):
@@ -129,6 +140,7 @@ class PITMarketContextRepository:
             raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
 
         expected_keys = _verify_read_side_evidence(dataset)
+        _verify_requested_universe(dataset["universe_version_id"], universe_version_id)
         member_rows = self._connection.execute(
             text(
                 "SELECT instrument_id, valid_from, valid_to FROM universe_members "
