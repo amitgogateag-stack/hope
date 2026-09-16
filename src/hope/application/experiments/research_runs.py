@@ -8,6 +8,17 @@ from uuid import UUID
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
+def _canonical_json(value) -> tuple[object, str]:
+    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return json.loads(encoded), encoded
+
+
+def research_result_fingerprint(result) -> tuple[object, str]:
+    """Return canonical JSON evidence and its deterministic SHA256 identity."""
+    canonical, encoded = _canonical_json(result)
+    return canonical, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
 def research_run_fingerprint(
     experiment: ExperimentRecord,
     *,
@@ -43,13 +54,7 @@ class CertifiedResearchContextLoader:
         self._experiments = experiment_repository
         self._market_contexts = market_context_repository
 
-    def load(
-        self,
-        experiment_id: str,
-        *,
-        as_of: datetime,
-        instrument_ids: tuple[UUID, ...],
-    ):
+    def load(self, experiment_id: str, *, as_of: datetime, instrument_ids: tuple[UUID, ...]):
         experiment = self._experiments.get(experiment_id)
         if experiment is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
@@ -62,16 +67,19 @@ class CertifiedResearchContextLoader:
 
 
 class CertifiedResearchRunOrchestrator:
-    """Claim a durable research identity and execute only certified PIT evidence.
+    """Execute certified PIT evidence and optionally persist immutable canonical output."""
 
-    The authoritative execution callback receives a PIT context, never arbitrary
-    caller-supplied bars. Exact retries reuse the same deterministic run identity.
-    """
-
-    def __init__(self, experiment_repository, run_repository, market_context_repository) -> None:
+    def __init__(
+        self,
+        experiment_repository,
+        run_repository,
+        market_context_repository,
+        evidence_repository=None,
+    ) -> None:
         self._experiments = experiment_repository
         self._runs = run_repository
         self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
+        self._evidence = evidence_repository
 
     def execute(
         self,
@@ -81,6 +89,7 @@ class CertifiedResearchRunOrchestrator:
         instrument_ids: tuple[UUID, ...],
         execute,
     ):
+        from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
         from hope.infrastructure.repositories.research_runs import ResearchRunRecord
 
         experiment = self._experiments.get(experiment_id)
@@ -95,5 +104,22 @@ class CertifiedResearchRunOrchestrator:
             as_of=as_of,
         )
         self._runs.claim(run)
+
+        if self._evidence is not None:
+            existing = self._evidence.get(run_id)
+            if existing is not None:
+                return run, existing.canonical_result
+
         context = self._contexts.load(experiment_id, as_of=as_of, instrument_ids=instrument_ids)
-        return run, execute(context)
+        result = execute(context)
+        if self._evidence is None:
+            return run, result
+
+        canonical_result, result_fingerprint = research_result_fingerprint(result)
+        evidence = ResearchRunEvidenceRecord(
+            research_run_id=run_id,
+            result_fingerprint=result_fingerprint,
+            canonical_result=canonical_result,
+        )
+        self._evidence.persist(evidence)
+        return run, canonical_result

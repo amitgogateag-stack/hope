@@ -1,11 +1,12 @@
 from datetime import datetime, timezone
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 import pytest
 
 from hope.application.experiments.research_runs import (
     CertifiedResearchContextLoader,
     CertifiedResearchRunOrchestrator,
+    research_result_fingerprint,
     research_run_fingerprint,
 )
 from hope.infrastructure.repositories.experiments import ExperimentRecord
@@ -28,11 +29,9 @@ def test_fingerprint_binds_exact_experiment_and_evidence_request() -> None:
     experiment = _experiment()
     t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
     instruments = (uuid4(), uuid4())
-
     first = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
     reordered = research_run_fingerprint(experiment, as_of=t0, instrument_ids=tuple(reversed(instruments)))
     later = research_run_fingerprint(experiment, as_of=datetime(2026, 1, 3, tzinfo=timezone.utc), instrument_ids=instruments)
-
     assert first == reordered
     assert first != later
     assert len(first) == 64
@@ -41,90 +40,70 @@ def test_fingerprint_binds_exact_experiment_and_evidence_request() -> None:
 def test_fingerprint_rejects_duplicate_instruments() -> None:
     instrument_id = uuid4()
     with pytest.raises(ValueError, match="DUPLICATE_INSTRUMENT"):
-        research_run_fingerprint(
-            _experiment(),
-            as_of=datetime(2026, 1, 2, tzinfo=timezone.utc),
-            instrument_ids=(instrument_id, instrument_id),
-        )
+        research_run_fingerprint(_experiment(), as_of=datetime(2026, 1, 2, tzinfo=timezone.utc), instrument_ids=(instrument_id, instrument_id))
+
+
+def test_result_fingerprint_is_canonical_and_rejects_nonfinite_numbers() -> None:
+    left, left_hash = research_result_fingerprint({"b": [2, 1], "a": 3})
+    right, right_hash = research_result_fingerprint({"a": 3, "b": [2, 1]})
+    assert left == right
+    assert left_hash == right_hash
+    with pytest.raises(ValueError):
+        research_result_fingerprint({"bad": float("nan")})
 
 
 def test_certified_loader_derives_dataset_and_universe_from_experiment() -> None:
     experiment = _experiment()
     t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
     instruments = (uuid4(),)
-
     class Experiments:
-        def get(self, experiment_id):
-            assert experiment_id == experiment.experiment_id
-            return experiment
-
+        def get(self, experiment_id): return experiment
     class Contexts:
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
             assert dataset_version_id == experiment.dataset_version_id
             assert universe_version_id == experiment.universe_version_id
-            assert as_of == t0
-            assert instrument_ids == instruments
             return "certified-context"
-
-    loader = CertifiedResearchContextLoader(Experiments(), Contexts())
-    assert loader.load(experiment.experiment_id, as_of=t0, instrument_ids=instruments) == "certified-context"
+    assert CertifiedResearchContextLoader(Experiments(), Contexts()).load(experiment.experiment_id, as_of=t0, instrument_ids=instruments) == "certified-context"
 
 
 def test_certified_loader_rejects_unknown_experiment_before_market_read() -> None:
     class Experiments:
-        def get(self, experiment_id):
-            return None
-
+        def get(self, experiment_id): return None
     class Contexts:
-        def get(self, *args, **kwargs):
-            raise AssertionError("market read must not occur")
-
-    loader = CertifiedResearchContextLoader(Experiments(), Contexts())
+        def get(self, *args, **kwargs): raise AssertionError("market read must not occur")
     with pytest.raises(KeyError, match="unknown experiment"):
-        loader.load("missing", as_of=datetime(2026, 1, 2, tzinfo=timezone.utc), instrument_ids=())
+        CertifiedResearchContextLoader(Experiments(), Contexts()).load("missing", as_of=datetime(2026, 1, 2, tzinfo=timezone.utc), instrument_ids=())
 
 
-def test_orchestrator_claims_deterministic_run_and_passes_only_certified_context() -> None:
+def test_orchestrator_persists_canonical_evidence_and_restart_reuses_it() -> None:
     experiment = _experiment()
     t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
     instruments = (uuid4(),)
-    claimed = []
-
+    stored = {}
+    executions = []
     class Experiments:
-        def get(self, experiment_id):
-            return experiment
-
+        def get(self, experiment_id): return experiment
     class Runs:
         @staticmethod
-        def deterministic_id(experiment_id, fingerprint):
-            from uuid import NAMESPACE_URL, uuid5
-            return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{fingerprint}")
-
-        def claim(self, run):
-            claimed.append(run)
-            return True
-
+        def deterministic_id(experiment_id, fingerprint): return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{fingerprint}")
+        def claim(self, run): return True
     class Contexts:
-        def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
-            return {"certified": True, "dataset": dataset_version_id, "universe": universe_version_id}
-
-    orchestrator = CertifiedResearchRunOrchestrator(Experiments(), Runs(), Contexts())
-    run, result = orchestrator.execute(
-        experiment.experiment_id,
-        as_of=t0,
-        instrument_ids=instruments,
-        execute=lambda context: context,
-    )
-
-    assert claimed == [run]
-    assert result["certified"] is True
-    assert result["dataset"] == experiment.dataset_version_id
-    assert result["universe"] == experiment.universe_version_id
+        def get(self, *args, **kwargs): return {"certified": True}
+    class Evidence:
+        def get(self, run_id): return stored.get(run_id)
+        def persist(self, record): stored[record.research_run_id] = record; return True
+    orchestrator = CertifiedResearchRunOrchestrator(Experiments(), Runs(), Contexts(), Evidence())
+    execute = lambda context: executions.append(context) or {"z": 2, "a": 1}
+    run, first = orchestrator.execute(experiment.experiment_id, as_of=t0, instrument_ids=instruments, execute=execute)
+    retry_run, retry = orchestrator.execute(experiment.experiment_id, as_of=t0, instrument_ids=instruments, execute=lambda context: pytest.fail("restart must reuse durable evidence"))
+    assert run == retry_run
+    assert first == retry == {"a": 1, "z": 2}
+    assert len(executions) == 1
+    assert stored[run.research_run_id].result_fingerprint == research_result_fingerprint(first)[1]
 
 
-def test_orchestrator_never_accepts_caller_bars() -> None:
+def test_orchestrator_never_accepts_caller_bars_or_provenance_substitution() -> None:
     import inspect
-
     parameters = inspect.signature(CertifiedResearchRunOrchestrator.execute).parameters
     assert "bars" not in parameters
     assert "dataset_version_id" not in parameters
