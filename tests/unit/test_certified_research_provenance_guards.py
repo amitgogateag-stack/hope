@@ -49,7 +49,7 @@ def _snapshot(
 
 def test_research_run_fingerprint_rejects_non_pit_certified_universe() -> None:
     experiment = _experiment()
-    with pytest.raises(ValueError, match="UNIVERSE_NOT_PIT_CERTIFIED"):
+    with pytest.raises(ValueError, match="RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE"):
         research_run_fingerprint(
             experiment,
             as_of=datetime(2026, 1, 2, tzinfo=UTC),
@@ -70,7 +70,7 @@ def test_input_loader_rejects_non_pit_certified_universe_before_market_read() ->
             raise AssertionError("market read must not occur")
 
     loader = CertifiedResearchInputLoader(Contexts(), Universes())
-    with pytest.raises(ValueError, match="UNIVERSE_NOT_PIT_CERTIFIED"):
+    with pytest.raises(ValueError, match="RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE"):
         loader.universe(experiment)
 
 

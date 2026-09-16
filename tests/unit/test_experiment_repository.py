@@ -61,7 +61,8 @@ def test_experiment_round_trip_and_invalidation_are_append_only() -> None:
         repo.invalidate(experiment.experiment_id, "MIXED_VINTAGE")
         stored_after = repo.get(experiment.experiment_id)
         assert stored_after is not None
-        assert stored_after.model_copy(update={"created_at": None}) == experiment
+        assert stored_after.invalidated_at is not None
+        assert stored_after.model_copy(update={"created_at": None, "invalidated_at": None}) == experiment
 
 
 @pytest.mark.parametrize(
