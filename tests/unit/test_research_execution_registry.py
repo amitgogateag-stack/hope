@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from decimal import Decimal
 from uuid import uuid4
 
 import pytest
@@ -11,6 +12,7 @@ from hope.application.experiments.execution import (
 )
 from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.market_data.context import PITMarketContext
+from hope.domain.market_data.models import MarketBar
 from hope.domain.universe.models import UniverseMember, UniverseVersion
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
 
@@ -30,18 +32,37 @@ def _plan():
     )
 
 
-def _inputs():
-    universe_id = uuid4()
-    snapshot = UniverseSnapshot(
+def _snapshot(instrument_id=None):
+    instrument_id = instrument_id or uuid4()
+    return UniverseSnapshot(
         universe_version_id=uuid4(),
         version=UniverseVersion(
-            universe_id=universe_id,
+            universe_id=uuid4(),
             version="v1",
             declared_member_count=1,
             pit_certified=True,
         ),
-        members=(UniverseMember(instrument_id=uuid4()),),
+        members=(UniverseMember(instrument_id=instrument_id),),
     )
+
+
+def _bar(instrument_id: str):
+    as_of = datetime(2026, 1, 2, tzinfo=UTC)
+    return MarketBar(
+        instrument_id=instrument_id,
+        event_time=as_of,
+        available_time=as_of,
+        ingestion_time=as_of,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=Decimal("1000"),
+    )
+
+
+def _inputs():
+    snapshot = _snapshot()
     return CertifiedResearchInputs(
         market_context=PITMarketContext(as_of=datetime(2026, 1, 2, tzinfo=UTC), bars=()),
         universe_snapshot=snapshot,
@@ -127,3 +148,26 @@ def test_certified_inputs_and_executor_reject_unsealed_inputs() -> None:
         CertifiedResearchInputs(object(), _inputs().universe_snapshot)
     with pytest.raises(TypeError, match="REQUIRE_UNIVERSE_SNAPSHOT"):
         CertifiedResearchInputs(_inputs().market_context, object())
+
+
+def test_certified_inputs_reject_market_bar_outside_frozen_universe() -> None:
+    frozen_instrument = uuid4()
+    snapshot = _snapshot(frozen_instrument)
+    context = PITMarketContext(
+        as_of=datetime(2026, 1, 2, tzinfo=UTC),
+        bars=(_bar(str(uuid4())),),
+    )
+    with pytest.raises(ValueError, match="BAR_OUTSIDE_FROZEN_UNIVERSE"):
+        CertifiedResearchInputs(context, snapshot)
+
+
+def test_certified_inputs_accept_market_bar_inside_frozen_universe() -> None:
+    frozen_instrument = uuid4()
+    snapshot = _snapshot(frozen_instrument)
+    context = PITMarketContext(
+        as_of=datetime(2026, 1, 2, tzinfo=UTC),
+        bars=(_bar(str(frozen_instrument)),),
+    )
+    inputs = CertifiedResearchInputs(context, snapshot)
+    assert inputs.market_context == context
+    assert inputs.universe_snapshot == snapshot
