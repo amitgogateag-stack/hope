@@ -4,7 +4,7 @@ from uuid import NAMESPACE_URL, uuid4, uuid5
 import pytest
 
 from hope.application.experiments.config_hash import configuration_hash
-from hope.application.experiments.research_runs import CertifiedResearchContextLoader, CertifiedResearchRunOrchestrator, research_result_fingerprint, research_run_fingerprint, verify_research_result_evidence
+from hope.application.experiments.research_runs import CertifiedResearchContextLoader, CertifiedResearchReproducibilityVerifier, CertifiedResearchRunOrchestrator, research_result_fingerprint, research_run_fingerprint, verify_research_result_evidence
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlanResolver, StrategyVersionRecord
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
@@ -150,6 +150,81 @@ def test_orchestrator_rejects_unverified_execution_plan_before_claim_or_market_r
     orchestrator = CertifiedResearchRunOrchestrator(Experiments(), Runs(), Contexts(), _resolver(experiment, configuration={"tampered": True}), Executor())
     with pytest.raises(ValueError, match="CONFIGURATION_HASH_MISMATCH"):
         orchestrator.execute(experiment.experiment_id, as_of=datetime(2026, 1, 2, tzinfo=timezone.utc), instrument_ids=())
+    assert calls == []
+
+
+def test_reproducibility_verifier_reexecutes_certified_inputs_and_matches_evidence() -> None:
+    from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
+    from hope.infrastructure.repositories.research_runs import ResearchRunRecord
+    experiment = _experiment(); t0 = datetime(2026, 1, 2, tzinfo=timezone.utc); instruments = (uuid4(),)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
+    run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
+    run = ResearchRunRecord(research_run_id=run_id, experiment_id=experiment.experiment_id, run_fingerprint=fingerprint, as_of=t0)
+    canonical, result_hash = research_result_fingerprint({"net": 12, "trades": 3})
+    evidence = ResearchRunEvidenceRecord(research_run_id=run_id, result_fingerprint=result_hash, canonical_result=canonical)
+    calls = []
+    class Experiments:
+        def get(self, experiment_id): return experiment
+    class Runs:
+        @staticmethod
+        def deterministic_id(experiment_id, run_fingerprint): return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{run_fingerprint}")
+        def get(self, requested_run_id): assert requested_run_id == run_id; return run
+    class Contexts:
+        def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
+            assert dataset_version_id == experiment.dataset_version_id; assert universe_version_id == experiment.universe_version_id
+            calls.append("market"); return {"certified": True}
+    class Evidence:
+        def get(self, requested_run_id): assert requested_run_id == run_id; return evidence
+    class Executor:
+        def execute(self, plan, context): calls.append((plan.strategy_version_id, context)); return {"trades": 3, "net": 12}
+    verifier = CertifiedResearchReproducibilityVerifier(Experiments(), Runs(), Contexts(), _resolver(experiment), Executor(), Evidence())
+    assert verifier.verify(experiment.experiment_id, as_of=t0, instrument_ids=instruments) == canonical
+    assert calls[0] == "market"; assert calls[1][0] == experiment.strategy_version_id
+
+
+def test_reproducibility_verifier_fails_closed_on_divergent_reexecution() -> None:
+    from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
+    from hope.infrastructure.repositories.research_runs import ResearchRunRecord
+    experiment = _experiment(); t0 = datetime(2026, 1, 2, tzinfo=timezone.utc); instruments = (uuid4(),)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
+    run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
+    run = ResearchRunRecord(research_run_id=run_id, experiment_id=experiment.experiment_id, run_fingerprint=fingerprint, as_of=t0)
+    canonical, result_hash = research_result_fingerprint({"net": 12})
+    evidence = ResearchRunEvidenceRecord(research_run_id=run_id, result_fingerprint=result_hash, canonical_result=canonical)
+    class Experiments:
+        def get(self, experiment_id): return experiment
+    class Runs:
+        @staticmethod
+        def deterministic_id(experiment_id, run_fingerprint): return run_id
+        def get(self, requested_run_id): return run
+    class Contexts:
+        def get(self, *args, **kwargs): return {"certified": True}
+    class Evidence:
+        def get(self, requested_run_id): return evidence
+    class Executor:
+        def execute(self, plan, context): return {"net": 11}
+    verifier = CertifiedResearchReproducibilityVerifier(Experiments(), Runs(), Contexts(), _resolver(experiment), Executor(), Evidence())
+    with pytest.raises(ValueError, match="RESEARCH_REPRODUCIBILITY_MISMATCH"):
+        verifier.verify(experiment.experiment_id, as_of=t0, instrument_ids=instruments)
+
+
+def test_reproducibility_verifier_requires_existing_run_and_evidence_before_reexecution() -> None:
+    experiment = _experiment(); t0 = datetime(2026, 1, 2, tzinfo=timezone.utc); calls = []
+    class Experiments:
+        def get(self, experiment_id): return experiment
+    class Runs:
+        @staticmethod
+        def deterministic_id(experiment_id, run_fingerprint): return uuid5(NAMESPACE_URL, f"hope:research-run:{experiment_id}:{run_fingerprint}")
+        def get(self, run_id): return None
+    class Contexts:
+        def get(self, *args, **kwargs): calls.append("market"); raise AssertionError("must not read market data")
+    class Evidence:
+        def get(self, run_id): calls.append("evidence"); raise AssertionError("must not read evidence without run")
+    class Executor:
+        def execute(self, plan, context): calls.append("execute"); raise AssertionError("must not execute")
+    verifier = CertifiedResearchReproducibilityVerifier(Experiments(), Runs(), Contexts(), _resolver(experiment), Executor(), Evidence())
+    with pytest.raises(ValueError, match="RESEARCH_REPRODUCIBILITY_RUN_MISSING"):
+        verifier.verify(experiment.experiment_id, as_of=t0, instrument_ids=())
     assert calls == []
 
 

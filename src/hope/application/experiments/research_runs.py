@@ -152,3 +152,55 @@ class CertifiedResearchRunOrchestrator:
         if persisted.result_fingerprint != result_fingerprint or verified != canonical_result:
             raise ValueError("RESEARCH_RUN_EVIDENCE_PERSISTED_RESULT_MISMATCH")
         return run, verified
+
+
+class CertifiedResearchReproducibilityVerifier:
+    """Re-execute certified immutable inputs and compare them with durable evidence."""
+
+    def __init__(
+        self,
+        experiment_repository,
+        run_repository,
+        market_context_repository,
+        execution_plan_resolver,
+        executor,
+        evidence_repository,
+    ) -> None:
+        self._experiments = experiment_repository
+        self._runs = run_repository
+        self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
+        self._execution_plans = execution_plan_resolver
+        self._executor = executor
+        self._evidence = evidence_repository
+
+    def verify(
+        self,
+        experiment_id: str,
+        *,
+        as_of: datetime,
+        instrument_ids: tuple[UUID, ...],
+    ) -> object:
+        experiment = self._experiments.get(experiment_id)
+        if experiment is None:
+            raise KeyError(f"unknown experiment: {experiment_id}")
+
+        execution_plan = self._execution_plans.resolve(experiment)
+        fingerprint = research_run_fingerprint(experiment, as_of=as_of, instrument_ids=instrument_ids)
+        run_id = self._runs.deterministic_id(experiment_id, fingerprint)
+        run = self._runs.get(run_id)
+        if run is None:
+            raise ValueError("RESEARCH_REPRODUCIBILITY_RUN_MISSING")
+        if run.experiment_id != experiment_id or run.run_fingerprint != fingerprint or run.as_of != as_of:
+            raise ValueError("RESEARCH_REPRODUCIBILITY_RUN_IDENTITY_MISMATCH")
+
+        evidence = self._evidence.get(run_id)
+        if evidence is None:
+            raise ValueError("RESEARCH_REPRODUCIBILITY_EVIDENCE_MISSING")
+        stored = verify_research_result_evidence(evidence.canonical_result, evidence.result_fingerprint)
+
+        context = self._contexts.load(experiment_id, as_of=as_of, instrument_ids=instrument_ids)
+        reproduced_result = self._executor.execute(execution_plan, context)
+        reproduced, reproduced_fingerprint = research_result_fingerprint(reproduced_result)
+        if reproduced_fingerprint != evidence.result_fingerprint or reproduced != stored:
+            raise ValueError("RESEARCH_REPRODUCIBILITY_MISMATCH")
+        return reproduced
