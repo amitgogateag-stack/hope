@@ -157,7 +157,7 @@ def test_certified_inputs_reject_market_bar_outside_frozen_universe() -> None:
         as_of=datetime(2026, 1, 2, tzinfo=UTC),
         bars=(_bar(str(uuid4())),),
     )
-    with pytest.raises(ValueError, match="BAR_OUTSIDE_FROZEN_UNIVERSE"):
+    with pytest.raises(ValueError, match="BAR_OUTSIDE_ACTIVE_FROZEN_UNIVERSE"):
         CertifiedResearchInputs(context, snapshot)
 
 
