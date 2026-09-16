@@ -1,18 +1,22 @@
 from __future__ import annotations
 
-from dataclasses import fields, is_dataclass
 from datetime import datetime
 from decimal import Decimal
-from enum import Enum
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel
-
 from hope.application.backtests.analytics import BacktestMetrics
-from hope.application.backtests.engine import BacktestResult
+from hope.application.backtests.engine import BacktestDecision, BacktestEvent, BacktestResult
+from hope.application.trading.service import TradingKernelResult
+from hope.domain.audit.models import AuditEvent
+from hope.domain.execution.models import ExecutionCancellation, ExecutionRejection
+from hope.domain.execution.simulator import Fill
+from hope.domain.market_data.models import MarketBar
 from hope.domain.portfolio.ledger import PortfolioState, PositionState
 from hope.domain.portfolio.valuation import PortfolioValuation
+from hope.domain.risk.models import RiskAssessment
+from hope.domain.signal.models import Signal
+from hope.domain.trading.kernel import OrderIntent
 
 
 BACKTEST_EVIDENCE_SCHEMA = "hope.backtest-result.v1"
@@ -32,8 +36,7 @@ def _decimal(value: Decimal) -> str:
         raise ValueError("BACKTEST_EVIDENCE_DECIMAL_MUST_BE_FINITE")
     if value == 0:
         return "0"
-    normalized = value.normalize()
-    return format(normalized, "f")
+    return format(value.normalize(), "f")
 
 
 def _datetime(value: datetime) -> str:
@@ -42,39 +45,12 @@ def _datetime(value: datetime) -> str:
     return value.isoformat()
 
 
-def _canonical_value(value: Any) -> Any:
-    """Canonicalize nested event/decision payloads not yet covered by explicit v1 projectors."""
-    if value is None or isinstance(value, (bool, int, str)):
-        return value
-    if isinstance(value, Decimal):
-        return _decimal(value)
-    if isinstance(value, UUID):
-        return str(value)
-    if isinstance(value, datetime):
-        return _datetime(value)
-    if isinstance(value, Enum):
-        return _canonical_value(value.value)
-    if isinstance(value, BaseModel):
-        return _canonical_value(value.model_dump(mode="python"))
-    if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _canonical_value(getattr(value, field.name)) for field in fields(value)}
-    if isinstance(value, tuple | list):
-        return [_canonical_value(item) for item in value]
-    if isinstance(value, dict):
-        projected: list[tuple[str, Any]] = []
-        for key, item in value.items():
-            if isinstance(key, UUID):
-                canonical_key = str(key)
-            elif isinstance(key, str):
-                canonical_key = key
-            else:
-                raise TypeError("BACKTEST_EVIDENCE_UNSUPPORTED_MAPPING_KEY")
-            projected.append((canonical_key, _canonical_value(item)))
-        projected.sort(key=lambda pair: pair[0])
-        if len({key for key, _ in projected}) != len(projected):
-            raise ValueError("BACKTEST_EVIDENCE_DUPLICATE_CANONICAL_KEY")
-        return {key: item for key, item in projected}
-    raise TypeError(f"BACKTEST_EVIDENCE_UNSUPPORTED_TYPE:{type(value).__name__}")
+def _optional_datetime(value: datetime | None) -> str | None:
+    return None if value is None else _datetime(value)
+
+
+def _optional_uuid(value: UUID | None) -> str | None:
+    return None if value is None else str(value)
 
 
 def _position(position: PositionState) -> dict[str, str]:
@@ -124,27 +100,157 @@ def _metrics(value: BacktestMetrics) -> dict[str, str]:
     }
 
 
-def project_backtest_result(result: BacktestResult) -> dict[str, Any]:
-    """Project BacktestResult into the explicit versioned v1 research-evidence contract.
+def _market_bar(value: MarketBar) -> dict[str, Any]:
+    return {
+        "instrument_id": value.instrument_id,
+        "event_time": _datetime(value.event_time),
+        "available_time": _datetime(value.available_time),
+        "effective_time": _optional_datetime(value.effective_time),
+        "ingestion_time": _datetime(value.ingestion_time),
+        "open": _decimal(value.open),
+        "high": _decimal(value.high),
+        "low": _decimal(value.low),
+        "close": _decimal(value.close),
+        "volume": _decimal(value.volume),
+    }
 
-    Core portfolio/valuation/metric fields are enumerated explicitly so adding a
-    new domain attribute cannot silently redefine v1. Event and decision payloads
-    remain intentionally partial: their ordered containers are part of v1, while
-    their nested domain objects use the deterministic canonicalizer until dedicated
-    event/decision evidence schemas are introduced in a later version.
-    """
+
+def _signal(value: Signal) -> dict[str, Any]:
+    return {
+        "signal_id": str(value.signal_id),
+        "instrument_id": str(value.instrument_id),
+        "strategy_version": value.strategy_version,
+        "decision_time": _datetime(value.decision_time),
+        "signal_type": value.signal_type.value,
+        "conviction": _decimal(value.conviction),
+        "inputs_hash": value.inputs_hash,
+    }
+
+
+def _risk(value: RiskAssessment) -> dict[str, str]:
+    return {
+        "signal_id": str(value.signal_id),
+        "decision": value.decision.value,
+        "reason_code": value.reason_code,
+        "approved_quantity": _decimal(value.approved_quantity),
+    }
+
+
+def _intent(value: OrderIntent | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    return {
+        "signal_id": str(value.signal_id),
+        "instrument_id": str(value.instrument_id),
+        "side": value.side.value,
+        "quantity": _decimal(value.quantity),
+        "environment": value.environment.value,
+        "signal_type": value.signal_type.value,
+    }
+
+
+def _fill(value: Fill | None) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    return {
+        "fill_id": str(value.fill_id),
+        "order_id": str(value.order_id),
+        "signal_id": str(value.signal_id),
+        "instrument_id": str(value.instrument_id),
+        "side": value.side.value,
+        "quantity": _decimal(value.quantity),
+        "price": _decimal(value.price),
+        "commission": _decimal(value.commission),
+        "slippage": _decimal(value.slippage),
+        "cost_model_version": value.cost_model_version,
+        "fill_time": _optional_datetime(value.fill_time),
+    }
+
+
+def _rejection(value: ExecutionRejection | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    return {
+        "order_id": str(value.order_id),
+        "signal_id": str(value.signal_id),
+        "instrument_id": str(value.instrument_id),
+        "environment": value.environment.value,
+        "reason_code": value.reason_code,
+        "rejection_time": _datetime(value.rejection_time),
+    }
+
+
+def _cancellation(value: ExecutionCancellation | None) -> dict[str, str] | None:
+    if value is None:
+        return None
+    return {
+        "order_id": str(value.order_id),
+        "signal_id": str(value.signal_id),
+        "instrument_id": str(value.instrument_id),
+        "environment": value.environment.value,
+        "reason_code": value.reason_code,
+        "cancellation_time": _datetime(value.cancellation_time),
+        "cancelled_quantity": _decimal(value.cancelled_quantity),
+    }
+
+
+def _audit_event(value: AuditEvent) -> dict[str, Any]:
+    return {
+        "event_id": str(value.event_id),
+        "event_type": value.event_type.value,
+        "event_time": _datetime(value.event_time),
+        "signal_id": _optional_uuid(value.signal_id),
+        "order_id": _optional_uuid(value.order_id),
+        "fill_id": _optional_uuid(value.fill_id),
+        "instrument_id": _optional_uuid(value.instrument_id),
+        "environment": value.environment.value,
+        "payload_hash": value.payload_hash,
+    }
+
+
+def _kernel_result(value: TradingKernelResult) -> dict[str, Any]:
+    return {
+        "intent": _intent(value.intent),
+        "order_id": _optional_uuid(value.order_id),
+        "fill": _fill(value.fill),
+        "portfolio_state": _portfolio_state(value.portfolio_state),
+        "audit_events": [_audit_event(event) for event in value.audit_events],
+        "rejection": _rejection(value.rejection),
+        "cancellation": _cancellation(value.cancellation),
+    }
+
+
+def _event(value: BacktestEvent) -> dict[str, Any]:
+    return {
+        "event_time": _datetime(value.event_time),
+        "bar": _market_bar(value.bar),
+        "result": _kernel_result(value.result),
+        "valuation": _valuation(value.valuation),
+    }
+
+
+def _decision(value: BacktestDecision) -> dict[str, Any]:
+    return {
+        "decision_time": _datetime(value.decision_time),
+        "bar": _market_bar(value.bar),
+        "signal": _signal(value.signal),
+        "risk": _risk(value.risk),
+        "result": _kernel_result(value.result),
+        "valuation": _valuation(value.valuation),
+    }
+
+
+def project_backtest_result(result: BacktestResult) -> dict[str, Any]:
+    """Project BacktestResult into the explicit, stable v1 research-evidence contract."""
     projected_result = {
         "initial_cash": _decimal(result.initial_cash),
         "final_state": _portfolio_state(result.final_state),
-        "events": [_canonical_value(event) for event in result.events],
+        "events": [_event(event) for event in result.events],
         "valuations": [_valuation(value) for value in result.valuations],
         "metrics": _metrics(result.metrics),
         "unfilled_order_ids": [str(order_id) for order_id in result.unfilled_order_ids],
-        "decisions": [_canonical_value(decision) for decision in result.decisions],
+        "decisions": [_decision(decision) for decision in result.decisions],
     }
     if tuple(projected_result) != BACKTEST_EVIDENCE_RESULT_FIELDS:
         raise RuntimeError("BACKTEST_EVIDENCE_V1_FIELD_CONTRACT_BROKEN")
-    return {
-        "schema": BACKTEST_EVIDENCE_SCHEMA,
-        "result": projected_result,
-    }
+    return {"schema": BACKTEST_EVIDENCE_SCHEMA, "result": projected_result}
