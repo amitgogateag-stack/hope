@@ -14,6 +14,8 @@ from hope.application.experiments.research_runs import (
     CertifiedResearchRunOrchestrator,
     research_run_fingerprint,
 )
+from hope.application.universe.snapshot import UniverseSnapshot
+from hope.domain.universe.models import UniverseMember, UniverseVersion
 from hope.infrastructure.repositories.execution_provenance import (
     CertifiedExecutionPlanResolver,
     StrategyVersionRecord,
@@ -57,12 +59,26 @@ def _setup(execute):
     return experiment, resolver, executor
 
 
+def _snapshot(experiment: ExperimentRecord) -> UniverseSnapshot:
+    member = UniverseMember(instrument_id=uuid4())
+    return UniverseSnapshot(
+        universe_version_id=experiment.universe_version_id,
+        version=UniverseVersion(
+            universe_id=uuid4(),
+            version="v1",
+            declared_member_count=1,
+            pit_certified=True,
+        ),
+        members=(member,),
+    )
+
+
 def test_corrupt_restart_evidence_fails_before_market_read_or_execution() -> None:
     executions = []
-    experiment, resolver, executor = _setup(lambda plan, context: executions.append("execute"))
+    experiment, resolver, executor = _setup(lambda plan, inputs: executions.append("execute"))
     t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
-    instruments = (uuid4(),)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, instrument_ids=instruments)
+    snapshot = _snapshot(experiment)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     bad = ResearchRunEvidenceRecord(
         research_run_id=run_id,
@@ -89,6 +105,11 @@ def test_corrupt_restart_evidence_fails_before_market_read_or_execution() -> Non
             calls.append("market")
             raise AssertionError("corrupt restart must fail before market read")
 
+    class Universes:
+        def get(self, universe_version_id):
+            assert universe_version_id == experiment.universe_version_id
+            return snapshot
+
     class Evidence:
         def get(self, requested_run_id):
             assert requested_run_id == run_id
@@ -98,17 +119,18 @@ def test_corrupt_restart_evidence_fails_before_market_read_or_execution() -> Non
             raise AssertionError("corrupt restart evidence must not be overwritten")
 
     orchestrator = CertifiedResearchRunOrchestrator(
-        Experiments(), Runs(), Contexts(), resolver, executor, Evidence()
+        Experiments(), Runs(), Contexts(), Universes(), resolver, executor, Evidence()
     )
     with pytest.raises(ValueError, match="EVIDENCE_FINGERPRINT_MISMATCH"):
-        orchestrator.execute(experiment.experiment_id, as_of=t0, instrument_ids=instruments)
+        orchestrator.execute(experiment.experiment_id, as_of=t0)
     assert calls == ["claim"]
     assert executions == []
 
 
 def test_reproducibility_missing_run_fails_before_evidence_market_or_execution() -> None:
     executions = []
-    experiment, resolver, executor = _setup(lambda plan, context: executions.append("execute"))
+    experiment, resolver, executor = _setup(lambda plan, inputs: executions.append("execute"))
+    snapshot = _snapshot(experiment)
     calls = []
 
     class Experiments:
@@ -129,19 +151,23 @@ def test_reproducibility_missing_run_fails_before_evidence_market_or_execution()
             calls.append("market")
             raise AssertionError("market read must not occur")
 
+    class Universes:
+        def get(self, universe_version_id):
+            assert universe_version_id == experiment.universe_version_id
+            return snapshot
+
     class Evidence:
         def get(self, run_id):
             calls.append("evidence")
             raise AssertionError("evidence read must not occur")
 
     verifier = CertifiedResearchReproducibilityVerifier(
-        Experiments(), Runs(), Contexts(), resolver, executor, Evidence()
+        Experiments(), Runs(), Contexts(), Universes(), resolver, executor, Evidence()
     )
     with pytest.raises(ValueError, match="RESEARCH_REPRODUCIBILITY_RUN_MISSING"):
         verifier.verify(
             experiment.experiment_id,
             as_of=datetime(2026, 1, 2, tzinfo=timezone.utc),
-            instrument_ids=(),
         )
     assert calls == ["run"]
     assert executions == []
