@@ -75,18 +75,22 @@ class CertifiedResearchContextLoader:
 
 
 class CertifiedResearchRunOrchestrator:
-    """Execute certified PIT evidence and optionally persist immutable canonical output."""
+    """Execute only certified PIT context with verified immutable execution provenance."""
 
     def __init__(
         self,
         experiment_repository,
         run_repository,
         market_context_repository,
+        execution_plan_resolver,
+        executor,
         evidence_repository=None,
     ) -> None:
         self._experiments = experiment_repository
         self._runs = run_repository
         self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
+        self._execution_plans = execution_plan_resolver
+        self._executor = executor
         self._evidence = evidence_repository
 
     def execute(
@@ -95,7 +99,6 @@ class CertifiedResearchRunOrchestrator:
         *,
         as_of: datetime,
         instrument_ids: tuple[UUID, ...],
-        execute,
     ):
         from hope.infrastructure.repositories.research_run_evidence import ResearchRunEvidenceRecord
         from hope.infrastructure.repositories.research_runs import ResearchRunRecord
@@ -103,6 +106,11 @@ class CertifiedResearchRunOrchestrator:
         experiment = self._experiments.get(experiment_id)
         if experiment is None:
             raise KeyError(f"unknown experiment: {experiment_id}")
+
+        # Fail closed before claiming a durable run or reading market data. The
+        # executor never receives caller-selected strategy/config provenance.
+        execution_plan = self._execution_plans.resolve(experiment)
+
         fingerprint = research_run_fingerprint(experiment, as_of=as_of, instrument_ids=instrument_ids)
         run_id = self._runs.deterministic_id(experiment_id, fingerprint)
         run = ResearchRunRecord(
@@ -123,7 +131,7 @@ class CertifiedResearchRunOrchestrator:
                 return run, verified
 
         context = self._contexts.load(experiment_id, as_of=as_of, instrument_ids=instrument_ids)
-        result = execute(context)
+        result = self._executor.execute(execution_plan, context)
         if self._evidence is None:
             return run, result
 
