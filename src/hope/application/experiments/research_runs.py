@@ -7,6 +7,7 @@ from uuid import UUID
 
 from hope.application.backtests.engine import BacktestResult
 from hope.application.backtests.evidence import project_backtest_result
+from hope.application.experiments.execution import CertifiedResearchExecutor
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
@@ -78,6 +79,12 @@ class CertifiedResearchContextLoader:
         )
 
 
+def _require_certified_executor(executor: CertifiedResearchExecutor) -> CertifiedResearchExecutor:
+    if not isinstance(executor, CertifiedResearchExecutor):
+        raise TypeError("RESEARCH_RUN_REQUIRES_CERTIFIED_EXECUTOR")
+    return executor
+
+
 class CertifiedResearchRunOrchestrator:
     """Execute only certified PIT context with verified immutable execution provenance."""
 
@@ -87,14 +94,14 @@ class CertifiedResearchRunOrchestrator:
         run_repository,
         market_context_repository,
         execution_plan_resolver,
-        executor,
+        certified_executor: CertifiedResearchExecutor,
         evidence_repository=None,
     ) -> None:
         self._experiments = experiment_repository
         self._runs = run_repository
         self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
         self._execution_plans = execution_plan_resolver
-        self._executor = executor
+        self._executor = _require_certified_executor(certified_executor)
         self._evidence = evidence_repository
 
     def execute(
@@ -165,14 +172,14 @@ class CertifiedResearchReproducibilityVerifier:
         run_repository,
         market_context_repository,
         execution_plan_resolver,
-        executor,
+        certified_executor: CertifiedResearchExecutor,
         evidence_repository,
     ) -> None:
         self._experiments = experiment_repository
         self._runs = run_repository
         self._contexts = CertifiedResearchContextLoader(experiment_repository, market_context_repository)
         self._execution_plans = execution_plan_resolver
-        self._executor = executor
+        self._executor = _require_certified_executor(certified_executor)
         self._evidence = evidence_repository
 
     def verify(
