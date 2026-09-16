@@ -19,6 +19,14 @@ def research_result_fingerprint(result) -> tuple[object, str]:
     return canonical, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def verify_research_result_evidence(canonical_result, result_fingerprint: str) -> object:
+    """Independently reconstruct and verify immutable stored result evidence."""
+    canonical, reconstructed = research_result_fingerprint(canonical_result)
+    if reconstructed != result_fingerprint:
+        raise ValueError("RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH")
+    return canonical
+
+
 def research_run_fingerprint(
     experiment: ExperimentRecord,
     *,
@@ -108,7 +116,11 @@ class CertifiedResearchRunOrchestrator:
         if self._evidence is not None:
             existing = self._evidence.get(run_id)
             if existing is not None:
-                return run, existing.canonical_result
+                verified = verify_research_result_evidence(
+                    existing.canonical_result,
+                    existing.result_fingerprint,
+                )
+                return run, verified
 
         context = self._contexts.load(experiment_id, as_of=as_of, instrument_ids=instrument_ids)
         result = execute(context)
@@ -122,4 +134,13 @@ class CertifiedResearchRunOrchestrator:
             canonical_result=canonical_result,
         )
         self._evidence.persist(evidence)
-        return run, canonical_result
+        persisted = self._evidence.get(run_id)
+        if persisted is None:
+            raise RuntimeError("RESEARCH_RUN_EVIDENCE_PERSIST_LOST")
+        verified = verify_research_result_evidence(
+            persisted.canonical_result,
+            persisted.result_fingerprint,
+        )
+        if persisted.result_fingerprint != result_fingerprint or verified != canonical_result:
+            raise ValueError("RESEARCH_RUN_EVIDENCE_PERSISTED_RESULT_MISMATCH")
+        return run, verified
