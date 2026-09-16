@@ -9,10 +9,22 @@ from uuid import UUID
 
 from pydantic import BaseModel
 
+from hope.application.backtests.analytics import BacktestMetrics
 from hope.application.backtests.engine import BacktestResult
+from hope.domain.portfolio.ledger import PortfolioState, PositionState
+from hope.domain.portfolio.valuation import PortfolioValuation
 
 
 BACKTEST_EVIDENCE_SCHEMA = "hope.backtest-result.v1"
+BACKTEST_EVIDENCE_RESULT_FIELDS = (
+    "initial_cash",
+    "final_state",
+    "events",
+    "valuations",
+    "metrics",
+    "unfilled_order_ids",
+    "decisions",
+)
 
 
 def _decimal(value: Decimal) -> str:
@@ -31,7 +43,7 @@ def _datetime(value: datetime) -> str:
 
 
 def _canonical_value(value: Any) -> Any:
-    """Project supported HOPE domain values into deterministic JSON primitives."""
+    """Canonicalize nested event/decision payloads not yet covered by explicit v1 projectors."""
     if value is None or isinstance(value, (bool, int, str)):
         return value
     if isinstance(value, Decimal):
@@ -65,9 +77,74 @@ def _canonical_value(value: Any) -> Any:
     raise TypeError(f"BACKTEST_EVIDENCE_UNSUPPORTED_TYPE:{type(value).__name__}")
 
 
+def _position(position: PositionState) -> dict[str, str]:
+    return {
+        "instrument_id": str(position.instrument_id),
+        "quantity": _decimal(position.quantity),
+        "average_price": _decimal(position.average_price),
+        "realized_pnl": _decimal(position.realized_pnl),
+        "total_commission": _decimal(position.total_commission),
+    }
+
+
+def _portfolio_state(state: PortfolioState) -> dict[str, Any]:
+    return {
+        "cash": _decimal(state.cash),
+        "positions": {
+            str(instrument_id): _position(state.positions[instrument_id])
+            for instrument_id in sorted(state.positions, key=str)
+        },
+    }
+
+
+def _valuation(value: PortfolioValuation) -> dict[str, str]:
+    return {
+        "as_of": _datetime(value.as_of),
+        "cash": _decimal(value.cash),
+        "market_value": _decimal(value.market_value),
+        "realized_pnl": _decimal(value.realized_pnl),
+        "unrealized_pnl": _decimal(value.unrealized_pnl),
+        "commissions": _decimal(value.commissions),
+        "equity": _decimal(value.equity),
+        "total_pnl": _decimal(value.total_pnl),
+    }
+
+
+def _metrics(value: BacktestMetrics) -> dict[str, str]:
+    return {
+        "initial_equity": _decimal(value.initial_equity),
+        "final_equity": _decimal(value.final_equity),
+        "total_pnl": _decimal(value.total_pnl),
+        "total_return": _decimal(value.total_return),
+        "max_drawdown": _decimal(value.max_drawdown),
+        "volatility": _decimal(value.volatility),
+        "sharpe": _decimal(value.sharpe),
+        "downside_deviation": _decimal(value.downside_deviation),
+        "sortino": _decimal(value.sortino),
+    }
+
+
 def project_backtest_result(result: BacktestResult) -> dict[str, Any]:
-    """Return the versioned, lossless JSON evidence contract for a backtest result."""
+    """Project BacktestResult into the explicit versioned v1 research-evidence contract.
+
+    Core portfolio/valuation/metric fields are enumerated explicitly so adding a
+    new domain attribute cannot silently redefine v1. Event and decision payloads
+    remain intentionally partial: their ordered containers are part of v1, while
+    their nested domain objects use the deterministic canonicalizer until dedicated
+    event/decision evidence schemas are introduced in a later version.
+    """
+    projected_result = {
+        "initial_cash": _decimal(result.initial_cash),
+        "final_state": _portfolio_state(result.final_state),
+        "events": [_canonical_value(event) for event in result.events],
+        "valuations": [_valuation(value) for value in result.valuations],
+        "metrics": _metrics(result.metrics),
+        "unfilled_order_ids": [str(order_id) for order_id in result.unfilled_order_ids],
+        "decisions": [_canonical_value(decision) for decision in result.decisions],
+    }
+    if tuple(projected_result) != BACKTEST_EVIDENCE_RESULT_FIELDS:
+        raise RuntimeError("BACKTEST_EVIDENCE_V1_FIELD_CONTRACT_BROKEN")
     return {
         "schema": BACKTEST_EVIDENCE_SCHEMA,
-        "result": _canonical_value(result),
+        "result": projected_result,
     }
