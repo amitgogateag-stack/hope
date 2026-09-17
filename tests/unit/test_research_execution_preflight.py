@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.execution import CertifiedResearchExecutor, ResearchExecutionRegistry
 from hope.application.experiments.research_runs import (
     CertifiedResearchReproducibilityVerifier,
@@ -13,6 +14,8 @@ from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
 UTC = timezone.utc
+CONFIG = {"strategy": {"lookback": 20}}
+CONFIG_HASH = configuration_hash(CONFIG)
 
 
 def _experiment() -> ExperimentRecord:
@@ -22,7 +25,7 @@ def _experiment() -> ExperimentRecord:
         strategy_version_id=uuid4(),
         dataset_version_id=uuid4(),
         universe_version_id=uuid4(),
-        configuration_hash="a" * 64,
+        configuration_hash=CONFIG_HASH,
         environment="BACKTEST",
         status="CREATED",
     )
@@ -36,7 +39,7 @@ def _plan(experiment: ExperimentRecord) -> CertifiedExecutionPlan:
         strategy_version="1.0.0",
         code_commit="abc123",
         configuration_hash=experiment.configuration_hash,
-        configuration={"strategy": {"lookback": 20}},
+        configuration=CONFIG,
     )
 
 
