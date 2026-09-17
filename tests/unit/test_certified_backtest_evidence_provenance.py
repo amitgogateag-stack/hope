@@ -1,3 +1,4 @@
+from copy import deepcopy
 from decimal import Decimal
 from uuid import uuid4
 
@@ -106,9 +107,67 @@ def test_certified_research_rejects_legacy_backtest_evidence_on_restart() -> Non
         )
 
 
+def test_certified_backtest_restart_requires_current_execution_plan() -> None:
+    plan = _plan()
+    canonical, fingerprint = research_result_fingerprint(_result(), execution_plan=plan)
+    with pytest.raises(ValueError, match="EXECUTION_PLAN_REQUIRED"):
+        verify_research_result_evidence(
+            canonical,
+            fingerprint,
+            reject_legacy_backtest=True,
+        )
+    assert verify_research_result_evidence(
+        canonical,
+        fingerprint,
+        reject_legacy_backtest=True,
+        execution_plan=plan,
+    ) == canonical
+
+
+def test_certified_backtest_restart_rejects_self_consistent_different_plan() -> None:
+    plan = _plan()
+    canonical, fingerprint = research_result_fingerprint(_result(), execution_plan=plan)
+    different_plan = CertifiedExecutionPlan(
+        experiment_id=plan.experiment_id,
+        strategy_version_id=plan.strategy_version_id,
+        strategy_id=plan.strategy_id,
+        strategy_version=plan.strategy_version,
+        code_commit="different-commit",
+        configuration_hash=plan.configuration_hash,
+        configuration=plan.configuration,
+    )
+    with pytest.raises(ValueError, match="EXECUTION_PROVENANCE_MISMATCH"):
+        verify_research_result_evidence(
+            canonical,
+            fingerprint,
+            reject_legacy_backtest=True,
+            execution_plan=different_plan,
+        )
+
+
+def test_certified_backtest_restart_rejects_self_consistent_structural_tampering() -> None:
+    plan = _plan()
+    canonical, _ = research_result_fingerprint(_result(), execution_plan=plan)
+    tampered = deepcopy(canonical)
+    del tampered["execution_provenance"]["strategy_id"]
+    tampered, tampered_fingerprint = research_result_fingerprint(tampered)
+    with pytest.raises(ValueError, match="PROVENANCE_FIELDS_MISMATCH"):
+        verify_research_result_evidence(
+            tampered,
+            tampered_fingerprint,
+            reject_legacy_backtest=True,
+            execution_plan=plan,
+        )
+
+
 def test_generic_research_evidence_contract_remains_unchanged() -> None:
     value = {"trades": 3, "net": 12}
     plan = _plan()
     canonical, fingerprint = research_result_fingerprint(value, execution_plan=plan)
     assert canonical == value
-    assert verify_research_result_evidence(canonical, fingerprint, reject_legacy_backtest=True) == value
+    assert verify_research_result_evidence(
+        canonical,
+        fingerprint,
+        reject_legacy_backtest=True,
+        execution_plan=plan,
+    ) == value

@@ -5,8 +5,10 @@ import json
 from datetime import datetime
 
 from hope.application.backtests.certified_evidence import (
+    is_certified_backtest_evidence,
     is_legacy_uncertified_backtest_evidence,
     project_certified_backtest_result,
+    verify_certified_backtest_evidence,
 )
 from hope.application.backtests.engine import BacktestResult
 from hope.application.backtests.evidence import project_backtest_result
@@ -46,6 +48,7 @@ def verify_research_result_evidence(
     result_fingerprint: str,
     *,
     reject_legacy_backtest: bool = False,
+    execution_plan: CertifiedExecutionPlan | None = None,
 ) -> object:
     """Independently reconstruct and verify immutable stored result evidence."""
     if reject_legacy_backtest and is_legacy_uncertified_backtest_evidence(canonical_result):
@@ -53,6 +56,12 @@ def verify_research_result_evidence(
     canonical, reconstructed = research_result_fingerprint(canonical_result)
     if reconstructed != result_fingerprint:
         raise ValueError("RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH")
+    if is_certified_backtest_evidence(canonical):
+        if execution_plan is None:
+            if reject_legacy_backtest:
+                raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_EXECUTION_PLAN_REQUIRED")
+        else:
+            verify_certified_backtest_evidence(canonical, execution_plan)
     return canonical
 
 
@@ -205,6 +214,7 @@ class CertifiedResearchRunOrchestrator:
                     existing.canonical_result,
                     existing.result_fingerprint,
                     reject_legacy_backtest=True,
+                    execution_plan=execution_plan,
                 )
                 return run, verified
 
@@ -234,6 +244,7 @@ class CertifiedResearchRunOrchestrator:
             persisted.canonical_result,
             persisted.result_fingerprint,
             reject_legacy_backtest=True,
+            execution_plan=execution_plan,
         )
         if persisted.result_fingerprint != result_fingerprint or verified != canonical_result:
             raise ValueError("RESEARCH_RUN_EVIDENCE_PERSISTED_RESULT_MISMATCH")
@@ -296,6 +307,7 @@ class CertifiedResearchReproducibilityVerifier:
             evidence.canonical_result,
             evidence.result_fingerprint,
             reject_legacy_backtest=True,
+            execution_plan=execution_plan,
         )
 
         inputs = self._inputs.load(
