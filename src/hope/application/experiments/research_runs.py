@@ -4,10 +4,15 @@ import hashlib
 import json
 from datetime import datetime
 
+from hope.application.backtests.certified_evidence import (
+    is_legacy_uncertified_backtest_evidence,
+    project_certified_backtest_result,
+)
 from hope.application.backtests.engine import BacktestResult
 from hope.application.backtests.evidence import project_backtest_result
 from hope.application.experiments.execution import CertifiedResearchExecutor, CertifiedResearchInputs
 from hope.application.universe.snapshot import UniverseSnapshot
+from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
 from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
@@ -16,16 +21,35 @@ def _canonical_json(value) -> tuple[object, str]:
     return json.loads(encoded), encoded
 
 
-def research_result_fingerprint(result) -> tuple[object, str]:
-    """Return canonical JSON evidence and its deterministic SHA256 identity."""
+def research_result_fingerprint(
+    result,
+    *,
+    execution_plan: CertifiedExecutionPlan | None = None,
+) -> tuple[object, str]:
+    """Return canonical JSON evidence and its deterministic SHA256 identity.
+
+    Certified backtests bind the stored evidence to their resolved immutable
+    execution provenance. Generic research handlers retain their existing
+    canonical result contract.
+    """
     if isinstance(result, BacktestResult):
-        result = project_backtest_result(result)
+        if execution_plan is None:
+            result = project_backtest_result(result)
+        else:
+            result = project_certified_backtest_result(result, execution_plan)
     canonical, encoded = _canonical_json(result)
     return canonical, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def verify_research_result_evidence(canonical_result, result_fingerprint: str) -> object:
+def verify_research_result_evidence(
+    canonical_result,
+    result_fingerprint: str,
+    *,
+    reject_legacy_backtest: bool = False,
+) -> object:
     """Independently reconstruct and verify immutable stored result evidence."""
+    if reject_legacy_backtest and is_legacy_uncertified_backtest_evidence(canonical_result):
+        raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_PROVENANCE_MISSING")
     canonical, reconstructed = research_result_fingerprint(canonical_result)
     if reconstructed != result_fingerprint:
         raise ValueError("RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH")
@@ -180,6 +204,7 @@ class CertifiedResearchRunOrchestrator:
                 verified = verify_research_result_evidence(
                     existing.canonical_result,
                     existing.result_fingerprint,
+                    reject_legacy_backtest=True,
                 )
                 return run, verified
 
@@ -192,7 +217,10 @@ class CertifiedResearchRunOrchestrator:
         if self._evidence is None:
             return run, result
 
-        canonical_result, result_fingerprint = research_result_fingerprint(result)
+        canonical_result, result_fingerprint = research_result_fingerprint(
+            result,
+            execution_plan=execution_plan,
+        )
         evidence = ResearchRunEvidenceRecord(
             research_run_id=run_id,
             result_fingerprint=result_fingerprint,
@@ -205,6 +233,7 @@ class CertifiedResearchRunOrchestrator:
         verified = verify_research_result_evidence(
             persisted.canonical_result,
             persisted.result_fingerprint,
+            reject_legacy_backtest=True,
         )
         if persisted.result_fingerprint != result_fingerprint or verified != canonical_result:
             raise ValueError("RESEARCH_RUN_EVIDENCE_PERSISTED_RESULT_MISMATCH")
@@ -263,7 +292,11 @@ class CertifiedResearchReproducibilityVerifier:
         evidence = self._evidence.get(run_id)
         if evidence is None:
             raise ValueError("RESEARCH_REPRODUCIBILITY_EVIDENCE_MISSING")
-        stored = verify_research_result_evidence(evidence.canonical_result, evidence.result_fingerprint)
+        stored = verify_research_result_evidence(
+            evidence.canonical_result,
+            evidence.result_fingerprint,
+            reject_legacy_backtest=True,
+        )
 
         inputs = self._inputs.load(
             experiment,
@@ -271,7 +304,10 @@ class CertifiedResearchReproducibilityVerifier:
             universe_snapshot=universe_snapshot,
         )
         reproduced_result = self._executor.execute(execution_plan, inputs)
-        reproduced, reproduced_fingerprint = research_result_fingerprint(reproduced_result)
+        reproduced, reproduced_fingerprint = research_result_fingerprint(
+            reproduced_result,
+            execution_plan=execution_plan,
+        )
         if reproduced_fingerprint != evidence.result_fingerprint or reproduced != stored:
             raise ValueError("RESEARCH_REPRODUCIBILITY_MISMATCH")
         return reproduced
