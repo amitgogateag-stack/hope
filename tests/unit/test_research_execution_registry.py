@@ -4,6 +4,7 @@ from uuid import uuid4
 
 import pytest
 
+from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.execution import (
     CertifiedResearchExecutor,
     CertifiedResearchInputs,
@@ -21,14 +22,15 @@ UTC = timezone.utc
 
 
 def _plan():
+    configuration = {"lookback": 20}
     return CertifiedExecutionPlan(
         experiment_id="exp-registry",
         strategy_version_id=uuid4(),
         strategy_id=uuid4(),
         strategy_version="1.2.3",
         code_commit="abc123",
-        configuration_hash="a" * 64,
-        configuration={"lookback": 20},
+        configuration_hash=configuration_hash(configuration),
+        configuration=configuration,
     )
 
 
@@ -120,6 +122,24 @@ def test_registry_fails_closed_on_strategy_or_commit_identity_mismatch() -> None
         )
         with pytest.raises(ValueError, match=error):
             executor.execute(plan, _inputs())
+
+
+def test_executor_preflight_rejects_configuration_hash_substitution() -> None:
+    plan = _plan()
+    forged = CertifiedExecutionPlan(
+        experiment_id=plan.experiment_id,
+        strategy_version_id=plan.strategy_version_id,
+        strategy_id=plan.strategy_id,
+        strategy_version=plan.strategy_version,
+        code_commit=plan.code_commit,
+        configuration_hash=plan.configuration_hash,
+        configuration={"lookback": 99},
+    )
+    executor = CertifiedResearchExecutor(
+        ResearchExecutionRegistry([_implementation(plan)])
+    )
+    with pytest.raises(ValueError, match="EXECUTION_CONFIGURATION_HASH_MISMATCH"):
+        executor.validate(forged)
 
 
 def test_registry_validates_canonical_definition_and_callable() -> None:

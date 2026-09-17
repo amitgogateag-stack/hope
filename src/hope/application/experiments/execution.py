@@ -5,6 +5,7 @@ from types import MappingProxyType
 from typing import Callable, Iterable
 from uuid import UUID
 
+from hope.application.experiments.config_hash import configuration_hash
 from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.market_data.context import PITMarketContext
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
@@ -99,6 +100,8 @@ class CertifiedResearchExecutor:
         """Fail closed on executable provenance before any research side effects or data reads."""
         if not isinstance(plan, CertifiedExecutionPlan):
             raise TypeError("CERTIFIED_RESEARCH_EXECUTOR_REQUIRES_EXECUTION_PLAN")
+        if configuration_hash(plan.configuration) != plan.configuration_hash:
+            raise ValueError("CERTIFIED_RESEARCH_EXECUTION_CONFIGURATION_HASH_MISMATCH")
         return self._registry.resolve(plan)
 
     def execute(self, plan: CertifiedExecutionPlan, inputs: CertifiedResearchInputs) -> object:
