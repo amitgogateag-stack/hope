@@ -88,3 +88,14 @@ def test_market_data_finalization_requires_nonempty_manifest_structure():
     assert "jsonb_array_length(w->'instruments') = 0" in sql
     assert "MARKET_DATA_FINALIZATION_MANIFEST_STRUCTURE_INVALID" in sql
     assert "BEFORE UPDATE ON dataset_versions" in sql
+
+
+def test_certified_research_evidence_is_bound_to_parent_run_identity():
+    sql = (ROOT / "migrations/078_research_run_evidence_identity.sql").read_text()
+    assert "guard_certified_research_run_evidence_identity" in sql
+    assert "hope.certified-backtest-result.v2" in sql
+    assert "research_provenance->>'experiment_id'" in sql
+    assert "research_provenance->>'run_fingerprint'" in sql
+    assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_EXPERIMENT_MISMATCH" in sql
+    assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_RUN_FINGERPRINT_MISMATCH" in sql
+    assert "BEFORE INSERT ON research_run_evidence" in sql
