@@ -64,6 +64,7 @@ def test_research_run_provenance_is_self_describing_and_matches_fingerprint() ->
             experiment,
             as_of=as_of,
             universe_snapshot=snapshot,
+            market_data_manifest_hash=MANIFEST_HASH,
         ),
     }
 

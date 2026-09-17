@@ -79,7 +79,12 @@ def test_corrupt_restart_evidence_fails_before_market_read_or_execution() -> Non
     experiment, resolver, executor = _setup(lambda plan, inputs: executions.append("execute"))
     t0 = datetime(2026, 1, 2, tzinfo=timezone.utc)
     snapshot = _snapshot(experiment)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
+    fingerprint = research_run_fingerprint(
+        experiment,
+        as_of=t0,
+        universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
+    )
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     bad = ResearchRunEvidenceRecord(
         research_run_id=run_id,
@@ -152,6 +157,10 @@ def test_reproducibility_missing_run_fails_before_evidence_market_or_execution()
             return None
 
     class Contexts:
+        def manifest_hash(self, *args, **kwargs):
+            calls.append("manifest")
+            return MANIFEST_HASH
+
         def get(self, *args, **kwargs):
             calls.append("market")
             raise AssertionError("market read must not occur")
