@@ -6,6 +6,7 @@ from datetime import datetime
 
 from hope.application.backtests.certified_evidence import (
     is_certified_backtest_evidence,
+    is_legacy_certified_backtest_evidence,
     is_legacy_uncertified_backtest_evidence,
     project_certified_backtest_result,
     verify_certified_backtest_evidence,
@@ -23,22 +24,65 @@ def _canonical_json(value) -> tuple[object, str]:
     return json.loads(encoded), encoded
 
 
+def research_run_provenance(
+    experiment: ExperimentRecord,
+    *,
+    as_of: datetime,
+    universe_snapshot: UniverseSnapshot,
+) -> dict[str, str]:
+    """Return the canonical scientific identity embedded into certified result evidence."""
+    _require_active_experiment(experiment)
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("RESEARCH_RUN_AS_OF_MUST_BE_TIMEZONE_AWARE")
+    if not isinstance(universe_snapshot, UniverseSnapshot):
+        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
+    if universe_snapshot.universe_version_id != experiment.universe_version_id:
+        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
+    if universe_snapshot.version.pit_certified is not True:
+        raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
+
+    identity = {
+        "experiment_id": experiment.experiment_id,
+        "strategy_version_id": str(experiment.strategy_version_id),
+        "dataset_version_id": str(experiment.dataset_version_id),
+        "universe_version_id": str(experiment.universe_version_id),
+        "universe_membership_hash": universe_snapshot.membership_hash,
+        "configuration_hash": experiment.configuration_hash,
+        "environment": experiment.environment,
+        "as_of": as_of.isoformat(),
+    }
+    canonical = json.dumps(identity, sort_keys=True, separators=(",", ":"))
+    return {
+        **identity,
+        "run_fingerprint": hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+    }
+
+
 def research_result_fingerprint(
     result,
     *,
     execution_plan: CertifiedExecutionPlan | None = None,
+    research_provenance: dict[str, str] | None = None,
 ) -> tuple[object, str]:
     """Return canonical JSON evidence and its deterministic SHA256 identity.
 
-    Certified backtests bind the stored evidence to their resolved immutable
-    execution provenance. Generic research handlers retain their existing
-    canonical result contract.
+    Certified backtests bind the stored evidence to both resolved immutable
+    execution provenance and exact scientific run provenance. Generic research
+    handlers retain their existing canonical result contract.
     """
     if isinstance(result, BacktestResult):
         if execution_plan is None:
+            if research_provenance is not None:
+                raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_EXECUTION_PLAN_REQUIRED")
             result = project_backtest_result(result)
         else:
-            result = project_certified_backtest_result(result, execution_plan)
+            if research_provenance is None:
+                raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_RUN_PROVENANCE_REQUIRED")
+            result = project_certified_backtest_result(
+                result,
+                execution_plan,
+                research_provenance,
+            )
     canonical, encoded = _canonical_json(result)
     return canonical, hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
@@ -49,19 +93,26 @@ def verify_research_result_evidence(
     *,
     reject_legacy_backtest: bool = False,
     execution_plan: CertifiedExecutionPlan | None = None,
+    research_provenance: dict[str, str] | None = None,
 ) -> object:
     """Independently reconstruct and verify immutable stored result evidence."""
     if reject_legacy_backtest and is_legacy_uncertified_backtest_evidence(canonical_result):
         raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_PROVENANCE_MISSING")
+    if reject_legacy_backtest and is_legacy_certified_backtest_evidence(canonical_result):
+        raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_RUN_PROVENANCE_MISSING")
     canonical, reconstructed = research_result_fingerprint(canonical_result)
     if reconstructed != result_fingerprint:
         raise ValueError("RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH")
     if is_certified_backtest_evidence(canonical):
         if execution_plan is None:
-            if reject_legacy_backtest:
-                raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_EXECUTION_PLAN_REQUIRED")
-        else:
-            verify_certified_backtest_evidence(canonical, execution_plan)
+            raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_EXECUTION_PLAN_REQUIRED")
+        if research_provenance is None:
+            raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_RUN_PROVENANCE_REQUIRED")
+        verify_certified_backtest_evidence(
+            canonical,
+            execution_plan,
+            research_provenance,
+        )
     return canonical
 
 
@@ -78,28 +129,11 @@ def research_run_fingerprint(
     universe_snapshot: UniverseSnapshot,
 ) -> str:
     """Bind run identity to the immutable experiment and exact frozen universe membership."""
-    _require_active_experiment(experiment)
-    if as_of.tzinfo is None or as_of.utcoffset() is None:
-        raise ValueError("RESEARCH_RUN_AS_OF_MUST_BE_TIMEZONE_AWARE")
-    if not isinstance(universe_snapshot, UniverseSnapshot):
-        raise TypeError("RESEARCH_RUN_REQUIRES_UNIVERSE_SNAPSHOT")
-    if universe_snapshot.universe_version_id != experiment.universe_version_id:
-        raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
-    if universe_snapshot.version.pit_certified is not True:
-        raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
-
-    payload = {
-        "experiment_id": experiment.experiment_id,
-        "strategy_version_id": str(experiment.strategy_version_id),
-        "dataset_version_id": str(experiment.dataset_version_id),
-        "universe_version_id": str(experiment.universe_version_id),
-        "universe_membership_hash": universe_snapshot.membership_hash,
-        "configuration_hash": experiment.configuration_hash,
-        "environment": experiment.environment,
-        "as_of": as_of.isoformat(),
-    }
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return research_run_provenance(
+        experiment,
+        as_of=as_of,
+        universe_snapshot=universe_snapshot,
+    )["run_fingerprint"]
 
 
 class CertifiedResearchInputLoader:
@@ -193,11 +227,12 @@ class CertifiedResearchRunOrchestrator:
         execution_plan = self._execution_plans.resolve(experiment)
         self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
-        fingerprint = research_run_fingerprint(
+        provenance = research_run_provenance(
             experiment,
             as_of=as_of,
             universe_snapshot=universe_snapshot,
         )
+        fingerprint = provenance["run_fingerprint"]
         run_id = self._runs.deterministic_id(experiment_id, fingerprint)
         run = ResearchRunRecord(
             research_run_id=run_id,
@@ -215,6 +250,7 @@ class CertifiedResearchRunOrchestrator:
                     existing.result_fingerprint,
                     reject_legacy_backtest=True,
                     execution_plan=execution_plan,
+                    research_provenance=provenance,
                 )
                 return run, verified
 
@@ -230,6 +266,7 @@ class CertifiedResearchRunOrchestrator:
         canonical_result, result_fingerprint = research_result_fingerprint(
             result,
             execution_plan=execution_plan,
+            research_provenance=provenance,
         )
         evidence = ResearchRunEvidenceRecord(
             research_run_id=run_id,
@@ -245,6 +282,7 @@ class CertifiedResearchRunOrchestrator:
             persisted.result_fingerprint,
             reject_legacy_backtest=True,
             execution_plan=execution_plan,
+            research_provenance=provenance,
         )
         if persisted.result_fingerprint != result_fingerprint or verified != canonical_result:
             raise ValueError("RESEARCH_RUN_EVIDENCE_PERSISTED_RESULT_MISMATCH")
@@ -288,11 +326,12 @@ class CertifiedResearchReproducibilityVerifier:
         execution_plan = self._execution_plans.resolve(experiment)
         self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
-        fingerprint = research_run_fingerprint(
+        provenance = research_run_provenance(
             experiment,
             as_of=as_of,
             universe_snapshot=universe_snapshot,
         )
+        fingerprint = provenance["run_fingerprint"]
         run_id = self._runs.deterministic_id(experiment_id, fingerprint)
         run = self._runs.get(run_id)
         if run is None:
@@ -308,6 +347,7 @@ class CertifiedResearchReproducibilityVerifier:
             evidence.result_fingerprint,
             reject_legacy_backtest=True,
             execution_plan=execution_plan,
+            research_provenance=provenance,
         )
 
         inputs = self._inputs.load(
@@ -319,6 +359,7 @@ class CertifiedResearchReproducibilityVerifier:
         reproduced, reproduced_fingerprint = research_result_fingerprint(
             reproduced_result,
             execution_plan=execution_plan,
+            research_provenance=provenance,
         )
         if reproduced_fingerprint != evidence.result_fingerprint or reproduced != stored:
             raise ValueError("RESEARCH_REPRODUCIBILITY_MISMATCH")
