@@ -196,7 +196,7 @@ def verify_certified_backtest_evidence(
     if not is_certified_backtest_evidence(value):
         raise ValueError("CERTIFIED_BACKTEST_EVIDENCE_SCHEMA_MISMATCH")
     assert isinstance(value, dict)
-    if tuple(value) != CERTIFIED_BACKTEST_EVIDENCE_FIELDS:
+    if set(value) != set(CERTIFIED_BACKTEST_EVIDENCE_FIELDS):
         raise ValueError("CERTIFIED_BACKTEST_EVIDENCE_FIELDS_MISMATCH")
 
     execution = value.get("execution_provenance")

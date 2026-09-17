@@ -16,6 +16,7 @@ from hope.application.experiments.research_runs import (
     CertifiedResearchRunOrchestrator,
     research_result_fingerprint,
     research_run_fingerprint,
+    research_run_provenance,
 )
 from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.portfolio.ledger import PortfolioState
@@ -109,7 +110,13 @@ def test_orchestrator_rejects_stored_certified_backtest_from_different_execution
         members=(UniverseMember(instrument_id=instrument_id),),
     )
     as_of = datetime(2026, 1, 2, tzinfo=UTC)
-    run_fingerprint = research_run_fingerprint(
+    run_provenance = research_run_provenance(
+        experiment,
+        as_of=as_of,
+        universe_snapshot=snapshot,
+    )
+    run_fingerprint = run_provenance["run_fingerprint"]
+    assert run_fingerprint == research_run_fingerprint(
         experiment,
         as_of=as_of,
         universe_snapshot=snapshot,
@@ -121,6 +128,7 @@ def test_orchestrator_rejects_stored_certified_backtest_from_different_execution
     canonical, evidence_fingerprint = research_result_fingerprint(
         _result(),
         execution_plan=stale_plan,
+        research_provenance=run_provenance,
     )
     stored_evidence = ResearchRunEvidenceRecord(
         research_run_id=run_id,
