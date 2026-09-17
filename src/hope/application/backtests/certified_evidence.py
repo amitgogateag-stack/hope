@@ -11,8 +11,9 @@ from hope.application.experiments.config_hash import configuration_hash
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
 
 
-CERTIFIED_BACKTEST_EVIDENCE_SCHEMA = "hope.certified-backtest-result.v2"
+CERTIFIED_BACKTEST_EVIDENCE_SCHEMA = "hope.certified-backtest-result.v3"
 LEGACY_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA = "hope.certified-backtest-result.v1"
+LEGACY_RUN_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA = "hope.certified-backtest-result.v2"
 CERTIFIED_BACKTEST_EVIDENCE_FIELDS = (
     "schema",
     "execution_provenance",
@@ -33,6 +34,7 @@ CERTIFIED_RESEARCH_PROVENANCE_FIELDS = (
     "dataset_version_id",
     "universe_version_id",
     "universe_membership_hash",
+    "market_data_manifest_hash",
     "configuration_hash",
     "environment",
     "as_of",
@@ -131,6 +133,10 @@ def _research_provenance(value: Mapping[str, object]) -> dict[str, str]:
             value["universe_membership_hash"],
             "CERTIFIED_BACKTEST_EVIDENCE_UNIVERSE_MEMBERSHIP_HASH_NOT_CANONICAL",
         ),
+        "market_data_manifest_hash": _canonical_sha256(
+            value["market_data_manifest_hash"],
+            "CERTIFIED_BACKTEST_EVIDENCE_MARKET_DATA_MANIFEST_HASH_NOT_CANONICAL",
+        ),
         "configuration_hash": _canonical_sha256(
             value["configuration_hash"],
             "CERTIFIED_BACKTEST_EVIDENCE_CONFIGURATION_HASH_NOT_CANONICAL",
@@ -175,7 +181,7 @@ def project_certified_backtest_result(
         "backtest": project_backtest_result(result),
     }
     if tuple(projected) != CERTIFIED_BACKTEST_EVIDENCE_FIELDS:
-        raise RuntimeError("CERTIFIED_BACKTEST_EVIDENCE_V2_FIELD_CONTRACT_BROKEN")
+        raise RuntimeError("CERTIFIED_BACKTEST_EVIDENCE_V3_FIELD_CONTRACT_BROKEN")
     return projected
 
 
@@ -184,7 +190,14 @@ def is_certified_backtest_evidence(value: object) -> bool:
 
 
 def is_legacy_certified_backtest_evidence(value: object) -> bool:
-    return isinstance(value, dict) and value.get("schema") == LEGACY_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA
+    return isinstance(value, dict) and value.get("schema") in {
+        LEGACY_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA,
+        LEGACY_RUN_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA,
+    }
+
+
+def is_legacy_run_certified_backtest_evidence(value: object) -> bool:
+    return isinstance(value, dict) and value.get("schema") == LEGACY_RUN_CERTIFIED_BACKTEST_EVIDENCE_SCHEMA
 
 
 def verify_certified_backtest_evidence(

@@ -12,6 +12,7 @@ from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 
 UTC = timezone.utc
+MANIFEST_HASH = "c" * 64
 
 
 def _fixture():
@@ -47,6 +48,7 @@ def test_research_run_provenance_is_self_describing_and_matches_fingerprint() ->
         experiment,
         as_of=as_of,
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
     )
     assert provenance == {
         "experiment_id": experiment.experiment_id,
@@ -54,6 +56,7 @@ def test_research_run_provenance_is_self_describing_and_matches_fingerprint() ->
         "dataset_version_id": str(experiment.dataset_version_id),
         "universe_version_id": str(experiment.universe_version_id),
         "universe_membership_hash": snapshot.membership_hash,
+        "market_data_manifest_hash": MANIFEST_HASH,
         "configuration_hash": experiment.configuration_hash,
         "environment": experiment.environment,
         "as_of": as_of.isoformat(),
@@ -71,11 +74,20 @@ def test_research_run_provenance_changes_with_scientific_inputs() -> None:
         experiment,
         as_of=datetime(2026, 1, 2, tzinfo=UTC),
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
     )
     later = research_run_provenance(
         experiment,
         as_of=datetime(2026, 1, 3, tzinfo=UTC),
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
+    )
+    different_manifest = research_run_provenance(
+        experiment,
+        as_of=datetime(2026, 1, 2, tzinfo=UTC),
+        universe_snapshot=snapshot,
+        market_data_manifest_hash="d" * 64,
     )
     assert first["run_fingerprint"] != later["run_fingerprint"]
+    assert first["run_fingerprint"] != different_manifest["run_fingerprint"]
     assert first["as_of"] != later["as_of"]

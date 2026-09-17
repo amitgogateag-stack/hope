@@ -94,6 +94,51 @@ class PITMarketContextRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
+    def manifest_hash(
+        self,
+        dataset_version_id: UUID,
+        *,
+        universe_version_id: UUID,
+    ) -> str:
+        """Resolve and verify immutable sealed market-data identity without reading bars."""
+        if not isinstance(dataset_version_id, UUID):
+            raise TypeError("PIT_MARKET_CONTEXT_REPOSITORY_REQUIRES_DATASET_VERSION_ID")
+        if not isinstance(universe_version_id, UUID):
+            raise TypeError("PIT_MARKET_CONTEXT_REPOSITORY_REQUIRES_UNIVERSE_VERSION_ID")
+
+        dataset = self._connection.execute(
+            text(
+                "SELECT dv.immutable, dv.vintage_label, d.pit_certified, d.source, "
+                "m.manifest, m.manifest_hash, m.universe_version_id, "
+                "uv.pit_certified AS universe_pit_certified, uv.declared_member_count, "
+                "(SELECT count(*) FROM universe_members um "
+                "WHERE um.universe_version_id = m.universe_version_id) AS actual_member_count "
+                "FROM dataset_versions dv "
+                "JOIN datasets d ON d.dataset_id = dv.dataset_id "
+                "LEFT JOIN market_data_coverage_manifests m "
+                "ON m.dataset_version_id = dv.dataset_version_id "
+                "LEFT JOIN universe_versions uv "
+                "ON uv.universe_version_id = m.universe_version_id "
+                "WHERE dv.dataset_version_id = :dataset_version_id"
+            ),
+            {"dataset_version_id": dataset_version_id},
+        ).mappings().first()
+        if dataset is None:
+            raise RuntimeError("PIT_MARKET_CONTEXT_DATASET_VERSION_NOT_FOUND")
+        if not dataset["immutable"]:
+            raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_IMMUTABLE_DATASET_VERSION")
+        if not dataset["pit_certified"]:
+            raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_PIT_CERTIFIED_DATASET")
+        if dataset["vintage_label"] != "sealed" or dataset["manifest"] is None:
+            raise ValueError("PIT_MARKET_CONTEXT_REQUIRES_MANIFEST_BACKED_SEALED_VERSION")
+
+        _verify_read_side_evidence(dataset)
+        _verify_requested_universe(dataset["universe_version_id"], universe_version_id)
+        manifest_hash = dataset["manifest_hash"]
+        if not isinstance(manifest_hash, str):
+            raise ValueError("PIT_MARKET_CONTEXT_MANIFEST_CHECKSUM_MISMATCH")
+        return manifest_hash
+
     def get(
         self,
         dataset_version_id: UUID,

@@ -27,6 +27,7 @@ from hope.infrastructure.repositories.experiments import ExperimentRecord
 
 UTC = timezone.utc
 CONFIG = {"risk": {"max_positions": 3}, "strategy": {"lookback": 20}}
+MANIFEST_HASH = "c" * 64
 
 
 def _experiment() -> ExperimentRecord:
@@ -89,15 +90,16 @@ def test_fingerprint_binds_exact_experiment_as_of_and_universe_membership() -> N
     experiment = _experiment()
     t0 = datetime(2026, 1, 2, tzinfo=UTC)
     snapshot = _snapshot(experiment)
-    first = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
-    assert first == research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    first = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
+    assert first == research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
     assert first != research_run_fingerprint(
         experiment,
         as_of=datetime(2026, 1, 3, tzinfo=UTC),
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
     )
     changed = _snapshot(experiment, instrument_ids=(uuid4(),))
-    assert first != research_run_fingerprint(experiment, as_of=t0, universe_snapshot=changed)
+    assert first != research_run_fingerprint(experiment, as_of=t0, universe_snapshot=changed, market_data_manifest_hash=MANIFEST_HASH)
     assert len(first) == 64
 
 
@@ -109,6 +111,7 @@ def test_fingerprint_rejects_wrong_universe() -> None:
             experiment,
             as_of=datetime(2026, 1, 2, tzinfo=UTC),
             universe_snapshot=_snapshot(wrong_experiment),
+            market_data_manifest_hash=MANIFEST_HASH,
         )
 
 
@@ -140,6 +143,9 @@ def test_input_loader_derives_exact_instruments_from_frozen_universe() -> None:
             return snapshot
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
             calls.append((dataset_version_id, as_of, universe_version_id, instrument_ids))
             return PITMarketContext(as_of=as_of, bars=())
@@ -165,6 +171,9 @@ def test_input_loader_rejects_missing_universe_before_market_read() -> None:
             return None
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, *args, **kwargs):
             raise AssertionError("market read must not occur")
 
@@ -199,6 +208,9 @@ def test_orchestrator_persists_evidence_and_restart_reuses_without_market_read()
             return True
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
             market_reads.append(instrument_ids)
             return PITMarketContext(as_of=as_of, bars=())
@@ -241,7 +253,7 @@ def test_orchestrator_rejects_corrupt_stored_evidence_before_market_read() -> No
     snapshot = _snapshot(experiment)
     t0 = datetime(2026, 1, 2, tzinfo=UTC)
     resolver, strategy = _resolver(experiment)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     bad = ResearchRunEvidenceRecord(
         research_run_id=run_id,
@@ -265,6 +277,9 @@ def test_orchestrator_rejects_corrupt_stored_evidence_before_market_read() -> No
         def persist(self, record): raise AssertionError("must not overwrite corrupt evidence")
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, *args, **kwargs): raise AssertionError("must fail before market read")
 
     executor = _executor(
@@ -286,7 +301,7 @@ def test_reproducibility_verifier_reexecutes_same_frozen_universe_and_matches() 
     experiment = _experiment()
     snapshot = _snapshot(experiment)
     t0 = datetime(2026, 1, 2, tzinfo=UTC)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     run = ResearchRunRecord(
         research_run_id=run_id,
@@ -315,6 +330,9 @@ def test_reproducibility_verifier_reexecutes_same_frozen_universe_and_matches() 
         def get(self, requested_run_id): return run
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, dataset_version_id, *, as_of, universe_version_id, instrument_ids):
             seen.append(instrument_ids)
             return PITMarketContext(as_of=as_of, bars=())
@@ -337,7 +355,7 @@ def test_reproducibility_verifier_fails_closed_on_divergent_reexecution() -> Non
     experiment = _experiment()
     snapshot = _snapshot(experiment)
     t0 = datetime(2026, 1, 2, tzinfo=UTC)
-    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot)
+    fingerprint = research_run_fingerprint(experiment, as_of=t0, universe_snapshot=snapshot, market_data_manifest_hash=MANIFEST_HASH)
     run_id = uuid5(NAMESPACE_URL, f"hope:research-run:{experiment.experiment_id}:{fingerprint}")
     run = ResearchRunRecord(research_run_id=run_id, experiment_id=experiment.experiment_id, run_fingerprint=fingerprint, as_of=t0)
     canonical, result_hash = research_result_fingerprint({"net": 12})
@@ -353,6 +371,9 @@ def test_reproducibility_verifier_fails_closed_on_divergent_reexecution() -> Non
         def deterministic_id(experiment_id, run_fingerprint): return run_id
         def get(self, requested_run_id): return run
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, *args, **kwargs): return PITMarketContext(as_of=t0, bars=())
     class Evidence:
         def get(self, requested_run_id): return evidence

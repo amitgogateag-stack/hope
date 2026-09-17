@@ -7,6 +7,7 @@ from datetime import datetime
 from hope.application.backtests.certified_evidence import (
     is_certified_backtest_evidence,
     is_legacy_certified_backtest_evidence,
+    is_legacy_run_certified_backtest_evidence,
     is_legacy_uncertified_backtest_evidence,
     project_certified_backtest_result,
     verify_certified_backtest_evidence,
@@ -29,6 +30,7 @@ def research_run_provenance(
     *,
     as_of: datetime,
     universe_snapshot: UniverseSnapshot,
+    market_data_manifest_hash: str,
 ) -> dict[str, str]:
     """Return the canonical scientific identity embedded into certified result evidence."""
     _require_active_experiment(experiment)
@@ -40,6 +42,12 @@ def research_run_provenance(
         raise ValueError("RESEARCH_RUN_UNIVERSE_VERSION_MISMATCH")
     if universe_snapshot.version.pit_certified is not True:
         raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
+    if (
+        not isinstance(market_data_manifest_hash, str)
+        or len(market_data_manifest_hash) != 64
+        or any(character not in "0123456789abcdef" for character in market_data_manifest_hash)
+    ):
+        raise ValueError("RESEARCH_RUN_REQUIRES_CANONICAL_MARKET_DATA_MANIFEST_HASH")
 
     identity = {
         "experiment_id": experiment.experiment_id,
@@ -47,6 +55,7 @@ def research_run_provenance(
         "dataset_version_id": str(experiment.dataset_version_id),
         "universe_version_id": str(experiment.universe_version_id),
         "universe_membership_hash": universe_snapshot.membership_hash,
+        "market_data_manifest_hash": market_data_manifest_hash,
         "configuration_hash": experiment.configuration_hash,
         "environment": experiment.environment,
         "as_of": as_of.isoformat(),
@@ -98,6 +107,8 @@ def verify_research_result_evidence(
     """Independently reconstruct and verify immutable stored result evidence."""
     if reject_legacy_backtest and is_legacy_uncertified_backtest_evidence(canonical_result):
         raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_PROVENANCE_MISSING")
+    if reject_legacy_backtest and is_legacy_run_certified_backtest_evidence(canonical_result):
+        raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_MANIFEST_PROVENANCE_MISSING")
     if reject_legacy_backtest and is_legacy_certified_backtest_evidence(canonical_result):
         raise ValueError("RESEARCH_RUN_CERTIFIED_BACKTEST_RUN_PROVENANCE_MISSING")
     canonical, reconstructed = research_result_fingerprint(canonical_result)
@@ -127,12 +138,14 @@ def research_run_fingerprint(
     *,
     as_of: datetime,
     universe_snapshot: UniverseSnapshot,
+    market_data_manifest_hash: str,
 ) -> str:
-    """Bind run identity to the immutable experiment and exact frozen universe membership."""
+    """Bind run identity to immutable experiment, frozen universe and sealed market data."""
     return research_run_provenance(
         experiment,
         as_of=as_of,
         universe_snapshot=universe_snapshot,
+        market_data_manifest_hash=market_data_manifest_hash,
     )["run_fingerprint"]
 
 
@@ -153,6 +166,23 @@ class CertifiedResearchInputLoader:
         if snapshot.version.pit_certified is not True:
             raise ValueError("RESEARCH_RUN_REQUIRES_PIT_CERTIFIED_UNIVERSE")
         return snapshot
+
+    def market_data_manifest_hash(self, experiment: ExperimentRecord) -> str:
+        _require_active_experiment(experiment)
+        resolver = getattr(self._market_contexts, "manifest_hash", None)
+        if not callable(resolver):
+            raise TypeError("RESEARCH_RUN_REQUIRES_MARKET_DATA_MANIFEST_IDENTITY_RESOLVER")
+        value = resolver(
+            experiment.dataset_version_id,
+            universe_version_id=experiment.universe_version_id,
+        )
+        if (
+            not isinstance(value, str)
+            or len(value) != 64
+            or any(character not in "0123456789abcdef" for character in value)
+        ):
+            raise ValueError("RESEARCH_RUN_REQUIRES_CANONICAL_MARKET_DATA_MANIFEST_HASH")
+        return value
 
     def load(
         self,
@@ -227,10 +257,12 @@ class CertifiedResearchRunOrchestrator:
         execution_plan = self._execution_plans.resolve(experiment)
         self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
+        market_data_manifest_hash = self._inputs.market_data_manifest_hash(experiment)
         provenance = research_run_provenance(
             experiment,
             as_of=as_of,
             universe_snapshot=universe_snapshot,
+            market_data_manifest_hash=market_data_manifest_hash,
         )
         fingerprint = provenance["run_fingerprint"]
         run_id = self._runs.deterministic_id(experiment_id, fingerprint)
@@ -326,10 +358,12 @@ class CertifiedResearchReproducibilityVerifier:
         execution_plan = self._execution_plans.resolve(experiment)
         self._executor.validate(execution_plan)
         universe_snapshot = self._inputs.universe(experiment)
+        market_data_manifest_hash = self._inputs.market_data_manifest_hash(experiment)
         provenance = research_run_provenance(
             experiment,
             as_of=as_of,
             universe_snapshot=universe_snapshot,
+            market_data_manifest_hash=market_data_manifest_hash,
         )
         fingerprint = provenance["run_fingerprint"]
         run_id = self._runs.deterministic_id(experiment_id, fingerprint)

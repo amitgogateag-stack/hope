@@ -99,3 +99,15 @@ def test_certified_research_evidence_is_bound_to_parent_run_identity():
     assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_EXPERIMENT_MISMATCH" in sql
     assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_RUN_FINGERPRINT_MISMATCH" in sql
     assert "BEFORE INSERT ON research_run_evidence" in sql
+
+
+def test_certified_v3_evidence_is_bound_to_exact_parent_market_data_identity():
+    sql = (ROOT / "migrations/080_research_run_evidence_market_data_identity.sql").read_text()
+    assert "hope.certified-backtest-result.v3" in sql
+    assert "research_run_market_data_provenance" in sql
+    assert "research_provenance->>'dataset_version_id'" in sql
+    assert "research_provenance->>'universe_version_id'" in sql
+    assert "research_provenance->>'market_data_manifest_hash'" in sql
+    assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_DATASET_VERSION_MISMATCH" in sql
+    assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_UNIVERSE_VERSION_MISMATCH" in sql
+    assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_MANIFEST_HASH_MISMATCH" in sql

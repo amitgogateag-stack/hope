@@ -54,6 +54,7 @@ def test_research_run_fingerprint_rejects_non_pit_certified_universe() -> None:
             experiment,
             as_of=datetime(2026, 1, 2, tzinfo=UTC),
             universe_snapshot=_snapshot(experiment, pit_certified=False),
+            market_data_manifest_hash="c" * 64,
         )
 
 
@@ -107,3 +108,16 @@ def test_input_loader_rejects_market_context_for_different_as_of() -> None:
             as_of=requested,
             universe_snapshot=snapshot,
         )
+
+
+def test_manifest_identity_resolver_is_required_before_certified_run_identity() -> None:
+    experiment = _experiment()
+    snapshot = _snapshot(experiment)
+
+    class Contexts:
+        def get(self, *args, **kwargs):
+            raise AssertionError("market bars must not be read")
+
+    loader = CertifiedResearchInputLoader(Contexts(), object())
+    with pytest.raises(TypeError, match="MARKET_DATA_MANIFEST_IDENTITY_RESOLVER"):
+        loader.market_data_manifest_hash(experiment)

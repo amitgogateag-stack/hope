@@ -66,6 +66,47 @@ def test_certified_research_evidence_is_bound_to_parent_run_identity() -> None:
                 with connection.begin_nested():
                     connection.execute(text("INSERT INTO research_run_evidence(research_run_id,result_fingerprint,canonical_result) VALUES (:rid,:fp,CAST(:result AS JSONB))"), {"rid": run_id, "fp": "3" * 64, "result": evidence(embedded_experiment_id="EXP-WRONG")})
 
+            v3_run_id = uuid4()
+            v3_run_fingerprint = "c" * 64
+            manifest_hash = "e" * 64
+            connection.execute(text("INSERT INTO research_runs(research_run_id,experiment_id,run_fingerprint,as_of) VALUES (:rid,:eid,:fp,:as_of)"), {"rid": v3_run_id, "eid": experiment_id, "fp": v3_run_fingerprint, "as_of": datetime(2026, 1, 4, tzinfo=timezone.utc)})
+            connection.execute(text("INSERT INTO research_run_market_data_provenance(research_run_id,dataset_version_id,universe_version_id,manifest_hash) VALUES (:rid,:did,:uid,:mh)"), {"rid": v3_run_id, "did": dataset_version_id, "uid": universe_version_id, "mh": manifest_hash})
+
+            def v3_evidence(*, embedded_manifest_hash=manifest_hash):
+                return json.dumps({
+                    "schema": "hope.certified-backtest-result.v3",
+                    "execution_provenance": {},
+                    "research_provenance": {
+                        "experiment_id": experiment_id,
+                        "run_fingerprint": v3_run_fingerprint,
+                        "dataset_version_id": str(dataset_version_id),
+                        "universe_version_id": str(universe_version_id),
+                        "market_data_manifest_hash": embedded_manifest_hash,
+                    },
+                    "backtest": {},
+                })
+
+            connection.execute(text("INSERT INTO research_run_evidence(research_run_id,result_fingerprint,canonical_result) VALUES (:rid,:fp,CAST(:result AS JSONB))"), {"rid": v3_run_id, "fp": "5" * 64, "result": v3_evidence()})
+
+            other_v3_run_id = uuid4()
+            connection.execute(text("INSERT INTO research_runs(research_run_id,experiment_id,run_fingerprint,as_of) VALUES (:rid,:eid,:fp,:as_of)"), {"rid": other_v3_run_id, "eid": experiment_id, "fp": "d" * 64, "as_of": datetime(2026, 1, 5, tzinfo=timezone.utc)})
+            connection.execute(text("INSERT INTO research_run_market_data_provenance(research_run_id,dataset_version_id,universe_version_id,manifest_hash) VALUES (:rid,:did,:uid,:mh)"), {"rid": other_v3_run_id, "did": dataset_version_id, "uid": universe_version_id, "mh": manifest_hash})
+            bad_v3 = json.dumps({
+                "schema": "hope.certified-backtest-result.v3",
+                "execution_provenance": {},
+                "research_provenance": {
+                    "experiment_id": experiment_id,
+                    "run_fingerprint": "d" * 64,
+                    "dataset_version_id": str(dataset_version_id),
+                    "universe_version_id": str(universe_version_id),
+                    "market_data_manifest_hash": "f" * 64,
+                },
+                "backtest": {},
+            })
+            with pytest.raises(IntegrityError, match="RESEARCH_RUN_CERTIFIED_EVIDENCE_MANIFEST_HASH_MISMATCH"):
+                with connection.begin_nested():
+                    connection.execute(text("INSERT INTO research_run_evidence(research_run_id,result_fingerprint,canonical_result) VALUES (:rid,:fp,CAST(:result AS JSONB))"), {"rid": other_v3_run_id, "fp": "6" * 64, "result": bad_v3})
+
             with pytest.raises(IntegrityError, match="RESEARCH_RUN_CERTIFIED_EVIDENCE_STRUCTURE_INVALID"):
                 with connection.begin_nested():
                     connection.execute(text("INSERT INTO research_run_evidence(research_run_id,result_fingerprint,canonical_result) VALUES (:rid,:fp,CAST(:result AS JSONB))"), {"rid": run_id, "fp": "4" * 64, "result": json.dumps({"schema": "hope.certified-backtest-result.v2", "research_provenance": {"experiment_id": experiment_id, "run_fingerprint": run_fingerprint}})})

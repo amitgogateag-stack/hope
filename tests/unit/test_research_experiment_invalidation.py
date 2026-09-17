@@ -88,6 +88,7 @@ def test_run_fingerprint_rejects_invalidated_experiment() -> None:
             experiment,
             as_of=datetime(2026, 1, 2, tzinfo=UTC),
             universe_snapshot=snapshot,
+            market_data_manifest_hash="c" * 64,
         )
 
 

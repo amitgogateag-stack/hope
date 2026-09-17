@@ -32,6 +32,7 @@ from hope.infrastructure.repositories.research_run_evidence import ResearchRunEv
 
 UTC = timezone.utc
 CONFIG = {"execution": {"latency_ms": 0}, "strategy": {"lookback": 20}}
+MANIFEST_HASH = "c" * 64
 
 
 def _result() -> BacktestResult:
@@ -114,12 +115,14 @@ def test_orchestrator_rejects_stored_certified_backtest_from_different_execution
         experiment,
         as_of=as_of,
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
     )
     run_fingerprint = run_provenance["run_fingerprint"]
     assert run_fingerprint == research_run_fingerprint(
         experiment,
         as_of=as_of,
         universe_snapshot=snapshot,
+        market_data_manifest_hash=MANIFEST_HASH,
     )
     run_id = uuid5(
         NAMESPACE_URL,
@@ -157,6 +160,9 @@ def test_orchestrator_rejects_stored_certified_backtest_from_different_execution
             return snapshot
 
     class Contexts:
+        def manifest_hash(self, dataset_version_id, *, universe_version_id):
+            return MANIFEST_HASH
+
         def get(self, *args, **kwargs):
             raise AssertionError("market read must not occur before provenance rejection")
 
