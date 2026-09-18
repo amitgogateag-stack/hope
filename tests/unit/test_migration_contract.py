@@ -189,3 +189,13 @@ def test_canonical_research_comparison_is_exact_projection_of_stage_evidence():
     assert "evaluation_protocol_hash" in sql
     assert "evaluation_results" in sql
     assert "RESEARCH_COMPARISON_CANONICAL_EVIDENCE_MISMATCH" in sql
+
+
+
+def test_research_decision_binds_exact_canonical_comparison():
+    sql = (ROOT / "migrations/087_research_decision_comparison_binding.sql").read_text()
+    assert "ADD COLUMN comparison_id UUID" in sql
+    assert "ADD COLUMN comparison_fingerprint CHAR(64)" in sql
+    assert "RESEARCH_DECISION_COMPARISON_BINDING_REQUIRED" in sql
+    assert "RESEARCH_DECISION_COMPARISON_ID_MISMATCH" in sql
+    assert "RESEARCH_DECISION_COMPARISON_FINGERPRINT_MISMATCH" in sql

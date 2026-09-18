@@ -90,6 +90,8 @@ class ResearchDecisionDefinition(BaseModel):
     variant_experiment_id: str
     control_run_id: UUID
     variant_run_id: UUID
+    comparison_id: UUID
+    comparison_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     decision: ResearchDecision
     rationale: str
 

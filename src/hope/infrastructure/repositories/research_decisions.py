@@ -17,6 +17,8 @@ class ResearchDecisionRecord(BaseModel):
     variant_experiment_id: str
     control_run_id: UUID
     variant_run_id: UUID
+    comparison_id: UUID
+    comparison_fingerprint: str
     decision: ResearchDecision
     rationale: str
     created_at: datetime
@@ -40,6 +42,8 @@ class SqlAlchemyResearchDecisionRepository:
             Column("variant_experiment_id", String, nullable=False),
             Column("control_run_id", Uuid, nullable=False),
             Column("variant_run_id", Uuid, nullable=False),
+            Column("comparison_id", Uuid, nullable=True),
+            Column("comparison_fingerprint", String, nullable=True),
             Column("decision", String, nullable=False),
             Column("rationale", String, nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
@@ -54,6 +58,8 @@ class SqlAlchemyResearchDecisionRepository:
                 variant_experiment_id=definition.variant_experiment_id,
                 control_run_id=definition.control_run_id,
                 variant_run_id=definition.variant_run_id,
+                comparison_id=definition.comparison_id,
+                comparison_fingerprint=definition.comparison_fingerprint,
                 decision=definition.decision.value,
                 rationale=definition.rationale,
             )

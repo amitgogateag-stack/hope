@@ -150,18 +150,26 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                 )
 
             repository = SqlAlchemyResearchDecisionRepository(connection)
-            definition = ResearchDecisionDefinition(
-                decision_id=f"DEC-{uuid4()}",
-                variant_experiment_id=variant_id,
-                control_run_id=control_run_id,
-                variant_run_id=variant_run_id,
-                decision=ResearchDecision.INCONCLUSIVE,
-                rationale="Evidence does not yet support a stronger conclusion",
-            )
-
-            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_REQUIRED"):
+            with pytest.raises(
+                IntegrityError,
+                match="RESEARCH_DECISION_COMPARISON_BINDING_REQUIRED",
+            ):
                 with connection.begin_nested():
-                    repository.create(definition)
+                    connection.execute(
+                        text(
+                            "INSERT INTO research_decisions("
+                            "decision_id,variant_experiment_id,control_run_id,variant_run_id,"
+                            "decision,rationale"
+                            ") VALUES (:id,:variant,:control_run,:variant_run,"
+                            "'INCONCLUSIVE','missing comparison binding')"
+                        ),
+                        {
+                            "id": f"DEC-{uuid4()}",
+                            "variant": variant_id,
+                            "control_run": control_run_id,
+                            "variant_run": variant_run_id,
+                        },
+                    )
 
             result_repository = SqlAlchemyResearchEvaluationResultRepository(connection)
             protocol_hash = plan_repository.get(variant_id).protocol_hash
@@ -222,12 +230,71 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                 )
             )
 
+            definition = ResearchDecisionDefinition(
+                decision_id=f"DEC-{uuid4()}",
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                comparison_id=comparison_id,
+                comparison_fingerprint=comparison_fingerprint,
+                decision=ResearchDecision.INCONCLUSIVE,
+                rationale="Evidence does not yet support a stronger conclusion",
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="RESEARCH_DECISION_COMPARISON_ID_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO research_decisions("
+                            "decision_id,variant_experiment_id,control_run_id,variant_run_id,"
+                            "comparison_id,comparison_fingerprint,decision,rationale"
+                            ") VALUES (:id,:variant,:control_run,:variant_run,:comparison_id,"
+                            ":comparison_fp,'INCONCLUSIVE','wrong comparison id')"
+                        ),
+                        {
+                            "id": f"DEC-{uuid4()}",
+                            "variant": variant_id,
+                            "control_run": control_run_id,
+                            "variant_run": variant_run_id,
+                            "comparison_id": uuid4(),
+                            "comparison_fp": comparison_fingerprint,
+                        },
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="RESEARCH_DECISION_COMPARISON_FINGERPRINT_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO research_decisions("
+                            "decision_id,variant_experiment_id,control_run_id,variant_run_id,"
+                            "comparison_id,comparison_fingerprint,decision,rationale"
+                            ") VALUES (:id,:variant,:control_run,:variant_run,:comparison_id,"
+                            ":comparison_fp,'INCONCLUSIVE','wrong comparison fingerprint')"
+                        ),
+                        {
+                            "id": f"DEC-{uuid4()}",
+                            "variant": variant_id,
+                            "control_run": control_run_id,
+                            "variant_run": variant_run_id,
+                            "comparison_id": comparison_id,
+                            "comparison_fp": "f" * 64,
+                        },
+                    )
+
             repository.create(definition)
             stored = repository.get(definition.decision_id)
             assert stored is not None
             assert stored.decision == ResearchDecision.INCONCLUSIVE
             assert stored.control_run_id == control_run_id
             assert stored.variant_run_id == variant_run_id
+            assert stored.comparison_id == comparison_id
+            assert stored.comparison_fingerprint == comparison_fingerprint
 
             with pytest.raises(IntegrityError, match="RESEARCH_DECISION_IMMUTABLE"):
                 with connection.begin_nested():
@@ -288,7 +355,7 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                     "as_of": as_of,
                 },
             )
-            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_REQUIRED"):
+            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_BINDING_REQUIRED"):
                 with connection.begin_nested():
                     connection.execute(
                         text(
