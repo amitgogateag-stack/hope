@@ -7,7 +7,10 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from hope.application.experiments.comparisons import research_comparison_fingerprint
+from hope.application.experiments.comparisons import (
+    build_research_comparison,
+    research_comparison_fingerprint,
+)
 from hope.application.experiments.evaluation_results import (
     ResearchEvaluationResultDefinition,
     research_evaluation_result_fingerprint,
@@ -178,12 +181,24 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                     )
                 )
 
-            canonical_comparison = {
-                "schema": "hope.research-comparison.v1",
-                "control": {"result_fingerprint": "c" * 64},
-                "variant": {"result_fingerprint": "d" * 64},
-                "deltas": {},
-            }
+            stage_records = result_repository.list_by_run_pair(
+                variant_id, control_run_id, variant_run_id
+            )
+            canonical_comparison = build_research_comparison(
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                control_result_fingerprint="c" * 64,
+                variant_result_fingerprint="d" * 64,
+                protocol_hash=protocol_hash,
+                stage_results={
+                    record.stage: {
+                        "result_fingerprint": record.result_fingerprint,
+                        "result": record.canonical_result,
+                    }
+                    for record in stage_records
+                },
+            )
             comparison_fingerprint = research_comparison_fingerprint(canonical_comparison)
             comparison_repository = SqlAlchemyResearchComparisonRepository(connection)
             comparison_id = comparison_repository.deterministic_id(

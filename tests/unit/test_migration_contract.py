@@ -179,3 +179,13 @@ def test_research_evaluation_results_complete_the_predeclared_protocol():
     assert "RESEARCH_EVALUATION_RESULT_IMMUTABLE" in sql
     assert "RESEARCH_COMPARISON_EVALUATION_RESULTS_INCOMPLETE" in sql
     assert "completed_stage_count <> 9" in sql
+
+
+
+def test_canonical_research_comparison_is_exact_projection_of_stage_evidence():
+    sql = (ROOT / "migrations/086_canonical_research_comparison.sql").read_text()
+    assert "hope.research-comparison.v2" in sql
+    assert "jsonb_object_agg" in sql
+    assert "evaluation_protocol_hash" in sql
+    assert "evaluation_results" in sql
+    assert "RESEARCH_COMPARISON_CANONICAL_EVIDENCE_MISMATCH" in sql

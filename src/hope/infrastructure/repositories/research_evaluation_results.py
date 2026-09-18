@@ -43,6 +43,23 @@ class SqlAlchemyResearchEvaluationResultRepository:
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
+    def list_by_run_pair(
+        self,
+        variant_experiment_id: str,
+        control_run_id: UUID,
+        variant_run_id: UUID,
+    ) -> list[ResearchEvaluationResultRecord]:
+        rows = self._connection.execute(
+            select(self._results)
+            .where(
+                self._results.c.variant_experiment_id == variant_experiment_id,
+                self._results.c.control_run_id == control_run_id,
+                self._results.c.variant_run_id == variant_run_id,
+            )
+            .order_by(self._results.c.stage)
+        ).mappings().all()
+        return [ResearchEvaluationResultRecord(**row) for row in rows]
+
     def persist(self, definition: ResearchEvaluationResultDefinition) -> bool:
         expected = research_evaluation_result_fingerprint(definition.canonical_result)
         if definition.result_fingerprint != expected:

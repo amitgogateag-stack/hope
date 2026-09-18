@@ -7,7 +7,10 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from hope.application.experiments.comparisons import research_comparison_fingerprint
+from hope.application.experiments.comparisons import (
+    build_research_comparison,
+    research_comparison_fingerprint,
+)
 from hope.application.experiments.evaluation_results import (
     ResearchEvaluationResultDefinition,
     research_evaluation_result_fingerprint,
@@ -196,12 +199,65 @@ def test_research_comparison_is_bound_to_exact_evidence_and_immutable() -> None:
                     )
                 )
 
-            canonical = {
-                "schema": "hope.research-comparison.v1",
-                "control": {"result_fingerprint": control_result_fp},
-                "variant": {"result_fingerprint": variant_result_fp},
-                "deltas": {"total_return": "0.01"},
+            arbitrary_canonical = {
+                "schema": "hope.research-comparison.v2",
+                "variant_experiment_id": variant_id,
+                "control": {
+                    "run_id": str(control_run_id),
+                    "result_fingerprint": control_result_fp,
+                },
+                "variant": {
+                    "run_id": str(variant_run_id),
+                    "result_fingerprint": variant_result_fp,
+                },
+                "evaluation_protocol_hash": protocol_hash,
+                "evaluation_results": {},
             }
+            arbitrary_fp = research_comparison_fingerprint(arbitrary_canonical)
+            arbitrary_id = SqlAlchemyResearchComparisonRepository.deterministic_id(
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                control_result_fingerprint=control_result_fp,
+                variant_result_fingerprint=variant_result_fp,
+                comparison_fingerprint=arbitrary_fp,
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="RESEARCH_COMPARISON_CANONICAL_EVIDENCE_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    SqlAlchemyResearchComparisonRepository(connection).persist(
+                        ResearchComparisonRecord(
+                            comparison_id=arbitrary_id,
+                            variant_experiment_id=variant_id,
+                            control_run_id=control_run_id,
+                            variant_run_id=variant_run_id,
+                            control_result_fingerprint=control_result_fp,
+                            variant_result_fingerprint=variant_result_fp,
+                            comparison_fingerprint=arbitrary_fp,
+                            canonical_comparison=arbitrary_canonical,
+                        )
+                    )
+
+            stage_records = result_repository.list_by_run_pair(
+                variant_id, control_run_id, variant_run_id
+            )
+            canonical = build_research_comparison(
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                control_result_fingerprint=control_result_fp,
+                variant_result_fingerprint=variant_result_fp,
+                protocol_hash=protocol_hash,
+                stage_results={
+                    record.stage: {
+                        "result_fingerprint": record.result_fingerprint,
+                        "result": record.canonical_result,
+                    }
+                    for record in stage_records
+                },
+            )
             comparison_fp = research_comparison_fingerprint(canonical)
             repository = SqlAlchemyResearchComparisonRepository(connection)
             comparison_id = repository.deterministic_id(
