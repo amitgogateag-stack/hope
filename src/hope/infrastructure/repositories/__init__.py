@@ -2,6 +2,10 @@ from hope.infrastructure.repositories.experiment_variants import (
     ExperimentVariantRepository,
     SqlAlchemyExperimentVariantRepository,
 )
+from hope.infrastructure.repositories.research_evaluation_results import (
+    ResearchEvaluationResultRecord,
+    SqlAlchemyResearchEvaluationResultRepository,
+)
 from hope.infrastructure.repositories.research_evaluation_plans import (
     ResearchEvaluationPlanRecord,
     SqlAlchemyResearchEvaluationPlanRepository,
@@ -25,9 +29,11 @@ __all__ = [
     "ResearchComparisonRecord",
     "ResearchDecisionRepository",
     "ResearchEvaluationPlanRecord",
+    "ResearchEvaluationResultRecord",
     "SqlAlchemyExperimentRepository",
     "SqlAlchemyExperimentVariantRepository",
     "SqlAlchemyResearchComparisonRepository",
     "SqlAlchemyResearchDecisionRepository",
     "SqlAlchemyResearchEvaluationPlanRepository",
+    "SqlAlchemyResearchEvaluationResultRepository",
 ]

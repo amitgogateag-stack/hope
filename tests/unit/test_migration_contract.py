@@ -167,3 +167,15 @@ def test_research_evaluation_plans_are_complete_predeclared_and_immutable():
     assert "contribution_analysis" in sql
     assert "RESEARCH_EVALUATION_PLAN_IMMUTABLE" in sql
     assert "RESEARCH_COMPARISON_EVALUATION_PLAN_REQUIRED" in sql
+
+
+
+def test_research_evaluation_results_complete_the_predeclared_protocol():
+    sql = (ROOT / "migrations/085_research_evaluation_results.sql").read_text()
+    assert "CREATE TABLE research_evaluation_results" in sql
+    assert "RESEARCH_EVALUATION_RESULT_PROTOCOL_HASH_MISMATCH" in sql
+    assert "RESEARCH_EVALUATION_RESULT_CONTROL_EVIDENCE_REQUIRED" in sql
+    assert "RESEARCH_EVALUATION_RESULT_VARIANT_EVIDENCE_REQUIRED" in sql
+    assert "RESEARCH_EVALUATION_RESULT_IMMUTABLE" in sql
+    assert "RESEARCH_COMPARISON_EVALUATION_RESULTS_INCOMPLETE" in sql
+    assert "completed_stage_count <> 9" in sql

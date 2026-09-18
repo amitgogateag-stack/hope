@@ -8,12 +8,19 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.experiments.comparisons import research_comparison_fingerprint
+from hope.application.experiments.evaluation_results import (
+    ResearchEvaluationResultDefinition,
+    research_evaluation_result_fingerprint,
+)
 from hope.application.experiments.evaluation_protocol import (
     REQUIRED_EVALUATION_STAGES,
     ResearchEvaluationPlanDefinition,
 )
 from hope.domain.research.models import ResearchDecision, ResearchDecisionDefinition
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.research_evaluation_results import (
+    SqlAlchemyResearchEvaluationResultRepository,
+)
 from hope.infrastructure.repositories.research_evaluation_plans import (
     SqlAlchemyResearchEvaluationPlanRepository,
 )
@@ -152,6 +159,24 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
             with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_REQUIRED"):
                 with connection.begin_nested():
                     repository.create(definition)
+
+            result_repository = SqlAlchemyResearchEvaluationResultRepository(connection)
+            protocol_hash = plan_repository.get(variant_id).protocol_hash
+            for stage in REQUIRED_EVALUATION_STAGES:
+                canonical_stage_result = {"stage": stage, "status": "RECORDED"}
+                result_repository.persist(
+                    ResearchEvaluationResultDefinition(
+                        variant_experiment_id=variant_id,
+                        control_run_id=control_run_id,
+                        variant_run_id=variant_run_id,
+                        stage=stage,
+                        protocol_hash=protocol_hash,
+                        canonical_result=canonical_stage_result,
+                        result_fingerprint=research_evaluation_result_fingerprint(
+                            canonical_stage_result
+                        ),
+                    )
+                )
 
             canonical_comparison = {
                 "schema": "hope.research-comparison.v1",

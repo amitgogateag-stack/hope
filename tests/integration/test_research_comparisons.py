@@ -8,11 +8,18 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.experiments.comparisons import research_comparison_fingerprint
+from hope.application.experiments.evaluation_results import (
+    ResearchEvaluationResultDefinition,
+    research_evaluation_result_fingerprint,
+)
 from hope.application.experiments.evaluation_protocol import (
     REQUIRED_EVALUATION_STAGES,
     ResearchEvaluationPlanDefinition,
 )
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.research_evaluation_results import (
+    SqlAlchemyResearchEvaluationResultRepository,
+)
 from hope.infrastructure.repositories.research_evaluation_plans import (
     SqlAlchemyResearchEvaluationPlanRepository,
 )
@@ -133,6 +140,60 @@ def test_research_comparison_is_bound_to_exact_evidence_and_immutable() -> None:
                         ") VALUES (:rid,:fp,'{}'::jsonb)"
                     ),
                     {"rid": run_id, "fp": result_fp},
+                )
+
+            result_repository = SqlAlchemyResearchEvaluationResultRepository(connection)
+            plan = plan_repository.get(variant_id)
+            assert plan is not None
+            protocol_hash = plan.protocol_hash
+
+            premature_canonical = {
+                "schema": "hope.research-comparison.v1",
+                "control": {"result_fingerprint": control_result_fp},
+                "variant": {"result_fingerprint": variant_result_fp},
+                "deltas": {},
+            }
+            premature_fp = research_comparison_fingerprint(premature_canonical)
+            premature_id = SqlAlchemyResearchComparisonRepository.deterministic_id(
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                control_result_fingerprint=control_result_fp,
+                variant_result_fingerprint=variant_result_fp,
+                comparison_fingerprint=premature_fp,
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="RESEARCH_COMPARISON_EVALUATION_RESULTS_INCOMPLETE",
+            ):
+                with connection.begin_nested():
+                    SqlAlchemyResearchComparisonRepository(connection).persist(
+                        ResearchComparisonRecord(
+                            comparison_id=premature_id,
+                            variant_experiment_id=variant_id,
+                            control_run_id=control_run_id,
+                            variant_run_id=variant_run_id,
+                            control_result_fingerprint=control_result_fp,
+                            variant_result_fingerprint=variant_result_fp,
+                            comparison_fingerprint=premature_fp,
+                            canonical_comparison=premature_canonical,
+                        )
+                    )
+
+            for stage in REQUIRED_EVALUATION_STAGES:
+                canonical_stage_result = {"stage": stage, "status": "RECORDED"}
+                result_repository.persist(
+                    ResearchEvaluationResultDefinition(
+                        variant_experiment_id=variant_id,
+                        control_run_id=control_run_id,
+                        variant_run_id=variant_run_id,
+                        stage=stage,
+                        protocol_hash=protocol_hash,
+                        canonical_result=canonical_stage_result,
+                        result_fingerprint=research_evaluation_result_fingerprint(
+                            canonical_stage_result
+                        ),
+                    )
                 )
 
             canonical = {
