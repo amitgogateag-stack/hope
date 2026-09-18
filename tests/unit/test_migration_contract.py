@@ -149,3 +149,21 @@ def test_research_comparisons_bind_exact_evidence_and_gate_decisions():
     assert "RESEARCH_COMPARISON_IMMUTABLE" in sql
     assert "RESEARCH_DECISION_COMPARISON_REQUIRED" in sql
     assert "CREATE OR REPLACE FUNCTION guard_research_decision_insert" in sql
+
+
+
+def test_research_evaluation_plans_are_complete_predeclared_and_immutable():
+    sql = (ROOT / "migrations/084_research_evaluation_plans.sql").read_text()
+    assert "CREATE TABLE research_evaluation_plans" in sql
+    assert "RESEARCH_EVALUATION_PLAN_MUST_PRECEDE_RUNS" in sql
+    assert "regression_invariants" in sql
+    assert "historical_evaluation" in sql
+    assert "walk_forward" in sql
+    assert "regime_analysis" in sql
+    assert "parameter_sensitivity" in sql
+    assert "cost_stress" in sql
+    assert "slippage_stress" in sql
+    assert "universe_perturbation" in sql
+    assert "contribution_analysis" in sql
+    assert "RESEARCH_EVALUATION_PLAN_IMMUTABLE" in sql
+    assert "RESEARCH_COMPARISON_EVALUATION_PLAN_REQUIRED" in sql

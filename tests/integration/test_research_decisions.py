@@ -8,8 +8,15 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.experiments.comparisons import research_comparison_fingerprint
+from hope.application.experiments.evaluation_protocol import (
+    REQUIRED_EVALUATION_STAGES,
+    ResearchEvaluationPlanDefinition,
+)
 from hope.domain.research.models import ResearchDecision, ResearchDecisionDefinition
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.research_evaluation_plans import (
+    SqlAlchemyResearchEvaluationPlanRepository,
+)
 from hope.infrastructure.repositories.research_comparisons import (
     ResearchComparisonRecord,
     SqlAlchemyResearchComparisonRepository,
@@ -96,6 +103,17 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                     ") VALUES (:variant,:control,'lookback-variant')"
                 ),
                 {"variant": variant_id, "control": control_id},
+            )
+
+            plan_repository = SqlAlchemyResearchEvaluationPlanRepository(connection)
+            plan_repository.persist(
+                ResearchEvaluationPlanDefinition(
+                    variant_experiment_id=variant_id,
+                    protocol={
+                        stage: {"enabled": True}
+                        for stage in REQUIRED_EVALUATION_STAGES
+                    },
+                )
             )
 
             as_of = datetime(2026, 1, 2, tzinfo=timezone.utc)
