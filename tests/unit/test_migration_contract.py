@@ -199,3 +199,16 @@ def test_research_decision_binds_exact_canonical_comparison():
     assert "RESEARCH_DECISION_COMPARISON_BINDING_REQUIRED" in sql
     assert "RESEARCH_DECISION_COMPARISON_ID_MISMATCH" in sql
     assert "RESEARCH_DECISION_COMPARISON_FINGERPRINT_MISMATCH" in sql
+
+
+
+def test_strategy_candidate_registry_is_dual_market_evidence_aware_and_immutable():
+    sql = (ROOT / "migrations/088_strategy_candidate_registry.sql").read_text()
+    assert "CREATE TABLE strategy_candidate_classifications" in sql
+    assert "RESEARCH" in sql
+    assert "BACKUP_CANDIDATE" in sql
+    assert "OPERATIONAL_CANDIDATE" in sql
+    assert "ARRAY['INDIA','USA']" in sql
+    assert "research_decision_id" in sql
+    assert "STRATEGY_CANDIDATE_DECISION_STRATEGY_MISMATCH" in sql
+    assert "STRATEGY_CANDIDATE_CLASSIFICATION_IMMUTABLE" in sql
