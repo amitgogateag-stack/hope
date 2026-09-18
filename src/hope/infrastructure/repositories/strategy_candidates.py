@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import ARRAY, Column, Connection, DateTime, MetaData, String, Table, Uuid, select
+from sqlalchemy import ARRAY, BigInteger, Column, Connection, DateTime, MetaData, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.domain.strategy.candidates import (
@@ -18,7 +18,22 @@ class StrategyCandidateClassificationRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     classification_id: UUID
+    classification_sequence: int
     strategy_version_id: UUID
+    markets: tuple[StrategyMarket, ...]
+    state: StrategyCandidateState
+    research_decision_id: str | None
+    rationale: str
+    created_at: datetime
+
+
+class CurrentStrategyCandidateRecord(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    classification_id: UUID
+    classification_sequence: int
+    strategy_version_id: UUID
+    family: str
     markets: tuple[StrategyMarket, ...]
     state: StrategyCandidateState
     research_decision_id: str | None
@@ -36,6 +51,7 @@ class SqlAlchemyStrategyCandidateRepository:
             "strategy_candidate_classifications",
             metadata,
             Column("classification_id", Uuid, primary_key=True),
+            Column("classification_sequence", BigInteger, nullable=False),
             Column("strategy_version_id", Uuid, nullable=False),
             Column("markets", ARRAY(String), nullable=False),
             Column("state", String, nullable=False),
@@ -89,3 +105,23 @@ class SqlAlchemyStrategyCandidateRepository:
             )
         ).mappings().all()
         return [StrategyCandidateClassificationRecord(**row) for row in rows]
+
+    def current(self) -> list[CurrentStrategyCandidateRecord]:
+        metadata = MetaData()
+        current = Table(
+            "current_strategy_candidate_classifications",
+            metadata,
+            Column("classification_id", Uuid),
+            Column("classification_sequence", BigInteger),
+            Column("strategy_version_id", Uuid),
+            Column("family", String),
+            Column("markets", ARRAY(String)),
+            Column("state", String),
+            Column("research_decision_id", String),
+            Column("rationale", String),
+            Column("created_at", DateTime(timezone=True)),
+        )
+        rows = self._connection.execute(
+            select(current).order_by(current.c.classification_sequence)
+        ).mappings().all()
+        return [CurrentStrategyCandidateRecord(**row) for row in rows]

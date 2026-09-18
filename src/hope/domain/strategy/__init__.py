@@ -9,3 +9,15 @@ __all__ = [
     "StrategyCandidateState",
     "StrategyMarket",
 ]
+
+from hope.domain.strategy.capacity import (
+    StrategyCandidateCapacityPolicy,
+    StrategyCandidateCapacityStatus,
+    assess_strategy_candidate_capacity,
+)
+
+__all__ += [
+    "StrategyCandidateCapacityPolicy",
+    "StrategyCandidateCapacityStatus",
+    "assess_strategy_candidate_capacity",
+]

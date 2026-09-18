@@ -212,3 +212,13 @@ def test_strategy_candidate_registry_is_dual_market_evidence_aware_and_immutable
     assert "research_decision_id" in sql
     assert "STRATEGY_CANDIDATE_DECISION_STRATEGY_MISMATCH" in sql
     assert "STRATEGY_CANDIDATE_CLASSIFICATION_IMMUTABLE" in sql
+
+
+
+def test_strategy_candidate_current_state_and_capacity_are_deterministic():
+    sql = (ROOT / "migrations/089_strategy_candidate_current_state.sql").read_text()
+    assert "classification_sequence BIGSERIAL UNIQUE" in sql
+    assert "CREATE VIEW current_strategy_candidate_classifications" in sql
+    assert "ORDER BY scc.strategy_version_id, scc.classification_sequence DESC" in sql
+    assert "STRATEGY_CANDIDATE_OPERATIONAL_CAPACITY_EXCEEDED" in sql
+    assert "STRATEGY_CANDIDATE_BACKUP_CAPACITY_EXCEEDED" in sql

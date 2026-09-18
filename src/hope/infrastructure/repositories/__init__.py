@@ -36,11 +36,13 @@ __all__ = [
     "SqlAlchemyResearchDecisionRepository",
     "SqlAlchemyResearchEvaluationPlanRepository",
     "SqlAlchemyResearchEvaluationResultRepository",
+    "CurrentStrategyCandidateRecord",
     "StrategyCandidateClassificationRecord",
     "SqlAlchemyStrategyCandidateRepository",
 ]
 
 from hope.infrastructure.repositories.strategy_candidates import (
+    CurrentStrategyCandidateRecord,
     StrategyCandidateClassificationRecord,
     SqlAlchemyStrategyCandidateRepository,
 )

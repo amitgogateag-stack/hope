@@ -67,6 +67,25 @@ def test_strategy_candidate_registry_is_idempotent_and_append_only() -> None:
                 StrategyMarket.USA,
             )
 
+            latest_definition = StrategyCandidateClassification(
+                strategy_version_id=strategy_version_id,
+                markets=frozenset({StrategyMarket.USA}),
+                state=StrategyCandidateState.RESEARCH,
+                rationale="Narrowed current research scope to USA",
+            )
+            assert repository.append(latest_definition) is True
+
+            history = repository.history(strategy_version_id)
+            assert len(history) == 2
+            assert history[0].classification_sequence < history[1].classification_sequence
+
+            current = repository.current()
+            assert len(current) == 1
+            assert current[0].strategy_version_id == strategy_version_id
+            assert current[0].family == "TEST_FAMILY"
+            assert current[0].markets == (StrategyMarket.USA,)
+            assert current[0].rationale == "Narrowed current research scope to USA"
+
             with pytest.raises(
                 IntegrityError,
                 match="STRATEGY_CANDIDATE_CLASSIFICATION_IMMUTABLE",
