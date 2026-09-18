@@ -7,8 +7,13 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.application.experiments.comparisons import research_comparison_fingerprint
 from hope.domain.research.models import ResearchDecision, ResearchDecisionDefinition
 from hope.infrastructure.postgres.migrations import apply_migrations
+from hope.infrastructure.repositories.research_comparisons import (
+    ResearchComparisonRecord,
+    SqlAlchemyResearchComparisonRepository,
+)
 from hope.infrastructure.repositories.research_decisions import (
     SqlAlchemyResearchDecisionRepository,
 )
@@ -125,6 +130,40 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                 decision=ResearchDecision.INCONCLUSIVE,
                 rationale="Evidence does not yet support a stronger conclusion",
             )
+
+            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_REQUIRED"):
+                with connection.begin_nested():
+                    repository.create(definition)
+
+            canonical_comparison = {
+                "schema": "hope.research-comparison.v1",
+                "control": {"result_fingerprint": "c" * 64},
+                "variant": {"result_fingerprint": "d" * 64},
+                "deltas": {},
+            }
+            comparison_fingerprint = research_comparison_fingerprint(canonical_comparison)
+            comparison_repository = SqlAlchemyResearchComparisonRepository(connection)
+            comparison_id = comparison_repository.deterministic_id(
+                variant_experiment_id=variant_id,
+                control_run_id=control_run_id,
+                variant_run_id=variant_run_id,
+                control_result_fingerprint="c" * 64,
+                variant_result_fingerprint="d" * 64,
+                comparison_fingerprint=comparison_fingerprint,
+            )
+            comparison_repository.persist(
+                ResearchComparisonRecord(
+                    comparison_id=comparison_id,
+                    variant_experiment_id=variant_id,
+                    control_run_id=control_run_id,
+                    variant_run_id=variant_run_id,
+                    control_result_fingerprint="c" * 64,
+                    variant_result_fingerprint="d" * 64,
+                    comparison_fingerprint=comparison_fingerprint,
+                    canonical_comparison=canonical_comparison,
+                )
+            )
+
             repository.create(definition)
             stored = repository.get(definition.decision_id)
             assert stored is not None
@@ -191,7 +230,7 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                     "as_of": as_of,
                 },
             )
-            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_VARIANT_EVIDENCE_REQUIRED"):
+            with pytest.raises(IntegrityError, match="RESEARCH_DECISION_COMPARISON_REQUIRED"):
                 with connection.begin_nested():
                     connection.execute(
                         text(

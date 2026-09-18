@@ -137,3 +137,15 @@ def test_research_decisions_require_comparable_completed_evidence_and_are_immuta
     assert "RESEARCH_DECISION_CONTROL_EVIDENCE_REQUIRED" in sql
     assert "RESEARCH_DECISION_VARIANT_EVIDENCE_REQUIRED" in sql
     assert "RESEARCH_DECISION_IMMUTABLE" in sql
+
+
+
+def test_research_comparisons_bind_exact_evidence_and_gate_decisions():
+    sql = (ROOT / "migrations/083_research_comparisons.sql").read_text()
+    assert "CREATE TABLE research_comparisons" in sql
+    assert "guard_research_comparison_insert" in sql
+    assert "RESEARCH_COMPARISON_CONTROL_FINGERPRINT_MISMATCH" in sql
+    assert "RESEARCH_COMPARISON_VARIANT_FINGERPRINT_MISMATCH" in sql
+    assert "RESEARCH_COMPARISON_IMMUTABLE" in sql
+    assert "RESEARCH_DECISION_COMPARISON_REQUIRED" in sql
+    assert "CREATE OR REPLACE FUNCTION guard_research_decision_insert" in sql
