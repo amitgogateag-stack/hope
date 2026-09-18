@@ -41,8 +41,9 @@ BEGIN
         IF NOT (NEW.canonical_protocol ? stage)
            OR jsonb_typeof(NEW.canonical_protocol->stage) <> 'object'
            OR NEW.canonical_protocol->stage = '{}'::jsonb THEN
-            RAISE EXCEPTION 'RESEARCH_EVALUATION_PLAN_STAGE_REQUIRED:%', stage
-                USING ERRCODE = '23514';
+            RAISE EXCEPTION USING
+                MESSAGE = 'RESEARCH_EVALUATION_PLAN_STAGE_REQUIRED:' || stage,
+                ERRCODE = '23514';
         END IF;
     END LOOP;
 
