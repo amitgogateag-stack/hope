@@ -48,7 +48,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "071_market_data_manifest_identity_continuity.sql", "072_market_data_manifest_identity_canonical.sql",
             "073_market_data_manifest_window_contract.sql", "074_market_data_manifest_structure.sql", "075_experiment_market_data_provenance.sql",
             "076_research_run_provenance.sql", "077_research_run_evidence.sql", "078_research_run_evidence_identity.sql",
-            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql",
+            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql", "081_experiment_variant_predeclaration.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -57,4 +57,5 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='paper_portfolio_pnl_events'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='research_run_evidence'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='research_run_market_data_provenance'")).scalar_one() == 1
+        assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiment_variants'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name='job_runs' AND column_name='status'")).scalar_one() == 1

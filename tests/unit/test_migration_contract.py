@@ -111,3 +111,16 @@ def test_certified_v3_evidence_is_bound_to_exact_parent_market_data_identity():
     assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_DATASET_VERSION_MISMATCH" in sql
     assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_UNIVERSE_VERSION_MISMATCH" in sql
     assert "RESEARCH_RUN_CERTIFIED_EVIDENCE_MANIFEST_HASH_MISMATCH" in sql
+
+
+
+def test_experiment_variants_are_predeclared_comparable_and_immutable():
+    sql = (ROOT / "migrations/081_experiment_variant_predeclaration.sql").read_text()
+    assert "CREATE TABLE experiment_variants" in sql
+    assert "guard_experiment_variant_predeclaration" in sql
+    assert "EXPERIMENT_VARIANT_MUST_BE_PREDECLARED_BEFORE_RUNS" in sql
+    assert "EXPERIMENT_VARIANT_DATASET_MISMATCH" in sql
+    assert "EXPERIMENT_VARIANT_UNIVERSE_MISMATCH" in sql
+    assert "EXPERIMENT_VARIANT_ENVIRONMENT_MISMATCH" in sql
+    assert "EXPERIMENT_VARIANT_REQUIRES_MATERIAL_CHANGE" in sql
+    assert "EXPERIMENT_VARIANT_IMMUTABLE" in sql

@@ -1,6 +1,6 @@
 import pytest
 
-from hope.domain.research.models import ExperimentDefinition
+from hope.domain.research.models import ExperimentDefinition, ExperimentVariantDefinition
 
 
 BASE = {
@@ -57,3 +57,36 @@ def test_research_hypothesis_must_be_canonical(value) -> None:
 
 def test_research_definition_accepts_canonical_provenance() -> None:
     assert ExperimentDefinition(**BASE).experiment_id == "EXP-1"
+
+
+
+def test_experiment_variant_definition_requires_distinct_control_and_variant() -> None:
+    with pytest.raises(ValueError, match="CONTROL_MUST_DIFFER"):
+        ExperimentVariantDefinition(
+            control_experiment_id="EXP-1",
+            variant_experiment_id="EXP-1",
+            variant_label="lookback-variant",
+        )
+
+
+@pytest.mark.parametrize("field", ["control_experiment_id", "variant_experiment_id"])
+@pytest.mark.parametrize("value", ["", "   ", " padded", "padded "])
+def test_experiment_variant_definition_requires_canonical_ids(field, value) -> None:
+    kwargs = {
+        "control_experiment_id": "EXP-CONTROL",
+        "variant_experiment_id": "EXP-VARIANT",
+        "variant_label": "lookback-variant",
+    }
+    kwargs[field] = value
+    with pytest.raises(ValueError, match="RESEARCH_VARIANT_EXPERIMENT_ID"):
+        ExperimentVariantDefinition(**kwargs)
+
+
+@pytest.mark.parametrize("value", ["", "   ", " padded", "padded "])
+def test_experiment_variant_definition_requires_canonical_label(value) -> None:
+    with pytest.raises(ValueError, match="RESEARCH_VARIANT_LABEL"):
+        ExperimentVariantDefinition(
+            control_experiment_id="EXP-CONTROL",
+            variant_experiment_id="EXP-VARIANT",
+            variant_label=value,
+        )

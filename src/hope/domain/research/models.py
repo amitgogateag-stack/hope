@@ -1,6 +1,6 @@
 from enum import StrEnum
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ResearchDecision(StrEnum):
@@ -44,3 +44,38 @@ class ExperimentDefinition(BaseModel):
         if value != value.strip():
             raise ValueError("RESEARCH_HYPOTHESIS_NOT_CANONICAL")
         return value
+
+
+
+class ExperimentVariantDefinition(BaseModel):
+    """Immutable, predeclared control/variant relationship for research comparison."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    control_experiment_id: str
+    variant_experiment_id: str
+    variant_label: str
+
+    @field_validator("control_experiment_id", "variant_experiment_id")
+    @classmethod
+    def require_canonical_experiment_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_VARIANT_EXPERIMENT_ID_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_VARIANT_EXPERIMENT_ID_NOT_CANONICAL")
+        return value
+
+    @field_validator("variant_label")
+    @classmethod
+    def require_canonical_variant_label(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_VARIANT_LABEL_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_VARIANT_LABEL_NOT_CANONICAL")
+        return value
+
+    @model_validator(mode="after")
+    def require_distinct_control_and_variant(self) -> "ExperimentVariantDefinition":
+        if self.control_experiment_id == self.variant_experiment_id:
+            raise ValueError("RESEARCH_VARIANT_CONTROL_MUST_DIFFER")
+        return self
