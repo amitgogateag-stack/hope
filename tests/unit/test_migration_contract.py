@@ -124,3 +124,16 @@ def test_experiment_variants_are_predeclared_comparable_and_immutable():
     assert "EXPERIMENT_VARIANT_ENVIRONMENT_MISMATCH" in sql
     assert "EXPERIMENT_VARIANT_REQUIRES_MATERIAL_CHANGE" in sql
     assert "EXPERIMENT_VARIANT_IMMUTABLE" in sql
+
+
+
+def test_research_decisions_require_comparable_completed_evidence_and_are_immutable():
+    sql = (ROOT / "migrations/082_research_decisions.sql").read_text()
+    assert "CREATE TABLE research_decisions" in sql
+    assert "guard_research_decision_insert" in sql
+    assert "RESEARCH_DECISION_CONTROL_RUN_MISMATCH" in sql
+    assert "RESEARCH_DECISION_VARIANT_RUN_MISMATCH" in sql
+    assert "RESEARCH_DECISION_AS_OF_MISMATCH" in sql
+    assert "RESEARCH_DECISION_CONTROL_EVIDENCE_REQUIRED" in sql
+    assert "RESEARCH_DECISION_VARIANT_EVIDENCE_REQUIRED" in sql
+    assert "RESEARCH_DECISION_IMMUTABLE" in sql

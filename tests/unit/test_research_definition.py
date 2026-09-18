@@ -1,6 +1,11 @@
 import pytest
 
-from hope.domain.research.models import ExperimentDefinition, ExperimentVariantDefinition
+from hope.domain.research.models import (
+    ExperimentDefinition,
+    ExperimentVariantDefinition,
+    ResearchDecision,
+    ResearchDecisionDefinition,
+)
 
 
 BASE = {
@@ -89,4 +94,29 @@ def test_experiment_variant_definition_requires_canonical_label(value) -> None:
             control_experiment_id="EXP-CONTROL",
             variant_experiment_id="EXP-VARIANT",
             variant_label=value,
+        )
+
+
+
+def test_research_decision_definition_requires_canonical_text() -> None:
+    from uuid import uuid4
+
+    with pytest.raises(ValueError, match="RESEARCH_DECISION_RATIONALE_REQUIRED"):
+        ResearchDecisionDefinition(
+            decision_id="DEC-1",
+            variant_experiment_id="EXP-VARIANT",
+            control_run_id=uuid4(),
+            variant_run_id=uuid4(),
+            decision=ResearchDecision.INCONCLUSIVE,
+            rationale="   ",
+        )
+
+    with pytest.raises(ValueError, match="RESEARCH_DECISION_IDENTITY_NOT_CANONICAL"):
+        ResearchDecisionDefinition(
+            decision_id=" DEC-1",
+            variant_experiment_id="EXP-VARIANT",
+            control_run_id=uuid4(),
+            variant_run_id=uuid4(),
+            decision=ResearchDecision.INCONCLUSIVE,
+            rationale="Evidence is not decisive",
         )

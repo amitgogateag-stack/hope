@@ -1,4 +1,5 @@
 from enum import StrEnum
+from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -46,7 +47,6 @@ class ExperimentDefinition(BaseModel):
         return value
 
 
-
 class ExperimentVariantDefinition(BaseModel):
     """Immutable, predeclared control/variant relationship for research comparison."""
 
@@ -79,3 +79,34 @@ class ExperimentVariantDefinition(BaseModel):
         if self.control_experiment_id == self.variant_experiment_id:
             raise ValueError("RESEARCH_VARIANT_CONTROL_MUST_DIFFER")
         return self
+
+
+class ResearchDecisionDefinition(BaseModel):
+    """Immutable decision over one evidence-backed control/variant run pair."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    decision_id: str
+    variant_experiment_id: str
+    control_run_id: UUID
+    variant_run_id: UUID
+    decision: ResearchDecision
+    rationale: str
+
+    @field_validator("decision_id", "variant_experiment_id")
+    @classmethod
+    def require_canonical_decision_identity(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_DECISION_IDENTITY_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_DECISION_IDENTITY_NOT_CANONICAL")
+        return value
+
+    @field_validator("rationale")
+    @classmethod
+    def require_canonical_rationale(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_DECISION_RATIONALE_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_DECISION_RATIONALE_NOT_CANONICAL")
+        return value
