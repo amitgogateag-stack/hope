@@ -61,6 +61,21 @@ def test_research_invariant_run_is_idempotent_and_immutable() -> None:
                 text("INSERT INTO universe_versions(universe_version_id,universe_id,version,pit_certified,declared_member_count) VALUES (:vid,:uid,'v1',TRUE,1)"),
                 {"vid": universe_version_id, "uid": universe_id},
             )
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"INV-{str(instrument_id)[:8]}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO universe_members(universe_version_id,instrument_id) "
+                    "VALUES (:uvid,:iid)"
+                ),
+                {"uvid": universe_version_id, "iid": instrument_id},
+            )
             connection.execute(
                 text("INSERT INTO configuration_snapshots(configuration_hash,canonical_json) VALUES (:hash,'{}'::jsonb)"),
                 {"hash": "a" * 64},
