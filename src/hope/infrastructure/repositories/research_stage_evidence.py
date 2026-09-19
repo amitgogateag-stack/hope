@@ -62,6 +62,10 @@ class SqlAlchemyResearchStageEvidenceRepository:
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
+    @property
+    def stage(self) -> str:
+        return self._stage
+
     def persist(self, evidence: ResearchStageEvidenceRecord) -> bool:
         if evidence.stage != self._stage:
             raise ValueError("RESEARCH_STAGE_EVIDENCE_REPOSITORY_STAGE_MISMATCH")
@@ -98,3 +102,23 @@ class SqlAlchemyResearchStageEvidenceRepository:
             )
         ).mappings().one_or_none()
         return ResearchStageEvidenceRecord(**row) if row else None
+
+
+def build_research_stage_evidence_repositories(
+    connection: Connection,
+    *,
+    invariant_repository,
+) -> dict[str, object]:
+    """Build the canonical durable evidence-source map for the evaluator orchestrator."""
+    if invariant_repository is None:
+        raise ValueError("RESEARCH_INVARIANT_EVIDENCE_REPOSITORY_REQUIRED")
+    repositories: dict[str, object] = {
+        "regression_invariants": invariant_repository,
+    }
+    repositories.update(
+        {
+            stage: SqlAlchemyResearchStageEvidenceRepository(connection, stage)
+            for stage in GENERIC_STAGE_EVIDENCE_STAGES
+        }
+    )
+    return repositories

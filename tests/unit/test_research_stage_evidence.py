@@ -6,6 +6,7 @@ from hope.infrastructure.repositories.research_stage_evidence import (
     GENERIC_STAGE_EVIDENCE_STAGES,
     ResearchStageEvidenceRecord,
     SqlAlchemyResearchStageEvidenceRepository,
+    build_research_stage_evidence_repositories,
     research_stage_evidence_fingerprint,
 )
 
@@ -49,3 +50,28 @@ def test_stage_evidence_repository_rejects_specialized_or_unknown_stage():
 def test_stage_evidence_fingerprint_requires_nonempty_mapping():
     with pytest.raises(ValueError, match="RESEARCH_STAGE_EVIDENCE_RESULT_REQUIRED"):
         research_stage_evidence_fingerprint({})
+
+
+def test_canonical_stage_repository_map_binds_every_derived_stage():
+    invariant_repository = object()
+    repositories = build_research_stage_evidence_repositories(
+        object(),
+        invariant_repository=invariant_repository,
+    )
+
+    assert repositories["regression_invariants"] is invariant_repository
+    assert "historical_evaluation" not in repositories
+    assert set(repositories) == {"regression_invariants", *GENERIC_STAGE_EVIDENCE_STAGES}
+    for stage in GENERIC_STAGE_EVIDENCE_STAGES:
+        assert repositories[stage].stage == stage
+
+
+def test_canonical_stage_repository_map_requires_invariant_repository():
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_INVARIANT_EVIDENCE_REPOSITORY_REQUIRED",
+    ):
+        build_research_stage_evidence_repositories(
+            object(),
+            invariant_repository=None,
+        )

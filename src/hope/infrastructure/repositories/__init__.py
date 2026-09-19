@@ -21,6 +21,7 @@ from hope.infrastructure.repositories.research_decisions import (
 from hope.infrastructure.repositories.research_stage_evidence import (
     ResearchStageEvidenceRecord,
     SqlAlchemyResearchStageEvidenceRepository,
+    build_research_stage_evidence_repositories,
 )
 from hope.infrastructure.repositories.experiments import (
     ExperimentRepository,
@@ -42,6 +43,7 @@ __all__ = [
     "SqlAlchemyResearchEvaluationPlanRepository",
     "SqlAlchemyResearchEvaluationResultRepository",
     "SqlAlchemyResearchStageEvidenceRepository",
+    "build_research_stage_evidence_repositories",
     "CurrentStrategyCandidateRecord",
     "StrategyCandidateClassificationRecord",
     "SqlAlchemyStrategyCandidateRepository",
