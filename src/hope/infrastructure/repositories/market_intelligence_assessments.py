@@ -48,6 +48,19 @@ class SqlAlchemyIntelligenceAssessmentRepository:
             Column("instrument_id", Uuid, nullable=True),
             Column("available_time", DateTime(timezone=True), nullable=False),
         )
+        self._entry_blocks = Table(
+            "current_market_intelligence_entry_blocks",
+            metadata,
+            Column("assessment_id", Uuid, primary_key=True),
+            Column("event_id", Uuid, nullable=False),
+            Column("policy_version", String, nullable=False),
+            Column("disposition", String, nullable=False),
+            Column("source_action", String, nullable=False),
+            Column("scope", String, nullable=False),
+            Column("instrument_id", Uuid, nullable=True),
+            Column("available_time", DateTime(timezone=True), nullable=False),
+            Column("review_outcome", String, nullable=True),
+        )
         self._resolutions = Table(
             "market_intelligence_review_resolutions",
             metadata,
@@ -99,37 +112,18 @@ class SqlAlchemyIntelligenceAssessmentRepository:
         if not policy_version or policy_version != policy_version.strip():
             raise ValueError("INTELLIGENCE_ENTRY_GATE_POLICY_NOT_CANONICAL")
 
-        join = self._assessments.join(
-            self._events,
-            self._events.c.event_id == self._assessments.c.event_id,
-        ).outerjoin(
-            self._resolutions,
-            and_(
-                self._resolutions.c.assessment_id
-                == self._assessments.c.assessment_id,
-                self._resolutions.c.policy_version == policy_version,
-            ),
-        )
         rows = self._connection.execute(
-            select(self._assessments.c.assessment_id)
-            .select_from(join)
-            .where(
-                self._assessments.c.policy_version == policy_version,
-                self._events.c.available_time <= as_of,
-                self._assessments.c.disposition != "OBSERVE_ONLY",
+            select(self._entry_blocks.c.assessment_id).where(
+                self._entry_blocks.c.policy_version == policy_version,
+                self._entry_blocks.c.available_time <= as_of,
                 or_(
-                    self._events.c.scope == "MARKET",
+                    self._entry_blocks.c.scope == "MARKET",
                     and_(
-                        self._events.c.scope == "COMPANY",
-                        self._events.c.instrument_id == instrument_id,
+                        self._entry_blocks.c.scope == "COMPANY",
+                        self._entry_blocks.c.instrument_id == instrument_id,
                     ),
                 ),
-                or_(
-                    self._resolutions.c.resolution_id.is_(None),
-                    self._resolutions.c.outcome == "BLOCK_CONFIRMED",
-                ),
-            )
-            .order_by(self._assessments.c.assessment_id)
+            ).order_by(self._entry_blocks.c.assessment_id)
         ).scalars().all()
         return IntelligenceEntryGateContext(
             blocker_assessment_ids=tuple(rows)

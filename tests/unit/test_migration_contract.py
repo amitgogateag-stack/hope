@@ -267,3 +267,12 @@ def test_market_intelligence_review_resolutions_are_explicit_bound_and_immutable
     assert "INTELLIGENCE_REVIEW_POLICY_VERSION_MISMATCH" in sql
     assert "MARKET_INTELLIGENCE_REVIEW_RESOLUTION_IMMUTABLE" in sql
     assert "UNIQUE(assessment_id, policy_version)" in sql
+
+
+
+def test_current_market_intelligence_entry_blocks_are_derived_from_immutable_history():
+    sql = (ROOT / "migrations/094_current_market_intelligence_entry_blocks.sql").read_text()
+    assert "CREATE VIEW current_market_intelligence_entry_blocks" in sql
+    assert "mia.disposition <> 'OBSERVE_ONLY'" in sql
+    assert "mir.resolution_id IS NULL" in sql
+    assert "mir.outcome = 'BLOCK_CONFIRMED'" in sql
