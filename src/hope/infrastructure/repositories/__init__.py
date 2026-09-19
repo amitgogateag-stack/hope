@@ -41,6 +41,8 @@ __all__ = [
     "SqlAlchemyStrategyCandidateRepository",
     "MarketIntelligenceEventRecord",
     "SqlAlchemyMarketIntelligenceRepository",
+    "IntelligenceAssessmentRecord",
+    "SqlAlchemyIntelligenceAssessmentRepository",
 ]
 
 from hope.infrastructure.repositories.strategy_candidates import (
@@ -52,4 +54,9 @@ from hope.infrastructure.repositories.strategy_candidates import (
 from hope.infrastructure.repositories.market_intelligence import (
     MarketIntelligenceEventRecord,
     SqlAlchemyMarketIntelligenceRepository,
+)
+
+from hope.infrastructure.repositories.market_intelligence_assessments import (
+    IntelligenceAssessmentRecord,
+    SqlAlchemyIntelligenceAssessmentRepository,
 )

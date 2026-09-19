@@ -15,3 +15,15 @@ __all__ = [
     "IntelligenceSourceTier",
     "MarketIntelligenceEvent",
 ]
+
+from hope.domain.market_intelligence.assessment import (
+    IntelligenceAssessment,
+    IntelligenceDisposition,
+    assess_intelligence_event,
+)
+
+__all__ += [
+    "IntelligenceAssessment",
+    "IntelligenceDisposition",
+    "assess_intelligence_event",
+]

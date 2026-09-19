@@ -249,3 +249,12 @@ def test_market_intelligence_events_are_provider_neutral_pit_bound_and_immutable
     assert "INTELLIGENCE_INSTRUMENT_NOT_IN_PIT_UNIVERSE" in sql
     assert "MARKET_INTELLIGENCE_EVENT_IMMUTABLE" in sql
     assert "source_tier <> 4" in sql
+
+
+
+def test_market_intelligence_assessments_are_bound_and_immutable():
+    sql = (ROOT / "migrations/092_market_intelligence_assessments.sql").read_text()
+    assert "CREATE TABLE market_intelligence_assessments" in sql
+    assert "INTELLIGENCE_ASSESSMENT_SOURCE_ACTION_MISMATCH" in sql
+    assert "MARKET_INTELLIGENCE_ASSESSMENT_IMMUTABLE" in sql
+    assert "UNIQUE(event_id, policy_version)" in sql

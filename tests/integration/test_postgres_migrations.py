@@ -48,7 +48,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "071_market_data_manifest_identity_continuity.sql", "072_market_data_manifest_identity_canonical.sql",
             "073_market_data_manifest_window_contract.sql", "074_market_data_manifest_structure.sql", "075_experiment_market_data_provenance.sql",
             "076_research_run_provenance.sql", "077_research_run_evidence.sql", "078_research_run_evidence_identity.sql",
-            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql", "081_experiment_variant_predeclaration.sql", "082_research_decisions.sql", "083_research_comparisons.sql", "084_research_evaluation_plans.sql", "085_research_evaluation_results.sql", "086_canonical_research_comparison.sql", "087_research_decision_comparison_binding.sql", "088_strategy_candidate_registry.sql", "089_strategy_candidate_current_state.sql", "090_strategy_family_catalog.sql", "091_market_intelligence_events.sql",
+            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql", "081_experiment_variant_predeclaration.sql", "082_research_decisions.sql", "083_research_comparisons.sql", "084_research_evaluation_plans.sql", "085_research_evaluation_results.sql", "086_canonical_research_comparison.sql", "087_research_decision_comparison_binding.sql", "088_strategy_candidate_registry.sql", "089_strategy_candidate_current_state.sql", "090_strategy_family_catalog.sql", "091_market_intelligence_events.sql", "092_market_intelligence_assessments.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -66,4 +66,5 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
         assert connection.execute(text("SELECT 1 FROM information_schema.views WHERE table_name='current_strategy_candidate_classifications'")).scalar_one() == 1
         assert connection.execute(text("SELECT count(*) FROM strategy_family_catalog")).scalar_one() == 10
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='market_intelligence_events'")).scalar_one() == 1
+        assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='market_intelligence_assessments'")).scalar_one() == 1
         assert connection.execute(text("SELECT 1 FROM information_schema.columns WHERE table_name='job_runs' AND column_name='status'")).scalar_one() == 1

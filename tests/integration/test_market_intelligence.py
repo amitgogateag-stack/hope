@@ -7,6 +7,10 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.domain.market_intelligence.assessment import (
+    IntelligenceDisposition,
+    assess_intelligence_event,
+)
 from hope.domain.market_intelligence.models import (
     IntelligenceAction,
     IntelligenceCategory,
@@ -18,6 +22,9 @@ from hope.domain.market_intelligence.models import (
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.market_intelligence import (
     SqlAlchemyMarketIntelligenceRepository,
+)
+from hope.infrastructure.repositories.market_intelligence_assessments import (
+    SqlAlchemyIntelligenceAssessmentRepository,
 )
 
 
@@ -131,6 +138,80 @@ def test_market_intelligence_is_idempotent_immutable_and_pit_universe_bound() ->
                             "t": datetime(2026, 9, 18, 10, 3, tzinfo=timezone.utc),
                             "hash": "c" * 64,
                         },
+                    )
+        finally:
+            transaction.rollback()
+
+
+
+@pytest.mark.integration
+def test_intelligence_assessment_is_bound_idempotent_and_immutable() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.MARKET,
+                source="FIXTURE",
+                source_item_id=f"market-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.MACRO,
+                materiality=IntelligenceMateriality.CRITICAL,
+                recommended_action=IntelligenceAction.MARKET_RISK_HALT_CANDIDATE,
+                event_time=datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc),
+                available_time=datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc),
+                ingestion_time=datetime(2026, 9, 18, 10, 1, tzinfo=timezone.utc),
+                source_payload_hash="d" * 64,
+            )
+            SqlAlchemyMarketIntelligenceRepository(connection).persist(event)
+
+            assessment = assess_intelligence_event(event)
+            assessment_id = uuid4()
+            repository = SqlAlchemyIntelligenceAssessmentRepository(connection)
+            assert repository.persist(assessment_id, assessment) is True
+            assert repository.persist(uuid4(), assessment) is False
+
+            stored = repository.get_for_event(
+                event.event_id,
+                policy_version=assessment.policy_version,
+            )
+            assert stored is not None
+            assert stored.disposition is IntelligenceDisposition.MARKET_RISK_REVIEW
+
+            with pytest.raises(
+                IntegrityError,
+                match="INTELLIGENCE_ASSESSMENT_SOURCE_ACTION_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO market_intelligence_assessments("
+                            "assessment_id,event_id,policy_version,disposition,source_action"
+                            ") VALUES (:aid,:eid,'wrong-policy','OBSERVE_ONLY','OBSERVE')"
+                        ),
+                        {"aid": uuid4(), "eid": event.event_id},
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="MARKET_INTELLIGENCE_ASSESSMENT_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE market_intelligence_assessments "
+                            "SET disposition='OBSERVE_ONLY' WHERE assessment_id=:aid"
+                        ),
+                        {"aid": assessment_id},
                     )
         finally:
             transaction.rollback()
