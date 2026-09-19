@@ -37,3 +37,7 @@ __all__ += [
     "IntelligenceReviewOutcome",
     "IntelligenceReviewResolution",
 ]
+
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
+
+__all__ += ["IntelligenceEntryGateContext"]

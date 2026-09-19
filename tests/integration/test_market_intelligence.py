@@ -11,6 +11,10 @@ from hope.domain.market_intelligence.assessment import (
     IntelligenceDisposition,
     assess_intelligence_event,
 )
+from hope.domain.market_intelligence.review import (
+    IntelligenceReviewOutcome,
+    IntelligenceReviewResolution,
+)
 from hope.domain.market_intelligence.models import (
     IntelligenceAction,
     IntelligenceCategory,
@@ -25,6 +29,9 @@ from hope.infrastructure.repositories.market_intelligence import (
 )
 from hope.infrastructure.repositories.market_intelligence_assessments import (
     SqlAlchemyIntelligenceAssessmentRepository,
+)
+from hope.infrastructure.repositories.market_intelligence_reviews import (
+    SqlAlchemyIntelligenceReviewRepository,
 )
 
 
@@ -213,5 +220,75 @@ def test_intelligence_assessment_is_bound_idempotent_and_immutable() -> None:
                         ),
                         {"aid": assessment_id},
                     )
+        finally:
+            transaction.rollback()
+
+
+
+@pytest.mark.integration
+def test_intelligence_entry_gate_uses_pit_scope_and_review_resolution() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"INTEL-{str(instrument_id)[:8]}"},
+            )
+            event_time = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="FIXTURE",
+                source_item_id=f"entry-gate-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.REGULATORY,
+                materiality=IntelligenceMateriality.HIGH,
+                recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+                event_time=event_time,
+                available_time=event_time,
+                ingestion_time=event_time,
+                source_payload_hash="e" * 64,
+            )
+            SqlAlchemyMarketIntelligenceRepository(connection).persist(event)
+            assessment = assess_intelligence_event(event)
+            assessment_id = uuid4()
+            assessments = SqlAlchemyIntelligenceAssessmentRepository(connection)
+            assessments.persist(assessment_id, assessment)
+
+            before = assessments.entry_gate_context(
+                instrument_id,
+                as_of=event_time,
+            )
+            assert before.blocker_assessment_ids == (assessment_id,)
+
+            review = IntelligenceReviewResolution(
+                assessment_id=assessment_id,
+                policy_version=assessment.policy_version,
+                outcome=IntelligenceReviewOutcome.CLEARED,
+                rationale="Primary filing reviewed; no entry block required",
+            )
+            SqlAlchemyIntelligenceReviewRepository(connection).resolve(
+                uuid4(),
+                review,
+            )
+            after = assessments.entry_gate_context(
+                instrument_id,
+                as_of=event_time,
+            )
+            assert after.blocker_assessment_ids == ()
         finally:
             transaction.rollback()

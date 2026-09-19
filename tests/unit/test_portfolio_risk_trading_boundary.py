@@ -4,6 +4,7 @@ from uuid import uuid4
 import pytest
 
 from hope.application.trading.risk import assess_portfolio_entry_signal
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.models import RiskDecision
 from hope.domain.risk.portfolio import (
@@ -119,3 +120,32 @@ def test_portfolio_entry_boundary_rejects_exit_signal():
     signal = make_signal(signal_type=SignalType.EXIT)
     with pytest.raises(ValueError, match="PORTFOLIO_ENTRY_RISK_REQUIRES_ENTRY_SIGNAL"):
         assess_portfolio_entry_signal(signal, make_inputs(signal), engine())
+
+
+
+def test_portfolio_entry_boundary_rejects_when_intelligence_review_blocks_entry():
+    signal = make_signal()
+    blocker_id = uuid4()
+    assessment = assess_portfolio_entry_signal(
+        signal,
+        make_inputs(signal),
+        engine(),
+        intelligence_gate=IntelligenceEntryGateContext(
+            blocker_assessment_ids=(blocker_id,)
+        ),
+    )
+
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == "INTELLIGENCE_ENTRY_REVIEW_REQUIRED"
+    assert assessment.approved_quantity == Decimal("0")
+
+
+def test_portfolio_entry_boundary_allows_empty_intelligence_gate():
+    signal = make_signal()
+    assessment = assess_portfolio_entry_signal(
+        signal,
+        make_inputs(signal),
+        engine(),
+        intelligence_gate=IntelligenceEntryGateContext(),
+    )
+    assert assessment.decision is RiskDecision.APPROVE

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
-from hope.domain.risk.models import RiskAssessment
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.risk.portfolio import PortfolioRiskEngine
 from hope.domain.signal.models import Signal, SignalType
 
@@ -10,6 +13,8 @@ def assess_portfolio_entry_signal(
     signal: Signal,
     inputs: PortfolioEntryRiskInputs,
     engine: PortfolioRiskEngine,
+    *,
+    intelligence_gate: IntelligenceEntryGateContext | None = None,
 ) -> RiskAssessment:
     """Assess an ENTRY signal using pre-derived authoritative portfolio risk inputs.
 
@@ -33,5 +38,15 @@ def assess_portfolio_entry_signal(
         raise ValueError("PORTFOLIO_RISK_INSTRUMENT_MISMATCH")
     if request.strategy_version != signal.strategy_version:
         raise ValueError("PORTFOLIO_RISK_STRATEGY_VERSION_MISMATCH")
+    if intelligence_gate is not None:
+        if not isinstance(intelligence_gate, IntelligenceEntryGateContext):
+            raise TypeError("INTELLIGENCE_ENTRY_GATE_CONTEXT_REQUIRED")
+        if intelligence_gate.blocks_entry:
+            return RiskAssessment(
+                signal_id=signal.signal_id,
+                decision=RiskDecision.REJECT,
+                reason_code="INTELLIGENCE_ENTRY_REVIEW_REQUIRED",
+                approved_quantity=Decimal("0"),
+            )
 
     return engine.assess_entry(request, inputs.snapshot)

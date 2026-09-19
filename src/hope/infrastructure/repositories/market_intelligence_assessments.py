@@ -4,13 +4,14 @@ from datetime import datetime
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
+from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.domain.market_intelligence.assessment import (
     IntelligenceAssessment,
     IntelligenceDisposition,
 )
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.market_intelligence.models import IntelligenceAction
 
 
@@ -38,6 +39,22 @@ class SqlAlchemyIntelligenceAssessmentRepository:
             Column("disposition", String, nullable=False),
             Column("source_action", String, nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+        self._events = Table(
+            "market_intelligence_events",
+            metadata,
+            Column("event_id", Uuid, primary_key=True),
+            Column("scope", String, nullable=False),
+            Column("instrument_id", Uuid, nullable=True),
+            Column("available_time", DateTime(timezone=True), nullable=False),
+        )
+        self._resolutions = Table(
+            "market_intelligence_review_resolutions",
+            metadata,
+            Column("resolution_id", Uuid, primary_key=True),
+            Column("assessment_id", Uuid, nullable=False),
+            Column("policy_version", String, nullable=False),
+            Column("outcome", String, nullable=False),
         )
 
     def persist(self, assessment_id: UUID, assessment: IntelligenceAssessment) -> bool:
@@ -68,3 +85,52 @@ class SqlAlchemyIntelligenceAssessmentRepository:
             )
         ).mappings().one_or_none()
         return IntelligenceAssessmentRecord(**row) if row else None
+
+
+    def entry_gate_context(
+        self,
+        instrument_id: UUID,
+        *,
+        as_of: datetime,
+        policy_version: str = "hope.intelligence-policy.v1",
+    ) -> IntelligenceEntryGateContext:
+        if as_of.tzinfo is None or as_of.utcoffset() is None:
+            raise ValueError("INTELLIGENCE_ENTRY_GATE_TIME_MUST_BE_TIMEZONE_AWARE")
+        if not policy_version or policy_version != policy_version.strip():
+            raise ValueError("INTELLIGENCE_ENTRY_GATE_POLICY_NOT_CANONICAL")
+
+        join = self._assessments.join(
+            self._events,
+            self._events.c.event_id == self._assessments.c.event_id,
+        ).outerjoin(
+            self._resolutions,
+            and_(
+                self._resolutions.c.assessment_id
+                == self._assessments.c.assessment_id,
+                self._resolutions.c.policy_version == policy_version,
+            ),
+        )
+        rows = self._connection.execute(
+            select(self._assessments.c.assessment_id)
+            .select_from(join)
+            .where(
+                self._assessments.c.policy_version == policy_version,
+                self._events.c.available_time <= as_of,
+                self._assessments.c.disposition != "OBSERVE_ONLY",
+                or_(
+                    self._events.c.scope == "MARKET",
+                    and_(
+                        self._events.c.scope == "COMPANY",
+                        self._events.c.instrument_id == instrument_id,
+                    ),
+                ),
+                or_(
+                    self._resolutions.c.resolution_id.is_(None),
+                    self._resolutions.c.outcome == "BLOCK_CONFIRMED",
+                ),
+            )
+            .order_by(self._assessments.c.assessment_id)
+        ).scalars().all()
+        return IntelligenceEntryGateContext(
+            blocker_assessment_ids=tuple(rows)
+        )
