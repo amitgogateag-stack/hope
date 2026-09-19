@@ -52,7 +52,13 @@ class _Evaluator:
         }
 
 
-def _orchestrator(*, plan=None, evidence=None, evaluators=None):
+def _orchestrator(
+    *,
+    plan=None,
+    evidence=None,
+    evaluators=None,
+    stage_evidence_repositories=None,
+):
     protocol = _protocol()
     if plan is None:
         plan = SimpleNamespace(
@@ -60,11 +66,16 @@ def _orchestrator(*, plan=None, evidence=None, evaluators=None):
             canonical_protocol=protocol,
         )
     results = _Results()
+    generic_evidence = _Evidence(evidence or {})
+    stage_sources = stage_evidence_repositories
+    if stage_sources is None:
+        stage_sources = {"regression_invariants": generic_evidence}
     orchestrator = ResearchEvaluationOrchestrator(
         plan_repository=_Plans(plan),
-        evidence_repository=_Evidence(evidence or {}),
+        evidence_repository=generic_evidence,
         result_repository=results,
         evaluators=tuple(evaluators or (_Evaluator(),)),
+        stage_evidence_repositories=stage_sources,
     )
     return orchestrator, results
 
