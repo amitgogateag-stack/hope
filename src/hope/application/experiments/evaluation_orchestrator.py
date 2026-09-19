@@ -88,7 +88,12 @@ class ResearchEvaluationOrchestrator:
         if evaluator is None:
             raise ValueError("RESEARCH_STAGE_EVALUATOR_MISSING")
 
-        source = self._stage_evidence.get(stage, self._evidence)
+        if stage == "historical_evaluation":
+            source = self._evidence
+        else:
+            source = self._stage_evidence.get(stage)
+            if source is None:
+                raise ValueError("RESEARCH_STAGE_EVIDENCE_SOURCE_MISSING")
         control = source.get(control_run_id)
         if control is None:
             raise ValueError("RESEARCH_EVALUATION_CONTROL_EVIDENCE_MISSING")
