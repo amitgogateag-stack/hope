@@ -176,3 +176,84 @@ def test_stage_orchestrator_rejects_placeholder_or_empty_result():
             stage="regression_invariants",
         )
     assert results.persisted == []
+
+
+
+def test_stage_orchestrator_can_use_stage_specific_evidence_repository():
+    class InvariantRecord:
+        def __init__(self, label):
+            self.label = label
+            self.created_at = None
+
+        def model_dump(self, exclude=None):
+            return {"label": self.label}
+
+    class InvariantEvaluator:
+        stage = "regression_invariants"
+
+        def evaluate(self, *, stage_protocol, control_evidence, variant_evidence):
+            return {
+                "control": control_evidence["label"],
+                "variant": variant_evidence["label"],
+            }
+
+    control_run_id, variant_run_id = uuid4(), uuid4()
+    protocol = _protocol()
+    plan = SimpleNamespace(
+        protocol_hash=research_evaluation_plan_hash(protocol),
+        canonical_protocol=protocol,
+    )
+    results = _Results()
+    invariant_repo = _Evidence(
+        {
+            control_run_id: InvariantRecord("control-invariants"),
+            variant_run_id: InvariantRecord("variant-invariants"),
+        }
+    )
+    orchestrator = ResearchEvaluationOrchestrator(
+        plan_repository=_Plans(plan),
+        evidence_repository=_Evidence({}),
+        result_repository=results,
+        evaluators=(InvariantEvaluator(),),
+        stage_evidence_repositories={"regression_invariants": invariant_repo},
+    )
+
+    definition = orchestrator.evaluate_stage(
+        variant_experiment_id="EXP-VARIANT",
+        control_run_id=control_run_id,
+        variant_run_id=variant_run_id,
+        stage="regression_invariants",
+    )
+
+    assert definition.canonical_result == {
+        "control": "control-invariants",
+        "variant": "variant-invariants",
+    }
+
+
+def test_stage_orchestrator_fails_closed_when_stage_specific_evidence_missing():
+    control_run_id, variant_run_id = uuid4(), uuid4()
+    protocol = _protocol()
+    plan = SimpleNamespace(
+        protocol_hash=research_evaluation_plan_hash(protocol),
+        canonical_protocol=protocol,
+    )
+    orchestrator = ResearchEvaluationOrchestrator(
+        plan_repository=_Plans(plan),
+        evidence_repository=_Evidence({}),
+        result_repository=_Results(),
+        evaluators=(_Evaluator(),),
+        stage_evidence_repositories={
+            "regression_invariants": _Evidence({})
+        },
+    )
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_EVALUATION_CONTROL_EVIDENCE_MISSING",
+    ):
+        orchestrator.evaluate_stage(
+            variant_experiment_id="EXP-VARIANT",
+            control_run_id=control_run_id,
+            variant_run_id=variant_run_id,
+            stage="regression_invariants",
+        )

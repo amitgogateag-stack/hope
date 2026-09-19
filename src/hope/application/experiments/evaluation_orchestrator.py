@@ -41,10 +41,16 @@ class ResearchEvaluationOrchestrator:
         evidence_repository,
         result_repository,
         evaluators: tuple[ResearchStageEvaluator, ...],
+        stage_evidence_repositories: Mapping[str, Any] | None = None,
     ) -> None:
         self._plans = plan_repository
         self._evidence = evidence_repository
         self._results = result_repository
+        self._stage_evidence = dict(stage_evidence_repositories or {})
+        unknown_sources = set(self._stage_evidence) - set(REQUIRED_EVALUATION_STAGES)
+        if unknown_sources:
+            raise ValueError("RESEARCH_STAGE_EVIDENCE_SOURCE_STAGE_INVALID")
+
         registry: dict[str, ResearchStageEvaluator] = {}
         for evaluator in evaluators:
             if not isinstance(evaluator, ResearchStageEvaluator):
@@ -82,17 +88,20 @@ class ResearchEvaluationOrchestrator:
         if evaluator is None:
             raise ValueError("RESEARCH_STAGE_EVALUATOR_MISSING")
 
-        control = self._evidence.get(control_run_id)
+        source = self._stage_evidence.get(stage, self._evidence)
+        control = source.get(control_run_id)
         if control is None:
             raise ValueError("RESEARCH_EVALUATION_CONTROL_EVIDENCE_MISSING")
-        variant = self._evidence.get(variant_run_id)
+        variant = source.get(variant_run_id)
         if variant is None:
             raise ValueError("RESEARCH_EVALUATION_VARIANT_EVIDENCE_MISSING")
 
+        control_payload = self._stage_payload(control)
+        variant_payload = self._stage_payload(variant)
         canonical_result = evaluator.evaluate(
             stage_protocol=stage_protocol,
-            control_evidence=control.canonical_result,
-            variant_evidence=variant.canonical_result,
+            control_evidence=control_payload,
+            variant_evidence=variant_payload,
         )
         if not isinstance(canonical_result, dict) or not canonical_result:
             raise ValueError("RESEARCH_STAGE_EVALUATOR_RESULT_INVALID")
@@ -108,3 +117,11 @@ class ResearchEvaluationOrchestrator:
         )
         self._results.persist(definition)
         return definition
+
+    @staticmethod
+    def _stage_payload(record: Any) -> Any:
+        if hasattr(record, "canonical_result"):
+            return record.canonical_result
+        if hasattr(record, "model_dump"):
+            return record.model_dump(exclude={"created_at"})
+        raise TypeError("RESEARCH_STAGE_EVIDENCE_RECORD_UNSUPPORTED")
