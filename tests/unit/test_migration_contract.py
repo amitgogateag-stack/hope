@@ -222,3 +222,17 @@ def test_strategy_candidate_current_state_and_capacity_are_deterministic():
     assert "ORDER BY scc.strategy_version_id, scc.classification_sequence DESC" in sql
     assert "STRATEGY_CANDIDATE_OPERATIONAL_CAPACITY_EXCEEDED" in sql
     assert "STRATEGY_CANDIDATE_BACKUP_CAPACITY_EXCEEDED" in sql
+
+
+
+def test_strategy_family_catalog_is_immutable_and_regime_aware():
+    sql = (ROOT / "migrations/090_strategy_family_catalog.sql").read_text()
+    assert "CREATE TABLE strategy_family_catalog" in sql
+    assert "CROSS_SECTIONAL_MOMENTUM" in sql
+    assert "FIFTY_TWO_WEEK_HIGH" in sql
+    assert "TIME_SERIES_TREND" in sql
+    assert "LOW_VOLATILITY_DEFENSIVE" in sql
+    assert "QUALITY_DEFENSIVE" in sql
+    assert "MULTIFACTOR_QMV" in sql
+    assert "BEAR_TREND" in sql
+    assert "STRATEGY_FAMILY_CATALOG_IMMUTABLE" in sql

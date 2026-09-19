@@ -21,3 +21,17 @@ __all__ += [
     "StrategyCandidateCapacityStatus",
     "assess_strategy_candidate_capacity",
 ]
+
+from hope.domain.strategy.families import (
+    MarketRegime,
+    STRATEGY_FAMILY_CATALOG,
+    StrategyFamilyDefinition,
+    StrategyFamilyPriority,
+)
+
+__all__ += [
+    "MarketRegime",
+    "STRATEGY_FAMILY_CATALOG",
+    "StrategyFamilyDefinition",
+    "StrategyFamilyPriority",
+]
