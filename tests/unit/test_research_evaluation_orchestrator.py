@@ -257,3 +257,67 @@ def test_stage_orchestrator_fails_closed_when_stage_specific_evidence_missing():
             variant_run_id=variant_run_id,
             stage="regression_invariants",
         )
+
+
+def test_stage_orchestrator_rejects_generic_fallback_for_derived_stage():
+    class WalkForwardEvaluator:
+        stage = "walk_forward"
+
+        def evaluate(self, *, stage_protocol, control_evidence, variant_evidence):
+            return {"control": control_evidence, "variant": variant_evidence}
+
+    control_run_id, variant_run_id = uuid4(), uuid4()
+    orchestrator, results = _orchestrator(
+        evidence={
+            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
+            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+        },
+        evaluators=(WalkForwardEvaluator(),),
+        stage_evidence_repositories={},
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_STAGE_EVIDENCE_SOURCE_MISSING",
+    ):
+        orchestrator.evaluate_stage(
+            variant_experiment_id="EXP-VARIANT",
+            control_run_id=control_run_id,
+            variant_run_id=variant_run_id,
+            stage="walk_forward",
+        )
+    assert results.persisted == []
+
+
+def test_stage_orchestrator_allows_generic_source_only_for_historical_evaluation():
+    class HistoricalEvaluator:
+        stage = "historical_evaluation"
+
+        def evaluate(self, *, stage_protocol, control_evidence, variant_evidence):
+            return {
+                "control": control_evidence["value"],
+                "variant": variant_evidence["value"],
+            }
+
+    control_run_id, variant_run_id = uuid4(), uuid4()
+    orchestrator, results = _orchestrator(
+        evidence={
+            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
+            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+        },
+        evaluators=(HistoricalEvaluator(),),
+        stage_evidence_repositories={},
+    )
+
+    definition = orchestrator.evaluate_stage(
+        variant_experiment_id="EXP-VARIANT",
+        control_run_id=control_run_id,
+        variant_run_id=variant_run_id,
+        stage="historical_evaluation",
+    )
+
+    assert definition.canonical_result == {
+        "control": "control",
+        "variant": "variant",
+    }
+    assert results.persisted == [definition]
