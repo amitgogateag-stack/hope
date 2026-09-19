@@ -11,9 +11,9 @@ def _fold(fold_id, start_day, test_day, pnl):
     return {
         "fold_id": fold_id,
         "train_start": f"2025-01-{start_day:02d}T00:00:00+00:00",
-        "train_end": f"2025-02-{start_day:02d}T00:00:00+00:00",
+        "train_end": f"2025-02-{test_day:02d}T00:00:00+00:00",
         "test_start": f"2025-02-{test_day:02d}T00:00:00+00:00",
-        "test_end": f"2025-03-{test_day:02d}T00:00:00+00:00",
+        "test_end": f"2025-02-{test_day + 1:02d}T00:00:00+00:00",
         "metrics": {
             "total_pnl": str(pnl),
             "sharpe": "1.25",
@@ -97,7 +97,7 @@ def test_walk_forward_rejects_fold_identity_or_window_drift():
         )
 
     shifted = _fold("fold-1", 1, 1, 100)
-    shifted["test_end"] = "2025-03-02T00:00:00+00:00"
+    shifted["test_end"] = "2025-02-03T00:00:00+00:00"
     variant_shifted = _artifact([shifted])
     with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_WINDOW_MISMATCH:fold-1"):
         WalkForwardStageEvaluator().evaluate(
