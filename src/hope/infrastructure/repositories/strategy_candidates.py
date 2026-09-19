@@ -99,10 +99,7 @@ class SqlAlchemyStrategyCandidateRepository:
             .where(
                 self._classifications.c.strategy_version_id == strategy_version_id
             )
-            .order_by(
-                self._classifications.c.created_at,
-                self._classifications.c.classification_id,
-            )
+            .order_by(self._classifications.c.classification_sequence)
         ).mappings().all()
         return [StrategyCandidateClassificationRecord(**row) for row in rows]
 
