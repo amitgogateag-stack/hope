@@ -236,3 +236,16 @@ def test_strategy_family_catalog_is_immutable_and_regime_aware():
     assert "MULTIFACTOR_QMV" in sql
     assert "BEAR_TREND" in sql
     assert "STRATEGY_FAMILY_CATALOG_IMMUTABLE" in sql
+
+
+
+def test_market_intelligence_events_are_provider_neutral_pit_bound_and_immutable():
+    sql = (ROOT / "migrations/091_market_intelligence_events.sql").read_text()
+    assert "CREATE TABLE market_intelligence_events" in sql
+    assert "source_item_id" in sql
+    assert "source_payload_hash" in sql
+    assert "available_time >= event_time" in sql
+    assert "ingestion_time >= available_time" in sql
+    assert "INTELLIGENCE_INSTRUMENT_NOT_IN_PIT_UNIVERSE" in sql
+    assert "MARKET_INTELLIGENCE_EVENT_IMMUTABLE" in sql
+    assert "source_tier <> 4" in sql
