@@ -276,3 +276,11 @@ def test_current_market_intelligence_entry_blocks_are_derived_from_immutable_his
     assert "mia.disposition <> 'OBSERVE_ONLY'" in sql
     assert "mir.resolution_id IS NULL" in sql
     assert "mir.outcome = 'BLOCK_CONFIRMED'" in sql
+
+
+
+def test_research_invariant_runs_are_immutable_and_bound_to_research_runs():
+    sql = (ROOT / "migrations/095_research_invariant_runs.sql").read_text()
+    assert "CREATE TABLE research_invariant_runs" in sql
+    assert "REFERENCES research_runs(research_run_id)" in sql
+    assert "RESEARCH_INVARIANT_RUN_IMMUTABLE" in sql
