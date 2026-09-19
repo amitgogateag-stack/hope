@@ -258,3 +258,12 @@ def test_market_intelligence_assessments_are_bound_and_immutable():
     assert "INTELLIGENCE_ASSESSMENT_SOURCE_ACTION_MISMATCH" in sql
     assert "MARKET_INTELLIGENCE_ASSESSMENT_IMMUTABLE" in sql
     assert "UNIQUE(event_id, policy_version)" in sql
+
+
+
+def test_market_intelligence_review_resolutions_are_explicit_bound_and_immutable():
+    sql = (ROOT / "migrations/093_market_intelligence_review_resolutions.sql").read_text()
+    assert "CREATE TABLE market_intelligence_review_resolutions" in sql
+    assert "INTELLIGENCE_REVIEW_POLICY_VERSION_MISMATCH" in sql
+    assert "MARKET_INTELLIGENCE_REVIEW_RESOLUTION_IMMUTABLE" in sql
+    assert "UNIQUE(assessment_id, policy_version)" in sql

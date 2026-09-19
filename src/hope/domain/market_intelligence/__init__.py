@@ -27,3 +27,13 @@ __all__ += [
     "IntelligenceDisposition",
     "assess_intelligence_event",
 ]
+
+from hope.domain.market_intelligence.review import (
+    IntelligenceReviewOutcome,
+    IntelligenceReviewResolution,
+)
+
+__all__ += [
+    "IntelligenceReviewOutcome",
+    "IntelligenceReviewResolution",
+]
