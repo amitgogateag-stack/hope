@@ -17,6 +17,18 @@ class _Repository:
         return True
 
 
+class _SourceResolver:
+    def __init__(self, evidence_by_run_id):
+        self.evidence_by_run_id = evidence_by_run_id
+        self.resolved = []
+
+    def resolve(self, run_id):
+        self.resolved.append(run_id)
+        if run_id not in self.evidence_by_run_id:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_RUN_MISSING")
+        return self.evidence_by_run_id[run_id]
+
+
 def _definition(method="baseline", version_id=None, membership_hash=None, as_of=None):
     return {
         "method": method,
@@ -29,7 +41,7 @@ def _definition(method="baseline", version_id=None, membership_hash=None, as_of=
 def _certified(definition, pnl="10", sharpe="1.0"):
     return {
         "schema": "hope.certified-backtest-result.v3",
-        "execution_provenance": {},
+        "execution_provenance": {"verified": True},
         "research_provenance": {
             "universe_version_id": definition["universe_version_id"],
             "universe_membership_hash": definition["universe_membership_hash"],
@@ -37,27 +49,34 @@ def _certified(definition, pnl="10", sharpe="1.0"):
         },
         "backtest": {
             "schema": "hope.backtest-result.v1",
-            "metrics": {
-                "initial_equity": "100",
-                "final_equity": "110",
-                "total_pnl": pnl,
-                "total_return": "0.1",
-                "max_drawdown": "0.02",
-                "volatility": "0.1",
-                "sharpe": sharpe,
-                "downside_deviation": "0.05",
-                "sortino": "1.2",
+            "result": {
+                "metrics": {
+                    "initial_equity": "100",
+                    "final_equity": "110",
+                    "total_pnl": pnl,
+                    "total_return": "0.1",
+                    "max_drawdown": "0.02",
+                    "volatility": "0.1",
+                    "sharpe": sharpe,
+                    "downside_deviation": "0.05",
+                    "sortino": "1.2",
+                }
             },
         },
     }
 
 
-def test_universe_perturbation_producer_binds_pit_identity_and_persists():
+def test_universe_perturbation_producer_resolves_sources_binds_pit_and_persists():
     repository = _Repository()
     baseline = _definition()
     drop10 = _definition(method="drop_random_fraction", membership_hash="b" * 64)
+    baseline_run, drop10_run = uuid4(), uuid4()
+    resolver = _SourceResolver({
+        baseline_run: _certified(baseline, "10", "1.0"),
+        drop10_run: _certified(drop10, "8", "0.8"),
+    })
 
-    record = UniversePerturbationEvidenceProducer(repository).produce(
+    record = UniversePerturbationEvidenceProducer(repository, resolver).produce(
         uuid4(),
         stage_protocol={
             "perturbation_ids": ["baseline", "drop10"],
@@ -67,38 +86,37 @@ def test_universe_perturbation_producer_binds_pit_identity_and_persists():
             {
                 "perturbation_id": "baseline",
                 "universe_definition": baseline,
-                "certified_result": _certified(baseline, "10", "1.0"),
+                "source_research_run_id": baseline_run,
             },
             {
                 "perturbation_id": "drop10",
                 "universe_definition": drop10,
-                "certified_result": _certified(drop10, "8", "0.8"),
+                "source_research_run_id": drop10_run,
             },
         ],
     )
 
+    assert resolver.resolved == [baseline_run, drop10_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
     assert artifact["schema"] == "hope.universe-perturbation-evidence.v1"
+    assert artifact["perturbations"][1]["source_research_run_id"] == str(drop10_run)
     assert artifact["perturbations"][1]["universe_definition"] == drop10
     assert artifact["result_fingerprint"] == configuration_hash(
         artifact["perturbations"]
     )
-    assert "winner" not in artifact
-    assert "best" not in artifact
 
 
-def test_universe_perturbation_producer_rejects_pit_binding_drift():
+def test_universe_perturbation_producer_requires_source_run_id():
     repository = _Repository()
     definition = _definition()
-    certified = _certified(definition)
-    certified["research_provenance"]["universe_membership_hash"] = "c" * 64
+    resolver = _SourceResolver({})
 
     with pytest.raises(
         ValueError,
-        match="UNIVERSE_PERTURBATION_PIT_BINDING_MISMATCH:baseline:universe_membership_hash",
+        match="UNIVERSE_PERTURBATION_SOURCE_RUN_ID_REQUIRED:baseline",
     ):
-        UniversePerturbationEvidenceProducer(repository).produce(
+        UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={
                 "perturbation_ids": ["baseline"],
@@ -108,7 +126,36 @@ def test_universe_perturbation_producer_rejects_pit_binding_drift():
                 {
                     "perturbation_id": "baseline",
                     "universe_definition": definition,
-                    "certified_result": certified,
+                }
+            ],
+        )
+    assert resolver.resolved == []
+    assert repository.persisted == []
+
+
+def test_universe_perturbation_producer_rejects_pit_binding_drift():
+    repository = _Repository()
+    definition = _definition()
+    source_run_id = uuid4()
+    certified = _certified(definition)
+    certified["research_provenance"]["universe_membership_hash"] = "c" * 64
+    resolver = _SourceResolver({source_run_id: certified})
+
+    with pytest.raises(
+        ValueError,
+        match="UNIVERSE_PERTURBATION_PIT_BINDING_MISMATCH:baseline:universe_membership_hash",
+    ):
+        UniversePerturbationEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol={
+                "perturbation_ids": ["baseline"],
+                "metrics": ["total_pnl"],
+            },
+            perturbations=[
+                {
+                    "perturbation_id": "baseline",
+                    "universe_definition": definition,
+                    "source_research_run_id": source_run_id,
                 }
             ],
         )
@@ -119,12 +166,14 @@ def test_universe_perturbation_producer_requires_canonical_pit_definition():
     repository = _Repository()
     definition = _definition()
     definition["universe_membership_hash"] = "not-a-hash"
+    source_run_id = uuid4()
+    resolver = _SourceResolver({source_run_id: _certified(_definition())})
 
     with pytest.raises(
         ValueError,
         match="UNIVERSE_PERTURBATION_DEFINITION_INVALID:baseline",
     ):
-        UniversePerturbationEvidenceProducer(repository).produce(
+        UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={
                 "perturbation_ids": ["baseline"],
@@ -134,10 +183,11 @@ def test_universe_perturbation_producer_requires_canonical_pit_definition():
                 {
                     "perturbation_id": "baseline",
                     "universe_definition": definition,
-                    "certified_result": _certified(_definition()),
+                    "source_research_run_id": source_run_id,
                 }
             ],
         )
+    assert resolver.resolved == []
     assert repository.persisted == []
 
 
@@ -145,11 +195,16 @@ def test_universe_perturbation_producer_rejects_identity_or_order_drift():
     repository = _Repository()
     first = _definition()
     second = _definition(membership_hash="b" * 64)
+    first_run, second_run = uuid4(), uuid4()
+    resolver = _SourceResolver({
+        first_run: _certified(first),
+        second_run: _certified(second),
+    })
     with pytest.raises(
         ValueError,
         match="UNIVERSE_PERTURBATION_SOURCE_IDS_MISMATCH",
     ):
-        UniversePerturbationEvidenceProducer(repository).produce(
+        UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={
                 "perturbation_ids": ["baseline", "drop10"],
@@ -159,12 +214,12 @@ def test_universe_perturbation_producer_rejects_identity_or_order_drift():
                 {
                     "perturbation_id": "drop10",
                     "universe_definition": second,
-                    "certified_result": _certified(second),
+                    "source_research_run_id": second_run,
                 },
                 {
                     "perturbation_id": "baseline",
                     "universe_definition": first,
-                    "certified_result": _certified(first),
+                    "source_research_run_id": first_run,
                 },
             ],
         )

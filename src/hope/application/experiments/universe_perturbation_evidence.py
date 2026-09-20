@@ -5,7 +5,6 @@ from datetime import datetime
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
 from hope.application.experiments.universe_perturbation import (
@@ -20,12 +19,13 @@ _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class UniversePerturbationEvidenceProducer:
-    """Persist PIT-bound, predeclared universe perturbation evidence."""
+    """Persist PIT-bound universe perturbation evidence from verified durable source runs."""
 
     stage = "universe_perturbation"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -76,11 +76,13 @@ class UniversePerturbationEvidenceProducer:
 
             self._validate_definition(perturbation_id, definition)
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
                 raise ValueError(
-                    f"UNIVERSE_PERTURBATION_CERTIFIED_RESULT_REQUIRED:{perturbation_id}"
+                    f"UNIVERSE_PERTURBATION_SOURCE_RUN_ID_REQUIRED:{perturbation_id}"
                 )
+            certified = self._sources.resolve(source_run_id)
+
             research = certified.get("research_provenance")
             if not isinstance(research, dict):
                 raise ValueError(
@@ -93,7 +95,8 @@ class UniversePerturbationEvidenceProducer:
                     )
 
             backtest = certified.get("backtest")
-            source_metrics = backtest.get("metrics") if isinstance(backtest, dict) else None
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(
                     f"UNIVERSE_PERTURBATION_CERTIFIED_METRICS_REQUIRED:{perturbation_id}"
@@ -111,6 +114,7 @@ class UniversePerturbationEvidenceProducer:
             canonical_items.append(
                 {
                     "perturbation_id": perturbation_id,
+                    "source_research_run_id": str(source_run_id),
                     "universe_definition": dict(definition),
                     "metrics": projected_metrics,
                 }
