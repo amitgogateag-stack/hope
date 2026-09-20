@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
 from hope.application.experiments.regime_analysis import REGIME_ANALYSIS_EVIDENCE_SCHEMA
@@ -14,12 +13,13 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 
 
 class RegimeAnalysisEvidenceProducer:
-    """Persist preclassified regime evidence without inferring or optimizing regimes."""
+    """Persist preclassified regime evidence from verified durable source runs."""
 
     stage = "regime_analysis"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -66,13 +66,14 @@ class RegimeAnalysisEvidenceProducer:
                 raise ValueError("REGIME_ANALYSIS_REGIME_ID_INVALID")
             observed_ids.append(regime_id)
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
-                raise ValueError(f"REGIME_ANALYSIS_CERTIFIED_RESULT_REQUIRED:{regime_id}")
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
+                raise ValueError(f"REGIME_ANALYSIS_SOURCE_RUN_ID_REQUIRED:{regime_id}")
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            if not isinstance(backtest, dict):
-                raise ValueError(f"REGIME_ANALYSIS_CERTIFIED_RESULT_INVALID:{regime_id}")
-            source_metrics = backtest.get("metrics")
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(f"REGIME_ANALYSIS_CERTIFIED_METRICS_REQUIRED:{regime_id}")
 
@@ -86,6 +87,7 @@ class RegimeAnalysisEvidenceProducer:
             canonical_regimes.append(
                 {
                     "regime_id": regime_id,
+                    "source_research_run_id": str(source_run_id),
                     "metrics": projected_metrics,
                 }
             )
