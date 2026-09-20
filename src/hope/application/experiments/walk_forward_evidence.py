@@ -57,15 +57,6 @@ class WalkForwardEvidenceProducer:
             test_end = self._time(definition["test_end"])
             if not (train_start < train_end <= test_start < test_end):
                 raise ValueError(f"WALK_FORWARD_FOLD_WINDOW_INVALID:{fold_id}")
-            observed_window = {
-                "train_start": train_start.isoformat(),
-                "train_end": train_end.isoformat(),
-                "test_start": test_start.isoformat(),
-                "test_end": test_end.isoformat(),
-            }
-            if observed_window != fold_definitions.get(fold_id):
-                raise ValueError(f"WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:{fold_id}")
-
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("WALK_FORWARD_METRICS_PREDECLARATION_REQUIRED")
@@ -95,6 +86,14 @@ class WalkForwardEvidenceProducer:
             test_end = self._time(source.get("test_end"))
             if not (train_start < train_end <= test_start < test_end):
                 raise ValueError(f"WALK_FORWARD_FOLD_WINDOW_INVALID:{fold_id}")
+            observed_window = {
+                "train_start": train_start.isoformat(),
+                "train_end": train_end.isoformat(),
+                "test_start": test_start.isoformat(),
+                "test_end": test_end.isoformat(),
+            }
+            if observed_window != fold_definitions.get(fold_id):
+                raise ValueError(f"WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:{fold_id}")
             if previous_test_end is not None and test_start < previous_test_end:
                 raise ValueError("WALK_FORWARD_TEST_WINDOWS_OVERLAP")
             previous_test_end = test_end
