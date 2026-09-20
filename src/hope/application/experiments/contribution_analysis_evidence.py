@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.contribution_analysis import (
     CONTRIBUTION_ANALYSIS_EVIDENCE_SCHEMA,
@@ -29,12 +28,13 @@ _FORBIDDEN_RETROSPECTIVE_TOKENS = {
 
 
 class ContributionAnalysisEvidenceProducer:
-    """Persist evidence for predeclared, non-performance-conditioned contribution buckets."""
+    """Persist evidence for predeclared contribution buckets from verified source runs."""
 
     stage = "contribution_analysis"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -99,13 +99,16 @@ class ContributionAnalysisEvidenceProducer:
                     f"CONTRIBUTION_ANALYSIS_PREDECLARED_DEFINITION_MISMATCH:{contribution_id}"
                 )
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
                 raise ValueError(
-                    f"CONTRIBUTION_ANALYSIS_CERTIFIED_RESULT_REQUIRED:{contribution_id}"
+                    f"CONTRIBUTION_ANALYSIS_SOURCE_RUN_ID_REQUIRED:{contribution_id}"
                 )
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            source_metrics = backtest.get("metrics") if isinstance(backtest, dict) else None
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(
                     f"CONTRIBUTION_ANALYSIS_CERTIFIED_METRICS_REQUIRED:{contribution_id}"
@@ -123,6 +126,7 @@ class ContributionAnalysisEvidenceProducer:
             canonical_items.append(
                 {
                     "contribution_id": contribution_id,
+                    "source_research_run_id": str(source_run_id),
                     "contribution_definition": dict(definition),
                     "metrics": projected_metrics,
                 }
