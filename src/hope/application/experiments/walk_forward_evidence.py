@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
 from hope.application.experiments.walk_forward import WALK_FORWARD_EVIDENCE_SCHEMA
@@ -15,12 +14,13 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 
 
 class WalkForwardEvidenceProducer:
-    """Build and persist deterministic walk-forward evidence from certified fold results."""
+    """Build deterministic walk-forward evidence from verified durable source runs."""
 
     stage = "walk_forward"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -75,13 +75,14 @@ class WalkForwardEvidenceProducer:
                 raise ValueError("WALK_FORWARD_TEST_WINDOWS_OVERLAP")
             previous_test_end = test_end
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
-                raise ValueError(f"WALK_FORWARD_CERTIFIED_RESULT_REQUIRED:{fold_id}")
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
+                raise ValueError(f"WALK_FORWARD_SOURCE_RUN_ID_REQUIRED:{fold_id}")
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            if not isinstance(backtest, dict):
-                raise ValueError(f"WALK_FORWARD_CERTIFIED_RESULT_INVALID:{fold_id}")
-            source_metrics = backtest.get("metrics")
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(f"WALK_FORWARD_CERTIFIED_METRICS_REQUIRED:{fold_id}")
 
@@ -95,6 +96,7 @@ class WalkForwardEvidenceProducer:
             canonical_folds.append(
                 {
                     "fold_id": fold_id,
+                    "source_research_run_id": str(source_run_id),
                     "train_start": train_start.isoformat(),
                     "train_end": train_end.isoformat(),
                     "test_start": test_start.isoformat(),
