@@ -30,6 +30,14 @@ class RegimeAnalysisStageEvaluator:
         if len(set(regime_ids)) != len(regime_ids):
             raise ValueError("REGIME_ANALYSIS_REGIME_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("regime_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(regime_ids):
+            raise ValueError("REGIME_ANALYSIS_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for regime_id in regime_ids:
+            definition = definitions.get(regime_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(f"REGIME_ANALYSIS_DEFINITION_INVALID:{regime_id}")
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("REGIME_ANALYSIS_METRICS_PREDECLARATION_REQUIRED")
@@ -50,8 +58,18 @@ class RegimeAnalysisStageEvaluator:
 
         comparisons: dict[str, Any] = {}
         for regime_id in regime_ids:
-            control_metrics = control_regimes[regime_id]["metrics"]
-            variant_metrics = variant_regimes[regime_id]["metrics"]
+            control_item = control_regimes[regime_id]
+            variant_item = variant_regimes[regime_id]
+            expected = definitions[regime_id]
+            if (
+                control_item["regime_definition"] != expected
+                or variant_item["regime_definition"] != expected
+            ):
+                raise ValueError(
+                    f"REGIME_ANALYSIS_PREDECLARED_DEFINITION_MISMATCH:{regime_id}"
+                )
+            control_metrics = control_item["metrics"]
+            variant_metrics = variant_item["metrics"]
             compared: dict[str, dict[str, str]] = {}
             for metric in metrics:
                 control_value = self._decimal(control_metrics.get(metric), metric)
@@ -61,7 +79,10 @@ class RegimeAnalysisStageEvaluator:
                     "variant": self._canonical_decimal(variant_value),
                     "delta": self._canonical_decimal(variant_value - control_value),
                 }
-            comparisons[regime_id] = {"metrics": compared}
+            comparisons[regime_id] = {
+                "regime_definition": expected,
+                "metrics": compared,
+            }
 
         return {
             "schema": "hope.regime-analysis-evaluation.v1",
@@ -87,6 +108,7 @@ class RegimeAnalysisStageEvaluator:
             if not isinstance(regime, dict):
                 raise ValueError("REGIME_ANALYSIS_REGIME_INVALID")
             regime_id = regime.get("regime_id")
+            definition = regime.get("regime_definition")
             metrics = regime.get("metrics")
             if not isinstance(regime_id, str) or not regime_id.strip() or not isinstance(metrics, dict):
                 raise ValueError("REGIME_ANALYSIS_REGIME_INVALID")

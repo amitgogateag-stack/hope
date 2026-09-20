@@ -41,6 +41,14 @@ class RegimeAnalysisEvidenceProducer:
         if len(set(regime_ids)) != len(regime_ids):
             raise ValueError("REGIME_ANALYSIS_REGIME_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("regime_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(regime_ids):
+            raise ValueError("REGIME_ANALYSIS_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for regime_id in regime_ids:
+            definition = definitions.get(regime_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(f"REGIME_ANALYSIS_DEFINITION_INVALID:{regime_id}")
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("REGIME_ANALYSIS_METRICS_PREDECLARATION_REQUIRED")
@@ -65,6 +73,13 @@ class RegimeAnalysisEvidenceProducer:
             ):
                 raise ValueError("REGIME_ANALYSIS_REGIME_ID_INVALID")
             observed_ids.append(regime_id)
+            definition = source.get("regime_definition")
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(f"REGIME_ANALYSIS_DEFINITION_INVALID:{regime_id}")
+            if definition != definitions.get(regime_id):
+                raise ValueError(
+                    f"REGIME_ANALYSIS_PREDECLARED_DEFINITION_MISMATCH:{regime_id}"
+                )
 
             source_run_id = source.get("source_research_run_id")
             if not isinstance(source_run_id, UUID):
@@ -88,6 +103,7 @@ class RegimeAnalysisEvidenceProducer:
                 {
                     "regime_id": regime_id,
                     "source_research_run_id": str(source_run_id),
+                    "regime_definition": dict(definition),
                     "metrics": projected_metrics,
                 }
             )

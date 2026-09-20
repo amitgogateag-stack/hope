@@ -53,8 +53,20 @@ def _certified(pnl="10", sharpe="1.0"):
     }
 
 
-def test_regime_producer_resolves_durable_sources_projects_metrics_and_persists():
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "regime_ids": ids,
+        "regime_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
+def test_regime_producer_resolves_sources_binds_definitions_and_persists():
     repository = _Repository()
+    definitions = {
+        "trend": {"classifier": "adx", "operator": ">=", "threshold": "25"},
+        "range": {"classifier": "adx", "operator": "<", "threshold": "25"},
+    }
     trend_run, range_run = uuid4(), uuid4()
     resolver = _SourceResolver({
         trend_run: _certified("20", "1.1"),
@@ -62,46 +74,63 @@ def test_regime_producer_resolves_durable_sources_projects_metrics_and_persists(
     })
     record = RegimeAnalysisEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={
-            "regime_ids": ["trend", "range"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["trend", "range"], definitions),
         regimes=[
-            {"regime_id": "trend", "source_research_run_id": trend_run},
-            {"regime_id": "range", "source_research_run_id": range_run},
+            {
+                "regime_id": "trend",
+                "regime_definition": definitions["trend"],
+                "source_research_run_id": trend_run,
+            },
+            {
+                "regime_id": "range",
+                "regime_definition": definitions["range"],
+                "source_research_run_id": range_run,
+            },
         ],
     )
 
     assert resolver.resolved == [trend_run, range_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.regime-analysis-evidence.v1"
-    assert artifact["regimes"] == [
-        {
-            "regime_id": "trend",
-            "source_research_run_id": str(trend_run),
-            "metrics": {"total_pnl": "20", "sharpe": "1.1"},
-        },
-        {
-            "regime_id": "range",
-            "source_research_run_id": str(range_run),
-            "metrics": {"total_pnl": "-5", "sharpe": "0.2"},
-        },
-    ]
+    assert artifact["regimes"][0]["regime_definition"] == definitions["trend"]
+    assert artifact["regimes"][0]["source_research_run_id"] == str(trend_run)
     assert artifact["result_fingerprint"] == configuration_hash(artifact["regimes"])
 
 
-def test_regime_producer_rejects_missing_source_run_id_before_resolution():
+def test_regime_producer_requires_predeclared_definitions():
     repository = _Repository()
     resolver = _SourceResolver({})
-    with pytest.raises(
-        ValueError,
-        match="REGIME_ANALYSIS_SOURCE_RUN_ID_REQUIRED:trend",
-    ):
+    with pytest.raises(ValueError, match="REGIME_ANALYSIS_DEFINITIONS_PREDECLARATION_REQUIRED"):
         RegimeAnalysisEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={"regime_ids": ["trend"], "metrics": ["total_pnl"]},
-            regimes=[{"regime_id": "trend"}],
+            regimes=[],
+        )
+
+
+def test_regime_producer_rejects_definition_drift_before_resolution():
+    repository = _Repository()
+    source_run_id = uuid4()
+    definitions = {
+        "trend": {"classifier": "adx", "operator": ">=", "threshold": "25"}
+    }
+    resolver = _SourceResolver({source_run_id: _certified()})
+    with pytest.raises(
+        ValueError,
+        match="REGIME_ANALYSIS_PREDECLARED_DEFINITION_MISMATCH:trend",
+    ):
+        RegimeAnalysisEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol=_protocol(["trend"], definitions, ("total_pnl",)),
+            regimes=[{
+                "regime_id": "trend",
+                "regime_definition": {
+                    "classifier": "adx",
+                    "operator": ">=",
+                    "threshold": "30",
+                },
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -110,48 +139,46 @@ def test_regime_producer_rejects_missing_source_run_id_before_resolution():
 def test_regime_producer_propagates_verified_source_failure():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {
+        "trend": {"classifier": "adx", "operator": ">=", "threshold": "25"}
+    }
     resolver = _SourceResolver({})
     with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RUN_MISSING"):
         RegimeAnalysisEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"regime_ids": ["trend"], "metrics": ["total_pnl"]},
-            regimes=[{"regime_id": "trend", "source_research_run_id": source_run_id}],
+            stage_protocol=_protocol(["trend"], definitions, ("total_pnl",)),
+            regimes=[{
+                "regime_id": "trend",
+                "regime_definition": definitions["trend"],
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert repository.persisted == []
 
 
 def test_regime_producer_rejects_regime_identity_or_order_drift():
     repository = _Repository()
+    definitions = {
+        "trend": {"classifier": "adx", "operator": ">=", "threshold": "25"},
+        "range": {"classifier": "adx", "operator": "<", "threshold": "25"},
+    }
     first, second = uuid4(), uuid4()
     resolver = _SourceResolver({first: _certified(), second: _certified()})
     with pytest.raises(ValueError, match="REGIME_ANALYSIS_SOURCE_REGIMES_MISMATCH"):
         RegimeAnalysisEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "regime_ids": ["trend", "range"],
-                "metrics": ["total_pnl"],
-            },
+            stage_protocol=_protocol(["trend", "range"], definitions, ("total_pnl",)),
             regimes=[
-                {"regime_id": "range", "source_research_run_id": first},
-                {"regime_id": "trend", "source_research_run_id": second},
-            ],
-        )
-    assert repository.persisted == []
-
-
-def test_regime_producer_rejects_unpredeclared_metric():
-    repository = _Repository()
-    source_run_id = uuid4()
-    resolver = _SourceResolver({source_run_id: _certified()})
-    with pytest.raises(ValueError, match="REGIME_ANALYSIS_METRIC_INVALID"):
-        RegimeAnalysisEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "regime_ids": ["trend"],
-                "metrics": ["made_up_metric"],
-            },
-            regimes=[
-                {"regime_id": "trend", "source_research_run_id": source_run_id},
+                {
+                    "regime_id": "range",
+                    "regime_definition": definitions["range"],
+                    "source_research_run_id": first,
+                },
+                {
+                    "regime_id": "trend",
+                    "regime_definition": definitions["trend"],
+                    "source_research_run_id": second,
+                },
             ],
         )
     assert repository.persisted == []
