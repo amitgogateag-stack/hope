@@ -33,6 +33,16 @@ class UniversePerturbationStageEvaluator:
         if len(set(perturbation_ids)) != len(perturbation_ids):
             raise ValueError("UNIVERSE_PERTURBATION_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("perturbation_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(perturbation_ids):
+            raise ValueError("UNIVERSE_PERTURBATION_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for perturbation_id in perturbation_ids:
+            definition = definitions.get(perturbation_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"UNIVERSE_PERTURBATION_DEFINITION_INVALID:{perturbation_id}"
+                )
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("UNIVERSE_PERTURBATION_METRICS_PREDECLARATION_REQUIRED")
@@ -55,9 +65,13 @@ class UniversePerturbationStageEvaluator:
         for perturbation_id in perturbation_ids:
             control_item = control_items[perturbation_id]
             variant_item = variant_items[perturbation_id]
-            if control_item["universe_definition"] != variant_item["universe_definition"]:
+            expected = definitions[perturbation_id]
+            if (
+                control_item["universe_definition"] != expected
+                or variant_item["universe_definition"] != expected
+            ):
                 raise ValueError(
-                    f"UNIVERSE_PERTURBATION_DEFINITION_MISMATCH:{perturbation_id}"
+                    f"UNIVERSE_PERTURBATION_PREDECLARED_DEFINITION_MISMATCH:{perturbation_id}"
                 )
 
             compared: dict[str, dict[str, str]] = {}
@@ -71,7 +85,7 @@ class UniversePerturbationStageEvaluator:
                 }
 
             comparisons[perturbation_id] = {
-                "universe_definition": control_item["universe_definition"],
+                "universe_definition": expected,
                 "metrics": compared,
             }
 

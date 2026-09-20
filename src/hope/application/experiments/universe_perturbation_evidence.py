@@ -45,6 +45,17 @@ class UniversePerturbationEvidenceProducer:
         if len(set(perturbation_ids)) != len(perturbation_ids):
             raise ValueError("UNIVERSE_PERTURBATION_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("perturbation_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(perturbation_ids):
+            raise ValueError("UNIVERSE_PERTURBATION_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for perturbation_id in perturbation_ids:
+            definition = definitions.get(perturbation_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"UNIVERSE_PERTURBATION_DEFINITION_INVALID:{perturbation_id}"
+                )
+            self._validate_definition(perturbation_id, definition)
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("UNIVERSE_PERTURBATION_METRICS_PREDECLARATION_REQUIRED")
@@ -75,6 +86,10 @@ class UniversePerturbationEvidenceProducer:
             observed_ids.append(perturbation_id)
 
             self._validate_definition(perturbation_id, definition)
+            if definition != definitions.get(perturbation_id):
+                raise ValueError(
+                    f"UNIVERSE_PERTURBATION_PREDECLARED_DEFINITION_MISMATCH:{perturbation_id}"
+                )
 
             source_run_id = source.get("source_research_run_id")
             if not isinstance(source_run_id, UUID):

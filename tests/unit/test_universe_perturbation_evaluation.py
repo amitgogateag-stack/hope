@@ -23,110 +23,106 @@ def _artifact(perturbations):
     }
 
 
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "perturbation_ids": ids,
+        "perturbation_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
 def test_universe_perturbation_compares_predeclared_variants_without_verdict():
-    definitions = [
-        {"method": "baseline", "symbols_hash": "abc123"},
-        {"method": "drop_random_fraction", "fraction": "0.10", "seed": 17},
-    ]
+    definitions = {
+        "baseline": {"method": "baseline", "symbols_hash": "abc123"},
+        "drop10": {"method": "drop_random_fraction", "fraction": "0.10", "seed": 17},
+    }
     control = _artifact([
-        _perturbation("baseline", definitions[0], 100, "1.0"),
-        _perturbation("drop10", definitions[1], 80, "0.8"),
+        _perturbation("baseline", definitions["baseline"], 100, "1.0"),
+        _perturbation("drop10", definitions["drop10"], 80, "0.8"),
     ])
     variant = _artifact([
-        _perturbation("baseline", definitions[0], 120, "1.1"),
-        _perturbation("drop10", definitions[1], 95, "0.9"),
+        _perturbation("baseline", definitions["baseline"], 120, "1.1"),
+        _perturbation("drop10", definitions["drop10"], 95, "0.9"),
     ])
 
     result = UniversePerturbationStageEvaluator().evaluate(
-        stage_protocol={
-            "perturbation_ids": ["baseline", "drop10"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["baseline", "drop10"], definitions),
         control_evidence=control,
         variant_evidence=variant,
     )
 
     assert result["schema"] == "hope.universe-perturbation-evaluation.v1"
     assert result["perturbations"]["drop10"]["metrics"]["total_pnl"]["delta"] == "15"
-    assert result["perturbations"]["baseline"]["universe_definition"] == definitions[0]
+    assert result["perturbations"]["baseline"]["universe_definition"] == definitions["baseline"]
     assert "winner" not in result
     assert "best" not in result
     assert "pass" not in result
 
 
-def test_universe_perturbation_requires_predeclared_ids_and_metrics():
-    evidence = _artifact([
-        _perturbation("baseline", {"method": "baseline"}, 100)
-    ])
+def test_universe_perturbation_requires_predeclared_ids_definitions_and_metrics():
+    definitions = {"baseline": {"method": "baseline"}}
+    evidence = _artifact([_perturbation("baseline", definitions["baseline"], 100)])
     evaluator = UniversePerturbationStageEvaluator()
 
     with pytest.raises(ValueError, match="UNIVERSE_PERTURBATION_PREDECLARATION_REQUIRED"):
         evaluator.evaluate(
-            stage_protocol={"metrics": ["total_pnl"]},
+            stage_protocol={"perturbation_definitions": definitions, "metrics": ["total_pnl"]},
             control_evidence=evidence,
             variant_evidence=evidence,
         )
 
     with pytest.raises(
         ValueError,
-        match="UNIVERSE_PERTURBATION_METRICS_PREDECLARATION_REQUIRED",
+        match="UNIVERSE_PERTURBATION_DEFINITIONS_PREDECLARATION_REQUIRED",
     ):
         evaluator.evaluate(
-            stage_protocol={"perturbation_ids": ["baseline"]},
+            stage_protocol={"perturbation_ids": ["baseline"], "metrics": ["total_pnl"]},
+            control_evidence=evidence,
+            variant_evidence=evidence,
+        )
+
+    with pytest.raises(ValueError, match="UNIVERSE_PERTURBATION_METRICS_PREDECLARATION_REQUIRED"):
+        evaluator.evaluate(
+            stage_protocol={
+                "perturbation_ids": ["baseline"],
+                "perturbation_definitions": definitions,
+            },
             control_evidence=evidence,
             variant_evidence=evidence,
         )
 
 
 def test_universe_perturbation_rejects_tampered_evidence():
-    evidence = _artifact([
-        _perturbation("baseline", {"method": "baseline"}, 100)
-    ])
+    definitions = {"baseline": {"method": "baseline"}}
+    evidence = _artifact([_perturbation("baseline", definitions["baseline"], 100)])
     evidence["perturbations"][0]["metrics"]["total_pnl"] = "999"
 
-    with pytest.raises(
-        ValueError,
-        match="UNIVERSE_PERTURBATION_EVIDENCE_FINGERPRINT_MISMATCH",
-    ):
+    with pytest.raises(ValueError, match="UNIVERSE_PERTURBATION_EVIDENCE_FINGERPRINT_MISMATCH"):
         UniversePerturbationStageEvaluator().evaluate(
-            stage_protocol={
-                "perturbation_ids": ["baseline"],
-                "metrics": ["total_pnl"],
-            },
+            stage_protocol=_protocol(["baseline"], definitions, ("total_pnl",)),
             control_evidence=evidence,
-            variant_evidence=_artifact([
-                _perturbation("baseline", {"method": "baseline"}, 100)
-            ]),
+            variant_evidence=_artifact([_perturbation("baseline", definitions["baseline"], 100)]),
         )
 
 
 def test_universe_perturbation_rejects_identity_drift():
-    control = _artifact([
-        _perturbation("baseline", {"method": "baseline"}, 100)
-    ])
-    variant = _artifact([
-        _perturbation("other", {"method": "baseline"}, 100)
-    ])
+    definitions = {"baseline": {"method": "baseline"}}
+    control = _artifact([_perturbation("baseline", definitions["baseline"], 100)])
+    variant = _artifact([_perturbation("other", definitions["baseline"], 100)])
 
     with pytest.raises(ValueError, match="UNIVERSE_PERTURBATION_VARIANT_IDS_MISMATCH"):
         UniversePerturbationStageEvaluator().evaluate(
-            stage_protocol={
-                "perturbation_ids": ["baseline"],
-                "metrics": ["total_pnl"],
-            },
+            stage_protocol=_protocol(["baseline"], definitions, ("total_pnl",)),
             control_evidence=control,
             variant_evidence=variant,
         )
 
 
-def test_universe_perturbation_rejects_definition_drift():
-    control = _artifact([
-        _perturbation(
-            "drop10",
-            {"method": "drop_random_fraction", "fraction": "0.10", "seed": 17},
-            100,
-        )
-    ])
+def test_universe_perturbation_rejects_definition_drift_from_protocol():
+    definitions = {
+        "drop10": {"method": "drop_random_fraction", "fraction": "0.10", "seed": 17}
+    }
+    control = _artifact([_perturbation("drop10", definitions["drop10"], 100)])
     variant = _artifact([
         _perturbation(
             "drop10",
@@ -137,13 +133,10 @@ def test_universe_perturbation_rejects_definition_drift():
 
     with pytest.raises(
         ValueError,
-        match="UNIVERSE_PERTURBATION_DEFINITION_MISMATCH:drop10",
+        match="UNIVERSE_PERTURBATION_PREDECLARED_DEFINITION_MISMATCH:drop10",
     ):
         UniversePerturbationStageEvaluator().evaluate(
-            stage_protocol={
-                "perturbation_ids": ["drop10"],
-                "metrics": ["total_pnl"],
-            },
+            stage_protocol=_protocol(["drop10"], definitions, ("total_pnl",)),
             control_evidence=control,
             variant_evidence=variant,
         )

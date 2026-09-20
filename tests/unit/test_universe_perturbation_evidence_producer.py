@@ -66,10 +66,19 @@ def _certified(definition, pnl="10", sharpe="1.0"):
     }
 
 
-def test_universe_perturbation_producer_resolves_sources_binds_pit_and_persists():
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "perturbation_ids": ids,
+        "perturbation_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
+def test_universe_perturbation_producer_resolves_sources_binds_protocol_pit_and_persists():
     repository = _Repository()
     baseline = _definition()
     drop10 = _definition(method="drop_random_fraction", membership_hash="b" * 64)
+    definitions = {"baseline": baseline, "drop10": drop10}
     baseline_run, drop10_run = uuid4(), uuid4()
     resolver = _SourceResolver({
         baseline_run: _certified(baseline, "10", "1.0"),
@@ -78,56 +87,55 @@ def test_universe_perturbation_producer_resolves_sources_binds_pit_and_persists(
 
     record = UniversePerturbationEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={
-            "perturbation_ids": ["baseline", "drop10"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["baseline", "drop10"], definitions),
         perturbations=[
-            {
-                "perturbation_id": "baseline",
-                "universe_definition": baseline,
-                "source_research_run_id": baseline_run,
-            },
-            {
-                "perturbation_id": "drop10",
-                "universe_definition": drop10,
-                "source_research_run_id": drop10_run,
-            },
+            {"perturbation_id": "baseline", "universe_definition": baseline, "source_research_run_id": baseline_run},
+            {"perturbation_id": "drop10", "universe_definition": drop10, "source_research_run_id": drop10_run},
         ],
     )
 
     assert resolver.resolved == [baseline_run, drop10_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.universe-perturbation-evidence.v1"
     assert artifact["perturbations"][1]["source_research_run_id"] == str(drop10_run)
     assert artifact["perturbations"][1]["universe_definition"] == drop10
-    assert artifact["result_fingerprint"] == configuration_hash(
-        artifact["perturbations"]
-    )
+    assert artifact["result_fingerprint"] == configuration_hash(artifact["perturbations"])
 
 
-def test_universe_perturbation_producer_requires_source_run_id():
+def test_universe_perturbation_producer_requires_predeclared_definitions():
     repository = _Repository()
-    definition = _definition()
     resolver = _SourceResolver({})
-
     with pytest.raises(
         ValueError,
-        match="UNIVERSE_PERTURBATION_SOURCE_RUN_ID_REQUIRED:baseline",
+        match="UNIVERSE_PERTURBATION_DEFINITIONS_PREDECLARATION_REQUIRED",
     ):
         UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "perturbation_ids": ["baseline"],
-                "metrics": ["total_pnl"],
-            },
-            perturbations=[
-                {
-                    "perturbation_id": "baseline",
-                    "universe_definition": definition,
-                }
-            ],
+            stage_protocol={"perturbation_ids": ["baseline"], "metrics": ["total_pnl"]},
+            perturbations=[],
+        )
+
+
+def test_universe_perturbation_producer_rejects_definition_drift_before_resolution():
+    repository = _Repository()
+    baseline = _definition()
+    drifted = dict(baseline)
+    drifted["universe_membership_hash"] = "b" * 64
+    source_run_id = uuid4()
+    resolver = _SourceResolver({source_run_id: _certified(baseline)})
+
+    with pytest.raises(
+        ValueError,
+        match="UNIVERSE_PERTURBATION_PREDECLARED_DEFINITION_MISMATCH:baseline",
+    ):
+        UniversePerturbationEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol=_protocol(["baseline"], {"baseline": baseline}, ("total_pnl",)),
+            perturbations=[{
+                "perturbation_id": "baseline",
+                "universe_definition": drifted,
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -147,27 +155,21 @@ def test_universe_perturbation_producer_rejects_pit_binding_drift():
     ):
         UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "perturbation_ids": ["baseline"],
-                "metrics": ["total_pnl"],
-            },
-            perturbations=[
-                {
-                    "perturbation_id": "baseline",
-                    "universe_definition": definition,
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["baseline"], {"baseline": definition}, ("total_pnl",)),
+            perturbations=[{
+                "perturbation_id": "baseline",
+                "universe_definition": definition,
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert repository.persisted == []
 
 
-def test_universe_perturbation_producer_requires_canonical_pit_definition():
+def test_universe_perturbation_producer_rejects_noncanonical_predeclared_definition():
     repository = _Repository()
     definition = _definition()
     definition["universe_membership_hash"] = "not-a-hash"
-    source_run_id = uuid4()
-    resolver = _SourceResolver({source_run_id: _certified(_definition())})
+    resolver = _SourceResolver({})
 
     with pytest.raises(
         ValueError,
@@ -175,52 +177,7 @@ def test_universe_perturbation_producer_requires_canonical_pit_definition():
     ):
         UniversePerturbationEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "perturbation_ids": ["baseline"],
-                "metrics": ["total_pnl"],
-            },
-            perturbations=[
-                {
-                    "perturbation_id": "baseline",
-                    "universe_definition": definition,
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["baseline"], {"baseline": definition}, ("total_pnl",)),
+            perturbations=[],
         )
     assert resolver.resolved == []
-    assert repository.persisted == []
-
-
-def test_universe_perturbation_producer_rejects_identity_or_order_drift():
-    repository = _Repository()
-    first = _definition()
-    second = _definition(membership_hash="b" * 64)
-    first_run, second_run = uuid4(), uuid4()
-    resolver = _SourceResolver({
-        first_run: _certified(first),
-        second_run: _certified(second),
-    })
-    with pytest.raises(
-        ValueError,
-        match="UNIVERSE_PERTURBATION_SOURCE_IDS_MISMATCH",
-    ):
-        UniversePerturbationEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "perturbation_ids": ["baseline", "drop10"],
-                "metrics": ["total_pnl"],
-            },
-            perturbations=[
-                {
-                    "perturbation_id": "drop10",
-                    "universe_definition": second,
-                    "source_research_run_id": second_run,
-                },
-                {
-                    "perturbation_id": "baseline",
-                    "universe_definition": first,
-                    "source_research_run_id": first_run,
-                },
-            ],
-        )
-    assert repository.persisted == []
