@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.cost_stress import COST_STRESS_EVIDENCE_SCHEMA
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
@@ -14,12 +13,13 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 
 
 class CostStressEvidenceProducer:
-    """Persist deterministic fee/cost stress evidence without mixing slippage mechanics."""
+    """Persist deterministic fee/cost stress evidence from verified durable source runs."""
 
     stage = "cost_stress"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -74,13 +74,14 @@ class CostStressEvidenceProducer:
                 )
             observed_ids.append(scenario_id)
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
-                raise ValueError(f"COST_STRESS_CERTIFIED_RESULT_REQUIRED:{scenario_id}")
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
+                raise ValueError(f"COST_STRESS_SOURCE_RUN_ID_REQUIRED:{scenario_id}")
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            if not isinstance(backtest, dict):
-                raise ValueError(f"COST_STRESS_CERTIFIED_RESULT_INVALID:{scenario_id}")
-            source_metrics = backtest.get("metrics")
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(f"COST_STRESS_CERTIFIED_METRICS_REQUIRED:{scenario_id}")
 
@@ -94,6 +95,7 @@ class CostStressEvidenceProducer:
             canonical_scenarios.append(
                 {
                     "scenario_id": scenario_id,
+                    "source_research_run_id": str(source_run_id),
                     "cost_assumptions": dict(assumptions),
                     "metrics": projected_metrics,
                 }
