@@ -39,6 +39,22 @@ class WalkForwardStageEvaluator:
         if len(set(requested_folds)) != len(requested_folds):
             raise ValueError("WALK_FORWARD_FOLD_ID_DUPLICATE")
 
+        fold_definitions = stage_protocol.get("fold_definitions")
+        if not isinstance(fold_definitions, dict) or set(fold_definitions) != set(requested_folds):
+            raise ValueError("WALK_FORWARD_FOLD_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for fold_id in requested_folds:
+            definition = fold_definitions.get(fold_id)
+            if not isinstance(definition, dict) or set(definition) != {
+                "train_start", "train_end", "test_start", "test_end"
+            }:
+                raise ValueError(f"WALK_FORWARD_FOLD_DEFINITION_INVALID:{fold_id}")
+            train_start = self._time(definition["train_start"])
+            train_end = self._time(definition["train_end"])
+            test_start = self._time(definition["test_start"])
+            test_end = self._time(definition["test_end"])
+            if not (train_start < train_end <= test_start < test_end):
+                raise ValueError(f"WALK_FORWARD_FOLD_WINDOW_INVALID:{fold_id}")
+
         control = self._artifact(control_evidence)
         variant = self._artifact(variant_evidence)
         control_folds = self._folds_by_id(control)
@@ -53,8 +69,12 @@ class WalkForwardStageEvaluator:
         for fold_id in requested_folds:
             control_fold = control_folds[fold_id]
             variant_fold = variant_folds[fold_id]
-            if self._window(control_fold) != self._window(variant_fold):
-                raise ValueError(f"WALK_FORWARD_FOLD_WINDOW_MISMATCH:{fold_id}")
+            expected_window = fold_definitions[fold_id]
+            if (
+                self._window(control_fold) != expected_window
+                or self._window(variant_fold) != expected_window
+            ):
+                raise ValueError(f"WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:{fold_id}")
 
             metrics: dict[str, dict[str, str]] = {}
             for metric in requested_metrics:
@@ -66,7 +86,7 @@ class WalkForwardStageEvaluator:
                     "delta": self._canonical_decimal(variant_value - control_value),
                 }
             comparisons[fold_id] = {
-                "window": self._window(control_fold),
+                "window": expected_window,
                 "metrics": metrics,
             }
 

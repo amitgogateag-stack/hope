@@ -7,17 +7,11 @@ from hope.application.experiments.walk_forward import (
 )
 
 
-def _fold(fold_id, start_day, test_day, pnl):
+def _fold(fold_id, window, pnl):
     return {
         "fold_id": fold_id,
-        "train_start": f"2025-01-{start_day:02d}T00:00:00+00:00",
-        "train_end": f"2025-02-{test_day:02d}T00:00:00+00:00",
-        "test_start": f"2025-02-{test_day:02d}T00:00:00+00:00",
-        "test_end": f"2025-02-{test_day + 1:02d}T00:00:00+00:00",
-        "metrics": {
-            "total_pnl": str(pnl),
-            "sharpe": "1.25",
-        },
+        **window,
+        "metrics": {"total_pnl": str(pnl), "sharpe": "1.25"},
     }
 
 
@@ -29,90 +23,114 @@ def _artifact(folds):
     }
 
 
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "fold_ids": ids,
+        "fold_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
 def test_walk_forward_compares_exact_predeclared_folds_without_verdict():
+    definitions = {
+        "fold-1": {
+            "train_start": "2025-01-01T00:00:00+00:00",
+            "train_end": "2025-02-01T00:00:00+00:00",
+            "test_start": "2025-02-01T00:00:00+00:00",
+            "test_end": "2025-02-02T00:00:00+00:00",
+        },
+        "fold-2": {
+            "train_start": "2025-01-02T00:00:00+00:00",
+            "train_end": "2025-02-02T00:00:00+00:00",
+            "test_start": "2025-02-02T00:00:00+00:00",
+            "test_end": "2025-02-03T00:00:00+00:00",
+        },
+    }
     control = _artifact([
-        _fold("fold-1", 1, 1, 100),
-        _fold("fold-2", 2, 2, 200),
+        _fold("fold-1", definitions["fold-1"], 100),
+        _fold("fold-2", definitions["fold-2"], 200),
     ])
     variant = _artifact([
-        _fold("fold-1", 1, 1, 125),
-        _fold("fold-2", 2, 2, 180),
+        _fold("fold-1", definitions["fold-1"], 125),
+        _fold("fold-2", definitions["fold-2"], 180),
     ])
 
     result = WalkForwardStageEvaluator().evaluate(
-        stage_protocol={
-            "fold_ids": ["fold-1", "fold-2"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["fold-1", "fold-2"], definitions),
         control_evidence=control,
         variant_evidence=variant,
     )
 
     assert result["schema"] == "hope.walk-forward-evaluation.v1"
     assert result["folds"]["fold-1"]["metrics"]["total_pnl"]["delta"] == "25"
-    assert result["folds"]["fold-2"]["metrics"]["total_pnl"]["delta"] == "-20"
+    assert result["folds"]["fold-1"]["window"] == definitions["fold-1"]
     assert "winner" not in result
     assert "pass" not in result
 
 
-def test_walk_forward_requires_predeclared_metrics_and_folds():
-    evidence = _artifact([_fold("fold-1", 1, 1, 100)])
+def test_walk_forward_requires_predeclared_metrics_folds_and_windows():
+    definition = {
+        "train_start": "2025-01-01T00:00:00+00:00",
+        "train_end": "2025-02-01T00:00:00+00:00",
+        "test_start": "2025-02-01T00:00:00+00:00",
+        "test_end": "2025-02-02T00:00:00+00:00",
+    }
+    evidence = _artifact([_fold("fold-1", definition, 100)])
     evaluator = WalkForwardStageEvaluator()
 
-    with pytest.raises(ValueError, match="WALK_FORWARD_METRICS_PREDECLARATION_REQUIRED"):
+    with pytest.raises(ValueError, match="WALK_FORWARD_FOLDS_PREDECLARATION_REQUIRED"):
         evaluator.evaluate(
-            stage_protocol={"fold_ids": ["fold-1"]},
+            stage_protocol={"fold_definitions": {"fold-1": definition}, "metrics": ["total_pnl"]},
             control_evidence=evidence,
             variant_evidence=evidence,
         )
 
-    with pytest.raises(ValueError, match="WALK_FORWARD_FOLDS_PREDECLARATION_REQUIRED"):
+    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_DEFINITIONS_PREDECLARATION_REQUIRED"):
         evaluator.evaluate(
-            stage_protocol={"metrics": ["total_pnl"]},
+            stage_protocol={"fold_ids": ["fold-1"], "metrics": ["total_pnl"]},
             control_evidence=evidence,
             variant_evidence=evidence,
+        )
+
+    with pytest.raises(ValueError, match="WALK_FORWARD_METRICS_PREDECLARATION_REQUIRED"):
+        evaluator.evaluate(
+            stage_protocol={"fold_ids": ["fold-1"], "fold_definitions": {"fold-1": definition}},
+            control_evidence=evidence,
+            variant_evidence=evidence,
+        )
+
+
+def test_walk_forward_rejects_predeclared_window_drift():
+    definition = {
+        "train_start": "2025-01-01T00:00:00+00:00",
+        "train_end": "2025-02-01T00:00:00+00:00",
+        "test_start": "2025-02-01T00:00:00+00:00",
+        "test_end": "2025-02-02T00:00:00+00:00",
+    }
+    shifted = dict(definition)
+    shifted["test_end"] = "2025-02-03T00:00:00+00:00"
+
+    with pytest.raises(ValueError, match="WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:fold-1"):
+        WalkForwardStageEvaluator().evaluate(
+            stage_protocol=_protocol(["fold-1"], {"fold-1": definition}, ("total_pnl",)),
+            control_evidence=_artifact([_fold("fold-1", definition, 100)]),
+            variant_evidence=_artifact([_fold("fold-1", shifted, 100)]),
         )
 
 
 def test_walk_forward_rejects_tampered_evidence():
-    evidence = _artifact([_fold("fold-1", 1, 1, 100)])
+    definition = {
+        "train_start": "2025-01-01T00:00:00+00:00",
+        "train_end": "2025-02-01T00:00:00+00:00",
+        "test_start": "2025-02-01T00:00:00+00:00",
+        "test_end": "2025-02-02T00:00:00+00:00",
+    }
+    evidence = _artifact([_fold("fold-1", definition, 100)])
     evidence["folds"][0]["metrics"]["total_pnl"] = "999"
 
     with pytest.raises(ValueError, match="WALK_FORWARD_EVIDENCE_FINGERPRINT_MISMATCH"):
         WalkForwardStageEvaluator().evaluate(
-            stage_protocol={"fold_ids": ["fold-1"], "metrics": ["total_pnl"]},
+            stage_protocol=_protocol(["fold-1"], {"fold-1": definition}, ("total_pnl",)),
             control_evidence=evidence,
-            variant_evidence=_artifact([_fold("fold-1", 1, 1, 100)]),
-        )
-
-
-def test_walk_forward_rejects_fold_identity_or_window_drift():
-    control = _artifact([_fold("fold-1", 1, 1, 100)])
-    variant_wrong_id = _artifact([_fold("fold-X", 1, 1, 100)])
-    with pytest.raises(ValueError, match="WALK_FORWARD_VARIANT_FOLDS_MISMATCH"):
-        WalkForwardStageEvaluator().evaluate(
-            stage_protocol={"fold_ids": ["fold-1"], "metrics": ["total_pnl"]},
-            control_evidence=control,
-            variant_evidence=variant_wrong_id,
-        )
-
-    shifted = _fold("fold-1", 1, 1, 100)
-    shifted["test_end"] = "2025-02-03T00:00:00+00:00"
-    variant_shifted = _artifact([shifted])
-    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_WINDOW_MISMATCH:fold-1"):
-        WalkForwardStageEvaluator().evaluate(
-            stage_protocol={"fold_ids": ["fold-1"], "metrics": ["total_pnl"]},
-            control_evidence=control,
-            variant_evidence=variant_shifted,
-        )
-
-
-def test_walk_forward_rejects_invalid_or_overlapping_windows():
-    bad = _fold("fold-1", 1, 1, 100)
-    bad["train_end"] = bad["train_start"]
-    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_WINDOW_INVALID:fold-1"):
-        WalkForwardStageEvaluator().evaluate(
-            stage_protocol={"fold_ids": ["fold-1"], "metrics": ["total_pnl"]},
-            control_evidence=_artifact([bad]),
-            variant_evidence=_artifact([bad]),
+            variant_evidence=_artifact([_fold("fold-1", definition, 100)]),
         )

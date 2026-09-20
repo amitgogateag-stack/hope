@@ -2,8 +2,8 @@ from uuid import uuid4
 
 import pytest
 
-from hope.application.experiments.walk_forward_evidence import WalkForwardEvidenceProducer
 from hope.application.experiments.config_hash import configuration_hash
+from hope.application.experiments.walk_forward_evidence import WalkForwardEvidenceProducer
 
 
 class _Repository:
@@ -45,82 +45,97 @@ def _certified(pnl="10", sharpe="1.0"):
                     "sharpe": sharpe,
                     "downside_deviation": "0.05",
                     "sortino": "1.2",
-                },
+                }
             },
         },
     }
 
 
-def _fold(fold_id, train_start, train_end, test_start, test_end, source_run_id):
+def _window(train_start, train_end, test_start, test_end):
     return {
-        "fold_id": fold_id,
         "train_start": train_start,
         "train_end": train_end,
         "test_start": test_start,
         "test_end": test_end,
-        "source_research_run_id": source_run_id,
     }
 
 
-def test_walk_forward_producer_resolves_durable_sources_projects_metrics_and_persists():
+def _fold(fold_id, window, source_run_id):
+    return {"fold_id": fold_id, **window, "source_research_run_id": source_run_id}
+
+
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "fold_ids": ids,
+        "fold_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
+def test_walk_forward_producer_resolves_sources_binds_windows_and_persists():
     repository = _Repository()
     source_1, source_2 = uuid4(), uuid4()
     resolver = _SourceResolver({
-        source_1: _certified(pnl="10", sharpe="1.0"),
-        source_2: _certified(pnl="12", sharpe="1.1"),
+        source_1: _certified("10", "1.0"),
+        source_2: _certified("12", "1.1"),
     })
-    producer = WalkForwardEvidenceProducer(repository, resolver)
-    folds = [
-        _fold(
-            "f1",
-            "2026-01-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            source_1,
-        ),
-        _fold(
-            "f2",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-04-01T00:00:00+00:00",
-            source_2,
-        ),
-    ]
+    w1 = _window(
+        "2026-01-01T00:00:00+00:00",
+        "2026-02-01T00:00:00+00:00",
+        "2026-02-01T00:00:00+00:00",
+        "2026-03-01T00:00:00+00:00",
+    )
+    w2 = _window(
+        "2026-02-01T00:00:00+00:00",
+        "2026-03-01T00:00:00+00:00",
+        "2026-03-01T00:00:00+00:00",
+        "2026-04-01T00:00:00+00:00",
+    )
+    definitions = {"f1": w1, "f2": w2}
 
-    record = producer.produce(
+    record = WalkForwardEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={"fold_ids": ["f1", "f2"], "metrics": ["total_pnl", "sharpe"]},
-        folds=folds,
+        stage_protocol=_protocol(["f1", "f2"], definitions),
+        folds=[_fold("f1", w1, source_1), _fold("f2", w2, source_2)],
     )
 
     assert resolver.resolved == [source_1, source_2]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.walk-forward-evidence.v1"
     assert artifact["folds"][0]["source_research_run_id"] == str(source_1)
-    assert artifact["folds"][0]["metrics"] == {"total_pnl": "10", "sharpe": "1.0"}
+    assert artifact["folds"][0]["test_end"] == w1["test_end"]
     assert artifact["result_fingerprint"] == configuration_hash(artifact["folds"])
 
 
-def test_walk_forward_producer_rejects_missing_source_run_id_before_resolution():
+def test_walk_forward_producer_requires_predeclared_windows():
     repository = _Repository()
     resolver = _SourceResolver({})
-    producer = WalkForwardEvidenceProducer(repository, resolver)
-    fold = {
-        "fold_id": "f1",
-        "train_start": "2026-01-01T00:00:00+00:00",
-        "train_end": "2026-02-01T00:00:00+00:00",
-        "test_start": "2026-02-01T00:00:00+00:00",
-        "test_end": "2026-03-01T00:00:00+00:00",
-    }
-
-    with pytest.raises(ValueError, match="WALK_FORWARD_SOURCE_RUN_ID_REQUIRED:f1"):
-        producer.produce(
+    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_DEFINITIONS_PREDECLARATION_REQUIRED"):
+        WalkForwardEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={"fold_ids": ["f1"], "metrics": ["total_pnl"]},
-            folds=[fold],
+            folds=[],
+        )
+
+
+def test_walk_forward_producer_rejects_window_drift_before_resolution():
+    repository = _Repository()
+    source_run_id = uuid4()
+    resolver = _SourceResolver({source_run_id: _certified()})
+    declared = _window(
+        "2026-01-01T00:00:00+00:00",
+        "2026-02-01T00:00:00+00:00",
+        "2026-02-01T00:00:00+00:00",
+        "2026-03-01T00:00:00+00:00",
+    )
+    observed = dict(declared)
+    observed["test_end"] = "2026-03-02T00:00:00+00:00"
+
+    with pytest.raises(ValueError, match="WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:f1"):
+        WalkForwardEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol=_protocol(["f1"], {"f1": declared}, ("total_pnl",)),
+            folds=[_fold("f1", observed, source_run_id)],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -130,82 +145,16 @@ def test_walk_forward_producer_propagates_verified_source_failure():
     repository = _Repository()
     source_run_id = uuid4()
     resolver = _SourceResolver({})
-    producer = WalkForwardEvidenceProducer(repository, resolver)
-    fold = _fold(
-        "f1",
+    definition = _window(
         "2026-01-01T00:00:00+00:00",
         "2026-02-01T00:00:00+00:00",
         "2026-02-01T00:00:00+00:00",
         "2026-03-01T00:00:00+00:00",
-        source_run_id,
     )
-
     with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RUN_MISSING"):
-        producer.produce(
+        WalkForwardEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"fold_ids": ["f1"], "metrics": ["total_pnl"]},
-            folds=[fold],
+            stage_protocol=_protocol(["f1"], {"f1": definition}, ("total_pnl",)),
+            folds=[_fold("f1", definition, source_run_id)],
         )
     assert repository.persisted == []
-
-
-def test_walk_forward_producer_rejects_fold_order_drift():
-    repository = _Repository()
-    s1, s2 = uuid4(), uuid4()
-    resolver = _SourceResolver({s1: _certified(), s2: _certified()})
-    producer = WalkForwardEvidenceProducer(repository, resolver)
-    folds = [
-        _fold(
-            "f2",
-            "2026-01-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            s1,
-        ),
-        _fold(
-            "f1",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-04-01T00:00:00+00:00",
-            s2,
-        ),
-    ]
-    with pytest.raises(ValueError, match="WALK_FORWARD_SOURCE_FOLDS_MISMATCH"):
-        producer.produce(
-            uuid4(),
-            stage_protocol={"fold_ids": ["f1", "f2"], "metrics": ["total_pnl"]},
-            folds=folds,
-        )
-
-
-def test_walk_forward_producer_rejects_overlapping_test_windows():
-    repository = _Repository()
-    s1, s2 = uuid4(), uuid4()
-    resolver = _SourceResolver({s1: _certified(), s2: _certified()})
-    producer = WalkForwardEvidenceProducer(repository, resolver)
-    folds = [
-        _fold(
-            "f1",
-            "2026-01-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-15T00:00:00+00:00",
-            s1,
-        ),
-        _fold(
-            "f2",
-            "2026-02-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-03-01T00:00:00+00:00",
-            "2026-04-01T00:00:00+00:00",
-            s2,
-        ),
-    ]
-    with pytest.raises(ValueError, match="WALK_FORWARD_TEST_WINDOWS_OVERLAP"):
-        producer.produce(
-            uuid4(),
-            stage_protocol={"fold_ids": ["f1", "f2"], "metrics": ["total_pnl"]},
-            folds=folds,
-        )

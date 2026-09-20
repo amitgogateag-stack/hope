@@ -42,6 +42,30 @@ class WalkForwardEvidenceProducer:
         if len(set(fold_ids)) != len(fold_ids):
             raise ValueError("WALK_FORWARD_FOLD_ID_DUPLICATE")
 
+        fold_definitions = stage_protocol.get("fold_definitions")
+        if not isinstance(fold_definitions, dict) or set(fold_definitions) != set(fold_ids):
+            raise ValueError("WALK_FORWARD_FOLD_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for fold_id in fold_ids:
+            definition = fold_definitions.get(fold_id)
+            if not isinstance(definition, dict) or set(definition) != {
+                "train_start", "train_end", "test_start", "test_end"
+            }:
+                raise ValueError(f"WALK_FORWARD_FOLD_DEFINITION_INVALID:{fold_id}")
+            train_start = self._time(definition["train_start"])
+            train_end = self._time(definition["train_end"])
+            test_start = self._time(definition["test_start"])
+            test_end = self._time(definition["test_end"])
+            if not (train_start < train_end <= test_start < test_end):
+                raise ValueError(f"WALK_FORWARD_FOLD_WINDOW_INVALID:{fold_id}")
+            observed_window = {
+                "train_start": train_start.isoformat(),
+                "train_end": train_end.isoformat(),
+                "test_start": test_start.isoformat(),
+                "test_end": test_end.isoformat(),
+            }
+            if observed_window != fold_definitions.get(fold_id):
+                raise ValueError(f"WALK_FORWARD_PREDECLARED_WINDOW_MISMATCH:{fold_id}")
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("WALK_FORWARD_METRICS_PREDECLARATION_REQUIRED")
