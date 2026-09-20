@@ -30,6 +30,16 @@ class SlippageStressStageEvaluator:
         if len(set(scenario_ids)) != len(scenario_ids):
             raise ValueError("SLIPPAGE_STRESS_SCENARIO_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("scenario_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(scenario_ids):
+            raise ValueError("SLIPPAGE_STRESS_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for scenario_id in scenario_ids:
+            definition = definitions.get(scenario_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"SLIPPAGE_STRESS_SCENARIO_DEFINITION_INVALID:{scenario_id}"
+                )
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("SLIPPAGE_STRESS_METRICS_PREDECLARATION_REQUIRED")
@@ -52,8 +62,14 @@ class SlippageStressStageEvaluator:
         for scenario_id in scenario_ids:
             control_item = control_scenarios[scenario_id]
             variant_item = variant_scenarios[scenario_id]
-            if control_item["slippage_assumptions"] != variant_item["slippage_assumptions"]:
-                raise ValueError(f"SLIPPAGE_STRESS_ASSUMPTIONS_MISMATCH:{scenario_id}")
+            expected = definitions[scenario_id]
+            if (
+                control_item["slippage_assumptions"] != expected
+                or variant_item["slippage_assumptions"] != expected
+            ):
+                raise ValueError(
+                    f"SLIPPAGE_STRESS_PREDECLARED_DEFINITION_MISMATCH:{scenario_id}"
+                )
 
             compared: dict[str, dict[str, str]] = {}
             for metric in metrics:
@@ -66,7 +82,7 @@ class SlippageStressStageEvaluator:
                 }
 
             comparisons[scenario_id] = {
-                "slippage_assumptions": control_item["slippage_assumptions"],
+                "slippage_assumptions": expected,
                 "metrics": compared,
             }
 

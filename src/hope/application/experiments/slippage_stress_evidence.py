@@ -41,6 +41,16 @@ class SlippageStressEvidenceProducer:
         if len(set(scenario_ids)) != len(scenario_ids):
             raise ValueError("SLIPPAGE_STRESS_SCENARIO_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("scenario_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(scenario_ids):
+            raise ValueError("SLIPPAGE_STRESS_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for scenario_id in scenario_ids:
+            definition = definitions.get(scenario_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"SLIPPAGE_STRESS_SCENARIO_DEFINITION_INVALID:{scenario_id}"
+                )
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("SLIPPAGE_STRESS_METRICS_PREDECLARATION_REQUIRED")
@@ -78,6 +88,10 @@ class SlippageStressEvidenceProducer:
                     f"SLIPPAGE_STRESS_COST_ASSUMPTION_FORBIDDEN:{scenario_id}"
                 )
             observed_ids.append(scenario_id)
+            if assumptions != definitions.get(scenario_id):
+                raise ValueError(
+                    f"SLIPPAGE_STRESS_PREDECLARED_DEFINITION_MISMATCH:{scenario_id}"
+                )
 
             source_run_id = source.get("source_research_run_id")
             if not isinstance(source_run_id, UUID):

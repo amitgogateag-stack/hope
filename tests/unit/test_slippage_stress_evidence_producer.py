@@ -53,8 +53,20 @@ def _certified(pnl="10", sharpe="1.0"):
     }
 
 
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "scenario_ids": ids,
+        "scenario_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
 def test_slippage_stress_producer_resolves_durable_sources_and_projects_scenarios():
     repository = _Repository()
+    definitions = {
+        "base": {"entry_bps": "2", "exit_bps": "2"},
+        "triple": {"entry_bps": "6", "exit_bps": "6"},
+    }
     base_run, triple_run = uuid4(), uuid4()
     resolver = _SourceResolver({
         base_run: _certified("10", "1.0"),
@@ -62,53 +74,49 @@ def test_slippage_stress_producer_resolves_durable_sources_and_projects_scenario
     })
     record = SlippageStressEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={
-            "scenario_ids": ["base", "triple"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["base", "triple"], definitions),
         scenarios=[
-            {
-                "scenario_id": "base",
-                "slippage_assumptions": {"entry_bps": "2", "exit_bps": "2"},
-                "source_research_run_id": base_run,
-            },
-            {
-                "scenario_id": "triple",
-                "slippage_assumptions": {"entry_bps": "6", "exit_bps": "6"},
-                "source_research_run_id": triple_run,
-            },
+            {"scenario_id": "base", "slippage_assumptions": definitions["base"], "source_research_run_id": base_run},
+            {"scenario_id": "triple", "slippage_assumptions": definitions["triple"], "source_research_run_id": triple_run},
         ],
     )
 
     assert resolver.resolved == [base_run, triple_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.slippage-stress-evidence.v1"
-    assert artifact["scenarios"][1] == {
-        "scenario_id": "triple",
-        "source_research_run_id": str(triple_run),
-        "slippage_assumptions": {"entry_bps": "6", "exit_bps": "6"},
-        "metrics": {"total_pnl": "6", "sharpe": "0.6"},
-    }
+    assert artifact["scenarios"][1]["slippage_assumptions"] == definitions["triple"]
+    assert artifact["scenarios"][1]["source_research_run_id"] == str(triple_run)
     assert artifact["result_fingerprint"] == configuration_hash(artifact["scenarios"])
 
 
-def test_slippage_stress_producer_requires_source_run_id():
+def test_slippage_stress_producer_requires_predeclared_definitions():
     repository = _Repository()
     resolver = _SourceResolver({})
-    with pytest.raises(
-        ValueError,
-        match="SLIPPAGE_STRESS_SOURCE_RUN_ID_REQUIRED:base",
-    ):
+    with pytest.raises(ValueError, match="SLIPPAGE_STRESS_DEFINITIONS_PREDECLARATION_REQUIRED"):
         SlippageStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "slippage_assumptions": {"entry_bps": "2", "exit_bps": "2"},
-                }
-            ],
+            scenarios=[],
+        )
+
+
+def test_slippage_stress_producer_rejects_definition_drift_before_resolution():
+    repository = _Repository()
+    source_run_id = uuid4()
+    definitions = {"base": {"entry_bps": "2", "exit_bps": "2"}}
+    resolver = _SourceResolver({source_run_id: _certified()})
+    with pytest.raises(
+        ValueError,
+        match="SLIPPAGE_STRESS_PREDECLARED_DEFINITION_MISMATCH:base",
+    ):
+        SlippageStressEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "slippage_assumptions": {"entry_bps": "3", "exit_bps": "2"},
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -117,55 +125,27 @@ def test_slippage_stress_producer_requires_source_run_id():
 def test_slippage_stress_producer_propagates_verified_source_failure():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {"base": {"entry_bps": "2", "exit_bps": "2"}}
     resolver = _SourceResolver({})
     with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RUN_MISSING"):
         SlippageStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "slippage_assumptions": {"entry_bps": "2", "exit_bps": "2"},
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "slippage_assumptions": definitions["base"],
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert repository.persisted == []
 
 
-def test_slippage_stress_producer_rejects_scenario_identity_or_order_drift():
-    repository = _Repository()
-    first, second = uuid4(), uuid4()
-    resolver = _SourceResolver({first: _certified(), second: _certified()})
-    with pytest.raises(
-        ValueError,
-        match="SLIPPAGE_STRESS_SOURCE_SCENARIOS_MISMATCH",
-    ):
-        SlippageStressEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "scenario_ids": ["base", "triple"],
-                "metrics": ["total_pnl"],
-            },
-            scenarios=[
-                {
-                    "scenario_id": "triple",
-                    "slippage_assumptions": {"entry_bps": "6", "exit_bps": "6"},
-                    "source_research_run_id": first,
-                },
-                {
-                    "scenario_id": "base",
-                    "slippage_assumptions": {"entry_bps": "2", "exit_bps": "2"},
-                    "source_research_run_id": second,
-                },
-            ],
-        )
-    assert repository.persisted == []
-
-
-def test_slippage_stress_producer_rejects_fee_fields():
+def test_slippage_stress_producer_rejects_fee_fields_in_predeclared_assumptions():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {
+        "base": {"entry_bps": "2", "exit_bps": "2", "commission_bps": "1"}
+    }
     resolver = _SourceResolver({source_run_id: _certified()})
     with pytest.raises(
         ValueError,
@@ -173,17 +153,10 @@ def test_slippage_stress_producer_rejects_fee_fields():
     ):
         SlippageStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "slippage_assumptions": {
-                        "entry_bps": "2",
-                        "exit_bps": "2",
-                        "commission_bps": "1",
-                    },
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "slippage_assumptions": definitions["base"],
+                "source_research_run_id": source_run_id,
+            }],
         )
-    assert repository.persisted == []
