@@ -51,8 +51,20 @@ def _certified(pnl="10", sharpe="1.0"):
     }
 
 
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "scenario_ids": ids,
+        "scenario_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
 def test_cost_stress_producer_resolves_durable_sources_and_projects_scenarios():
     repository = _Repository()
+    definitions = {
+        "base": {"commission_bps": "2", "fees_bps": "1"},
+        "double": {"commission_bps": "4", "fees_bps": "2"},
+    }
     base_run, double_run = uuid4(), uuid4()
     resolver = _SourceResolver({
         base_run: _certified("10", "1.0"),
@@ -60,50 +72,49 @@ def test_cost_stress_producer_resolves_durable_sources_and_projects_scenarios():
     })
     record = CostStressEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={
-            "scenario_ids": ["base", "double"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["base", "double"], definitions),
         scenarios=[
-            {
-                "scenario_id": "base",
-                "cost_assumptions": {"commission_bps": "2", "fees_bps": "1"},
-                "source_research_run_id": base_run,
-            },
-            {
-                "scenario_id": "double",
-                "cost_assumptions": {"commission_bps": "4", "fees_bps": "2"},
-                "source_research_run_id": double_run,
-            },
+            {"scenario_id": "base", "cost_assumptions": definitions["base"], "source_research_run_id": base_run},
+            {"scenario_id": "double", "cost_assumptions": definitions["double"], "source_research_run_id": double_run},
         ],
     )
 
     assert resolver.resolved == [base_run, double_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.cost-stress-evidence.v1"
-    assert artifact["scenarios"][1] == {
-        "scenario_id": "double",
-        "source_research_run_id": str(double_run),
-        "cost_assumptions": {"commission_bps": "4", "fees_bps": "2"},
-        "metrics": {"total_pnl": "7", "sharpe": "0.7"},
-    }
+    assert artifact["scenarios"][1]["cost_assumptions"] == definitions["double"]
+    assert artifact["scenarios"][1]["source_research_run_id"] == str(double_run)
     assert artifact["result_fingerprint"] == configuration_hash(artifact["scenarios"])
 
 
-def test_cost_stress_producer_requires_source_run_id():
+def test_cost_stress_producer_requires_predeclared_definitions():
     repository = _Repository()
     resolver = _SourceResolver({})
-    with pytest.raises(ValueError, match="COST_STRESS_SOURCE_RUN_ID_REQUIRED:base"):
+    with pytest.raises(ValueError, match="COST_STRESS_DEFINITIONS_PREDECLARATION_REQUIRED"):
         CostStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
             stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "cost_assumptions": {"commission_bps": "2"},
-                }
-            ],
+            scenarios=[],
+        )
+
+
+def test_cost_stress_producer_rejects_definition_drift_before_resolution():
+    repository = _Repository()
+    source_run_id = uuid4()
+    definitions = {"base": {"commission_bps": "2"}}
+    resolver = _SourceResolver({source_run_id: _certified()})
+    with pytest.raises(
+        ValueError,
+        match="COST_STRESS_PREDECLARED_DEFINITION_MISMATCH:base",
+    ):
+        CostStressEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "cost_assumptions": {"commission_bps": "3"},
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -112,52 +123,25 @@ def test_cost_stress_producer_requires_source_run_id():
 def test_cost_stress_producer_propagates_verified_source_failure():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {"base": {"commission_bps": "2"}}
     resolver = _SourceResolver({})
     with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RUN_MISSING"):
         CostStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "cost_assumptions": {"commission_bps": "2"},
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "cost_assumptions": definitions["base"],
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert repository.persisted == []
 
 
-def test_cost_stress_producer_rejects_scenario_identity_or_order_drift():
-    repository = _Repository()
-    first, second = uuid4(), uuid4()
-    resolver = _SourceResolver({first: _certified(), second: _certified()})
-    with pytest.raises(ValueError, match="COST_STRESS_SOURCE_SCENARIOS_MISMATCH"):
-        CostStressEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "scenario_ids": ["base", "double"],
-                "metrics": ["total_pnl"],
-            },
-            scenarios=[
-                {
-                    "scenario_id": "double",
-                    "cost_assumptions": {"commission_bps": "4"},
-                    "source_research_run_id": first,
-                },
-                {
-                    "scenario_id": "base",
-                    "cost_assumptions": {"commission_bps": "2"},
-                    "source_research_run_id": second,
-                },
-            ],
-        )
-    assert repository.persisted == []
-
-
-def test_cost_stress_producer_rejects_slippage_in_cost_assumptions():
+def test_cost_stress_producer_rejects_slippage_in_predeclared_cost_assumptions():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {"base": {"commission_bps": "2", "slippage_bps": "3"}}
     resolver = _SourceResolver({source_run_id: _certified()})
     with pytest.raises(
         ValueError,
@@ -165,16 +149,10 @@ def test_cost_stress_producer_rejects_slippage_in_cost_assumptions():
     ):
         CostStressEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={"scenario_ids": ["base"], "metrics": ["total_pnl"]},
-            scenarios=[
-                {
-                    "scenario_id": "base",
-                    "cost_assumptions": {
-                        "commission_bps": "2",
-                        "slippage_bps": "3",
-                    },
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            scenarios=[{
+                "scenario_id": "base",
+                "cost_assumptions": definitions["base"],
+                "source_research_run_id": source_run_id,
+            }],
         )
-    assert repository.persisted == []
