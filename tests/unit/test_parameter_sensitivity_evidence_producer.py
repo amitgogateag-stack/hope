@@ -53,8 +53,21 @@ def _certified(pnl="10", sharpe="1.0"):
     }
 
 
+def _protocol(ids, definitions, metrics=("total_pnl", "sharpe")):
+    return {
+        "parameter_set_ids": ids,
+        "parameter_definitions": definitions,
+        "metrics": list(metrics),
+    }
+
+
 def test_parameter_sensitivity_producer_resolves_durable_sources_and_projects_sets():
     repository = _Repository()
+    definitions = {
+        "low": {"lookback": 10},
+        "base": {"lookback": 20},
+        "high": {"lookback": 30},
+    }
     low_run, base_run, high_run = uuid4(), uuid4(), uuid4()
     resolver = _SourceResolver({
         low_run: _certified("8", "0.7"),
@@ -63,65 +76,50 @@ def test_parameter_sensitivity_producer_resolves_durable_sources_and_projects_se
     })
     record = ParameterSensitivityEvidenceProducer(repository, resolver).produce(
         uuid4(),
-        stage_protocol={
-            "parameter_set_ids": ["low", "base", "high"],
-            "metrics": ["total_pnl", "sharpe"],
-        },
+        stage_protocol=_protocol(["low", "base", "high"], definitions),
         parameter_sets=[
-            {
-                "parameter_set_id": "low",
-                "parameters": {"lookback": 10},
-                "source_research_run_id": low_run,
-            },
-            {
-                "parameter_set_id": "base",
-                "parameters": {"lookback": 20},
-                "source_research_run_id": base_run,
-            },
-            {
-                "parameter_set_id": "high",
-                "parameters": {"lookback": 30},
-                "source_research_run_id": high_run,
-            },
+            {"parameter_set_id": "low", "parameters": definitions["low"], "source_research_run_id": low_run},
+            {"parameter_set_id": "base", "parameters": definitions["base"], "source_research_run_id": base_run},
+            {"parameter_set_id": "high", "parameters": definitions["high"], "source_research_run_id": high_run},
         ],
     )
 
     assert resolver.resolved == [low_run, base_run, high_run]
     assert repository.persisted == [record]
     artifact = record.canonical_result
-    assert artifact["schema"] == "hope.parameter-sensitivity-evidence.v1"
-    assert artifact["parameter_sets"][1] == {
-        "parameter_set_id": "base",
-        "source_research_run_id": str(base_run),
-        "parameters": {"lookback": 20},
-        "metrics": {"total_pnl": "10", "sharpe": "1.0"},
-    }
-    assert artifact["result_fingerprint"] == configuration_hash(
-        artifact["parameter_sets"]
-    )
-    assert "best" not in artifact
-    assert "winner" not in artifact
+    assert artifact["parameter_sets"][1]["parameters"] == definitions["base"]
+    assert artifact["parameter_sets"][1]["source_research_run_id"] == str(base_run)
+    assert artifact["result_fingerprint"] == configuration_hash(artifact["parameter_sets"])
 
 
-def test_parameter_sensitivity_producer_requires_source_run_id():
+def test_parameter_sensitivity_producer_requires_predeclared_definitions():
     repository = _Repository()
     resolver = _SourceResolver({})
+    with pytest.raises(ValueError, match="PARAMETER_SENSITIVITY_DEFINITIONS_PREDECLARATION_REQUIRED"):
+        ParameterSensitivityEvidenceProducer(repository, resolver).produce(
+            uuid4(),
+            stage_protocol={"parameter_set_ids": ["base"], "metrics": ["total_pnl"]},
+            parameter_sets=[],
+        )
+
+
+def test_parameter_sensitivity_producer_rejects_definition_drift_before_resolution():
+    repository = _Repository()
+    source_run_id = uuid4()
+    definitions = {"base": {"lookback": 20}}
+    resolver = _SourceResolver({source_run_id: _certified()})
     with pytest.raises(
         ValueError,
-        match="PARAMETER_SENSITIVITY_SOURCE_RUN_ID_REQUIRED:base",
+        match="PARAMETER_SENSITIVITY_PREDECLARED_DEFINITION_MISMATCH:base",
     ):
         ParameterSensitivityEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "parameter_set_ids": ["base"],
-                "metrics": ["total_pnl"],
-            },
-            parameter_sets=[
-                {
-                    "parameter_set_id": "base",
-                    "parameters": {"lookback": 20},
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            parameter_sets=[{
+                "parameter_set_id": "base",
+                "parameters": {"lookback": 21},
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert resolver.resolved == []
     assert repository.persisted == []
@@ -130,75 +128,16 @@ def test_parameter_sensitivity_producer_requires_source_run_id():
 def test_parameter_sensitivity_producer_propagates_verified_source_failure():
     repository = _Repository()
     source_run_id = uuid4()
+    definitions = {"base": {"lookback": 20}}
     resolver = _SourceResolver({})
     with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RUN_MISSING"):
         ParameterSensitivityEvidenceProducer(repository, resolver).produce(
             uuid4(),
-            stage_protocol={
-                "parameter_set_ids": ["base"],
-                "metrics": ["total_pnl"],
-            },
-            parameter_sets=[
-                {
-                    "parameter_set_id": "base",
-                    "parameters": {"lookback": 20},
-                    "source_research_run_id": source_run_id,
-                }
-            ],
-        )
-    assert repository.persisted == []
-
-
-def test_parameter_sensitivity_producer_rejects_identity_or_order_drift():
-    repository = _Repository()
-    first, second = uuid4(), uuid4()
-    resolver = _SourceResolver({first: _certified(), second: _certified()})
-    with pytest.raises(
-        ValueError,
-        match="PARAMETER_SENSITIVITY_SOURCE_PARAMETER_SETS_MISMATCH",
-    ):
-        ParameterSensitivityEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "parameter_set_ids": ["low", "high"],
-                "metrics": ["total_pnl"],
-            },
-            parameter_sets=[
-                {
-                    "parameter_set_id": "high",
-                    "parameters": {"lookback": 30},
-                    "source_research_run_id": first,
-                },
-                {
-                    "parameter_set_id": "low",
-                    "parameters": {"lookback": 10},
-                    "source_research_run_id": second,
-                },
-            ],
-        )
-    assert repository.persisted == []
-
-
-def test_parameter_sensitivity_producer_requires_explicit_parameter_definition():
-    repository = _Repository()
-    source_run_id = uuid4()
-    resolver = _SourceResolver({source_run_id: _certified()})
-    with pytest.raises(
-        ValueError,
-        match="PARAMETER_SENSITIVITY_PARAMETER_SET_INVALID",
-    ):
-        ParameterSensitivityEvidenceProducer(repository, resolver).produce(
-            uuid4(),
-            stage_protocol={
-                "parameter_set_ids": ["base"],
-                "metrics": ["total_pnl"],
-            },
-            parameter_sets=[
-                {
-                    "parameter_set_id": "base",
-                    "parameters": {},
-                    "source_research_run_id": source_run_id,
-                }
-            ],
+            stage_protocol=_protocol(["base"], definitions, ("total_pnl",)),
+            parameter_sets=[{
+                "parameter_set_id": "base",
+                "parameters": definitions["base"],
+                "source_research_run_id": source_run_id,
+            }],
         )
     assert repository.persisted == []

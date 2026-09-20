@@ -30,6 +30,16 @@ class ParameterSensitivityStageEvaluator:
         if len(set(parameter_set_ids)) != len(parameter_set_ids):
             raise ValueError("PARAMETER_SENSITIVITY_PARAMETER_SET_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("parameter_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(parameter_set_ids):
+            raise ValueError("PARAMETER_SENSITIVITY_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for parameter_set_id in parameter_set_ids:
+            definition = definitions.get(parameter_set_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"PARAMETER_SENSITIVITY_PARAMETER_DEFINITION_INVALID:{parameter_set_id}"
+                )
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("PARAMETER_SENSITIVITY_METRICS_PREDECLARATION_REQUIRED")
@@ -52,9 +62,10 @@ class ParameterSensitivityStageEvaluator:
         for parameter_set_id in parameter_set_ids:
             control_item = control_sets[parameter_set_id]
             variant_item = variant_sets[parameter_set_id]
-            if control_item["parameters"] != variant_item["parameters"]:
+            expected = definitions[parameter_set_id]
+            if control_item["parameters"] != expected or variant_item["parameters"] != expected:
                 raise ValueError(
-                    f"PARAMETER_SENSITIVITY_PARAMETER_DEFINITION_MISMATCH:{parameter_set_id}"
+                    f"PARAMETER_SENSITIVITY_PREDECLARED_DEFINITION_MISMATCH:{parameter_set_id}"
                 )
 
             compared: dict[str, dict[str, str]] = {}
@@ -68,7 +79,7 @@ class ParameterSensitivityStageEvaluator:
                 }
 
             comparisons[parameter_set_id] = {
-                "parameters": control_item["parameters"],
+                "parameters": expected,
                 "metrics": compared,
             }
 

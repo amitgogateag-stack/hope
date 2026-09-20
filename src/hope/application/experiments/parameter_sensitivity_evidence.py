@@ -45,6 +45,16 @@ class ParameterSensitivityEvidenceProducer:
         if len(set(parameter_set_ids)) != len(parameter_set_ids):
             raise ValueError("PARAMETER_SENSITIVITY_PARAMETER_SET_ID_DUPLICATE")
 
+        definitions = stage_protocol.get("parameter_definitions")
+        if not isinstance(definitions, dict) or set(definitions) != set(parameter_set_ids):
+            raise ValueError("PARAMETER_SENSITIVITY_DEFINITIONS_PREDECLARATION_REQUIRED")
+        for parameter_set_id in parameter_set_ids:
+            definition = definitions.get(parameter_set_id)
+            if not isinstance(definition, dict) or not definition:
+                raise ValueError(
+                    f"PARAMETER_SENSITIVITY_PARAMETER_DEFINITION_INVALID:{parameter_set_id}"
+                )
+
         metrics = stage_protocol.get("metrics")
         if not isinstance(metrics, list) or not metrics:
             raise ValueError("PARAMETER_SENSITIVITY_METRICS_PREDECLARATION_REQUIRED")
@@ -72,6 +82,10 @@ class ParameterSensitivityEvidenceProducer:
             ):
                 raise ValueError("PARAMETER_SENSITIVITY_PARAMETER_SET_INVALID")
             observed_ids.append(parameter_set_id)
+            if parameters != definitions.get(parameter_set_id):
+                raise ValueError(
+                    f"PARAMETER_SENSITIVITY_PREDECLARED_DEFINITION_MISMATCH:{parameter_set_id}"
+                )
 
             source_run_id = source.get("source_research_run_id")
             if not isinstance(source_run_id, UUID):
