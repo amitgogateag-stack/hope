@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
 from hope.application.experiments.parameter_sensitivity import (
@@ -16,12 +15,13 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 
 
 class ParameterSensitivityEvidenceProducer:
-    """Persist deterministic evidence for predeclared parameter perturbation sets."""
+    """Persist deterministic evidence for predeclared parameter sets from verified runs."""
 
     stage = "parameter_sensitivity"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -73,17 +73,16 @@ class ParameterSensitivityEvidenceProducer:
                 raise ValueError("PARAMETER_SENSITIVITY_PARAMETER_SET_INVALID")
             observed_ids.append(parameter_set_id)
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
                 raise ValueError(
-                    f"PARAMETER_SENSITIVITY_CERTIFIED_RESULT_REQUIRED:{parameter_set_id}"
+                    f"PARAMETER_SENSITIVITY_SOURCE_RUN_ID_REQUIRED:{parameter_set_id}"
                 )
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            if not isinstance(backtest, dict):
-                raise ValueError(
-                    f"PARAMETER_SENSITIVITY_CERTIFIED_RESULT_INVALID:{parameter_set_id}"
-                )
-            source_metrics = backtest.get("metrics")
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(
                     f"PARAMETER_SENSITIVITY_CERTIFIED_METRICS_REQUIRED:{parameter_set_id}"
@@ -101,6 +100,7 @@ class ParameterSensitivityEvidenceProducer:
             canonical_sets.append(
                 {
                     "parameter_set_id": parameter_set_id,
+                    "source_research_run_id": str(source_run_id),
                     "parameters": dict(parameters),
                     "metrics": projected_metrics,
                 }
