@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any, Mapping
 from uuid import UUID
 
-from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.historical_evaluation import HISTORICAL_METRICS
 from hope.application.experiments.slippage_stress import SLIPPAGE_STRESS_EVIDENCE_SCHEMA
@@ -14,12 +13,13 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 
 
 class SlippageStressEvidenceProducer:
-    """Persist deterministic slippage stress evidence without mixing fee mechanics."""
+    """Persist deterministic slippage stress evidence from verified durable source runs."""
 
     stage = "slippage_stress"
 
-    def __init__(self, repository) -> None:
+    def __init__(self, repository, source_resolver) -> None:
         self._repository = repository
+        self._sources = source_resolver
 
     def produce(
         self,
@@ -79,17 +79,16 @@ class SlippageStressEvidenceProducer:
                 )
             observed_ids.append(scenario_id)
 
-            certified = source.get("certified_result")
-            if not is_certified_backtest_evidence(certified):
+            source_run_id = source.get("source_research_run_id")
+            if not isinstance(source_run_id, UUID):
                 raise ValueError(
-                    f"SLIPPAGE_STRESS_CERTIFIED_RESULT_REQUIRED:{scenario_id}"
+                    f"SLIPPAGE_STRESS_SOURCE_RUN_ID_REQUIRED:{scenario_id}"
                 )
+            certified = self._sources.resolve(source_run_id)
+
             backtest = certified.get("backtest")
-            if not isinstance(backtest, dict):
-                raise ValueError(
-                    f"SLIPPAGE_STRESS_CERTIFIED_RESULT_INVALID:{scenario_id}"
-                )
-            source_metrics = backtest.get("metrics")
+            result = backtest.get("result") if isinstance(backtest, dict) else None
+            source_metrics = result.get("metrics") if isinstance(result, dict) else None
             if not isinstance(source_metrics, dict):
                 raise ValueError(
                     f"SLIPPAGE_STRESS_CERTIFIED_METRICS_REQUIRED:{scenario_id}"
@@ -107,6 +106,7 @@ class SlippageStressEvidenceProducer:
             canonical_scenarios.append(
                 {
                     "scenario_id": scenario_id,
+                    "source_research_run_id": str(source_run_id),
                     "slippage_assumptions": dict(assumptions),
                     "metrics": projected_metrics,
                 }
