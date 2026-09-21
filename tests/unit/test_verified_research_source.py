@@ -30,6 +30,16 @@ class _PlanResolver:
         return self.plan
 
 
+class _MarketContexts:
+    def __init__(self, manifest_hash):
+        self.value = manifest_hash
+        self.calls = []
+
+    def manifest_hash(self, dataset_version_id, *, universe_version_id):
+        self.calls.append((dataset_version_id, universe_version_id))
+        return self.value
+
+
 def _fixture():
     run_id = uuid4()
     strategy_version_id = uuid4()
@@ -39,6 +49,8 @@ def _fixture():
     configuration = {"risk": {"per_trade": "0.01"}}
     configuration_hash_value = configuration_hash(configuration)
     as_of = datetime(2026, 1, 31, tzinfo=timezone.utc)
+    membership_hash = "a" * 64
+    manifest_hash = "b" * 64
 
     experiment = SimpleNamespace(
         experiment_id="EXP-1",
@@ -54,8 +66,8 @@ def _fixture():
         "strategy_version_id": str(strategy_version_id),
         "dataset_version_id": str(dataset_version_id),
         "universe_version_id": str(universe_version_id),
-        "universe_membership_hash": "a" * 64,
-        "market_data_manifest_hash": "b" * 64,
+        "universe_membership_hash": membership_hash,
+        "market_data_manifest_hash": manifest_hash,
         "configuration_hash": configuration_hash_value,
         "environment": "BACKTEST",
         "as_of": as_of.isoformat(),
@@ -100,50 +112,102 @@ def _fixture():
         result_fingerprint=result_fingerprint,
         canonical_result=canonical,
     )
-    return run_id, experiment, run, evidence, plan
+    universe = SimpleNamespace(
+        universe_version_id=universe_version_id,
+        membership_hash=membership_hash,
+        version=SimpleNamespace(pit_certified=True),
+    )
+    markets = _MarketContexts(manifest_hash)
+    return run_id, experiment, run, evidence, plan, universe, markets
 
 
-def _resolver(experiment, run, evidence, plan):
+def _resolver(experiment, run, evidence, plan, universe, markets):
     return VerifiedCertifiedResearchSourceResolver(
         experiment_repository=_Repo(experiment),
         run_repository=_Repo(run),
         evidence_repository=_Repo(evidence),
         execution_plan_resolver=_PlanResolver(plan),
+        universe_snapshot_repository=_Repo(universe),
+        market_context_repository=markets,
     )
 
 
 def test_verified_source_resolver_returns_only_fully_verified_durable_evidence():
-    run_id, experiment, run, evidence, plan = _fixture()
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
 
-    verified = _resolver(experiment, run, evidence, plan).resolve(run_id)
+    verified = _resolver(
+        experiment, run, evidence, plan, universe, markets
+    ).resolve(run_id)
 
     assert verified == evidence.canonical_result
+    assert markets.calls == [
+        (experiment.dataset_version_id, experiment.universe_version_id)
+    ]
 
 
 def test_verified_source_resolver_rejects_tampered_durable_result_fingerprint():
-    run_id, experiment, run, evidence, plan = _fixture()
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
     evidence.result_fingerprint = "f" * 64
 
     with pytest.raises(
         ValueError,
         match="RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH",
     ):
-        _resolver(experiment, run, evidence, plan).resolve(run_id)
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
 
 
 def test_verified_source_resolver_rejects_wrong_run_identity():
-    run_id, experiment, run, evidence, plan = _fixture()
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
     run.research_run_id = uuid4()
 
     with pytest.raises(
         ValueError,
         match="VERIFIED_RESEARCH_SOURCE_RUN_IDENTITY_MISMATCH",
     ):
-        _resolver(experiment, run, evidence, plan).resolve(run_id)
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
+
+
+def test_verified_source_resolver_rejects_authoritative_membership_hash_drift():
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+    universe.membership_hash = "c" * 64
+
+    with pytest.raises(
+        ValueError,
+        match="VERIFIED_RESEARCH_SOURCE_UNIVERSE_MEMBERSHIP_HASH_MISMATCH",
+    ):
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
+
+
+def test_verified_source_resolver_rejects_authoritative_manifest_hash_drift():
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+    markets.value = "c" * 64
+
+    with pytest.raises(
+        ValueError,
+        match="VERIFIED_RESEARCH_SOURCE_MARKET_DATA_MANIFEST_HASH_MISMATCH",
+    ):
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
+
+
+def test_verified_source_resolver_rejects_missing_authoritative_universe():
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+
+    with pytest.raises(
+        ValueError,
+        match="VERIFIED_RESEARCH_SOURCE_UNIVERSE_SNAPSHOT_MISSING",
+    ):
+        VerifiedCertifiedResearchSourceResolver(
+            experiment_repository=_Repo(experiment),
+            run_repository=_Repo(run),
+            evidence_repository=_Repo(evidence),
+            execution_plan_resolver=_PlanResolver(plan),
+            universe_snapshot_repository=_Repo(None),
+            market_context_repository=markets,
+        ).resolve(run_id)
 
 
 def test_verified_source_resolver_rejects_research_provenance_drift():
-    run_id, experiment, run, evidence, plan = _fixture()
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
     tampered = dict(evidence.canonical_result)
     tampered["research_provenance"] = dict(tampered["research_provenance"])
     tampered["research_provenance"]["universe_membership_hash"] = "c" * 64
@@ -153,13 +217,13 @@ def test_verified_source_resolver_rejects_research_provenance_drift():
 
     with pytest.raises(
         ValueError,
-        match="VERIFIED_RESEARCH_SOURCE_RUN_FINGERPRINT_MISMATCH",
+        match="VERIFIED_RESEARCH_SOURCE_UNIVERSE_MEMBERSHIP_HASH_MISMATCH",
     ):
-        _resolver(experiment, run, evidence, plan).resolve(run_id)
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
 
 
 def test_verified_source_resolver_rejects_execution_provenance_drift():
-    run_id, experiment, run, evidence, plan = _fixture()
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
     tampered = dict(evidence.canonical_result)
     tampered["execution_provenance"] = dict(tampered["execution_provenance"])
     tampered["execution_provenance"]["code_commit"] = "different"
@@ -171,4 +235,4 @@ def test_verified_source_resolver_rejects_execution_provenance_drift():
         ValueError,
         match="CERTIFIED_BACKTEST_EVIDENCE_EXECUTION_PROVENANCE_MISMATCH",
     ):
-        _resolver(experiment, run, evidence, plan).resolve(run_id)
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)

@@ -31,11 +31,15 @@ class VerifiedCertifiedResearchSourceResolver:
         run_repository,
         evidence_repository,
         execution_plan_resolver,
+        universe_snapshot_repository,
+        market_context_repository,
     ) -> None:
         self._experiments = experiment_repository
         self._runs = run_repository
         self._evidence = evidence_repository
         self._execution_plans = execution_plan_resolver
+        self._universes = universe_snapshot_repository
+        self._market_contexts = market_context_repository
 
     def resolve(self, source_research_run_id: UUID) -> dict[str, Any]:
         if not isinstance(source_research_run_id, UUID):
@@ -72,13 +76,32 @@ class VerifiedCertifiedResearchSourceResolver:
         if set(research) != expected_fields:
             raise ValueError("VERIFIED_RESEARCH_SOURCE_RESEARCH_PROVENANCE_FIELDS_MISMATCH")
 
+        universe_snapshot = self._universes.get(experiment.universe_version_id)
+        if universe_snapshot is None:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_UNIVERSE_SNAPSHOT_MISSING")
+        if universe_snapshot.universe_version_id != experiment.universe_version_id:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_UNIVERSE_SNAPSHOT_IDENTITY_MISMATCH")
+        if universe_snapshot.version.pit_certified is not True:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_UNIVERSE_NOT_PIT_CERTIFIED")
+
+        authoritative_membership_hash = universe_snapshot.membership_hash
+        if research.get("universe_membership_hash") != authoritative_membership_hash:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_UNIVERSE_MEMBERSHIP_HASH_MISMATCH")
+
+        authoritative_manifest_hash = self._market_contexts.manifest_hash(
+            experiment.dataset_version_id,
+            universe_version_id=experiment.universe_version_id,
+        )
+        if research.get("market_data_manifest_hash") != authoritative_manifest_hash:
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_MARKET_DATA_MANIFEST_HASH_MISMATCH")
+
         expected_identity = {
             "experiment_id": experiment.experiment_id,
             "strategy_version_id": str(experiment.strategy_version_id),
             "dataset_version_id": str(experiment.dataset_version_id),
             "universe_version_id": str(experiment.universe_version_id),
-            "universe_membership_hash": research["universe_membership_hash"],
-            "market_data_manifest_hash": research["market_data_manifest_hash"],
+            "universe_membership_hash": authoritative_membership_hash,
+            "market_data_manifest_hash": authoritative_manifest_hash,
             "configuration_hash": experiment.configuration_hash,
             "environment": experiment.environment,
             "as_of": run.as_of.isoformat(),
