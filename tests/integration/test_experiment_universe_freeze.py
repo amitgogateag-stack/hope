@@ -85,6 +85,20 @@ def test_experiment_freezes_referenced_universe_snapshot() -> None:
                         "INSERT INTO universe_members(universe_version_id, instrument_id) VALUES (:vid, :iid)"
                     ), {"vid": universe_version_id, "iid": second_instrument_id})
 
+            with pytest.raises(IntegrityError, match="EXPERIMENT_UNIVERSE_IMMUTABLE"):
+                with connection.begin_nested():
+                    connection.execute(text(
+                        "UPDATE universe_members SET valid_from = now() "
+                        "WHERE universe_version_id = :vid AND instrument_id = :iid"
+                    ), {"vid": universe_version_id, "iid": first_instrument_id})
+
+            with pytest.raises(IntegrityError, match="EXPERIMENT_UNIVERSE_IMMUTABLE"):
+                with connection.begin_nested():
+                    connection.execute(text(
+                        "DELETE FROM universe_members "
+                        "WHERE universe_version_id = :vid AND instrument_id = :iid"
+                    ), {"vid": universe_version_id, "iid": first_instrument_id})
+
             stored = connection.execute(text(
                 "SELECT declared_member_count FROM universe_versions WHERE universe_version_id = :vid"
             ), {"vid": universe_version_id}).scalar_one()
