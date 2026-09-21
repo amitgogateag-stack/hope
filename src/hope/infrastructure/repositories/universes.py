@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, String, Table, Uuid, insert, select
 from sqlalchemy.engine import Connection
 
@@ -16,6 +16,22 @@ class UniverseVersionRecord(BaseModel):
     pit_certified: bool
     declared_member_count: int = Field(ge=0)
     created_at: datetime | None = None
+
+    @field_validator("version")
+    @classmethod
+    def require_canonical_version(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("UNIVERSE_VERSION_REQUIRED")
+        if value != value.strip():
+            raise ValueError("UNIVERSE_VERSION_NOT_CANONICAL")
+        return value
+
+    @field_validator("created_at")
+    @classmethod
+    def require_aware_created_at(cls, value: datetime | None) -> datetime | None:
+        if value is not None and (value.tzinfo is None or value.utcoffset() is None):
+            raise ValueError("UNIVERSE_VERSION_CREATED_AT_MUST_BE_TIMEZONE_AWARE")
+        return value
 
 
 class UniverseRepository:
