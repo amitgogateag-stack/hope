@@ -11,6 +11,25 @@ from hope.infrastructure.repositories.research_stage_evidence import (
 )
 
 
+class Rows:
+    def __init__(self, row: dict) -> None:
+        self._row = row
+
+    def mappings(self):
+        return self
+
+    def one_or_none(self):
+        return self._row
+
+
+class Connection:
+    def __init__(self, row: dict) -> None:
+        self._row = row
+
+    def execute(self, statement):
+        return Rows(self._row)
+
+
 def test_stage_evidence_fingerprint_is_canonical():
     a = {"schema": "x", "folds": [{"id": "1", "metrics": {"pnl": "10"}}]}
     b = {"folds": [{"metrics": {"pnl": "10"}, "id": "1"}], "schema": "x"}
@@ -50,6 +69,27 @@ def test_stage_evidence_repository_rejects_specialized_or_unknown_stage():
 def test_stage_evidence_fingerprint_requires_nonempty_mapping():
     with pytest.raises(ValueError, match="RESEARCH_STAGE_EVIDENCE_RESULT_REQUIRED"):
         research_stage_evidence_fingerprint({})
+
+
+def test_stage_evidence_repository_rejects_tampered_stored_result():
+    canonical_result = {"schema": "hope.walk-forward-evidence.v1", "folds": []}
+    row = {
+        "research_run_id": uuid4(),
+        "stage": "walk_forward",
+        "result_fingerprint": research_stage_evidence_fingerprint(canonical_result),
+        "canonical_result": {"schema": "tampered", "folds": []},
+        "created_at": None,
+    }
+    repository = SqlAlchemyResearchStageEvidenceRepository(
+        Connection(row),
+        "walk_forward",
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_STAGE_EVIDENCE_STORED_FINGERPRINT_MISMATCH",
+    ):
+        repository.get(row["research_run_id"])
 
 
 def test_canonical_stage_repository_map_binds_every_derived_stage():

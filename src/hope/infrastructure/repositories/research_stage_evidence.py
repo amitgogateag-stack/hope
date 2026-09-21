@@ -101,7 +101,14 @@ class SqlAlchemyResearchStageEvidenceRepository:
                 self._evidence.c.stage == self._stage,
             )
         ).mappings().one_or_none()
-        return ResearchStageEvidenceRecord(**row) if row else None
+        if row is None:
+            return None
+
+        evidence = ResearchStageEvidenceRecord(**row)
+        expected = research_stage_evidence_fingerprint(evidence.canonical_result)
+        if evidence.result_fingerprint != expected:
+            raise ValueError("RESEARCH_STAGE_EVIDENCE_STORED_FINGERPRINT_MISMATCH")
+        return evidence
 
 
 def build_research_stage_evidence_repositories(
