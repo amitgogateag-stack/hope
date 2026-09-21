@@ -129,4 +129,24 @@ class SqlAlchemyResearchComparisonRepository:
                 self._comparisons.c.variant_run_id == variant_run_id,
             )
         ).mappings().one_or_none()
-        return ResearchComparisonRecord(**row) if row else None
+        if row is None:
+            return None
+
+        comparison = ResearchComparisonRecord(**row)
+        expected_fingerprint = research_comparison_fingerprint(
+            comparison.canonical_comparison
+        )
+        if comparison.comparison_fingerprint != expected_fingerprint:
+            raise ValueError("RESEARCH_COMPARISON_STORED_FINGERPRINT_MISMATCH")
+
+        expected_id = self.deterministic_id(
+            variant_experiment_id=comparison.variant_experiment_id,
+            control_run_id=comparison.control_run_id,
+            variant_run_id=comparison.variant_run_id,
+            control_result_fingerprint=comparison.control_result_fingerprint,
+            variant_result_fingerprint=comparison.variant_result_fingerprint,
+            comparison_fingerprint=comparison.comparison_fingerprint,
+        )
+        if comparison.comparison_id != expected_id:
+            raise ValueError("RESEARCH_COMPARISON_STORED_ID_NOT_DETERMINISTIC")
+        return comparison
