@@ -3,7 +3,7 @@ from __future__ import annotations
 from enum import StrEnum
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from hope.domain.market_intelligence.models import IntelligenceAction, MarketIntelligenceEvent
 
@@ -13,6 +13,24 @@ class IntelligenceDisposition(StrEnum):
     ENTRY_ELIGIBILITY_REVIEW = "ENTRY_ELIGIBILITY_REVIEW"
     POSITION_RISK_REVIEW = "POSITION_RISK_REVIEW"
     MARKET_RISK_REVIEW = "MARKET_RISK_REVIEW"
+
+
+_ACTION_DISPOSITIONS = {
+    IntelligenceAction.NO_ACTION: IntelligenceDisposition.OBSERVE_ONLY,
+    IntelligenceAction.OBSERVE: IntelligenceDisposition.OBSERVE_ONLY,
+    IntelligenceAction.BLOCK_NEW_ENTRY: IntelligenceDisposition.ENTRY_ELIGIBILITY_REVIEW,
+    IntelligenceAction.DATA_REVIEW_REQUIRED: IntelligenceDisposition.ENTRY_ELIGIBILITY_REVIEW,
+    IntelligenceAction.REDUCE_RISK_CANDIDATE: IntelligenceDisposition.POSITION_RISK_REVIEW,
+    IntelligenceAction.EXIT_CANDIDATE: IntelligenceDisposition.POSITION_RISK_REVIEW,
+    IntelligenceAction.MARKET_RISK_HALT_CANDIDATE: IntelligenceDisposition.MARKET_RISK_REVIEW,
+}
+
+
+def _disposition_for_action(action: IntelligenceAction) -> IntelligenceDisposition:
+    try:
+        return _ACTION_DISPOSITIONS[action]
+    except KeyError:
+        raise ValueError("INTELLIGENCE_ACTION_UNMAPPED") from None
 
 
 class IntelligenceAssessment(BaseModel):
@@ -25,6 +43,13 @@ class IntelligenceAssessment(BaseModel):
     disposition: IntelligenceDisposition
     source_action: IntelligenceAction
 
+    @model_validator(mode="after")
+    def require_action_disposition_binding(self) -> IntelligenceAssessment:
+        expected = _disposition_for_action(self.source_action)
+        if self.disposition is not expected:
+            raise ValueError("INTELLIGENCE_ASSESSMENT_DISPOSITION_MISMATCH")
+        return self
+
 
 def assess_intelligence_event(
     event: MarketIntelligenceEvent,
@@ -34,25 +59,7 @@ def assess_intelligence_event(
     if not policy_version or policy_version != policy_version.strip():
         raise ValueError("INTELLIGENCE_POLICY_VERSION_NOT_CANONICAL")
 
-    if event.recommended_action in {
-        IntelligenceAction.NO_ACTION,
-        IntelligenceAction.OBSERVE,
-    }:
-        disposition = IntelligenceDisposition.OBSERVE_ONLY
-    elif event.recommended_action in {
-        IntelligenceAction.BLOCK_NEW_ENTRY,
-        IntelligenceAction.DATA_REVIEW_REQUIRED,
-    }:
-        disposition = IntelligenceDisposition.ENTRY_ELIGIBILITY_REVIEW
-    elif event.recommended_action in {
-        IntelligenceAction.REDUCE_RISK_CANDIDATE,
-        IntelligenceAction.EXIT_CANDIDATE,
-    }:
-        disposition = IntelligenceDisposition.POSITION_RISK_REVIEW
-    elif event.recommended_action is IntelligenceAction.MARKET_RISK_HALT_CANDIDATE:
-        disposition = IntelligenceDisposition.MARKET_RISK_REVIEW
-    else:
-        raise ValueError("INTELLIGENCE_ACTION_UNMAPPED")
+    disposition = _disposition_for_action(event.recommended_action)
 
     return IntelligenceAssessment(
         event_id=event.event_id,

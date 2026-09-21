@@ -32,3 +32,23 @@ def test_assessment_repository_rejects_noncanonical_stored_policy(policy_version
     repository = SqlAlchemyIntelligenceAssessmentRepository(Connection(row))
     with pytest.raises(ValueError, match="INTELLIGENCE_ASSESSMENT_POLICY_NOT_CANONICAL"):
         repository.get_for_event(row["event_id"], policy_version=policy_version)
+
+
+def test_assessment_repository_rejects_stored_disposition_mismatch() -> None:
+    row = {
+        "assessment_id": uuid4(),
+        "event_id": uuid4(),
+        "policy_version": "hope.intelligence-policy.v1",
+        "disposition": "OBSERVE_ONLY",
+        "source_action": "BLOCK_NEW_ENTRY",
+        "created_at": datetime(2026, 1, 1, tzinfo=UTC),
+    }
+    repository = SqlAlchemyIntelligenceAssessmentRepository(Connection(row))
+    with pytest.raises(
+        ValueError,
+        match="INTELLIGENCE_ASSESSMENT_DISPOSITION_MISMATCH",
+    ):
+        repository.get_for_event(
+            row["event_id"],
+            policy_version=row["policy_version"],
+        )

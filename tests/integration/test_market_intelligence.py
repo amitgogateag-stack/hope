@@ -210,6 +210,21 @@ def test_intelligence_assessment_is_bound_idempotent_and_immutable() -> None:
 
             with pytest.raises(
                 IntegrityError,
+                match="INTELLIGENCE_ASSESSMENT_DISPOSITION_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO market_intelligence_assessments("
+                            "assessment_id,event_id,policy_version,disposition,source_action"
+                            ") VALUES (:aid,:eid,'wrong-disposition','OBSERVE_ONLY',"
+                            "'MARKET_RISK_HALT_CANDIDATE')"
+                        ),
+                        {"aid": uuid4(), "eid": event.event_id},
+                    )
+
+            with pytest.raises(
+                IntegrityError,
                 match="MARKET_INTELLIGENCE_ASSESSMENT_IMMUTABLE",
             ):
                 with connection.begin_nested():

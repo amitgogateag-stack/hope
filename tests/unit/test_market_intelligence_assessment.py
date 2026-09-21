@@ -1,7 +1,10 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 
+import pytest
+
 from hope.domain.market_intelligence.assessment import (
+    IntelligenceAssessment,
     IntelligenceDisposition,
     assess_intelligence_event,
 )
@@ -44,3 +47,16 @@ def test_intelligence_assessment_never_returns_order_instruction() -> None:
     assert assess_intelligence_event(
         _event(IntelligenceAction.MARKET_RISK_HALT_CANDIDATE)
     ).disposition is IntelligenceDisposition.MARKET_RISK_REVIEW
+
+
+def test_intelligence_assessment_rejects_action_disposition_mismatch() -> None:
+    with pytest.raises(
+        ValueError,
+        match="INTELLIGENCE_ASSESSMENT_DISPOSITION_MISMATCH",
+    ):
+        IntelligenceAssessment(
+            event_id=uuid4(),
+            policy_version="hope.intelligence-policy.v1",
+            disposition=IntelligenceDisposition.OBSERVE_ONLY,
+            source_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+        )
