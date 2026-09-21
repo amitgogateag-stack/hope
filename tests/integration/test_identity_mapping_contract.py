@@ -30,14 +30,18 @@ def test_identity_mapping_contract_is_enforced_by_database() -> None:
                 ),
                 {"instrument_id": canonical_instrument_id},
             )
-            for broker_instrument_id in ("broker-valid-1", " broker-padded-1 "):
+            for broker, broker_instrument_id in (
+                ("TEST-VALID", "broker-valid-1"),
+                ("TEST-PADDED", " broker-padded-1 "),
+            ):
                 connection.execute(
                     text(
                         "INSERT INTO broker_instruments"
                         "(broker_instrument_id, broker, instrument_id, status) "
-                        "VALUES (:broker_instrument_id, 'TEST', :instrument_id, 'ACTIVE')"
+                        "VALUES (:broker_instrument_id, :broker, :instrument_id, 'ACTIVE')"
                     ),
                     {
+                        "broker": broker,
                         "broker_instrument_id": broker_instrument_id,
                         "instrument_id": canonical_instrument_id,
                     },
