@@ -34,7 +34,12 @@ class WalkForwardStageEvaluator:
         requested_folds = stage_protocol.get("fold_ids")
         if not isinstance(requested_folds, list) or not requested_folds:
             raise ValueError("WALK_FORWARD_FOLDS_PREDECLARATION_REQUIRED")
-        if any(not isinstance(fold_id, str) or not fold_id.strip() for fold_id in requested_folds):
+        if any(
+            not isinstance(fold_id, str)
+            or not fold_id.strip()
+            or fold_id != fold_id.strip()
+            for fold_id in requested_folds
+        ):
             raise ValueError("WALK_FORWARD_FOLD_ID_INVALID")
         if len(set(requested_folds)) != len(requested_folds):
             raise ValueError("WALK_FORWARD_FOLD_ID_DUPLICATE")
@@ -116,7 +121,12 @@ class WalkForwardStageEvaluator:
                 raise ValueError("WALK_FORWARD_FOLD_INVALID")
             fold_id = fold.get("fold_id")
             metrics = fold.get("metrics")
-            if not isinstance(fold_id, str) or not fold_id.strip() or not isinstance(metrics, dict):
+            if (
+                not isinstance(fold_id, str)
+                or not fold_id.strip()
+                or fold_id != fold_id.strip()
+                or not isinstance(metrics, dict)
+            ):
                 raise ValueError("WALK_FORWARD_FOLD_INVALID")
             if fold_id in result:
                 raise ValueError("WALK_FORWARD_FOLD_ID_DUPLICATE")

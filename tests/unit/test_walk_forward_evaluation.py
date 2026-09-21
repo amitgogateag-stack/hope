@@ -100,6 +100,41 @@ def test_walk_forward_requires_predeclared_metrics_folds_and_windows():
         )
 
 
+def test_walk_forward_rejects_noncanonical_protocol_fold_id():
+    definition = {
+        "train_start": "2025-01-01T00:00:00+00:00",
+        "train_end": "2025-02-01T00:00:00+00:00",
+        "test_start": "2025-02-01T00:00:00+00:00",
+        "test_end": "2025-02-02T00:00:00+00:00",
+    }
+    evidence = _artifact([_fold(" fold-1", definition, 100)])
+
+    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_ID_INVALID"):
+        WalkForwardStageEvaluator().evaluate(
+            stage_protocol=_protocol([" fold-1"], {" fold-1": definition}),
+            control_evidence=evidence,
+            variant_evidence=evidence,
+        )
+
+
+def test_walk_forward_rejects_noncanonical_evidence_fold_id():
+    definition = {
+        "train_start": "2025-01-01T00:00:00+00:00",
+        "train_end": "2025-02-01T00:00:00+00:00",
+        "test_start": "2025-02-01T00:00:00+00:00",
+        "test_end": "2025-02-02T00:00:00+00:00",
+    }
+    canonical = _artifact([_fold("fold-1", definition, 100)])
+    noncanonical = _artifact([_fold(" fold-1", definition, 100)])
+
+    with pytest.raises(ValueError, match="WALK_FORWARD_FOLD_INVALID"):
+        WalkForwardStageEvaluator().evaluate(
+            stage_protocol=_protocol(["fold-1"], {"fold-1": definition}),
+            control_evidence=noncanonical,
+            variant_evidence=canonical,
+        )
+
+
 def test_walk_forward_rejects_predeclared_window_drift():
     definition = {
         "train_start": "2025-01-01T00:00:00+00:00",
