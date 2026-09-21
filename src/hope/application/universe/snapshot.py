@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from uuid import UUID
 
 from hope.application.experiments.config_hash import configuration_hash
@@ -40,12 +40,26 @@ class UniverseSnapshot:
 
         ordered = tuple(sorted(validated, key=lambda member: str(member.instrument_id)))
         object.__setattr__(self, "members", ordered)
+        canonical_members = [
+            {
+                "instrument_id": str(member.instrument_id),
+                "valid_from": (
+                    member.valid_from.astimezone(timezone.utc).isoformat()
+                    if member.valid_from is not None
+                    else None
+                ),
+                "valid_to": (
+                    member.valid_to.astimezone(timezone.utc).isoformat()
+                    if member.valid_to is not None
+                    else None
+                ),
+            }
+            for member in ordered
+        ]
         object.__setattr__(
             self,
             "membership_hash",
-            configuration_hash(
-                [member.model_dump(mode="json") for member in ordered]
-            ),
+            configuration_hash(canonical_members),
         )
 
     def active_members(self, as_of: datetime) -> tuple[UniverseMember, ...]:

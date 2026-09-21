@@ -143,3 +143,24 @@ def test_universe_models_forbid_undeclared_fields(model) -> None:
 
     with pytest.raises(ValueError, match="extra_forbidden"):
         model(**values, undeclared="must-fail")
+
+
+def test_universe_snapshot_hash_canonicalizes_equivalent_timezones_to_utc() -> None:
+    version_id = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
+    instrument = UUID("11111111-1111-1111-1111-111111111111")
+    other = UniverseMember(instrument_id=UUID("22222222-2222-2222-2222-222222222222"))
+    utc_member = UniverseMember(
+        instrument_id=instrument,
+        valid_from=datetime(2026, 1, 1, 12, 0, tzinfo=UTC),
+        valid_to=datetime(2026, 1, 2, 12, 0, tzinfo=UTC),
+    )
+    offset = timezone.utc.__class__(__import__("datetime").timedelta(hours=5, minutes=30))
+    offset_member = UniverseMember(
+        instrument_id=instrument,
+        valid_from=datetime(2026, 1, 1, 17, 30, tzinfo=offset),
+        valid_to=datetime(2026, 1, 2, 17, 30, tzinfo=offset),
+    )
+
+    assert UniverseSnapshot(version_id, _version(), (utc_member, other)).membership_hash == UniverseSnapshot(
+        version_id, _version(), (offset_member, other)
+    ).membership_hash
