@@ -78,11 +78,20 @@ class SqlAlchemyResearchRunRepository:
             raise ValueError("RESEARCH_RUN_IDENTITY_CONFLICT")
         return False
 
+    @classmethod
+    def _validate_stored_identity(cls, run: ResearchRunRecord) -> ResearchRunRecord:
+        expected_id = cls.deterministic_id(run.experiment_id, run.run_fingerprint)
+        if run.research_run_id != expected_id:
+            raise ValueError("RESEARCH_RUN_STORED_ID_NOT_DETERMINISTIC")
+        return run
+
     def get(self, research_run_id: UUID) -> ResearchRunRecord | None:
         row = self._connection.execute(
             select(self._runs).where(self._runs.c.research_run_id == research_run_id)
         ).mappings().one_or_none()
-        return ResearchRunRecord(**row) if row else None
+        if row is None:
+            return None
+        return self._validate_stored_identity(ResearchRunRecord(**row))
 
     def get_by_fingerprint(self, experiment_id: str, run_fingerprint: str) -> ResearchRunRecord | None:
         row = self._connection.execute(
@@ -91,4 +100,6 @@ class SqlAlchemyResearchRunRepository:
                 self._runs.c.run_fingerprint == run_fingerprint,
             )
         ).mappings().one_or_none()
-        return ResearchRunRecord(**row) if row else None
+        if row is None:
+            return None
+        return self._validate_stored_identity(ResearchRunRecord(**row))
