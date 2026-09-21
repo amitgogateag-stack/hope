@@ -65,11 +65,26 @@ class IdentityRepository:
             created_at=created_at,
         ))
 
-    def get_mapping(self, source_symbol: str) -> IdentityMapping | None:
+    def get_mapping(
+        self,
+        source_symbol: str,
+        broker_instrument_id: str,
+    ) -> IdentityMapping | None:
+        for value in (source_symbol, broker_instrument_id):
+            if not value.strip():
+                raise ValueError("IDENTITY_MAPPING_VALUE_REQUIRED")
+            if value != value.strip():
+                raise ValueError("IDENTITY_MAPPING_VALUE_NOT_CANONICAL")
         row = self._connection.execute(
             select(self._mappings)
-            .where(self._mappings.c.source_symbol == source_symbol)
-            .order_by(self._mappings.c.created_at.desc())
+            .where(
+                self._mappings.c.source_symbol == source_symbol,
+                self._mappings.c.broker_instrument_id == broker_instrument_id,
+            )
+            .order_by(
+                self._mappings.c.created_at.desc(),
+                self._mappings.c.identity_mapping_id.desc(),
+            )
             .limit(1)
         ).mappings().one_or_none()
         return IdentityMapping(**{k: row[k] for k in ("source_symbol", "broker_instrument_id", "canonical_instrument_id", "status", "reason")}) if row else None
