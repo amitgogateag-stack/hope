@@ -55,4 +55,13 @@ class SqlAlchemyExperimentVariantRepository:
                 self._variants.c.variant_experiment_id == variant_experiment_id
             )
         ).mappings().one_or_none()
-        return ExperimentVariantRecord(**row) if row else None
+        if row is None:
+            return None
+
+        record = ExperimentVariantRecord(**row)
+        ExperimentVariantDefinition(
+            control_experiment_id=record.control_experiment_id,
+            variant_experiment_id=record.variant_experiment_id,
+            variant_label=record.variant_label,
+        )
+        return record
