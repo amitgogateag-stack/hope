@@ -35,7 +35,14 @@ class UniverseMemberRepository:
             .order_by(self._table.c.instrument_id)
         ).mappings().all()
         def normalize(value):
-            if value is not None and value.tzinfo is None:
+            if (
+                value is not None
+                and self._connection.dialect.name == "sqlite"
+                and value.tzinfo is None
+            ):
+                # SQLite drops timezone offsets for DateTime columns. Repository
+                # writes are UTC; restore only the representation lost by this
+                # test adapter. PostgreSQL durable reads remain fail closed.
                 return value.replace(tzinfo=timezone.utc)
             return value
         return tuple(
