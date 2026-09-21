@@ -31,7 +31,7 @@ class ResearchInvariantRunArtifact(BaseModel):
                 raise ValueError("RESEARCH_INVARIANT_RESULT_SHAPE_INVALID")
             if not result["invariant_id"].strip() or result["invariant_id"] != result["invariant_id"].strip():
                 raise ValueError("RESEARCH_INVARIANT_ID_NOT_CANONICAL")
-            if result["status"] not in {"PASS", "FAIL"}:
+            if result["status"] not in {"PASS", "FAIL", "SKIP"}:
                 raise ValueError("RESEARCH_INVARIANT_STATUS_INVALID")
         return value
 

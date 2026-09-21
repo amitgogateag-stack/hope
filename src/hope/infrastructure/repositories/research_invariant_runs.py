@@ -69,6 +69,12 @@ class SqlAlchemyResearchInvariantRunRepository:
             return None
 
         record = ResearchInvariantRunRecord(**row)
+        ResearchInvariantRunArtifact(
+            research_run_id=record.research_run_id,
+            context_fingerprint=record.context_fingerprint,
+            result_fingerprint=record.result_fingerprint,
+            canonical_results=record.canonical_results,
+        )
         if record.result_fingerprint != _fingerprint(record.canonical_results):
             raise ValueError("RESEARCH_INVARIANT_STORED_RESULT_FINGERPRINT_MISMATCH")
         return record
