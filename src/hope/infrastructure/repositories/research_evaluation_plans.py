@@ -69,4 +69,15 @@ class SqlAlchemyResearchEvaluationPlanRepository:
                 self._plans.c.variant_experiment_id == variant_experiment_id
             )
         ).mappings().one_or_none()
-        return ResearchEvaluationPlanRecord(**row) if row else None
+        if row is None:
+            return None
+
+        record = ResearchEvaluationPlanRecord(**row)
+        definition = ResearchEvaluationPlanDefinition(
+            variant_experiment_id=record.variant_experiment_id,
+            protocol=record.canonical_protocol,
+        )
+        expected_hash = research_evaluation_plan_hash(definition.protocol)
+        if record.protocol_hash != expected_hash:
+            raise ValueError("RESEARCH_EVALUATION_PLAN_STORED_HASH_MISMATCH")
+        return record
