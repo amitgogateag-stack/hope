@@ -55,3 +55,28 @@ def test_invariant_run_repository_rejects_tampered_stored_results() -> None:
         match="RESEARCH_INVARIANT_STORED_RESULT_FINGERPRINT_MISMATCH",
     ):
         repository.get(row["research_run_id"])
+
+
+@pytest.mark.parametrize(
+    ("canonical_results", "error"),
+    [
+        ([{"invariant_id": "INVARIANT-001", "status": "UNKNOWN", "message": "x"}], "RESEARCH_INVARIANT_STATUS_INVALID"),
+        ([{"invariant_id": " INVARIANT-001 ", "status": "PASS", "message": "x"}], "RESEARCH_INVARIANT_ID_NOT_CANONICAL"),
+        ([{"invariant_id": "INVARIANT-001", "status": "PASS", "message": "x", "extra": "tampered"}], "RESEARCH_INVARIANT_RESULT_SHAPE_INVALID"),
+    ],
+)
+def test_invariant_run_repository_rejects_semantically_invalid_stored_results(
+    canonical_results: list[dict[str, str]],
+    error: str,
+) -> None:
+    row = {
+        "research_run_id": uuid4(),
+        "context_fingerprint": "a" * 64,
+        "result_fingerprint": _fingerprint(canonical_results),
+        "canonical_results": canonical_results,
+        "created_at": None,
+    }
+    repository = SqlAlchemyResearchInvariantRunRepository(Connection(row))
+
+    with pytest.raises(ValueError, match=error):
+        repository.get(row["research_run_id"])

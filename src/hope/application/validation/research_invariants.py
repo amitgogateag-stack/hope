@@ -5,7 +5,7 @@ from dataclasses import asdict
 from typing import Any
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from hope.application.experiments.config_hash import canonical_json
 from hope.application.validation.runner import InvariantRun, InvariantRunner
@@ -19,6 +19,21 @@ class ResearchInvariantRunArtifact(BaseModel):
     context_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     result_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     canonical_results: list[dict[str, str]]
+
+    @field_validator("canonical_results")
+    @classmethod
+    def require_canonical_result_shape(
+        cls, value: list[dict[str, str]]
+    ) -> list[dict[str, str]]:
+        required = {"invariant_id", "status", "message"}
+        for result in value:
+            if set(result) != required:
+                raise ValueError("RESEARCH_INVARIANT_RESULT_SHAPE_INVALID")
+            if not result["invariant_id"].strip() or result["invariant_id"] != result["invariant_id"].strip():
+                raise ValueError("RESEARCH_INVARIANT_ID_NOT_CANONICAL")
+            if result["status"] not in {"PASS", "FAIL"}:
+                raise ValueError("RESEARCH_INVARIANT_STATUS_INVALID")
+        return value
 
 
 def _fingerprint(value: Any) -> str:
