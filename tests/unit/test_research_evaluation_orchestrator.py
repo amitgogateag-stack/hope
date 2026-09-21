@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 
+from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.evaluation_orchestrator import (
     ResearchEvaluationOrchestrator,
 )
@@ -10,10 +11,22 @@ from hope.application.experiments.evaluation_protocol import (
     REQUIRED_EVALUATION_STAGES,
     research_evaluation_plan_hash,
 )
+from hope.application.experiments.research_runs import research_result_fingerprint
 
 
 def _protocol():
     return {stage: {"enabled": True} for stage in REQUIRED_EVALUATION_STAGES}
+
+
+def _evidence_record(canonical_result, *, historical=False):
+    if historical:
+        _, fingerprint = research_result_fingerprint(canonical_result)
+    else:
+        fingerprint = configuration_hash(canonical_result)
+    return SimpleNamespace(
+        canonical_result=canonical_result,
+        result_fingerprint=fingerprint,
+    )
 
 
 class _Plans:
@@ -84,8 +97,8 @@ def test_stage_orchestrator_persists_deterministic_result_from_exact_evidence():
     control_run_id, variant_run_id = uuid4(), uuid4()
     orchestrator, results = _orchestrator(
         evidence={
-            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+            control_run_id: _evidence_record({"value": "control"}),
+            variant_run_id: _evidence_record({"value": "variant"}),
         }
     )
 
@@ -105,8 +118,8 @@ def test_stage_orchestrator_fails_closed_without_registered_evaluator():
     control_run_id, variant_run_id = uuid4(), uuid4()
     orchestrator, _ = _orchestrator(
         evidence={
-            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+            control_run_id: _evidence_record({"value": "control"}),
+            variant_run_id: _evidence_record({"value": "variant"}),
         },
         evaluators=(),
     )
@@ -147,8 +160,8 @@ def test_stage_orchestrator_rejects_tampered_protocol_hash():
 def test_stage_orchestrator_requires_exact_pair_evidence(missing, message):
     control_run_id, variant_run_id = uuid4(), uuid4()
     evidence = {
-        control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-        variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+        control_run_id: _evidence_record({"value": "control"}),
+        variant_run_id: _evidence_record({"value": "variant"}),
     }
     evidence.pop(control_run_id if missing == "control" else variant_run_id)
     orchestrator, results = _orchestrator(evidence=evidence)
@@ -173,8 +186,8 @@ def test_stage_orchestrator_rejects_placeholder_or_empty_result():
     control_run_id, variant_run_id = uuid4(), uuid4()
     orchestrator, results = _orchestrator(
         evidence={
-            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+            control_run_id: _evidence_record({"value": "control"}),
+            variant_run_id: _evidence_record({"value": "variant"}),
         },
         evaluators=(EmptyEvaluator(),),
     )
@@ -280,8 +293,8 @@ def test_stage_orchestrator_rejects_generic_fallback_for_derived_stage():
     control_run_id, variant_run_id = uuid4(), uuid4()
     orchestrator, results = _orchestrator(
         evidence={
-            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+            control_run_id: _evidence_record({"value": "control"}),
+            variant_run_id: _evidence_record({"value": "variant"}),
         },
         evaluators=(WalkForwardEvaluator(),),
         stage_evidence_repositories={},
@@ -313,8 +326,8 @@ def test_stage_orchestrator_allows_generic_source_only_for_historical_evaluation
     control_run_id, variant_run_id = uuid4(), uuid4()
     orchestrator, results = _orchestrator(
         evidence={
-            control_run_id: SimpleNamespace(canonical_result={"value": "control"}),
-            variant_run_id: SimpleNamespace(canonical_result={"value": "variant"}),
+            control_run_id: _evidence_record({"value": "control"}, historical=True),
+            variant_run_id: _evidence_record({"value": "variant"}, historical=True),
         },
         evaluators=(HistoricalEvaluator(),),
         stage_evidence_repositories={},
@@ -332,3 +345,42 @@ def test_stage_orchestrator_allows_generic_source_only_for_historical_evaluation
         "variant": "variant",
     }
     assert results.persisted == [definition]
+
+
+@pytest.mark.parametrize("stage", ["regression_invariants", "historical_evaluation"])
+def test_stage_orchestrator_rejects_tampered_source_evidence(stage):
+    class StageEvaluator:
+        def __init__(self, stage):
+            self.stage = stage
+
+        def evaluate(self, *, stage_protocol, control_evidence, variant_evidence):
+            raise AssertionError("tampered evidence reached evaluator")
+
+    control_run_id, variant_run_id = uuid4(), uuid4()
+    tampered = SimpleNamespace(
+        canonical_result={"value": "tampered"},
+        result_fingerprint="0" * 64,
+    )
+    valid = _evidence_record(
+        {"value": "variant"},
+        historical=stage == "historical_evaluation",
+    )
+    evidence = {control_run_id: tampered, variant_run_id: valid}
+    stage_sources = {} if stage == "historical_evaluation" else {stage: _Evidence(evidence)}
+    orchestrator, results = _orchestrator(
+        evidence=evidence,
+        evaluators=(StageEvaluator(stage),),
+        stage_evidence_repositories=stage_sources,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="RESEARCH_EVALUATION_SOURCE_EVIDENCE_FINGERPRINT_MISMATCH",
+    ):
+        orchestrator.evaluate_stage(
+            variant_experiment_id="EXP-VARIANT",
+            control_run_id=control_run_id,
+            variant_run_id=variant_run_id,
+            stage=stage,
+        )
+    assert results.persisted == []

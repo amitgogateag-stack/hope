@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
+from hope.application.experiments.config_hash import configuration_hash
 from hope.application.experiments.evaluation_protocol import (
     REQUIRED_EVALUATION_STAGES,
     research_evaluation_plan_hash,
@@ -11,6 +12,7 @@ from hope.application.experiments.evaluation_results import (
     ResearchEvaluationResultDefinition,
     research_evaluation_result_fingerprint,
 )
+from hope.application.experiments.research_runs import research_result_fingerprint
 
 
 @runtime_checkable
@@ -101,8 +103,8 @@ class ResearchEvaluationOrchestrator:
         if variant is None:
             raise ValueError("RESEARCH_EVALUATION_VARIANT_EVIDENCE_MISSING")
 
-        control_payload = self._stage_payload(control)
-        variant_payload = self._stage_payload(variant)
+        control_payload = self._stage_payload(control, stage=stage)
+        variant_payload = self._stage_payload(variant, stage=stage)
         canonical_result = evaluator.evaluate(
             stage_protocol=stage_protocol,
             control_evidence=control_payload,
@@ -124,9 +126,19 @@ class ResearchEvaluationOrchestrator:
         return definition
 
     @staticmethod
-    def _stage_payload(record: Any) -> Any:
+    def _stage_payload(record: Any, *, stage: str) -> Any:
         if hasattr(record, "canonical_result"):
-            return record.canonical_result
+            payload = record.canonical_result
+            fingerprint = getattr(record, "result_fingerprint", None)
+            if not isinstance(fingerprint, str):
+                raise ValueError("RESEARCH_EVALUATION_SOURCE_EVIDENCE_FINGERPRINT_MISSING")
+            if stage == "historical_evaluation":
+                _, expected_fingerprint = research_result_fingerprint(payload)
+            else:
+                expected_fingerprint = configuration_hash(payload)
+            if fingerprint != expected_fingerprint:
+                raise ValueError("RESEARCH_EVALUATION_SOURCE_EVIDENCE_FINGERPRINT_MISMATCH")
+            return payload
         if hasattr(record, "model_dump"):
             return record.model_dump(exclude={"created_at"})
         raise TypeError("RESEARCH_STAGE_EVIDENCE_RECORD_UNSUPPORTED")
