@@ -1,4 +1,5 @@
 from copy import deepcopy
+from uuid import uuid4
 
 import pytest
 
@@ -7,11 +8,28 @@ from hope.application.experiments.historical_evaluation import (
 )
 
 
-def _evidence(*, total_pnl="10", sharpe="1.5"):
+_CONTEXT = {
+    "dataset_version_id": str(uuid4()),
+    "universe_version_id": str(uuid4()),
+    "universe_membership_hash": "a" * 64,
+    "market_data_manifest_hash": "b" * 64,
+    "as_of": "2026-08-31T00:00:00+00:00",
+}
+
+
+def _evidence(*, total_pnl="10", sharpe="1.5", context=None):
+    research_context = dict(_CONTEXT if context is None else context)
     return {
         "schema": "hope.certified-backtest-result.v3",
         "execution_provenance": {},
-        "research_provenance": {},
+        "research_provenance": {
+            "experiment_id": "exp-1",
+            "strategy_version_id": str(uuid4()),
+            "configuration_hash": "c" * 64,
+            "environment": "BACKTEST",
+            "run_fingerprint": "d" * 64,
+            **research_context,
+        },
         "backtest": {
             "schema": "hope.backtest-result.v1",
             "result": {
@@ -31,9 +49,16 @@ def _evidence(*, total_pnl="10", sharpe="1.5"):
     }
 
 
-def test_historical_evaluator_compares_only_predeclared_metrics_without_verdict():
+def _protocol(metrics=("total_pnl", "sharpe"), context=None):
+    return {
+        "metrics": list(metrics),
+        "evaluation_context": dict(_CONTEXT if context is None else context),
+    }
+
+
+def test_historical_evaluator_compares_only_predeclared_metrics_in_predeclared_context():
     result = HistoricalEvaluationStageEvaluator().evaluate(
-        stage_protocol={"metrics": ["total_pnl", "sharpe"]},
+        stage_protocol=_protocol(),
         control_evidence=_evidence(total_pnl="10", sharpe="1.5"),
         variant_evidence=_evidence(total_pnl="12.5", sharpe="1.25"),
     )
@@ -49,15 +74,40 @@ def test_historical_evaluator_compares_only_predeclared_metrics_without_verdict(
     assert "pass" not in result
 
 
-def test_historical_evaluator_requires_metric_predeclaration():
+def test_historical_evaluator_requires_metric_and_context_predeclaration():
+    evaluator = HistoricalEvaluationStageEvaluator()
     with pytest.raises(
         ValueError,
         match="HISTORICAL_EVALUATION_METRICS_PREDECLARATION_REQUIRED",
     ):
-        HistoricalEvaluationStageEvaluator().evaluate(
-            stage_protocol={"enabled": True},
+        evaluator.evaluate(
+            stage_protocol={"evaluation_context": _CONTEXT},
             control_evidence=_evidence(),
             variant_evidence=_evidence(),
+        )
+
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_EVALUATION_CONTEXT_PREDECLARATION_REQUIRED",
+    ):
+        evaluator.evaluate(
+            stage_protocol={"metrics": ["total_pnl"]},
+            control_evidence=_evidence(),
+            variant_evidence=_evidence(),
+        )
+
+
+def test_historical_evaluator_rejects_context_drift():
+    drifted = dict(_CONTEXT)
+    drifted["market_data_manifest_hash"] = "e" * 64
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_EVALUATION_PREDECLARED_CONTEXT_MISMATCH",
+    ):
+        HistoricalEvaluationStageEvaluator().evaluate(
+            stage_protocol=_protocol(("total_pnl",)),
+            control_evidence=_evidence(),
+            variant_evidence=_evidence(context=drifted),
         )
 
 
@@ -65,13 +115,13 @@ def test_historical_evaluator_rejects_unstored_or_duplicate_metric():
     evaluator = HistoricalEvaluationStageEvaluator()
     with pytest.raises(ValueError, match="HISTORICAL_EVALUATION_METRIC_INVALID"):
         evaluator.evaluate(
-            stage_protocol={"metrics": ["profit_factor"]},
+            stage_protocol=_protocol(("profit_factor",)),
             control_evidence=_evidence(),
             variant_evidence=_evidence(),
         )
     with pytest.raises(ValueError, match="HISTORICAL_EVALUATION_METRIC_DUPLICATE"):
         evaluator.evaluate(
-            stage_protocol={"metrics": ["total_pnl", "total_pnl"]},
+            stage_protocol=_protocol(("total_pnl", "total_pnl")),
             control_evidence=_evidence(),
             variant_evidence=_evidence(),
         )
@@ -85,7 +135,7 @@ def test_historical_evaluator_requires_certified_backtest_evidence():
         match="HISTORICAL_EVALUATION_CERTIFIED_EVIDENCE_REQUIRED",
     ):
         HistoricalEvaluationStageEvaluator().evaluate(
-            stage_protocol={"metrics": ["total_pnl"]},
+            stage_protocol=_protocol(("total_pnl",)),
             control_evidence=bad,
             variant_evidence=_evidence(),
         )
@@ -99,7 +149,7 @@ def test_historical_evaluator_fails_on_missing_metric_value():
         match="HISTORICAL_EVALUATION_METRIC_VALUE_INVALID:sharpe",
     ):
         HistoricalEvaluationStageEvaluator().evaluate(
-            stage_protocol={"metrics": ["sharpe"]},
+            stage_protocol=_protocol(("sharpe",)),
             control_evidence=bad,
             variant_evidence=_evidence(),
         )

@@ -42,6 +42,22 @@ class HistoricalEvaluationStageEvaluator:
         if len(set(requested)) != len(requested):
             raise ValueError("HISTORICAL_EVALUATION_METRIC_DUPLICATE")
 
+        context = stage_protocol.get("evaluation_context")
+        required_context_fields = {
+            "dataset_version_id",
+            "universe_version_id",
+            "universe_membership_hash",
+            "market_data_manifest_hash",
+            "as_of",
+        }
+        if not isinstance(context, dict) or set(context) != required_context_fields:
+            raise ValueError("HISTORICAL_EVALUATION_CONTEXT_PREDECLARATION_REQUIRED")
+
+        control_context = self._research_context(control_evidence)
+        variant_context = self._research_context(variant_evidence)
+        if control_context != context or variant_context != context:
+            raise ValueError("HISTORICAL_EVALUATION_PREDECLARED_CONTEXT_MISMATCH")
+
         control_metrics = self._metrics(control_evidence)
         variant_metrics = self._metrics(variant_evidence)
         comparisons: dict[str, dict[str, str]] = {}
@@ -58,6 +74,24 @@ class HistoricalEvaluationStageEvaluator:
             "schema": "hope.historical-evaluation.v1",
             "metrics": comparisons,
         }
+
+    @staticmethod
+    def _research_context(evidence: Any) -> dict[str, str]:
+        if not isinstance(evidence, dict):
+            raise ValueError("HISTORICAL_EVALUATION_CERTIFIED_EVIDENCE_REQUIRED")
+        research = evidence.get("research_provenance")
+        if not isinstance(research, dict):
+            raise ValueError("HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_REQUIRED")
+        fields = (
+            "dataset_version_id",
+            "universe_version_id",
+            "universe_membership_hash",
+            "market_data_manifest_hash",
+            "as_of",
+        )
+        if any(not isinstance(research.get(field), str) or not research.get(field) for field in fields):
+            raise ValueError("HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_REQUIRED")
+        return {field: research[field] for field in fields}
 
     @staticmethod
     def _metrics(evidence: Any) -> Mapping[str, Any]:
