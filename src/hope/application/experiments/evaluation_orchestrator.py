@@ -103,8 +103,16 @@ class ResearchEvaluationOrchestrator:
         if variant is None:
             raise ValueError("RESEARCH_EVALUATION_VARIANT_EVIDENCE_MISSING")
 
-        control_payload = self._stage_payload(control, stage=stage)
-        variant_payload = self._stage_payload(variant, stage=stage)
+        control_payload = self._stage_payload(
+            control,
+            stage=stage,
+            expected_run_id=control_run_id,
+        )
+        variant_payload = self._stage_payload(
+            variant,
+            stage=stage,
+            expected_run_id=variant_run_id,
+        )
         canonical_result = evaluator.evaluate(
             stage_protocol=stage_protocol,
             control_evidence=control_payload,
@@ -126,7 +134,12 @@ class ResearchEvaluationOrchestrator:
         return definition
 
     @staticmethod
-    def _stage_payload(record: Any, *, stage: str) -> Any:
+    def _stage_payload(record: Any, *, stage: str, expected_run_id: UUID) -> Any:
+        if getattr(record, "research_run_id", None) != expected_run_id:
+            raise ValueError("RESEARCH_EVALUATION_SOURCE_EVIDENCE_IDENTITY_MISMATCH")
+        record_stage = getattr(record, "stage", stage)
+        if record_stage != stage:
+            raise ValueError("RESEARCH_EVALUATION_SOURCE_EVIDENCE_STAGE_MISMATCH")
         if hasattr(record, "canonical_result"):
             payload = record.canonical_result
             fingerprint = getattr(record, "result_fingerprint", None)
