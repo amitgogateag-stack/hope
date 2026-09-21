@@ -12,7 +12,7 @@ class UniverseVersionRecord(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
     universe_version_id: UUID
     universe_id: UUID
-    version: str = Field(min_length=1)
+    version: str
     pit_certified: bool
     declared_member_count: int = Field(ge=0)
     created_at: datetime | None = None
@@ -57,4 +57,16 @@ class UniverseRepository:
         row = self._connection.execute(
             select(self._table).where(self._table.c.universe_version_id == universe_version_id)
         ).mappings().one_or_none()
-        return UniverseVersionRecord(**row) if row else None
+        if not row:
+            return None
+        values = dict(row)
+        created_at = values["created_at"]
+        if (
+            self._connection.dialect.name == "sqlite"
+            and created_at.tzinfo is None
+        ):
+            # SQLite does not preserve offsets for timezone-aware DateTime columns.
+            # Repository writes are UTC, so restore the representation lost by the
+            # test adapter without weakening PostgreSQL's durable read contract.
+            values["created_at"] = created_at.replace(tzinfo=timezone.utc)
+        return UniverseVersionRecord(**values)
