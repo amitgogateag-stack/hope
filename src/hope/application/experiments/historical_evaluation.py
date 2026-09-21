@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Mapping
+from uuid import UUID
 
 from hope.application.backtests.certified_evidence import (
     CERTIFIED_BACKTEST_EVIDENCE_SCHEMA,
@@ -20,6 +23,14 @@ HISTORICAL_METRICS = (
     "downside_deviation",
     "sortino",
 )
+_CONTEXT_FIELDS = (
+    "dataset_version_id",
+    "universe_version_id",
+    "universe_membership_hash",
+    "market_data_manifest_hash",
+    "as_of",
+)
+_SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
 class HistoricalEvaluationStageEvaluator:
@@ -43,15 +54,12 @@ class HistoricalEvaluationStageEvaluator:
             raise ValueError("HISTORICAL_EVALUATION_METRIC_DUPLICATE")
 
         context = stage_protocol.get("evaluation_context")
-        required_context_fields = {
-            "dataset_version_id",
-            "universe_version_id",
-            "universe_membership_hash",
-            "market_data_manifest_hash",
-            "as_of",
-        }
-        if not isinstance(context, dict) or set(context) != required_context_fields:
+        if not isinstance(context, dict) or set(context) != set(_CONTEXT_FIELDS):
             raise ValueError("HISTORICAL_EVALUATION_CONTEXT_PREDECLARATION_REQUIRED")
+        context = self._canonical_context(
+            context,
+            "HISTORICAL_EVALUATION_CONTEXT_INVALID",
+        )
 
         control_context = self._research_context(control_evidence)
         variant_context = self._research_context(variant_evidence)
@@ -82,16 +90,45 @@ class HistoricalEvaluationStageEvaluator:
         research = evidence.get("research_provenance")
         if not isinstance(research, dict):
             raise ValueError("HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_REQUIRED")
-        fields = (
-            "dataset_version_id",
-            "universe_version_id",
-            "universe_membership_hash",
-            "market_data_manifest_hash",
-            "as_of",
+        return HistoricalEvaluationStageEvaluator._canonical_context(
+            {field: research.get(field) for field in _CONTEXT_FIELDS},
+            "HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_NOT_CANONICAL",
         )
-        if any(not isinstance(research.get(field), str) or not research.get(field) for field in fields):
-            raise ValueError("HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_REQUIRED")
-        return {field: research[field] for field in fields}
+
+    @staticmethod
+    def _canonical_context(value: Mapping[str, Any], error: str) -> dict[str, str]:
+        result: dict[str, str] = {}
+        for field in ("dataset_version_id", "universe_version_id"):
+            observed = value.get(field)
+            try:
+                parsed = UUID(str(observed))
+            except (TypeError, ValueError, AttributeError) as exc:
+                raise ValueError(error) from exc
+            if not isinstance(observed, str) or str(parsed) != observed:
+                raise ValueError(error)
+            result[field] = observed
+
+        for field in ("universe_membership_hash", "market_data_manifest_hash"):
+            observed = value.get(field)
+            if not isinstance(observed, str) or _SHA256_RE.fullmatch(observed) is None:
+                raise ValueError(error)
+            result[field] = observed
+
+        as_of = value.get("as_of")
+        if not isinstance(as_of, str):
+            raise ValueError(error)
+        try:
+            parsed_as_of = datetime.fromisoformat(as_of)
+        except ValueError as exc:
+            raise ValueError(error) from exc
+        if (
+            parsed_as_of.tzinfo is None
+            or parsed_as_of.utcoffset() is None
+            or parsed_as_of.isoformat() != as_of
+        ):
+            raise ValueError(error)
+        result["as_of"] = as_of
+        return result
 
     @staticmethod
     def _metrics(evidence: Any) -> Mapping[str, Any]:

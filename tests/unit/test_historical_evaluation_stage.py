@@ -111,6 +111,43 @@ def test_historical_evaluator_rejects_context_drift():
         )
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("dataset_version_id", "not-a-uuid"),
+        ("universe_version_id", " NOT-A-UUID "),
+        ("universe_membership_hash", "A" * 64),
+        ("market_data_manifest_hash", "b" * 63),
+        ("as_of", "2026-08-31T00:00:00"),
+    ],
+)
+def test_historical_evaluator_rejects_noncanonical_predeclared_context(field, value):
+    context = dict(_CONTEXT)
+    context[field] = value
+
+    with pytest.raises(ValueError, match="HISTORICAL_EVALUATION_CONTEXT_INVALID"):
+        HistoricalEvaluationStageEvaluator().evaluate(
+            stage_protocol=_protocol(("total_pnl",), context),
+            control_evidence=_evidence(),
+            variant_evidence=_evidence(),
+        )
+
+
+def test_historical_evaluator_rejects_noncanonical_evidence_context():
+    context = dict(_CONTEXT)
+    context["market_data_manifest_hash"] = " B" * 32
+
+    with pytest.raises(
+        ValueError,
+        match="HISTORICAL_EVALUATION_RESEARCH_PROVENANCE_NOT_CANONICAL",
+    ):
+        HistoricalEvaluationStageEvaluator().evaluate(
+            stage_protocol=_protocol(("total_pnl",)),
+            control_evidence=_evidence(context=context),
+            variant_evidence=_evidence(),
+        )
+
+
 def test_historical_evaluator_rejects_unstored_or_duplicate_metric():
     evaluator = HistoricalEvaluationStageEvaluator()
     with pytest.raises(ValueError, match="HISTORICAL_EVALUATION_METRIC_INVALID"):
