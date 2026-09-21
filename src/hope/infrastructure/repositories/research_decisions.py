@@ -8,6 +8,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, insert, select
 
 from hope.domain.research.models import ResearchDecision, ResearchDecisionDefinition
+from hope.infrastructure.repositories.research_comparisons import (
+    SqlAlchemyResearchComparisonRepository,
+)
 
 
 class ResearchDecisionRecord(BaseModel):
@@ -69,4 +72,21 @@ class SqlAlchemyResearchDecisionRepository:
         row = self._connection.execute(
             select(self._decisions).where(self._decisions.c.decision_id == decision_id)
         ).mappings().one_or_none()
-        return ResearchDecisionRecord(**row) if row else None
+        if row is None:
+            return None
+
+        decision = ResearchDecisionRecord(**row)
+        comparison = SqlAlchemyResearchComparisonRepository(
+            self._connection
+        ).get_by_run_pair(
+            decision.variant_experiment_id,
+            decision.control_run_id,
+            decision.variant_run_id,
+        )
+        if comparison is None:
+            raise ValueError("RESEARCH_DECISION_STORED_COMPARISON_MISSING")
+        if decision.comparison_id != comparison.comparison_id:
+            raise ValueError("RESEARCH_DECISION_STORED_COMPARISON_ID_MISMATCH")
+        if decision.comparison_fingerprint != comparison.comparison_fingerprint:
+            raise ValueError("RESEARCH_DECISION_STORED_COMPARISON_FINGERPRINT_MISMATCH")
+        return decision
