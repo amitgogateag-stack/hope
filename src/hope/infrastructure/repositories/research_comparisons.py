@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Any
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import CHAR, JSON, Column, Connection, DateTime, MetaData, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -25,6 +25,15 @@ class ResearchComparisonRecord(BaseModel):
     comparison_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     canonical_comparison: Any
     created_at: datetime | None = None
+
+    @field_validator("variant_experiment_id")
+    @classmethod
+    def require_canonical_variant_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_COMPARISON_VARIANT_ID_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_COMPARISON_VARIANT_ID_NOT_CANONICAL")
+        return value
 
 
 class SqlAlchemyResearchComparisonRepository:

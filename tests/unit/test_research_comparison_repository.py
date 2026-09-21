@@ -86,3 +86,22 @@ def test_comparison_repository_rejects_nondeterministic_stored_id() -> None:
         match="RESEARCH_COMPARISON_STORED_ID_NOT_DETERMINISTIC",
     ):
         read(row)
+
+
+@pytest.mark.parametrize("variant_experiment_id", ["", "   ", " EXP-VARIANT ", "EXP-VARIANT "])
+def test_comparison_repository_rejects_noncanonical_stored_variant_identity(
+    variant_experiment_id: str,
+) -> None:
+    row = comparison_row()
+    row["variant_experiment_id"] = variant_experiment_id
+    row["comparison_id"] = SqlAlchemyResearchComparisonRepository.deterministic_id(
+        variant_experiment_id=variant_experiment_id,
+        control_run_id=row["control_run_id"],
+        variant_run_id=row["variant_run_id"],
+        control_result_fingerprint=row["control_result_fingerprint"],
+        variant_result_fingerprint=row["variant_result_fingerprint"],
+        comparison_fingerprint=row["comparison_fingerprint"],
+    )
+
+    with pytest.raises(ValueError, match="RESEARCH_COMPARISON_VARIANT_ID"):
+        read(row)
