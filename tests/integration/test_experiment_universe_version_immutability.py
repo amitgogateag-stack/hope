@@ -45,7 +45,7 @@ def test_experiment_referenced_universe_version_metadata_is_immutable(operation:
                 if operation == "update"
                 else "DELETE FROM universe_versions WHERE universe_version_id = :id"
             )
-            with pytest.raises(IntegrityError, match="EXPERIMENT_UNIVERSE_VERSION_IMMUTABLE"):
+            with pytest.raises(IntegrityError, match="EXPERIMENT_UNIVERSE_IMMUTABLE"):
                 with connection.begin_nested():
                     connection.execute(text(statement), {"id": universe_version_id})
         finally:

@@ -8,7 +8,7 @@ BEGIN
         FROM experiments
         WHERE universe_version_id = OLD.universe_version_id
     ) THEN
-        RAISE EXCEPTION 'EXPERIMENT_UNIVERSE_VERSION_IMMUTABLE: referenced universe version metadata cannot be changed'
+        RAISE EXCEPTION 'EXPERIMENT_UNIVERSE_IMMUTABLE: referenced universe version cannot be modified or deleted'
             USING ERRCODE = '23514';
     END IF;
     RETURN OLD;
