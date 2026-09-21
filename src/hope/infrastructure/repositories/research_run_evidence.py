@@ -8,6 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import CHAR, JSON, Column, Connection, DateTime, MetaData, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from hope.application.experiments.research_runs import research_result_fingerprint
+
 
 class ResearchRunEvidenceRecord(BaseModel):
     """Immutable canonical output evidence for an authoritative research run."""
@@ -35,6 +37,10 @@ class SqlAlchemyResearchRunEvidenceRepository:
         )
 
     def persist(self, evidence: ResearchRunEvidenceRecord) -> bool:
+        _, expected_fingerprint = research_result_fingerprint(evidence.canonical_result)
+        if evidence.result_fingerprint != expected_fingerprint:
+            raise ValueError("RESEARCH_RUN_EVIDENCE_FINGERPRINT_MISMATCH")
+
         values = evidence.model_dump(exclude={"created_at"})
         statement = (
             pg_insert(self._evidence)
@@ -59,4 +65,11 @@ class SqlAlchemyResearchRunEvidenceRepository:
         row = self._connection.execute(
             select(self._evidence).where(self._evidence.c.research_run_id == research_run_id)
         ).mappings().one_or_none()
-        return ResearchRunEvidenceRecord(**row) if row else None
+        if row is None:
+            return None
+
+        evidence = ResearchRunEvidenceRecord(**row)
+        _, expected_fingerprint = research_result_fingerprint(evidence.canonical_result)
+        if evidence.result_fingerprint != expected_fingerprint:
+            raise ValueError("RESEARCH_RUN_EVIDENCE_STORED_FINGERPRINT_MISMATCH")
+        return evidence
