@@ -89,4 +89,9 @@ class SqlAlchemyMarketIntelligenceRepository:
         row = self._connection.execute(
             select(self._events).where(self._events.c.event_id == event_id)
         ).mappings().one_or_none()
-        return MarketIntelligenceEventRecord(**row) if row else None
+        if row is None:
+            return None
+
+        record = MarketIntelligenceEventRecord(**row)
+        MarketIntelligenceEvent(**record.model_dump(exclude={"created_at"}))
+        return record
