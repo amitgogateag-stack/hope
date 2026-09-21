@@ -65,4 +65,10 @@ class SqlAlchemyResearchInvariantRunRepository:
         row = self._connection.execute(
             select(self._runs).where(self._runs.c.research_run_id == research_run_id)
         ).mappings().one_or_none()
-        return ResearchInvariantRunRecord(**row) if row else None
+        if row is None:
+            return None
+
+        record = ResearchInvariantRunRecord(**row)
+        if record.result_fingerprint != _fingerprint(record.canonical_results):
+            raise ValueError("RESEARCH_INVARIANT_STORED_RESULT_FINGERPRINT_MISMATCH")
+        return record
