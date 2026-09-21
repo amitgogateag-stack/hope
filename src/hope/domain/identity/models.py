@@ -46,10 +46,23 @@ class IdentityMapping(BaseModel):
             raise ValueError("IDENTITY_MAPPING_VALUE_NOT_CANONICAL")
         return value
 
+    @field_validator("reason")
+    @classmethod
+    def require_canonical_reason(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.strip():
+            raise ValueError("IDENTITY_MAPPING_REASON_REQUIRED")
+        if value != value.strip():
+            raise ValueError("IDENTITY_MAPPING_REASON_NOT_CANONICAL")
+        return value
+
     @model_validator(mode="after")
     def validate_mapping_state(self):
         if self.status is IdentityStatus.ACTIVE and self.canonical_instrument_id is None:
             raise ValueError("ACTIVE identity mapping requires canonical_instrument_id")
         if self.status is IdentityStatus.TERMINAL and self.canonical_instrument_id is not None:
             raise ValueError("TERMINAL identity mapping cannot carry canonical_instrument_id")
+        if self.status is not IdentityStatus.ACTIVE and self.reason is None:
+            raise ValueError("NON_ACTIVE identity mapping requires reason")
         return self

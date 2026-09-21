@@ -74,3 +74,25 @@ def test_identity_lookup_rejects_noncanonical_namespace(
         repo = IdentityRepository(connection)
         with pytest.raises(ValueError, match='IDENTITY_MAPPING_VALUE'):
             repo.get_mapping(source_symbol, broker_instrument_id)
+
+
+@pytest.mark.parametrize("reason", [None, "", "   ", " padded reason "])
+def test_identity_repository_rejects_noncanonical_stored_nonactive_reason(reason):
+    engine = create_engine('sqlite+pysqlite:///:memory:')
+    with engine.begin() as connection:
+        schema(connection)
+        repo = IdentityRepository(connection)
+        now = datetime.now(timezone.utc)
+        connection.execute(
+            repo._mappings.insert().values(
+                identity_mapping_id=uuid4(),
+                source_symbol='STALE',
+                broker_instrument_id='broker-stale-1',
+                canonical_instrument_id=None,
+                status='TERMINAL',
+                reason=reason,
+                created_at=now,
+            )
+        )
+        with pytest.raises(ValueError, match='IDENTITY_MAPPING_REASON|NON_ACTIVE identity mapping requires reason'):
+            repo.get_mapping('STALE', 'broker-stale-1')
