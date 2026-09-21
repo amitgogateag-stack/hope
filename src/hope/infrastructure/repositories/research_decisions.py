@@ -76,6 +76,16 @@ class SqlAlchemyResearchDecisionRepository:
             return None
 
         decision = ResearchDecisionRecord(**row)
+        ResearchDecisionDefinition(
+            decision_id=decision.decision_id,
+            variant_experiment_id=decision.variant_experiment_id,
+            control_run_id=decision.control_run_id,
+            variant_run_id=decision.variant_run_id,
+            comparison_id=decision.comparison_id,
+            comparison_fingerprint=decision.comparison_fingerprint,
+            decision=decision.decision,
+            rationale=decision.rationale,
+        )
         comparison = SqlAlchemyResearchComparisonRepository(
             self._connection
         ).get_by_run_pair(

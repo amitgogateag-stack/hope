@@ -105,3 +105,34 @@ def test_decision_repository_rejects_mismatched_stored_comparison_fingerprint() 
         match="RESEARCH_DECISION_STORED_COMPARISON_FINGERPRINT_MISMATCH",
     ):
         read(decision, comparison)
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        ("decision_id", " DECISION-1 ", "RESEARCH_DECISION_IDENTITY_NOT_CANONICAL"),
+        ("variant_experiment_id", " EXP-VARIANT ", "RESEARCH_DECISION_IDENTITY_NOT_CANONICAL"),
+        ("rationale", " Evidence does not yet support a stronger conclusion ", "RESEARCH_DECISION_RATIONALE_NOT_CANONICAL"),
+    ],
+)
+def test_decision_repository_revalidates_stored_definition(
+    field: str,
+    value: str,
+    error: str,
+) -> None:
+    decision, comparison = evidence_rows()
+    decision[field] = value
+    if field == "variant_experiment_id":
+        comparison["variant_experiment_id"] = value
+        comparison["comparison_id"] = SqlAlchemyResearchComparisonRepository.deterministic_id(
+            variant_experiment_id=value,
+            control_run_id=comparison["control_run_id"],
+            variant_run_id=comparison["variant_run_id"],
+            control_result_fingerprint=comparison["control_result_fingerprint"],
+            variant_result_fingerprint=comparison["variant_result_fingerprint"],
+            comparison_fingerprint=comparison["comparison_fingerprint"],
+        )
+        decision["comparison_id"] = comparison["comparison_id"]
+
+    with pytest.raises(ValueError, match=error):
+        read(decision, comparison)
