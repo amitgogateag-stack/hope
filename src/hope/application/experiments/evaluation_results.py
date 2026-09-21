@@ -21,6 +21,15 @@ class ResearchEvaluationResultDefinition(BaseModel):
     canonical_result: dict[str, Any]
     result_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
 
+    @field_validator("variant_experiment_id")
+    @classmethod
+    def require_canonical_variant_id(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("RESEARCH_EVALUATION_RESULT_VARIANT_ID_REQUIRED")
+        if value != value.strip():
+            raise ValueError("RESEARCH_EVALUATION_RESULT_VARIANT_ID_NOT_CANONICAL")
+        return value
+
     @field_validator("stage")
     @classmethod
     def require_known_stage(cls, value: str) -> str:

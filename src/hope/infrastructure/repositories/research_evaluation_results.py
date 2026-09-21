@@ -60,8 +60,17 @@ class SqlAlchemyResearchEvaluationResultRepository:
         ).mappings().all()
         records = [ResearchEvaluationResultRecord(**row) for row in rows]
         for record in records:
-            expected = research_evaluation_result_fingerprint(record.canonical_result)
-            if record.result_fingerprint != expected:
+            definition = ResearchEvaluationResultDefinition(
+                variant_experiment_id=record.variant_experiment_id,
+                control_run_id=record.control_run_id,
+                variant_run_id=record.variant_run_id,
+                stage=record.stage,
+                protocol_hash=record.protocol_hash,
+                canonical_result=record.canonical_result,
+                result_fingerprint=record.result_fingerprint,
+            )
+            expected = research_evaluation_result_fingerprint(definition.canonical_result)
+            if definition.result_fingerprint != expected:
                 raise ValueError(
                     "RESEARCH_EVALUATION_STORED_RESULT_FINGERPRINT_MISMATCH"
                 )
