@@ -91,6 +91,41 @@ class SqlAlchemyStrategyCandidateRepository:
         )
         return self._connection.execute(statement).scalar_one_or_none() is not None
 
+    @classmethod
+    def _validate_stored_identity(
+        cls,
+        *,
+        classification_id: UUID,
+        strategy_version_id: UUID,
+        markets: tuple[StrategyMarket, ...],
+        state: StrategyCandidateState,
+        research_decision_id: str | None,
+        rationale: str,
+    ) -> None:
+        definition = StrategyCandidateClassification(
+            strategy_version_id=strategy_version_id,
+            markets=frozenset(markets),
+            state=state,
+            research_decision_id=research_decision_id,
+            rationale=rationale,
+        )
+        if classification_id != cls.deterministic_id(definition):
+            raise ValueError("STRATEGY_CANDIDATE_STORED_ID_NOT_DETERMINISTIC")
+
+    @classmethod
+    def _validate_record(
+        cls,
+        record: StrategyCandidateClassificationRecord | CurrentStrategyCandidateRecord,
+    ) -> None:
+        cls._validate_stored_identity(
+            classification_id=record.classification_id,
+            strategy_version_id=record.strategy_version_id,
+            markets=record.markets,
+            state=record.state,
+            research_decision_id=record.research_decision_id,
+            rationale=record.rationale,
+        )
+
     def history(
         self, strategy_version_id: UUID
     ) -> list[StrategyCandidateClassificationRecord]:
@@ -101,7 +136,10 @@ class SqlAlchemyStrategyCandidateRepository:
             )
             .order_by(self._classifications.c.classification_sequence)
         ).mappings().all()
-        return [StrategyCandidateClassificationRecord(**row) for row in rows]
+        records = [StrategyCandidateClassificationRecord(**row) for row in rows]
+        for record in records:
+            self._validate_record(record)
+        return records
 
     def current(self) -> list[CurrentStrategyCandidateRecord]:
         metadata = MetaData()
@@ -121,4 +159,7 @@ class SqlAlchemyStrategyCandidateRepository:
         rows = self._connection.execute(
             select(current).order_by(current.c.classification_sequence)
         ).mappings().all()
-        return [CurrentStrategyCandidateRecord(**row) for row in rows]
+        records = [CurrentStrategyCandidateRecord(**row) for row in rows]
+        for record in records:
+            self._validate_record(record)
+        return records
