@@ -26,11 +26,15 @@ class ResearchInvariantRunArtifact(BaseModel):
         cls, value: list[dict[str, str]]
     ) -> list[dict[str, str]]:
         required = {"invariant_id", "status", "message"}
+        invariant_ids: set[str] = set()
         for result in value:
             if set(result) != required:
                 raise ValueError("RESEARCH_INVARIANT_RESULT_SHAPE_INVALID")
             if not result["invariant_id"].strip() or result["invariant_id"] != result["invariant_id"].strip():
                 raise ValueError("RESEARCH_INVARIANT_ID_NOT_CANONICAL")
+            if result["invariant_id"] in invariant_ids:
+                raise ValueError("RESEARCH_INVARIANT_RESULT_DUPLICATE")
+            invariant_ids.add(result["invariant_id"])
             if result["status"] not in {"PASS", "FAIL", "SKIP"}:
                 raise ValueError("RESEARCH_INVARIANT_STATUS_INVALID")
         return value

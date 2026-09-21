@@ -63,6 +63,13 @@ def test_invariant_run_repository_rejects_tampered_stored_results() -> None:
         ([{"invariant_id": "INVARIANT-001", "status": "UNKNOWN", "message": "x"}], "RESEARCH_INVARIANT_STATUS_INVALID"),
         ([{"invariant_id": " INVARIANT-001 ", "status": "PASS", "message": "x"}], "RESEARCH_INVARIANT_ID_NOT_CANONICAL"),
         ([{"invariant_id": "INVARIANT-001", "status": "PASS", "message": "x", "extra": "tampered"}], "RESEARCH_INVARIANT_RESULT_SHAPE_INVALID"),
+        (
+            [
+                {"invariant_id": "INVARIANT-001", "status": "PASS", "message": "x"},
+                {"invariant_id": "INVARIANT-001", "status": "FAIL", "message": "y"},
+            ],
+            "RESEARCH_INVARIANT_RESULT_DUPLICATE",
+        ),
     ],
 )
 def test_invariant_run_repository_rejects_semantically_invalid_stored_results(
