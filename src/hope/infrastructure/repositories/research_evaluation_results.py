@@ -58,7 +58,14 @@ class SqlAlchemyResearchEvaluationResultRepository:
             )
             .order_by(self._results.c.stage)
         ).mappings().all()
-        return [ResearchEvaluationResultRecord(**row) for row in rows]
+        records = [ResearchEvaluationResultRecord(**row) for row in rows]
+        for record in records:
+            expected = research_evaluation_result_fingerprint(record.canonical_result)
+            if record.result_fingerprint != expected:
+                raise ValueError(
+                    "RESEARCH_EVALUATION_STORED_RESULT_FINGERPRINT_MISMATCH"
+                )
+        return records
 
     def persist(self, definition: ResearchEvaluationResultDefinition) -> bool:
         expected = research_evaluation_result_fingerprint(definition.canonical_result)
