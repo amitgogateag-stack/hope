@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, and_, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -24,6 +24,13 @@ class IntelligenceAssessmentRecord(BaseModel):
     disposition: IntelligenceDisposition
     source_action: IntelligenceAction
     created_at: datetime
+
+    @field_validator("policy_version")
+    @classmethod
+    def require_canonical_policy_version(cls, value: str) -> str:
+        if not value or value != value.strip():
+            raise ValueError("INTELLIGENCE_ASSESSMENT_POLICY_NOT_CANONICAL")
+        return value
 
 
 class SqlAlchemyIntelligenceAssessmentRepository:
@@ -97,7 +104,16 @@ class SqlAlchemyIntelligenceAssessmentRepository:
                 self._assessments.c.policy_version == policy_version,
             )
         ).mappings().one_or_none()
-        return IntelligenceAssessmentRecord(**row) if row else None
+        if row is None:
+            return None
+        record = IntelligenceAssessmentRecord(**row)
+        IntelligenceAssessment(
+            event_id=record.event_id,
+            policy_version=record.policy_version,
+            disposition=record.disposition,
+            source_action=record.source_action,
+        )
+        return record
 
 
     def entry_gate_context(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, field_validator
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -22,6 +22,15 @@ class IntelligenceReviewResolutionRecord(BaseModel):
     outcome: IntelligenceReviewOutcome
     rationale: str
     created_at: datetime
+
+    @field_validator("policy_version", "rationale")
+    @classmethod
+    def require_canonical_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("INTELLIGENCE_REVIEW_TEXT_REQUIRED")
+        if value != value.strip():
+            raise ValueError("INTELLIGENCE_REVIEW_TEXT_NOT_CANONICAL")
+        return value
 
 
 class SqlAlchemyIntelligenceReviewRepository:
@@ -72,4 +81,13 @@ class SqlAlchemyIntelligenceReviewRepository:
                 self._resolutions.c.policy_version == policy_version,
             )
         ).mappings().one_or_none()
-        return IntelligenceReviewResolutionRecord(**row) if row else None
+        if row is None:
+            return None
+        record = IntelligenceReviewResolutionRecord(**row)
+        IntelligenceReviewResolution(
+            assessment_id=record.assessment_id,
+            policy_version=record.policy_version,
+            outcome=record.outcome,
+            rationale=record.rationale,
+        )
+        return record
