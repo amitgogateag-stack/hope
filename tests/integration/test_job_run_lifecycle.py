@@ -138,3 +138,61 @@ def test_job_run_completion_rejects_durable_identity_conflict() -> None:
 
         with pytest.raises(ValueError, match="JOB_RUN_IDENTITY_CONFLICT"):
             repository.complete(completion)
+
+
+@pytest.mark.integration
+def test_job_run_reads_reject_noncanonical_durable_text() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    padded_key_run = create_scheduled_job_run(
+        "paper-cycle-padded-key",
+        datetime(2026, 9, 9, 21, 0, tzinfo=UTC),
+    )
+    padded_failure_run = create_scheduled_job_run(
+        "paper-cycle-padded-failure",
+        datetime(2026, 9, 9, 22, 0, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("DELETE FROM job_runs WHERE job_run_id IN (:key_id, :failure_id)"),
+            {
+                "key_id": padded_key_run.job_run_id,
+                "failure_id": padded_failure_run.job_run_id,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for) "
+                "VALUES (:job_run_id, :job_key, :scheduled_for)"
+            ),
+            {
+                "job_run_id": padded_key_run.job_run_id,
+                "job_key": f" {padded_key_run.job_key} ",
+                "scheduled_for": padded_key_run.scheduled_for,
+            },
+        )
+        connection.execute(
+            text(
+                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for, status, completed_at, failure_code) "
+                "VALUES (:job_run_id, :job_key, :scheduled_for, 'FAILED', :completed_at, :failure_code)"
+            ),
+            {
+                "job_run_id": padded_failure_run.job_run_id,
+                "job_key": padded_failure_run.job_key,
+                "scheduled_for": padded_failure_run.scheduled_for,
+                "completed_at": padded_failure_run.scheduled_for + timedelta(minutes=1),
+                "failure_code": " UPSTREAM_DATA_UNAVAILABLE ",
+            },
+        )
+        repository = SqlAlchemyJobRunRepository(connection)
+
+        with pytest.raises(ValueError, match="JOB_RUN_KEY_NOT_CANONICAL"):
+            repository.get_record(padded_key_run.job_run_id)
+        with pytest.raises(ValueError, match="JOB_RUN_FAILURE_CODE_NOT_CANONICAL"):
+            repository.get_record(padded_failure_run.job_run_id)

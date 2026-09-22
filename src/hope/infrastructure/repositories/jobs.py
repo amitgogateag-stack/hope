@@ -114,9 +114,14 @@ class SqlAlchemyJobRunRepository:
             job_key=row["job_key"],
             scheduled_for=row["scheduled_for"],
         )
-        return JobRunRecord(
+        if row["job_key"] != run.job_key:
+            raise ValueError("JOB_RUN_KEY_NOT_CANONICAL")
+        record = JobRunRecord(
             run=run,
             status=JobRunStatus(row["status"]),
             completed_at=row["completed_at"],
             failure_code=row["failure_code"],
         )
+        if row["failure_code"] != record.failure_code:
+            raise ValueError("JOB_RUN_FAILURE_CODE_NOT_CANONICAL")
+        return record
