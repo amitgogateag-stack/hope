@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from hope.application.paper.portfolio_pnl import PaperPortfolioPnLEvent
+from hope.application.paper.portfolio_pnl import PaperPortfolioPnLEvent, paper_portfolio_pnl_event_id
 from hope.domain.execution.models import OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioLedger
@@ -59,11 +59,12 @@ def test_unrealized_pnl_rejects_non_finite_mark():
 
 @pytest.mark.parametrize("invalid_value", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity")])
 def test_paper_pnl_event_rejects_non_finite_realized_delta(invalid_value):
+    portfolio_id, fill_id = uuid4(), uuid4()
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_REALIZED_DELTA_INVALID"):
         PaperPortfolioPnLEvent(
-            pnl_event_id=uuid4(),
-            portfolio_id=uuid4(),
-            fill_id=uuid4(),
+            pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+            portfolio_id=portfolio_id,
+            fill_id=fill_id,
             instrument_id=uuid4(),
             realized_pnl_delta=invalid_value,
             commission_delta=Decimal("0"),
@@ -73,13 +74,41 @@ def test_paper_pnl_event_rejects_non_finite_realized_delta(invalid_value):
 
 @pytest.mark.parametrize("invalid_value", [Decimal("NaN"), Decimal("Infinity"), Decimal("-Infinity"), Decimal("-1")])
 def test_paper_pnl_event_rejects_invalid_commission_delta(invalid_value):
+    portfolio_id, fill_id = uuid4(), uuid4()
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_COMMISSION_DELTA_INVALID"):
+        PaperPortfolioPnLEvent(
+            pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+            portfolio_id=portfolio_id,
+            fill_id=fill_id,
+            instrument_id=uuid4(),
+            realized_pnl_delta=Decimal("0"),
+            commission_delta=invalid_value,
+            event_time=NOW,
+        )
+
+
+def test_paper_pnl_event_rejects_noncanonical_identity():
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_IDENTITY_MISMATCH"):
         PaperPortfolioPnLEvent(
             pnl_event_id=uuid4(),
             portfolio_id=uuid4(),
             fill_id=uuid4(),
             instrument_id=uuid4(),
             realized_pnl_delta=Decimal("0"),
-            commission_delta=invalid_value,
+            commission_delta=Decimal("0"),
             event_time=NOW,
+        )
+
+
+def test_paper_pnl_event_rejects_naive_event_time():
+    portfolio_id, fill_id = uuid4(), uuid4()
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EVENT_TIME_MUST_BE_TIMEZONE_AWARE"):
+        PaperPortfolioPnLEvent(
+            pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+            portfolio_id=portfolio_id,
+            fill_id=fill_id,
+            instrument_id=uuid4(),
+            realized_pnl_delta=Decimal("0"),
+            commission_delta=Decimal("0"),
+            event_time=datetime(2026, 1, 1, 14, 0),
         )

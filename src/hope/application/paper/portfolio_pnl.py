@@ -28,6 +28,19 @@ class PaperPortfolioPnLEvent:
             raise ValueError("PAPER_PORTFOLIO_PNL_REALIZED_DELTA_INVALID")
         if not self.commission_delta.is_finite() or self.commission_delta < 0:
             raise ValueError("PAPER_PORTFOLIO_PNL_COMMISSION_DELTA_INVALID")
+        for value, error in (
+            (self.pnl_event_id, "PAPER_PORTFOLIO_PNL_EVENT_ID_INVALID"),
+            (self.portfolio_id, "PAPER_PORTFOLIO_PNL_PORTFOLIO_ID_INVALID"),
+            (self.fill_id, "PAPER_PORTFOLIO_PNL_FILL_ID_INVALID"),
+            (self.instrument_id, "PAPER_PORTFOLIO_PNL_INSTRUMENT_ID_INVALID"),
+        ):
+            if not isinstance(value, UUID):
+                raise ValueError(error)
+        if self.event_time.tzinfo is None or self.event_time.utcoffset() is None:
+            raise ValueError("PAPER_PORTFOLIO_PNL_EVENT_TIME_MUST_BE_TIMEZONE_AWARE")
+        expected_id = paper_portfolio_pnl_event_id(self.portfolio_id, self.fill_id)
+        if self.pnl_event_id != expected_id:
+            raise ValueError("PAPER_PORTFOLIO_PNL_IDENTITY_MISMATCH")
 
 
 def paper_portfolio_pnl_event_id(portfolio_id: UUID, fill_id: UUID) -> UUID:
