@@ -128,6 +128,16 @@ def test_claimed_job_run_identity_cannot_be_rewritten() -> None:
                     },
                 )
 
+        with pytest.raises(IntegrityError, match="JOB_RUN_IDENTITY_IMMUTABLE"):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "UPDATE job_runs SET created_at = created_at + interval '1 second' "
+                        "WHERE job_run_id = :job_run_id"
+                    ),
+                    {"job_run_id": job_run.job_run_id},
+                )
+
         stored = connection.execute(
             text("SELECT job_run_id, job_key, scheduled_for, status FROM job_runs WHERE job_run_id = :job_run_id"),
             {"job_run_id": job_run.job_run_id},
