@@ -14,12 +14,12 @@ BEGIN
     WHERE signal_id = NEW.signal_id;
 
     IF risk_decision IS DISTINCT FROM 'APPROVE' THEN
-        RAISE EXCEPTION 'PAPER_ORDER_REQUIRES_APPROVING_RISK_ASSESSMENT: signal %', NEW.signal_id
+        RAISE EXCEPTION 'PAPER_ORDER_REQUIRES_APPROVING_RISK_ASSESSMENT: signal %%', NEW.signal_id
             USING ERRCODE = '23514';
     END IF;
 
     IF risk_quantity IS DISTINCT FROM NEW.quantity THEN
-        RAISE EXCEPTION 'PAPER_ORDER_RISK_QUANTITY_MISMATCH: signal % approved % vs order %',
+        RAISE EXCEPTION 'PAPER_ORDER_RISK_QUANTITY_MISMATCH: signal %% approved %% vs order %%',
             NEW.signal_id, risk_quantity, NEW.quantity
             USING ERRCODE = '23514';
     END IF;
