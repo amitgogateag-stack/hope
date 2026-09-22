@@ -149,6 +149,70 @@ def test_paper_portfolio_rejects_untracked_or_conflicting_fill_without_state_mut
 
 
 @pytest.mark.integration
+def test_paper_portfolio_restore_rejects_applied_fill_without_effect():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, signal_id, order_id, fill_id, portfolio_id = (uuid4() for _ in range(5))
+    decision_time = datetime(2026, 9, 9, 23, 35, tzinfo=UTC)
+    fill_time = decision_time.replace(minute=36)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id,'PAPER-NO-EFFECT','TEST','ACTIVE')"),
+            {"id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO signals(signal_id, instrument_id, decision_time, state) "
+                "VALUES (:signal_id, :instrument_id, :decision_time, 'SIGNAL')"
+            ),
+            {"signal_id": signal_id, "instrument_id": instrument_id, "decision_time": decision_time},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO orders(order_id, signal_id, instrument_id, environment, side, quantity) "
+                "VALUES (:order_id, :signal_id, :instrument_id, 'PAPER', 'BUY', 1)"
+            ),
+            {"order_id": order_id, "signal_id": signal_id, "instrument_id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) "
+                "VALUES (:fill_id, :order_id, 1, 100, 0, 0.25, :fill_time, 'portfolio-cost-v1')"
+            ),
+            {"fill_id": fill_id, "order_id": order_id, "fill_time": fill_time},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash, version) "
+                "VALUES (:portfolio_id, 1000, 899.75, 1)"
+            ),
+            {"portfolio_id": portfolio_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolio_positions(portfolio_id, instrument_id, quantity, average_price, realized_pnl, total_commission) "
+                "VALUES (:portfolio_id, :instrument_id, 1, 100, 0, 0.25)"
+            ),
+            {"portfolio_id": portfolio_id, "instrument_id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolio_fill_applications(portfolio_id, fill_id, application_sequence, applied_at) "
+                "VALUES (:portfolio_id, :fill_id, 1, :fill_time)"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill_id, "fill_time": fill_time},
+        )
+
+        with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_EFFECT"):
+            SqlAlchemyPaperPortfolioRepository(connection).load_ledger(portfolio_id)
+
+
+@pytest.mark.integration
 def test_paper_portfolio_restore_rejects_incomplete_application_history():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:

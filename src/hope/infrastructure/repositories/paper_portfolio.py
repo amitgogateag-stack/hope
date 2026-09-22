@@ -173,6 +173,11 @@ class SqlAlchemyPaperPortfolioRepository:
                 cost_model_version=row["cost_model_version"],
                 fill_time=row["filled_at"],
             )
+            effect = self._effects.get(PaperEffectType.FILL, fill.fill_id)
+            if effect is None:
+                raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_EFFECT")
+            if effect.payload_hash != paper_fill_payload_hash(fill):
+                raise ValueError("PAPER_PORTFOLIO_APPLIED_FILL_PAYLOAD_MISMATCH")
             ledger.apply_fill(fill)
 
         materialized = PortfolioState(
