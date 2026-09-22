@@ -38,6 +38,8 @@ def test_experiment_referenced_universe_version_metadata_is_immutable(operation:
             connection.execute(text("INSERT INTO dataset_versions(dataset_version_id, dataset_id, version, vintage_label, immutable) VALUES (:vid, :did, 'v1', 'sealed', TRUE)"), {"vid": dataset_version_id, "did": dataset_id})
             connection.execute(text("INSERT INTO universes(universe_id, name) VALUES (:id, :name)"), {"id": universe_id, "name": f"freeze-version-{universe_id}"})
             connection.execute(text("INSERT INTO universe_versions(universe_version_id, universe_id, version, pit_certified, declared_member_count) VALUES (:vid, :uid, 'v1', TRUE, 0)"), {"vid": universe_version_id, "uid": universe_id})
+            connection.execute(text("UPDATE universe_versions SET version = 'draft-v2' WHERE universe_version_id = :id"), {"id": universe_version_id})
+            assert connection.execute(text("SELECT version FROM universe_versions WHERE universe_version_id = :id"), {"id": universe_version_id}).scalar_one() == "draft-v2"
             connection.execute(text("INSERT INTO configuration_snapshots(configuration_hash, canonical_json) VALUES (:hash, CAST(:payload AS JSONB))"), {"hash": config_hash, "payload": "{}"})
             connection.execute(text("INSERT INTO experiments(experiment_id, hypothesis, strategy_version_id, dataset_version_id, universe_version_id, configuration_hash, environment, status) VALUES (:eid, 'freeze version provenance', :sid, :did, :uid, :hash, 'RESEARCH', 'CREATED')"), {"eid": f"EXP-UNIVERSE-VERSION-{operation.upper()}", "sid": strategy_version_id, "did": dataset_version_id, "uid": universe_version_id, "hash": config_hash})
 
