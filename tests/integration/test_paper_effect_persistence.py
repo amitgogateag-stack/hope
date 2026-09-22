@@ -23,6 +23,58 @@ PAYLOAD = "b" * 64
 
 
 @pytest.mark.integration
+def test_paper_effect_cannot_predate_its_job_claim() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    job_run = create_scheduled_job_run(
+        "paper-effect-claim-chronology",
+        datetime(2026, 9, 9, 21, 0, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("DELETE FROM job_runs WHERE job_run_id = :job_run_id"),
+            {"job_run_id": job_run.job_run_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for, created_at) "
+                "VALUES (:job_run_id, :job_key, :scheduled_for, :created_at)"
+            ),
+            {
+                "job_run_id": job_run.job_run_id,
+                "job_key": job_run.job_key,
+                "scheduled_for": job_run.scheduled_for,
+                "created_at": job_run.scheduled_for,
+            },
+        )
+
+        with pytest.raises(IntegrityError, match="PAPER_EFFECT_PRECEDES_JOB_CLAIM"):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_effects("
+                        "effect_id, job_run_id, effect_type, entity_id, payload_hash, created_at"
+                        ") VALUES ("
+                        ":effect_id, :job_run_id, 'SIGNAL', :entity_id, :payload_hash, :created_at"
+                        ")"
+                    ),
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": job_run.job_run_id,
+                        "entity_id": uuid4(),
+                        "payload_hash": PAYLOAD,
+                        "created_at": job_run.scheduled_for - timedelta(seconds=1),
+                    },
+                )
+
+
+@pytest.mark.integration
 def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
