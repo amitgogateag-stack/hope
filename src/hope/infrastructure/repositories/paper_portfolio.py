@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
+from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioFillTransition, PortfolioLedger, PortfolioState, PositionState
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
@@ -54,6 +55,14 @@ class SqlAlchemyPaperPortfolioRepository:
             Column("transaction_cost", Numeric, nullable=False),
             Column("filled_at", DateTime(timezone=True), nullable=False),
             Column("cost_model_version", String, nullable=True),
+        )
+        self._orders = Table(
+            "orders", metadata,
+            Column("order_id", Uuid, primary_key=True),
+            Column("signal_id", Uuid, nullable=False),
+            Column("instrument_id", Uuid, nullable=False),
+            Column("environment", String, nullable=False),
+            Column("side", String, nullable=False),
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
@@ -117,12 +126,22 @@ class SqlAlchemyPaperPortfolioRepository:
                 self._applications.c.fill_id,
                 self._applications.c.application_sequence,
                 self._fills.c.filled_at,
+                self._fills.c.order_id,
+                self._fills.c.quantity,
+                self._fills.c.fill_price,
+                self._fills.c.slippage,
+                self._fills.c.transaction_cost,
+                self._fills.c.cost_model_version,
+                self._orders.c.signal_id,
+                self._orders.c.instrument_id,
+                self._orders.c.environment,
+                self._orders.c.side,
             )
             .select_from(
                 self._applications.join(
                     self._fills,
                     self._applications.c.fill_id == self._fills.c.fill_id,
-                )
+                ).join(self._orders, self._fills.c.order_id == self._orders.c.order_id)
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
             .order_by(self._applications.c.application_sequence)
@@ -136,6 +155,34 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_TIME_REGRESSION")
         return applications
 
+    def _restore_verified_ledger(self, portfolio, applications) -> PortfolioLedger:
+        ledger = PortfolioLedger(portfolio["initial_cash"])
+        for row in applications:
+            if row["environment"] != Environment.PAPER.value:
+                raise RuntimeError("PAPER_PORTFOLIO_NON_PAPER_HISTORY")
+            fill = Fill(
+                fill_id=row["fill_id"],
+                order_id=row["order_id"],
+                signal_id=row["signal_id"],
+                instrument_id=row["instrument_id"],
+                side=OrderSide(row["side"]),
+                quantity=row["quantity"],
+                price=row["fill_price"],
+                commission=row["transaction_cost"],
+                slippage=row["slippage"],
+                cost_model_version=row["cost_model_version"],
+                fill_time=row["filled_at"],
+            )
+            ledger.apply_fill(fill)
+
+        materialized = PortfolioState(
+            portfolio["cash"],
+            self._load_positions(portfolio["portfolio_id"]),
+        )
+        if ledger.state != materialized:
+            raise RuntimeError("PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT")
+        return ledger
+
     def load_ledger(self, portfolio_id: UUID) -> PortfolioLedger | None:
         portfolio = self._connection.execute(
             select(self._portfolios).where(self._portfolios.c.portfolio_id == portfolio_id)
@@ -143,12 +190,7 @@ class SqlAlchemyPaperPortfolioRepository:
         if portfolio is None:
             return None
         applications = self._load_application_history(portfolio_id, portfolio["version"])
-        state = PortfolioState(portfolio["cash"], self._load_positions(portfolio_id))
-        return PortfolioLedger.from_state(
-            state,
-            applied_fill_ids=[row["fill_id"] for row in applications],
-            initial_cash=portfolio["initial_cash"],
-        )
+        return self._restore_verified_ledger(portfolio, applications)
 
     def apply_fill_with_transition(
         self,
@@ -161,16 +203,12 @@ class SqlAlchemyPaperPortfolioRepository:
             self._assert_tracked_fill(fill)
             portfolio = self._ensure_and_lock_portfolio(portfolio_id, initial_cash)
             applications = self._load_application_history(portfolio_id, portfolio["version"])
+            ledger = self._restore_verified_ledger(portfolio, applications)
             if any(row["fill_id"] == fill.fill_id for row in applications):
                 return None
             if applications and fill.fill_time < applications[-1]["filled_at"]:
                 raise ValueError("PAPER_PORTFOLIO_FILL_TIME_REGRESSION")
 
-            ledger = PortfolioLedger.from_state(
-                PortfolioState(portfolio["cash"], self._load_positions(portfolio_id)),
-                applied_fill_ids=[row["fill_id"] for row in applications],
-                initial_cash=portfolio["initial_cash"],
-            )
             transition = ledger.apply_fill_with_transition(fill)
             state = transition.state_after
             position = state.positions[fill.instrument_id]
