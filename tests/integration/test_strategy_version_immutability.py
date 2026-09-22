@@ -82,3 +82,64 @@ def test_strategy_versions_are_append_only() -> None:
             assert stored == ("1.0.0", "commit-a")
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("version", "code_commit"),
+    [
+        ("", "commit-a"),
+        (" 1.0.0", "commit-a"),
+        ("1.0.0 ", "commit-a"),
+        ("1.0.0", ""),
+        ("1.0.0", " commit-a"),
+        ("1.0.0", "commit-a "),
+    ],
+)
+def test_strategy_version_text_identity_must_be_canonical(
+    version: str, code_commit: str
+) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    strategy_id = uuid4()
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(
+                text(
+                    "INSERT INTO strategies(strategy_id, name, family) "
+                    "VALUES (:strategy_id, :name, :family)"
+                ),
+                {
+                    "strategy_id": strategy_id,
+                    "name": f"canonical-provenance-{strategy_id}",
+                    "family": "TEST",
+                },
+            )
+
+            with pytest.raises(IntegrityError):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO strategy_versions("
+                            "strategy_version_id, strategy_id, version, code_commit"
+                            ") VALUES ("
+                            ":strategy_version_id, :strategy_id, :version, :code_commit"
+                            ")"
+                        ),
+                        {
+                            "strategy_version_id": uuid4(),
+                            "strategy_id": strategy_id,
+                            "version": version,
+                            "code_commit": code_commit,
+                        },
+                    )
+        finally:
+            transaction.rollback()
