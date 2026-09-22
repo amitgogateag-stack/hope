@@ -37,6 +37,11 @@ def test_paper_portfolio_fill_applications_reject_fill_time_regression() -> None
             connection.execute(text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0, :t, 'test-v1')"), {"id": first_fill_id, "order_id": order_id, "t": later})
             connection.execute(text("INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, transaction_cost, filled_at, cost_model_version) VALUES (:id, :order_id, 1, 100, 0, 0, :t, 'test-v1')"), {"id": second_fill_id, "order_id": order_id, "t": earlier})
             connection.execute(text("INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash) VALUES (:id, 1000, 1000)"), {"id": portfolio_id})
+
+            with pytest.raises(IntegrityError, match="PAPER_PORTFOLIO_APPLICATION_PRECEDES_FILL"):
+                with connection.begin_nested():
+                    connection.execute(text("INSERT INTO paper_portfolio_fill_applications(portfolio_id, fill_id, application_sequence, applied_at) VALUES (:portfolio_id, :fill_id, 1, :t)"), {"portfolio_id": portfolio_id, "fill_id": first_fill_id, "t": earlier})
+
             connection.execute(text("INSERT INTO paper_portfolio_fill_applications(portfolio_id, fill_id, application_sequence, applied_at) VALUES (:portfolio_id, :fill_id, 1, :t)"), {"portfolio_id": portfolio_id, "fill_id": first_fill_id, "t": later})
 
             with pytest.raises(IntegrityError, match="PAPER_PORTFOLIO_APPLICATION_TIME_REGRESSION"):

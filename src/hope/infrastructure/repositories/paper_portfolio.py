@@ -125,6 +125,7 @@ class SqlAlchemyPaperPortfolioRepository:
             select(
                 self._applications.c.fill_id,
                 self._applications.c.application_sequence,
+                self._applications.c.applied_at,
                 self._fills.c.filled_at,
                 self._fills.c.order_id,
                 self._fills.c.quantity,
@@ -150,6 +151,9 @@ class SqlAlchemyPaperPortfolioRepository:
         actual_sequences = [row["application_sequence"] for row in applications]
         if actual_sequences != expected_sequences:
             raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT")
+        for row in applications:
+            if row["applied_at"] < row["filled_at"]:
+                raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_PRECEDES_FILL")
         for previous, current in zip(applications, applications[1:]):
             if current["filled_at"] < previous["filled_at"]:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLICATION_TIME_REGRESSION")
