@@ -244,6 +244,51 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     assert sequence == 7
 
 
+def test_paper_cycle_runtime_does_not_authorize_order_when_risk_write_is_not_recorded() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    order_writer = RecordingOrderWriter()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+    signal_id = UUID(int=14)
+    assessment = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="PORTFOLIO_RISK_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+    order = Order(
+        order_id=UUID(int=15),
+        signal_id=signal_id,
+        instrument_id=UUID(int=16),
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+
+    class NonRecordingRiskWriter(RecordingRiskWriter):
+        def record(self, context, assessment) -> bool:
+            self.calls.append((context, assessment))
+            return False
+
+    def work(runtime) -> None:
+        assert runtime.record_risk(assessment) is False
+        runtime.record_order(order)
+
+    with pytest.raises(ValueError, match="PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL"):
+        runner.run_runtime(
+            job_run,
+            RecordingSignalWriter(),
+            NonRecordingRiskWriter(),
+            order_writer,
+            RecordingFillAccountingWriter(),
+            work,
+        )
+
+    assert order_writer.calls == []
+    assert repository.completions[0].status is JobRunStatus.FAILED
+
+
 def test_paper_cycle_runtime_rejects_order_without_runtime_risk_approval() -> None:
     job_run = make_run()
     repository = FakeJobRunRepository()

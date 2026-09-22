@@ -62,7 +62,7 @@ class PaperRuntimeContext:
 
     def record_risk(self, assessment: RiskAssessment) -> bool:
         recorded = self._risk_writer.record(self.cycle, assessment)
-        if assessment.decision is RiskDecision.APPROVE:
+        if recorded and assessment.decision is RiskDecision.APPROVE:
             self._approved_quantities[assessment.signal_id] = assessment.approved_quantity
         return recorded
 
