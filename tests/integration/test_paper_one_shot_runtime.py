@@ -18,6 +18,7 @@ from hope.infrastructure.paper_runtime import (
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.scheduling.paper import _preflight_due_paper_job_states
 from hope.infrastructure.repositories.market_data_finalizer import (
     SqlAlchemyMarketDataVersionFinalizer,
 )
@@ -452,3 +453,20 @@ def test_run_paper_once_rolls_back_claim_when_failure_terminalization_is_invalid
 
     with engine.connect() as connection:
         assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
+
+
+@pytest.mark.integration
+def test_scheduler_preflight_rejects_persisted_incomplete_claim() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-scheduler-stranded-claim",
+        datetime(2026, 9, 10, 13, 38, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+
+    with engine.begin() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.claim(job_run) is True
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
+        _preflight_due_paper_job_states(engine, [job_run])
