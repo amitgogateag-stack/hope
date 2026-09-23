@@ -40,6 +40,14 @@ class OperationalPaperJobBinding:
             raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_NOT_CANONICAL")
         PaperJobDefinition(self.job_key, self.work)
 
+    @property
+    def durable_job_key(self) -> str:
+        return _durable_operational_paper_job_key(
+            self.strategy_version_id,
+            self.market,
+            self.job_key,
+        )
+
 
 @dataclass(frozen=True)
 class OperationalPaperSchedule:
@@ -64,6 +72,22 @@ class OperationalPaperSchedule:
             raise TypeError("PAPER_SCHEDULE_REQUIRES_SESSION_OFFSET")
         if self.session_offset < timedelta(0):
             raise ValueError("PAPER_SCHEDULE_OFFSET_MUST_BE_NONNEGATIVE")
+
+    @property
+    def durable_job_key(self) -> str:
+        return _durable_operational_paper_job_key(
+            self.strategy_version_id,
+            self.market,
+            self.job_key,
+        )
+
+
+def _durable_operational_paper_job_key(
+    strategy_version_id: UUID,
+    market: StrategyMarket,
+    job_key: str,
+) -> str:
+    return f"paper:{market.value}:{strategy_version_id}:{job_key}"
 
 
 def build_operational_paper_registry(
@@ -107,7 +131,7 @@ def build_operational_paper_registry(
             raise ValueError("PAPER_ORCHESTRATION_DUPLICATE_MARKET_BINDING")
         bound_scopes.add(scope)
         bound_versions.add(binding.strategy_version_id)
-        definitions.append(PaperJobDefinition(binding.job_key, binding.work))
+        definitions.append(PaperJobDefinition(binding.durable_job_key, binding.work))
 
     if bound_versions != operational_versions:
         raise ValueError("PAPER_ORCHESTRATION_OPERATIONAL_CANDIDATE_UNBOUND")
@@ -168,7 +192,7 @@ def build_operational_paper_runs(
             if scheduled_for >= session_close:
                 raise ValueError("PAPER_SCHEDULE_OFFSET_OUTSIDE_SESSION")
             if window_start <= scheduled_for < window_end:
-                runs.append(create_scheduled_job_run(schedule.job_key, scheduled_for))
+                runs.append(create_scheduled_job_run(schedule.durable_job_key, scheduled_for))
 
     runs.sort(key=lambda run: (run.scheduled_for, run.job_key, str(run.job_run_id)))
     return tuple(runs)
