@@ -54,9 +54,13 @@ def _schedule(binding: OperationalPaperJobBinding, *, offset=timedelta(minutes=5
 
 def test_operational_paper_registry_resolves_only_explicit_operational_binding() -> None:
     candidate = _candidate()
-    registry = build_operational_paper_registry([candidate], [_binding(candidate)])
+    binding = _binding(candidate)
+    registry = build_operational_paper_registry([candidate], [binding])
 
-    run = create_scheduled_job_run("paper-us", datetime(2026, 9, 23, 14, 0, tzinfo=UTC))
+    run = create_scheduled_job_run(
+        binding.durable_job_key,
+        datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
+    )
     assert callable(registry.resolve(run))
 
 
@@ -113,7 +117,7 @@ def test_operational_paper_schedule_materializes_only_declared_market_sessions()
         datetime(2026, 9, 23, 13, 35, tzinfo=UTC),
         datetime(2026, 9, 24, 13, 35, tzinfo=UTC),
     ]
-    assert all(run.job_key == "paper-us" for run in runs)
+    assert all(run.job_key == binding.durable_job_key for run in runs)
 
 
 def test_operational_paper_schedule_requires_every_approved_binding() -> None:
@@ -321,3 +325,37 @@ def test_due_paper_runner_preflights_registry_before_any_execution(monkeypatch) 
         )
 
     assert calls == []
+
+
+def test_operational_paper_durable_job_key_binds_strategy_market_and_declared_key() -> None:
+    first = _candidate()
+    second = _candidate()
+    first_binding = _binding(first, key="paper-open")
+    second_binding = _binding(second, key="paper-open")
+
+    assert first_binding.durable_job_key != second_binding.durable_job_key
+    assert str(first.strategy_version_id) in first_binding.durable_job_key
+    assert first_binding.market.value in first_binding.durable_job_key
+    assert first_binding.durable_job_key.endswith(":paper-open")
+
+
+def test_operational_paper_schedule_uses_same_durable_binding_identity_as_registry() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    schedule = _schedule(binding, offset=timedelta())
+    calendar = MarketSessionCalendar(
+        sessions=((datetime(2026, 9, 23, 13, 30, tzinfo=UTC), datetime(2026, 9, 23, 20, 0, tzinfo=UTC)),)
+    )
+
+    registry = build_operational_paper_registry([candidate], [binding])
+    runs = build_operational_paper_runs(
+        [binding],
+        [schedule],
+        {StrategyMarket.USA: calendar},
+        start=datetime(2026, 9, 23, 13, 0, tzinfo=UTC),
+        end=datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
+    )
+
+    assert len(runs) == 1
+    assert runs[0].job_key == binding.durable_job_key
+    assert callable(registry.resolve(runs[0]))
