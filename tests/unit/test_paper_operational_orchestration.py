@@ -11,7 +11,7 @@ from hope.infrastructure.scheduling.paper import (
     OperationalPaperJobBinding,
     OperationalPaperSchedule,
     build_operational_paper_registry,
-    build_operational_paper_runs,
+    build_operational_paper_runs,\n    run_due_operational_paper_jobs,
 )
 
 
@@ -173,4 +173,55 @@ def test_operational_paper_schedule_requires_authoritative_market_calendar() -> 
             {},
             start=datetime(2026, 9, 23, tzinfo=UTC),
             end=datetime(2026, 9, 24, tzinfo=UTC),
+        )
+
+
+
+def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypatch) -> None:
+    now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    due_late = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
+    due_early = create_scheduled_job_run("paper-a", now - timedelta(minutes=2))
+    future = create_scheduled_job_run("paper-c", now + timedelta(minutes=1))
+    calls = []
+
+    def fake_run(engine, job_run, registry, *, now):
+        calls.append(job_run)
+        from hope.application.paper.runner import PaperCycleOutcome
+        return PaperCycleOutcome.EXECUTED
+
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
+        [
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-a", lambda runtime: None),
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-b", lambda runtime: None),
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-c", lambda runtime: None),
+        ]
+    )
+    results = run_due_operational_paper_jobs(
+        object(),
+        registry,
+        [future, due_late, due_early],
+        now=lambda: now,
+    )
+    assert calls == [due_early, due_late]
+    assert [run for run, _ in results] == [due_early, due_late]
+
+
+def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) -> None:
+    now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    run = create_scheduled_job_run("paper-us", now)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
+        [__import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-us", lambda runtime: None)]
+    )
+    with pytest.raises(ValueError, match="PAPER_SCHEDULER_DUPLICATE_JOB_RUN"):
+        run_due_operational_paper_jobs(object(), registry, [run, run], now=lambda: now)
+
+
+def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
+    with pytest.raises(TypeError, match="PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY"):
+        run_due_operational_paper_jobs(
+            object(),
+            object(),
+            [],
+            now=lambda: datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
         )

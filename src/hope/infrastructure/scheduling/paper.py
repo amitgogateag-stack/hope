@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 from uuid import UUID
 
 from hope.application.jobs import ScheduledJobRun, create_scheduled_job_run
 from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
-from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, PaperRegisteredWork
-from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
+from hope.infrastructure.paper_runtime import (\n    PaperCycleOutcome,\n    PaperJobDefinition,\n    PaperJobRegistry,\n    PaperRegisteredWork,\n    run_paper_once,\n)
+from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord\nfrom sqlalchemy import Engine
 
 
 @dataclass(frozen=True)
@@ -173,3 +173,40 @@ def _aware_schedule_time(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("PAPER_SCHEDULE_WINDOW_MUST_BE_TIMEZONE_AWARE")
     return value.astimezone(timezone.utc)
+
+
+
+def run_due_operational_paper_jobs(
+    engine: Engine,
+    registry: PaperJobRegistry,
+    job_runs: Iterable[ScheduledJobRun],
+    *,
+    now: Callable[[], datetime],
+) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
+    """Execute due PAPER runs in deterministic order through the authoritative runtime.
+
+    Future runs are never claimed early. Repeated invocations are safe because run_paper_once()
+    uses the durable scheduled-run identity and returns SKIPPED_TERMINAL for completed work.
+    """
+
+    if not isinstance(registry, PaperJobRegistry):
+        raise TypeError("PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY")
+    current = _aware_schedule_time(now())
+    ordered: list[ScheduledJobRun] = []
+    seen: set[UUID] = set()
+    for job_run in job_runs:
+        if not isinstance(job_run, ScheduledJobRun):
+            raise TypeError("PAPER_SCHEDULER_REQUIRES_SCHEDULED_JOB_RUN")
+        if job_run.job_run_id in seen:
+            raise ValueError("PAPER_SCHEDULER_DUPLICATE_JOB_RUN")
+        seen.add(job_run.job_run_id)
+        ordered.append(job_run)
+
+    ordered.sort(key=lambda run: (run.scheduled_for, run.job_key, str(run.job_run_id)))
+    results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
+    for job_run in ordered:
+        if job_run.scheduled_for > current:
+            continue
+        outcome = run_paper_once(engine, job_run, registry, now=now)
+        results.append((job_run, outcome))
+    return tuple(results)
