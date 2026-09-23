@@ -203,6 +203,7 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
         registry,
         [future, due_late, due_early],
         now=lambda: now,
+        max_lateness=timedelta(minutes=5),
     )
     assert calls == [due_early, due_late]
     assert [run for run, _ in results] == [due_early, due_late]
@@ -215,7 +216,13 @@ def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) ->
         [__import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-us", lambda runtime: None)]
     )
     with pytest.raises(ValueError, match="PAPER_SCHEDULER_DUPLICATE_JOB_RUN"):
-        run_due_operational_paper_jobs(object(), registry, [run, run], now=lambda: now)
+        run_due_operational_paper_jobs(
+            object(),
+            registry,
+            [run, run],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
 
 
 def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
@@ -225,4 +232,59 @@ def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
             object(),
             [],
             now=lambda: datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
+            max_lateness=timedelta(minutes=5),
+        )
+
+
+def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) -> None:
+    now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    stale = create_scheduled_job_run("paper-a", now - timedelta(minutes=6))
+    fresh = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
+    calls = []
+
+    def fake_run(engine, job_run, registry, *, now):
+        calls.append(job_run)
+        from hope.application.paper.runner import PaperCycleOutcome
+        return PaperCycleOutcome.EXECUTED
+
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
+        [
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-a", lambda runtime: None),
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-b", lambda runtime: None),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
+        run_due_operational_paper_jobs(
+            object(),
+            registry,
+            [fresh, stale],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+
+
+def test_due_paper_runner_requires_explicit_nonnegative_lateness_policy() -> None:
+    now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry([])
+
+    with pytest.raises(TypeError, match="PAPER_SCHEDULER_REQUIRES_MAX_LATENESS"):
+        run_due_operational_paper_jobs(
+            object(),
+            registry,
+            [],
+            now=lambda: now,
+            max_lateness=None,
+        )
+
+    with pytest.raises(ValueError, match="PAPER_SCHEDULER_MAX_LATENESS_MUST_BE_NONNEGATIVE"):
+        run_due_operational_paper_jobs(
+            object(),
+            registry,
+            [],
+            now=lambda: now,
+            max_lateness=timedelta(seconds=-1),
         )
