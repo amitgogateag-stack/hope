@@ -221,6 +221,9 @@ def run_due_operational_paper_jobs(
     if any(current - job_run.scheduled_for > max_lateness for job_run in due):
         raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
+    for job_run in due:
+        registry.resolve(job_run)
+
     results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
     for job_run in due:
         outcome = run_paper_once(engine, job_run, registry, now=now)
