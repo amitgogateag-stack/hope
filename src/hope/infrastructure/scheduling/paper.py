@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from datetime import datetime, timedelta, timezone
+from typing import Iterable, Mapping
 from uuid import UUID
 
+from hope.application.jobs import ScheduledJobRun, create_scheduled_job_run
+from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, PaperRegisteredWork
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
@@ -28,21 +31,39 @@ class OperationalPaperJobBinding:
             raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_REQUIRED")
         if key != self.job_key:
             raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_NOT_CANONICAL")
-        # PaperJobDefinition owns the authoritative callable/bindable-work contract.
         PaperJobDefinition(self.job_key, self.work)
+
+
+@dataclass(frozen=True)
+class OperationalPaperSchedule:
+    """Explicit market-session schedule for one already-approved PAPER job binding."""
+
+    strategy_version_id: UUID
+    market: StrategyMarket
+    job_key: str
+    session_offset: timedelta
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.strategy_version_id, UUID):
+            raise TypeError("PAPER_SCHEDULE_REQUIRES_STRATEGY_VERSION_ID")
+        if not isinstance(self.market, StrategyMarket):
+            raise TypeError("PAPER_SCHEDULE_REQUIRES_STRATEGY_MARKET")
+        key = self.job_key.strip()
+        if not key:
+            raise ValueError("PAPER_SCHEDULE_JOB_KEY_REQUIRED")
+        if key != self.job_key:
+            raise ValueError("PAPER_SCHEDULE_JOB_KEY_NOT_CANONICAL")
+        if not isinstance(self.session_offset, timedelta):
+            raise TypeError("PAPER_SCHEDULE_REQUIRES_SESSION_OFFSET")
+        if self.session_offset < timedelta(0):
+            raise ValueError("PAPER_SCHEDULE_OFFSET_MUST_BE_NONNEGATIVE")
 
 
 def build_operational_paper_registry(
     candidates: Iterable[CurrentStrategyCandidateRecord],
     bindings: Iterable[OperationalPaperJobBinding],
 ) -> PaperJobRegistry:
-    """Build the PAPER allow-list only from the current operational candidate set.
-
-    This is deliberately a composition boundary, not an execution entrypoint.  Candidate
-    classification never runs a strategy by itself: every operational candidate must have an
-    explicit market-scoped binding, and every binding must resolve to a current operational
-    candidate before the immutable PaperJobRegistry can be constructed.
-    """
+    """Build the PAPER allow-list only from the current operational candidate set."""
 
     current_by_version: dict[UUID, CurrentStrategyCandidateRecord] = {}
     operational_versions: set[UUID] = set()
@@ -85,3 +106,70 @@ def build_operational_paper_registry(
         raise ValueError("PAPER_ORCHESTRATION_OPERATIONAL_CANDIDATE_UNBOUND")
 
     return PaperJobRegistry(definitions)
+
+
+def build_operational_paper_runs(
+    bindings: Iterable[OperationalPaperJobBinding],
+    schedules: Iterable[OperationalPaperSchedule],
+    calendars: Mapping[StrategyMarket, MarketSessionCalendar],
+    *,
+    start: datetime,
+    end: datetime,
+) -> tuple[ScheduledJobRun, ...]:
+    """Materialize deterministic PAPER runs only from explicit bindings and market sessions.
+
+    The exchange calendar remains authoritative and data-driven.  No weekday, holiday, timezone,
+    or exchange-hours assumptions are embedded here.
+    """
+
+    window_start = _aware_schedule_time(start)
+    window_end = _aware_schedule_time(end)
+    if window_end <= window_start:
+        raise ValueError("PAPER_SCHEDULE_WINDOW_INVALID")
+
+    binding_keys: set[tuple[UUID, StrategyMarket, str]] = set()
+    for binding in bindings:
+        if not isinstance(binding, OperationalPaperJobBinding):
+            raise TypeError("PAPER_ORCHESTRATION_REQUIRES_JOB_BINDING")
+        key = (binding.strategy_version_id, binding.market, binding.job_key)
+        if key in binding_keys:
+            raise ValueError("PAPER_SCHEDULE_DUPLICATE_BINDING")
+        binding_keys.add(key)
+
+    schedules_by_key: dict[tuple[UUID, StrategyMarket, str], OperationalPaperSchedule] = {}
+    for schedule in schedules:
+        if not isinstance(schedule, OperationalPaperSchedule):
+            raise TypeError("PAPER_SCHEDULE_DEFINITION_REQUIRED")
+        key = (schedule.strategy_version_id, schedule.market, schedule.job_key)
+        if key not in binding_keys:
+            raise ValueError("PAPER_SCHEDULE_WITHOUT_APPROVED_BINDING")
+        if key in schedules_by_key:
+            raise ValueError("PAPER_SCHEDULE_DUPLICATE_DEFINITION")
+        schedules_by_key[key] = schedule
+
+    if set(schedules_by_key) != binding_keys:
+        raise ValueError("PAPER_SCHEDULE_APPROVED_BINDING_UNSCHEDULED")
+
+    runs: list[ScheduledJobRun] = []
+    for key in sorted(schedules_by_key, key=lambda item: (item[1].value, item[2], str(item[0]))):
+        schedule = schedules_by_key[key]
+        calendar = calendars.get(schedule.market)
+        if not isinstance(calendar, MarketSessionCalendar):
+            raise ValueError("PAPER_SCHEDULE_MARKET_CALENDAR_REQUIRED")
+        for session_open, session_close in calendar.sessions:
+            scheduled_for = session_open + schedule.session_offset
+            if scheduled_for >= session_close:
+                raise ValueError("PAPER_SCHEDULE_OFFSET_OUTSIDE_SESSION")
+            if window_start <= scheduled_for < window_end:
+                runs.append(create_scheduled_job_run(schedule.job_key, scheduled_for))
+
+    runs.sort(key=lambda run: (run.scheduled_for, run.job_key, str(run.job_run_id)))
+    return tuple(runs)
+
+
+def _aware_schedule_time(value: datetime) -> datetime:
+    if not isinstance(value, datetime):
+        raise TypeError("PAPER_SCHEDULE_WINDOW_REQUIRES_DATETIME")
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise ValueError("PAPER_SCHEDULE_WINDOW_MUST_BE_TIMEZONE_AWARE")
+    return value.astimezone(timezone.utc)

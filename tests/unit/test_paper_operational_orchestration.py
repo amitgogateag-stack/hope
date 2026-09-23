@@ -1,14 +1,17 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 
 from hope.application.jobs import create_scheduled_job_run
+from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
 from hope.infrastructure.scheduling.paper import (
     OperationalPaperJobBinding,
+    OperationalPaperSchedule,
     build_operational_paper_registry,
+    build_operational_paper_runs,
 )
 
 
@@ -39,6 +42,15 @@ def _binding(candidate: CurrentStrategyCandidateRecord, *, market=StrategyMarket
     )
 
 
+def _schedule(binding: OperationalPaperJobBinding, *, offset=timedelta(minutes=5)):
+    return OperationalPaperSchedule(
+        strategy_version_id=binding.strategy_version_id,
+        market=binding.market,
+        job_key=binding.job_key,
+        session_offset=offset,
+    )
+
+
 def test_operational_paper_registry_resolves_only_explicit_operational_binding() -> None:
     candidate = _candidate()
     registry = build_operational_paper_registry([candidate], [_binding(candidate)])
@@ -49,43 +61,116 @@ def test_operational_paper_registry_resolves_only_explicit_operational_binding()
 
 def test_operational_paper_registry_rejects_nonoperational_binding() -> None:
     candidate = _candidate(state=StrategyCandidateState.BACKUP_CANDIDATE)
-
     with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_CANDIDATE_NOT_OPERATIONAL"):
         build_operational_paper_registry([candidate], [_binding(candidate)])
 
 
 def test_operational_paper_registry_rejects_unbound_operational_candidate() -> None:
     candidate = _candidate()
-
     with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_OPERATIONAL_CANDIDATE_UNBOUND"):
         build_operational_paper_registry([candidate], [])
 
 
 def test_operational_paper_registry_rejects_binding_outside_candidate_market_scope() -> None:
     candidate = _candidate(markets=(StrategyMarket.INDIA,))
-
     with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_MARKET_NOT_ELIGIBLE"):
-        build_operational_paper_registry(
-            [candidate],
-            [_binding(candidate, market=StrategyMarket.USA)],
-        )
+        build_operational_paper_registry([candidate], [_binding(candidate, market=StrategyMarket.USA)])
 
 
 def test_operational_paper_registry_rejects_duplicate_market_binding() -> None:
     candidate = _candidate()
-
     with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_DUPLICATE_MARKET_BINDING"):
         build_operational_paper_registry(
             [candidate],
-            [
-                _binding(candidate, key="paper-us-open"),
-                _binding(candidate, key="paper-us-close"),
-            ],
+            [_binding(candidate, key="paper-us-open"), _binding(candidate, key="paper-us-close")],
         )
 
 
 def test_operational_paper_registry_rejects_more_than_three_operational_candidates() -> None:
     candidates = [_candidate() for _ in range(4)]
-
     with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_OPERATIONAL_CAPACITY_EXCEEDED"):
         build_operational_paper_registry(candidates, [_binding(c, key=f"paper-{i}") for i, c in enumerate(candidates)])
+
+
+def test_operational_paper_schedule_materializes_only_declared_market_sessions() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    calendar = MarketSessionCalendar(
+        sessions=(
+            (datetime(2026, 9, 23, 13, 30, tzinfo=UTC), datetime(2026, 9, 23, 20, 0, tzinfo=UTC)),
+            (datetime(2026, 9, 24, 13, 30, tzinfo=UTC), datetime(2026, 9, 24, 20, 0, tzinfo=UTC)),
+        )
+    )
+    runs = build_operational_paper_runs(
+        [binding],
+        [_schedule(binding)],
+        {StrategyMarket.USA: calendar},
+        start=datetime(2026, 9, 23, tzinfo=UTC),
+        end=datetime(2026, 9, 25, tzinfo=UTC),
+    )
+    assert [run.scheduled_for for run in runs] == [
+        datetime(2026, 9, 23, 13, 35, tzinfo=UTC),
+        datetime(2026, 9, 24, 13, 35, tzinfo=UTC),
+    ]
+    assert all(run.job_key == "paper-us" for run in runs)
+
+
+def test_operational_paper_schedule_requires_every_approved_binding() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    with pytest.raises(ValueError, match="PAPER_SCHEDULE_APPROVED_BINDING_UNSCHEDULED"):
+        build_operational_paper_runs(
+            [binding],
+            [],
+            {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
+            start=datetime(2026, 9, 23, tzinfo=UTC),
+            end=datetime(2026, 9, 24, tzinfo=UTC),
+        )
+
+
+def test_operational_paper_schedule_rejects_unapproved_job() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    rogue = OperationalPaperSchedule(
+        strategy_version_id=candidate.strategy_version_id,
+        market=StrategyMarket.USA,
+        job_key="rogue-paper-job",
+        session_offset=timedelta(),
+    )
+    with pytest.raises(ValueError, match="PAPER_SCHEDULE_WITHOUT_APPROVED_BINDING"):
+        build_operational_paper_runs(
+            [binding],
+            [rogue],
+            {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
+            start=datetime(2026, 9, 23, tzinfo=UTC),
+            end=datetime(2026, 9, 24, tzinfo=UTC),
+        )
+
+
+def test_operational_paper_schedule_rejects_offset_outside_session() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    calendar = MarketSessionCalendar(
+        sessions=((datetime(2026, 9, 23, 13, 30, tzinfo=UTC), datetime(2026, 9, 23, 20, 0, tzinfo=UTC)),)
+    )
+    with pytest.raises(ValueError, match="PAPER_SCHEDULE_OFFSET_OUTSIDE_SESSION"):
+        build_operational_paper_runs(
+            [binding],
+            [_schedule(binding, offset=timedelta(hours=7))],
+            {StrategyMarket.USA: calendar},
+            start=datetime(2026, 9, 23, tzinfo=UTC),
+            end=datetime(2026, 9, 24, tzinfo=UTC),
+        )
+
+
+def test_operational_paper_schedule_requires_authoritative_market_calendar() -> None:
+    candidate = _candidate()
+    binding = _binding(candidate)
+    with pytest.raises(ValueError, match="PAPER_SCHEDULE_MARKET_CALENDAR_REQUIRED"):
+        build_operational_paper_runs(
+            [binding],
+            [_schedule(binding)],
+            {},
+            start=datetime(2026, 9, 23, tzinfo=UTC),
+            end=datetime(2026, 9, 24, tzinfo=UTC),
+        )
