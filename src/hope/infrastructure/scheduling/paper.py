@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Mapping
 from uuid import UUID
 
-from hope.application.jobs import ScheduledJobRun, create_scheduled_job_run
+from hope.application.jobs import JobRunStatus, ScheduledJobRun, create_scheduled_job_run
 from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
 from hope.infrastructure.paper_runtime import (
@@ -15,6 +15,7 @@ from hope.infrastructure.paper_runtime import (
     PaperRegisteredWork,
     run_paper_once,
 )
+from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
 from sqlalchemy import Engine
 
@@ -207,6 +208,19 @@ def _aware_schedule_time(value: datetime) -> datetime:
 
 
 
+def _preflight_due_paper_job_states(
+    engine: Engine,
+    job_runs: Iterable[ScheduledJobRun],
+) -> None:
+    """Reject persisted incomplete claims before any due PAPER job executes."""
+    with engine.connect() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        for job_run in job_runs:
+            record = repository.get_record(job_run.job_run_id)
+            if record is not None and record.status is JobRunStatus.CLAIMED:
+                raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+
+
 def run_due_operational_paper_jobs(
     engine: Engine,
     registry: PaperJobRegistry,
@@ -247,6 +261,8 @@ def run_due_operational_paper_jobs(
 
     for job_run in due:
         registry.resolve(job_run)
+
+    _preflight_due_paper_job_states(engine, due)
 
     results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
     for job_run in due:
