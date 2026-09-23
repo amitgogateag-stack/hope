@@ -11,7 +11,8 @@ from hope.infrastructure.scheduling.paper import (
     OperationalPaperJobBinding,
     OperationalPaperSchedule,
     build_operational_paper_registry,
-    build_operational_paper_runs,\n    run_due_operational_paper_jobs,
+    build_operational_paper_runs,
+    run_due_operational_paper_jobs,
 )
 
 
