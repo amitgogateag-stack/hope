@@ -288,3 +288,36 @@ def test_due_paper_runner_requires_explicit_nonnegative_lateness_policy() -> Non
             now=lambda: now,
             max_lateness=timedelta(seconds=-1),
         )
+
+
+def test_due_paper_runner_preflights_registry_before_any_execution(monkeypatch) -> None:
+    now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    valid = create_scheduled_job_run("paper-a", now - timedelta(minutes=2))
+    rogue = create_scheduled_job_run("paper-rogue", now - timedelta(minutes=1))
+    calls = []
+
+    def fake_run(engine, job_run, registry, *, now):
+        calls.append(job_run)
+        from hope.application.paper.runner import PaperCycleOutcome
+        return PaperCycleOutcome.EXECUTED
+
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
+        [
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition(
+                "paper-a",
+                lambda runtime: None,
+            ),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_NOT_REGISTERED"):
+        run_due_operational_paper_jobs(
+            object(),
+            registry,
+            [valid, rogue],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
