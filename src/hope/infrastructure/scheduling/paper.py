@@ -189,15 +189,22 @@ def run_due_operational_paper_jobs(
     job_runs: Iterable[ScheduledJobRun],
     *,
     now: Callable[[], datetime],
+    max_lateness: timedelta,
 ) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
-    """Execute due PAPER runs in deterministic order through the authoritative runtime.
+    """Execute fresh due PAPER runs in deterministic order through the authoritative runtime.
 
-    Future runs are never claimed early. Repeated invocations are safe because run_paper_once()
-    uses the durable scheduled-run identity and returns SKIPPED_TERMINAL for completed work.
+    Future runs are never claimed early. Stale runs fail closed before any due work executes,
+    so restart recovery cannot silently replay arbitrarily old market sessions. Repeated
+    invocations are safe because run_paper_once() uses the durable scheduled-run identity and
+    returns SKIPPED_TERMINAL for completed work.
     """
 
     if not isinstance(registry, PaperJobRegistry):
         raise TypeError("PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY")
+    if not isinstance(max_lateness, timedelta):
+        raise TypeError("PAPER_SCHEDULER_REQUIRES_MAX_LATENESS")
+    if max_lateness < timedelta(0):
+        raise ValueError("PAPER_SCHEDULER_MAX_LATENESS_MUST_BE_NONNEGATIVE")
     current = _aware_schedule_time(now())
     ordered: list[ScheduledJobRun] = []
     seen: set[UUID] = set()
@@ -210,10 +217,12 @@ def run_due_operational_paper_jobs(
         ordered.append(job_run)
 
     ordered.sort(key=lambda run: (run.scheduled_for, run.job_key, str(run.job_run_id)))
+    due = [job_run for job_run in ordered if job_run.scheduled_for <= current]
+    if any(current - job_run.scheduled_for > max_lateness for job_run in due):
+        raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
+
     results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
-    for job_run in ordered:
-        if job_run.scheduled_for > current:
-            continue
+    for job_run in due:
         outcome = run_paper_once(engine, job_run, registry, now=now)
         results.append((job_run, outcome))
     return tuple(results)
