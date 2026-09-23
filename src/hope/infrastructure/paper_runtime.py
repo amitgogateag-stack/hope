@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine
 
-from hope.application.jobs import ScheduledJobRun
+from hope.application.jobs import JobRunStatus, ScheduledJobRun
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.paper.orders import PaperOrderWriter
@@ -192,6 +192,9 @@ def run_paper_once(
             )
             outcome = runtime._run_registered(job_run, work)
         except Exception as exc:
+            record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+            if record is None or record.status is not JobRunStatus.FAILED:
+                raise
             work_error = exc
 
     if work_error is not None:
