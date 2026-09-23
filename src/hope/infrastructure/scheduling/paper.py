@@ -8,8 +8,15 @@ from uuid import UUID
 from hope.application.jobs import ScheduledJobRun, create_scheduled_job_run
 from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
-from hope.infrastructure.paper_runtime import (\n    PaperCycleOutcome,\n    PaperJobDefinition,\n    PaperJobRegistry,\n    PaperRegisteredWork,\n    run_paper_once,\n)
-from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord\nfrom sqlalchemy import Engine
+from hope.infrastructure.paper_runtime import (
+    PaperCycleOutcome,
+    PaperJobDefinition,
+    PaperJobRegistry,
+    PaperRegisteredWork,
+    run_paper_once,
+)
+from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
+from sqlalchemy import Engine
 
 
 @dataclass(frozen=True)
