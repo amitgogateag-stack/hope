@@ -12,6 +12,7 @@ from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.market_data.context import PITMarketContext
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.risk.portfolio import PortfolioRiskEngine
@@ -128,6 +129,7 @@ class PaperEntryOrderDecisionJob:
     risk_inputs: PortfolioEntryRiskInputs
     risk_engine: PortfolioRiskEngine
     side: OrderSide
+    intelligence_gate: IntelligenceEntryGateContext | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.signal, Signal):
@@ -138,6 +140,11 @@ class PaperEntryOrderDecisionJob:
             raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_ENGINE")
         if not isinstance(self.side, OrderSide):
             raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE")
+        if self.intelligence_gate is not None and not isinstance(
+            self.intelligence_gate,
+            IntelligenceEntryGateContext,
+        ):
+            raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_INTELLIGENCE_GATE_CONTEXT")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
         decision_time = self.signal.decision_time
@@ -150,6 +157,7 @@ class PaperEntryOrderDecisionJob:
             self.signal,
             self.risk_inputs,
             self.risk_engine,
+            intelligence_gate=self.intelligence_gate,
         )
         runtime.record_risk(assessment)
 

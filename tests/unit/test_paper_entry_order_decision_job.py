@@ -8,6 +8,7 @@ from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.jobs import PaperEntryOrderDecisionJob
 from hope.domain.execution.models import Environment, OrderSide
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.models import RiskDecision
 from hope.domain.risk.portfolio import (
@@ -129,6 +130,27 @@ def test_paper_entry_order_job_persists_rejection_without_order() -> None:
     assert assessment.approved_quantity == Decimal("0")
 
 
+def test_paper_entry_order_job_fails_closed_on_intelligence_entry_block() -> None:
+    signal = _signal()
+    runtime = _runtime()
+    gate = IntelligenceEntryGateContext(blocker_assessment_ids=(uuid4(),))
+
+    PaperEntryOrderDecisionJob(
+        signal,
+        _inputs(signal),
+        _engine(),
+        OrderSide.BUY,
+        intelligence_gate=gate,
+    )(runtime)
+
+    assert len(runtime.events) == 1
+    kind, assessment = runtime.events[0]
+    assert kind == "risk"
+    assert assessment.decision is RiskDecision.REJECT
+    assert assessment.reason_code == "INTELLIGENCE_ENTRY_REVIEW_REQUIRED"
+    assert assessment.approved_quantity == Decimal("0")
+
+
 def test_paper_entry_order_job_rejects_non_entry_signal_before_any_effect() -> None:
     signal = _signal(signal_type=SignalType.EXIT)
     runtime = _runtime()
@@ -165,6 +187,17 @@ def test_paper_entry_order_job_requires_typed_dependencies() -> None:
         PaperEntryOrderDecisionJob(signal, inputs, object(), OrderSide.BUY)
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE"):
         PaperEntryOrderDecisionJob(signal, inputs, engine, object())
+    with pytest.raises(
+        TypeError,
+        match="PAPER_ENTRY_ORDER_JOB_REQUIRES_INTELLIGENCE_GATE_CONTEXT",
+    ):
+        PaperEntryOrderDecisionJob(
+            signal,
+            inputs,
+            engine,
+            OrderSide.BUY,
+            intelligence_gate=object(),
+        )
 
 
 def test_paper_entry_order_job_rejects_naive_signal_time_before_any_effect() -> None:
