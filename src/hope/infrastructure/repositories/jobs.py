@@ -99,6 +99,20 @@ class SqlAlchemyJobRunRepository:
             raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
         return False
 
+    def get_record_for_run(self, job_run: ScheduledJobRun) -> JobRunRecord | None:
+        """Resolve persisted state by schedule identity and fail on durable-ID mismatch."""
+        row = self._connection.execute(
+            select(self._job_runs.c.job_run_id).where(
+                self._job_runs.c.job_key == job_run.job_key,
+                self._job_runs.c.scheduled_for == job_run.scheduled_for,
+            )
+        ).scalar_one_or_none()
+        if row is None:
+            return None
+        if row != job_run.job_run_id:
+            raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+        return self.get_record(job_run.job_run_id)
+
     def get(self, job_run_id: UUID) -> ScheduledJobRun | None:
         record = self.get_record(job_run_id)
         return record.run if record is not None else None
