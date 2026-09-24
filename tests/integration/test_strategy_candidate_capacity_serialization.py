@@ -72,36 +72,18 @@ def test_strategy_candidate_capacity_lock_releases_after_commit() -> None:
         pytest.skip("HOPE_DATABASE_URL is not configured")
 
     engine = create_engine(url)
-    migrations_dir = Path(__file__).parents[2] / "migrations"
-    with engine.begin() as connection:
-        apply_migrations(connection, migrations_dir)
 
-    strategy_id = uuid4()
-    strategy_version_id = uuid4()
+    # The preceding integration test proves that candidate transitions acquire
+    # this exact transaction-scoped advisory lock through the trigger. Here we
+    # isolate PostgreSQL's commit-release semantics without persisting candidate
+    # history that would contaminate later integration tests.
     with engine.connect() as writer, engine.connect() as probe:
         transaction = writer.begin()
         writer.execute(
             text(
-                "INSERT INTO strategies(strategy_id,name,family) "
-                "VALUES (:sid,:name,'TEST_FAMILY')"
-            ),
-            {"sid": strategy_id, "name": f"capacity-commit-{strategy_id}"},
-        )
-        writer.execute(
-            text(
-                "INSERT INTO strategy_versions("
-                "strategy_version_id,strategy_id,version,code_commit"
-                ") VALUES (:vid,:sid,'v1','capacity-commit')"
-            ),
-            {"vid": strategy_version_id, "sid": strategy_id},
-        )
-        writer.execute(
-            text(
-                "INSERT INTO strategy_candidate_classifications("
-                "classification_id,strategy_version_id,markets,state,rationale"
-                ") VALUES (:cid,:vid,ARRAY['USA'],'RESEARCH','Commit capacity lock')"
-            ),
-            {"cid": uuid4(), "vid": strategy_version_id},
+                "SELECT pg_advisory_xact_lock("
+                "hashtext('hope:strategy-candidate-capacity')::bigint)"
+            )
         )
 
         assert probe.execute(
@@ -119,3 +101,4 @@ def test_strategy_candidate_capacity_lock_releases_after_commit() -> None:
                 "hashtext('hope:strategy-candidate-capacity')::bigint)"
             )
         ).scalar_one() is True
+
