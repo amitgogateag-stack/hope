@@ -431,3 +431,61 @@ def test_concurrent_scheduler_lock_blocks_entire_due_batch_before_claim() -> Non
     assert calls == []
     with engine.connect() as connection:
         assert SqlAlchemyJobRunRepository(connection).get_record(due.job_run_id) is None
+
+@pytest.mark.integration
+def test_scheduler_lock_is_released_after_failed_paper_work() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 55, tzinfo=UTC)
+    due = create_scheduled_job_run(
+        "paper-batch-lock-release-after-failure",
+        now - timedelta(minutes=1),
+    )
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "DELETE FROM job_runs "
+                "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+            ),
+            {
+                "job_key": due.job_key,
+                "scheduled_for": due.scheduled_for,
+            },
+        )
+
+    def fail_work(runtime) -> None:
+        raise RuntimeError("EXPECTED_PAPER_WORK_FAILURE")
+
+    registry = PaperJobRegistry([PaperJobDefinition(due.job_key, fail_work)])
+
+    # Hold this connection open before the scheduler starts so the scheduler must acquire
+    # its advisory lock on a different PostgreSQL session. After the work failure unwinds,
+    # this independent session must be able to acquire the same lock immediately.
+    with engine.connect() as probe_connection:
+        with pytest.raises(RuntimeError, match="EXPECTED_PAPER_WORK_FAILURE"):
+            run_due_operational_paper_jobs(
+                engine,
+                registry,
+                [due],
+                now=lambda: now,
+                max_lateness=timedelta(minutes=5),
+            )
+
+        acquired = probe_connection.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:lock_name)::bigint)"),
+            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+        ).scalar_one()
+        assert acquired is True
+        assert probe_connection.execute(
+            text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"),
+            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+        ).scalar_one() is True
+
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(due.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.failure_code == "RuntimeError"
+
