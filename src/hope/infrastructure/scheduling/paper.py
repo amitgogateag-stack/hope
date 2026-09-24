@@ -207,18 +207,22 @@ def _aware_schedule_time(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
-
 def _preflight_due_paper_job_states(
     engine: Engine,
     job_runs: Iterable[ScheduledJobRun],
-) -> None:
-    """Reject persisted incomplete claims before any due PAPER job executes."""
+) -> frozenset[UUID]:
+    """Reject incomplete claims and identify terminal runs before due work executes."""
+    terminal_run_ids: set[UUID] = set()
     with engine.connect() as connection:
         repository = SqlAlchemyJobRunRepository(connection)
         for job_run in job_runs:
             record = repository.get_record(job_run.job_run_id)
-            if record is not None and record.status is JobRunStatus.CLAIMED:
+            if record is None:
+                continue
+            if record.status is JobRunStatus.CLAIMED:
                 raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+            terminal_run_ids.add(job_run.job_run_id)
+    return frozenset(terminal_run_ids)
 
 
 def run_due_operational_paper_jobs(
@@ -231,10 +235,10 @@ def run_due_operational_paper_jobs(
 ) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute fresh due PAPER runs in deterministic order through the authoritative runtime.
 
-    Future runs are never claimed early. Stale runs fail closed before any due work executes,
-    so restart recovery cannot silently replay arbitrarily old market sessions. Repeated
-    invocations are safe because run_paper_once() uses the durable scheduled-run identity and
-    returns SKIPPED_TERMINAL for completed work.
+    Future runs are never claimed early. Stale nonterminal runs fail closed before any due work
+    executes; already-terminal history remains an idempotent skip even when it is older than the
+    replay window. Repeated invocations are safe because run_paper_once() uses the durable
+    scheduled-run identity and returns SKIPPED_TERMINAL for completed work.
     """
 
     if not isinstance(registry, PaperJobRegistry):
@@ -256,13 +260,17 @@ def run_due_operational_paper_jobs(
 
     ordered.sort(key=lambda run: (run.scheduled_for, run.job_key, str(run.job_run_id)))
     due = [job_run for job_run in ordered if job_run.scheduled_for <= current]
-    if any(current - job_run.scheduled_for > max_lateness for job_run in due):
-        raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
     for job_run in due:
         registry.resolve(job_run)
 
-    _preflight_due_paper_job_states(engine, due)
+    terminal_run_ids = _preflight_due_paper_job_states(engine, due)
+    if any(
+        job_run.job_run_id not in terminal_run_ids
+        and current - job_run.scheduled_for > max_lateness
+        for job_run in due
+    ):
+        raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
     results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
     for job_run in due:
