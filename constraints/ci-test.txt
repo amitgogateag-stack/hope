@@ -1,0 +1,25 @@
+# HOPE CI test-runtime constraints.
+# Captured from exact-head CI #662 on Python 3.13.
+# Keep pyproject.toml as the supported dependency-range contract; this file
+# freezes the resolved CI environment so dependency drift cannot silently
+# change test behavior between commits.
+
+Mako==1.4.3
+MarkupSafe==3.0.3
+SQLAlchemy==2.0.54
+alembic==1.20.0
+annotated-types==0.8.0
+coverage==7.16.1
+greenlet==3.5.6
+iniconfig==2.3.0
+packaging==26.3
+pluggy==1.6.0
+psycopg==3.3.6
+psycopg-binary==3.3.6
+pydantic==2.13.5
+pydantic-core==2.46.5
+Pygments==2.21.0
+pytest==9.1.1
+pytest-cov==7.1.0
+typing-extensions==4.16.0
+typing-inspection==0.4.4
