@@ -39,7 +39,9 @@ def test_paper_pnl_writer_records_effect_with_job_lineage() -> None:
     )
     repository = FakePaperPnLPersistence()
 
-    assert PaperPnLWriter(repository).record(context, event, sequence=0) is True
+    with pytest.warns(DeprecationWarning, match="PaperPnLWriter is legacy"):
+        writer = PaperPnLWriter(repository)
+    assert writer.record(context, event, sequence=0) is True
     effect, persisted = repository.calls[0]
     assert persisted == event
     assert effect.job_run_id == context.job_run.job_run_id
@@ -57,7 +59,9 @@ def test_paper_pnl_writer_preserves_duplicate_result() -> None:
         Decimal("0"),
         datetime(2026, 9, 9, 23, 29, tzinfo=UTC),
     )
-    assert PaperPnLWriter(FakePaperPnLPersistence(False)).record(context, event, sequence=1) is False
+    with pytest.warns(DeprecationWarning, match="PaperPnLWriter is legacy"):
+        writer = PaperPnLWriter(FakePaperPnLPersistence(False))
+    assert writer.record(context, event, sequence=1) is False
 
 
 def test_paper_pnl_writer_rejects_non_deterministic_id() -> None:
@@ -69,8 +73,10 @@ def test_paper_pnl_writer_rejects_non_deterministic_id() -> None:
         datetime(2026, 9, 9, 23, 29, tzinfo=UTC),
     )
     repository = FakePaperPnLPersistence()
+    with pytest.warns(DeprecationWarning, match="PaperPnLWriter is legacy"):
+        writer = PaperPnLWriter(repository)
     with pytest.raises(ValueError, match="PAPER_PNL_IDENTITY_MISMATCH"):
-        PaperPnLWriter(repository).record(context, event, sequence=0)
+        writer.record(context, event, sequence=0)
     assert repository.calls == []
 
 

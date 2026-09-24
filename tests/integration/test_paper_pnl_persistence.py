@@ -71,7 +71,11 @@ def test_paper_pnl_is_durable_and_idempotent_across_scheduled_cycles() -> None:
         )
         jobs = SqlAlchemyJobRunRepository(connection)
         signal_writer = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection))
-        pnl_writer = PaperPnLWriter(SqlAlchemyPaperPnLRepository(connection))
+        with pytest.warns(
+            DeprecationWarning,
+            match="PaperPnLWriter is legacy",
+        ):
+            pnl_writer = PaperPnLWriter(SqlAlchemyPaperPnLRepository(connection))
 
         assert jobs.claim(first_run) is True
         assert signal_writer.record(first_context, signal) is True
@@ -119,7 +123,11 @@ def test_paper_pnl_rejects_missing_or_untracked_position_without_orphan_effect()
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         jobs = SqlAlchemyJobRunRepository(connection)
-        writer = PaperPnLWriter(SqlAlchemyPaperPnLRepository(connection))
+        with pytest.warns(
+            DeprecationWarning,
+            match="PaperPnLWriter is legacy",
+        ):
+            writer = PaperPnLWriter(SqlAlchemyPaperPnLRepository(connection))
 
         assert jobs.claim(missing_run) is True
         missing_context = PaperCycleContext(missing_run)
