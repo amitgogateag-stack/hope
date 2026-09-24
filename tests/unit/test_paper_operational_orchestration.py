@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -186,6 +187,10 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
         "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
         lambda engine, job_runs: set(),
     )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
+        lambda engine: nullcontext(),
+    )
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     due_late = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
     due_early = create_scheduled_job_run("paper-a", now - timedelta(minutes=2))
@@ -247,6 +252,10 @@ def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) ->
     monkeypatch.setattr(
         "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
         lambda engine, job_runs: set(),
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
+        lambda engine: nullcontext(),
     )
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     stale = create_scheduled_job_run("paper-a", now - timedelta(minutes=6))
