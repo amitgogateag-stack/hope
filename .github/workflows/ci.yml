@@ -31,4 +31,4 @@ jobs:
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
-        run: pytest
+        run: pytest --cov=hope --cov-report=term-missing
