@@ -282,3 +282,68 @@ def test_future_run_is_not_claimed_or_executed_during_restart_preflight() -> Non
         assert due_record is not None
         assert due_record.status is JobRunStatus.SUCCEEDED
         assert repository.get_record(future.job_run_id) is None
+
+
+@pytest.mark.integration
+def test_future_stranded_claim_does_not_block_current_due_work() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 20, tzinfo=UTC)
+    due = create_scheduled_job_run(
+        "paper-batch-due-with-future-claim",
+        now - timedelta(minutes=1),
+    )
+    future = create_scheduled_job_run(
+        "paper-batch-future-stranded",
+        now + timedelta(minutes=1),
+    )
+    calls = []
+
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        for job_run in (due, future):
+            connection.execute(
+                text(
+                    "DELETE FROM job_runs "
+                    "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+                ),
+                {
+                    "job_key": job_run.job_key,
+                    "scheduled_for": job_run.scheduled_for,
+                },
+            )
+        assert SqlAlchemyJobRunRepository(connection).claim(future) is True
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                due.job_key,
+                lambda runtime: calls.append(due.job_run_id),
+            ),
+            PaperJobDefinition(
+                future.job_key,
+                lambda runtime: calls.append(future.job_run_id),
+            ),
+        ]
+    )
+
+    results = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        [future, due],
+        now=lambda: now,
+        max_lateness=timedelta(minutes=5),
+    )
+
+    assert [run.job_run_id for run, _ in results] == [due.job_run_id]
+    assert [outcome.value for _, outcome in results] == ["EXECUTED"]
+    assert calls == [due.job_run_id]
+
+    with engine.connect() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        due_record = repository.get_record(due.job_run_id)
+        future_record = repository.get_record(future.job_run_id)
+        assert due_record is not None
+        assert due_record.status is JobRunStatus.SUCCEEDED
+        assert future_record is not None
+        assert future_record.status is JobRunStatus.CLAIMED
