@@ -181,11 +181,10 @@ def test_operational_paper_schedule_requires_authoritative_market_calendar() -> 
         )
 
 
-
 def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypatch) -> None:
     monkeypatch.setattr(
         "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
-        lambda engine, job_runs: None,
+        lambda engine, job_runs: set(),
     )
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     due_late = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
@@ -245,6 +244,10 @@ def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
 
 
 def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
+        lambda engine, job_runs: set(),
+    )
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     stale = create_scheduled_job_run("paper-a", now - timedelta(minutes=6))
     fresh = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
