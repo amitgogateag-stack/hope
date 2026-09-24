@@ -129,7 +129,7 @@ class PaperEntryOrderDecisionJob:
     risk_inputs: PortfolioEntryRiskInputs
     risk_engine: PortfolioRiskEngine
     side: OrderSide
-    intelligence_gate: IntelligenceEntryGateContext | None = None
+    intelligence_gate: IntelligenceEntryGateContext
 
     def __post_init__(self) -> None:
         if not isinstance(self.signal, Signal):
@@ -140,7 +140,7 @@ class PaperEntryOrderDecisionJob:
             raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_ENGINE")
         if not isinstance(self.side, OrderSide):
             raise TypeError("PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE")
-        if self.intelligence_gate is not None and not isinstance(
+        if not isinstance(
             self.intelligence_gate,
             IntelligenceEntryGateContext,
         ):

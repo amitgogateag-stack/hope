@@ -98,6 +98,7 @@ def test_paper_entry_order_job_records_approval_before_deterministic_order() -> 
         _inputs(signal),
         _engine(),
         OrderSide.BUY,
+        IntelligenceEntryGateContext(),
     )(runtime)
 
     assert [kind for kind, _ in runtime.events] == ["risk", "order"]
@@ -121,6 +122,7 @@ def test_paper_entry_order_job_persists_rejection_without_order() -> None:
         _inputs(signal, proposed_quantity=Decimal("20")),
         _engine(max_position_notional=Decimal("1000")),
         OrderSide.BUY,
+        IntelligenceEntryGateContext(),
     )(runtime)
 
     assert len(runtime.events) == 1
@@ -154,7 +156,13 @@ def test_paper_entry_order_job_fails_closed_on_intelligence_entry_block() -> Non
 def test_paper_entry_order_job_rejects_non_entry_signal_before_any_effect() -> None:
     signal = _signal(signal_type=SignalType.EXIT)
     runtime = _runtime()
-    job = PaperEntryOrderDecisionJob(signal, _inputs(signal), _engine(), OrderSide.SELL)
+    job = PaperEntryOrderDecisionJob(
+        signal,
+        _inputs(signal),
+        _engine(),
+        OrderSide.SELL,
+        IntelligenceEntryGateContext(),
+    )
 
     with pytest.raises(ValueError, match="PORTFOLIO_ENTRY_RISK_REQUIRES_ENTRY_SIGNAL"):
         job(runtime)
@@ -166,7 +174,13 @@ def test_paper_entry_order_job_rejects_risk_lineage_mismatch_before_any_effect()
     signal = _signal()
     other = _signal()
     runtime = _runtime()
-    job = PaperEntryOrderDecisionJob(signal, _inputs(other), _engine(), OrderSide.BUY)
+    job = PaperEntryOrderDecisionJob(
+        signal,
+        _inputs(other),
+        _engine(),
+        OrderSide.BUY,
+        IntelligenceEntryGateContext(),
+    )
 
     with pytest.raises(ValueError, match="PORTFOLIO_RISK_SIGNAL_MISMATCH"):
         job(runtime)
@@ -180,13 +194,37 @@ def test_paper_entry_order_job_requires_typed_dependencies() -> None:
     engine = _engine()
 
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_SIGNAL"):
-        PaperEntryOrderDecisionJob(object(), inputs, engine, OrderSide.BUY)
+        PaperEntryOrderDecisionJob(
+            object(),
+            inputs,
+            engine,
+            OrderSide.BUY,
+            IntelligenceEntryGateContext(),
+        )
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_INPUTS"):
-        PaperEntryOrderDecisionJob(signal, object(), engine, OrderSide.BUY)
+        PaperEntryOrderDecisionJob(
+            signal,
+            object(),
+            engine,
+            OrderSide.BUY,
+            IntelligenceEntryGateContext(),
+        )
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_RISK_ENGINE"):
-        PaperEntryOrderDecisionJob(signal, inputs, object(), OrderSide.BUY)
+        PaperEntryOrderDecisionJob(
+            signal,
+            inputs,
+            object(),
+            OrderSide.BUY,
+            IntelligenceEntryGateContext(),
+        )
     with pytest.raises(TypeError, match="PAPER_ENTRY_ORDER_JOB_REQUIRES_ORDER_SIDE"):
-        PaperEntryOrderDecisionJob(signal, inputs, engine, object())
+        PaperEntryOrderDecisionJob(
+            signal,
+            inputs,
+            engine,
+            object(),
+            IntelligenceEntryGateContext(),
+        )
     with pytest.raises(
         TypeError,
         match="PAPER_ENTRY_ORDER_JOB_REQUIRES_INTELLIGENCE_GATE_CONTEXT",
@@ -205,7 +243,13 @@ def test_paper_entry_order_job_rejects_naive_signal_time_before_any_effect() -> 
         update={"decision_time": datetime(2026, 9, 13, 15, 0)}
     )
     runtime = _runtime()
-    job = PaperEntryOrderDecisionJob(signal, _inputs(signal), _engine(), OrderSide.BUY)
+    job = PaperEntryOrderDecisionJob(
+        signal,
+        _inputs(signal),
+        _engine(),
+        OrderSide.BUY,
+        IntelligenceEntryGateContext(),
+    )
 
     with pytest.raises(
         ValueError,
