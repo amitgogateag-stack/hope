@@ -63,3 +63,59 @@ def test_strategy_candidate_transition_holds_transaction_scoped_capacity_lock() 
                 "hashtext('hope:strategy-candidate-capacity')::bigint)"
             )
         ).scalar_one() is True
+
+
+@pytest.mark.integration
+def test_strategy_candidate_capacity_lock_releases_after_commit() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    strategy_id = uuid4()
+    strategy_version_id = uuid4()
+    with engine.connect() as writer, engine.connect() as probe:
+        transaction = writer.begin()
+        writer.execute(
+            text(
+                "INSERT INTO strategies(strategy_id,name,family) "
+                "VALUES (:sid,:name,'TEST_FAMILY')"
+            ),
+            {"sid": strategy_id, "name": f"capacity-commit-{strategy_id}"},
+        )
+        writer.execute(
+            text(
+                "INSERT INTO strategy_versions("
+                "strategy_version_id,strategy_id,version,code_commit"
+                ") VALUES (:vid,:sid,'v1','capacity-commit')"
+            ),
+            {"vid": strategy_version_id, "sid": strategy_id},
+        )
+        writer.execute(
+            text(
+                "INSERT INTO strategy_candidate_classifications("
+                "classification_id,strategy_version_id,markets,state,rationale"
+                ") VALUES (:cid,:vid,ARRAY['USA'],'RESEARCH','Commit capacity lock')"
+            ),
+            {"cid": uuid4(), "vid": strategy_version_id},
+        )
+
+        assert probe.execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock("
+                "hashtext('hope:strategy-candidate-capacity')::bigint)"
+            )
+        ).scalar_one() is False
+
+        transaction.commit()
+
+        assert probe.execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock("
+                "hashtext('hope:strategy-candidate-capacity')::bigint)"
+            )
+        ).scalar_one() is True
