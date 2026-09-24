@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, Table, Uuid, select
+from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, Table, Uuid, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.domain.market_data.models import MarketBar
@@ -23,7 +23,7 @@ class SqlAlchemyMarketBarSink:
         self._market_bars = Table(
             "market_bars",
             metadata,
-            Column("market_bar_id", Uuid, primary_key=True),
+            Column("market_bar_id", Uuid, primary_key=True, server_default=text("gen_random_uuid()")),
             Column("dataset_version_id", Uuid, nullable=False),
             Column("instrument_id", Uuid, nullable=False),
             Column("event_time", DateTime(timezone=True), nullable=False),
