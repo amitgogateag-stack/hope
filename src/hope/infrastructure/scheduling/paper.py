@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable, Iterable, Mapping
@@ -17,7 +18,7 @@ from hope.infrastructure.paper_runtime import (
 )
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
-from sqlalchemy import Engine
+from sqlalchemy import Engine, text
 
 
 @dataclass(frozen=True)
@@ -207,6 +208,28 @@ def _aware_schedule_time(value: datetime) -> datetime:
     return value.astimezone(timezone.utc)
 
 
+_PAPER_SCHEDULER_LOCK_NAME = "hope:paper:operational-scheduler"
+
+
+@contextmanager
+def _operational_paper_scheduler_lock(engine: Engine):
+    """Serialize autonomous PAPER batches across scheduler processes."""
+    with engine.connect() as connection:
+        acquired = connection.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:lock_name)::bigint)"),
+            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+        ).scalar_one()
+        if acquired is not True:
+            raise RuntimeError("PAPER_SCHEDULER_CONCURRENT_RUN")
+        try:
+            yield
+        finally:
+            connection.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"),
+                {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+            )
+
+
 def _preflight_due_paper_job_states(
     engine: Engine,
     job_runs: Iterable[ScheduledJobRun],
@@ -264,16 +287,17 @@ def run_due_operational_paper_jobs(
     for job_run in due:
         registry.resolve(job_run)
 
-    terminal_run_ids = _preflight_due_paper_job_states(engine, due)
-    if any(
-        job_run.job_run_id not in terminal_run_ids
-        and current - job_run.scheduled_for > max_lateness
-        for job_run in due
-    ):
-        raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
+    with _operational_paper_scheduler_lock(engine):
+        terminal_run_ids = _preflight_due_paper_job_states(engine, due)
+        if any(
+            job_run.job_run_id not in terminal_run_ids
+            and current - job_run.scheduled_for > max_lateness
+            for job_run in due
+        ):
+            raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
-    results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
-    for job_run in due:
-        outcome = run_paper_once(engine, job_run, registry, now=now)
-        results.append((job_run, outcome))
-    return tuple(results)
+        results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
+        for job_run in due:
+            outcome = run_paper_once(engine, job_run, registry, now=now)
+            results.append((job_run, outcome))
+        return tuple(results)
