@@ -10,12 +10,10 @@ from sqlalchemy import create_engine, text
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperCycleOutcome
 from hope.application.paper.jobs import (
-    PaperEntryOrderDecisionJob,
     PaperFillAccountingJob,
     PaperSignalPersistenceJob,
 )
 from hope.domain.execution import Fill, OrderSide
-from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import (
     PortfolioEntryRiskRequest,
@@ -24,7 +22,12 @@ from hope.domain.risk.portfolio import (
     PortfolioRiskSnapshot,
 )
 from hope.domain.signal.models import Signal, SignalType
-from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, run_paper_once
+from hope.infrastructure.paper_runtime import (
+    DurablePaperEntryOrderDecision,
+    PaperJobDefinition,
+    PaperJobRegistry,
+    run_paper_once,
+)
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -131,12 +134,11 @@ def test_authoritative_paper_runtime_persists_signal_risk_order_and_fill_in_sepa
             PaperJobDefinition(signal_run.job_key, PaperSignalPersistenceJob(signal)),
             PaperJobDefinition(
                 risk_order_run.job_key,
-                PaperEntryOrderDecisionJob(
+                DurablePaperEntryOrderDecision(
                     signal,
                     risk_inputs,
                     risk_engine,
                     OrderSide.BUY,
-                    IntelligenceEntryGateContext(),
                 ),
             ),
             PaperJobDefinition(

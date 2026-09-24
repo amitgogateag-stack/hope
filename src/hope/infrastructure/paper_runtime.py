@@ -10,14 +10,21 @@ from sqlalchemy import Connection, Engine
 
 from hope.application.jobs import JobRunStatus, ScheduledJobRun
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
-from hope.application.paper.jobs import PaperStrategyDecisionJob
+from hope.application.paper.jobs import PaperEntryOrderDecisionJob, PaperStrategyDecisionJob
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner, PaperRuntimeContext
 from hope.application.paper.signals import PaperSignalWriter
+from hope.domain.execution.models import OrderSide
+from hope.domain.risk.inputs import PortfolioEntryRiskInputs
+from hope.domain.risk.portfolio import PortfolioRiskEngine
+from hope.domain.signal.models import Signal
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
+from hope.infrastructure.repositories.market_intelligence_assessments import (
+    SqlAlchemyIntelligenceAssessmentRepository,
+)
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
@@ -80,6 +87,45 @@ class DurableUniversePaperStrategyDecision:
 
 
 PaperRegisteredWork = PaperJobWork | ConnectionBoundPaperJob
+
+
+@dataclass(frozen=True)
+class DurablePaperEntryOrderDecision:
+    """Resolve the intelligence entry gate from durable history inside the PAPER transaction."""
+
+    signal: Signal
+    risk_inputs: PortfolioEntryRiskInputs
+    risk_engine: PortfolioRiskEngine
+    side: OrderSide
+    policy_version: str = "hope.intelligence-policy.v1"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.signal, Signal):
+            raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_SIGNAL")
+        if not isinstance(self.risk_inputs, PortfolioEntryRiskInputs):
+            raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_RISK_INPUTS")
+        if not isinstance(self.risk_engine, PortfolioRiskEngine):
+            raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_RISK_ENGINE")
+        if not isinstance(self.side, OrderSide):
+            raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_ORDER_SIDE")
+        if not self.policy_version or self.policy_version != self.policy_version.strip():
+            raise ValueError("PAPER_DURABLE_ENTRY_POLICY_NOT_CANONICAL")
+
+    def bind(self, connection: Connection) -> PaperJobWork:
+        intelligence_gate = SqlAlchemyIntelligenceAssessmentRepository(
+            connection
+        ).entry_gate_context(
+            self.signal.instrument_id,
+            as_of=self.signal.decision_time,
+            policy_version=self.policy_version,
+        )
+        return PaperEntryOrderDecisionJob(
+            self.signal,
+            self.risk_inputs,
+            self.risk_engine,
+            self.side,
+            intelligence_gate,
+        )
 
 
 @dataclass(frozen=True)
