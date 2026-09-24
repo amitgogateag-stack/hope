@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -58,3 +58,83 @@ def test_stranded_later_claim_blocks_entire_due_batch_before_work_executes() -> 
         repository = SqlAlchemyJobRunRepository(connection)
         assert repository.get_record(earlier.job_run_id) is None
         assert repository.get_record(stranded.job_run_id) is not None
+
+
+@pytest.mark.integration
+def test_terminal_prior_run_does_not_block_fresh_due_run() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 5, tzinfo=UTC)
+    terminal = create_scheduled_job_run(
+        "paper-batch-terminal",
+        now - timedelta(minutes=2),
+    )
+    fresh = create_scheduled_job_run(
+        "paper-batch-fresh",
+        now - timedelta(minutes=1),
+    )
+    calls = []
+
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        for job_run in (terminal, fresh):
+            connection.execute(
+                text(
+                    "DELETE FROM job_runs "
+                    "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+                ),
+                {
+                    "job_key": job_run.job_key,
+                    "scheduled_for": job_run.scheduled_for,
+                },
+            )
+
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.claim(terminal) is True
+        assert repository.complete(
+            create_job_run_completion(
+                terminal,
+                JobRunStatus.SUCCEEDED,
+                terminal.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                terminal.job_key,
+                lambda runtime: calls.append(terminal.job_run_id),
+            ),
+            PaperJobDefinition(
+                fresh.job_key,
+                lambda runtime: calls.append(fresh.job_run_id),
+            ),
+        ]
+    )
+
+    results = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        [fresh, terminal],
+        now=lambda: now,
+        max_lateness=timedelta(minutes=5),
+    )
+
+    assert [run.job_run_id for run, _ in results] == [
+        terminal.job_run_id,
+        fresh.job_run_id,
+    ]
+    assert [outcome.value for _, outcome in results] == [
+        "SKIPPED_TERMINAL",
+        "EXECUTED",
+    ]
+    assert calls == [fresh.job_run_id]
+
+    with engine.connect() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        terminal_record = repository.get_record(terminal.job_run_id)
+        fresh_record = repository.get_record(fresh.job_run_id)
+        assert terminal_record is not None
+        assert terminal_record.status is JobRunStatus.SUCCEEDED
+        assert fresh_record is not None
+        assert fresh_record.status is JobRunStatus.SUCCEEDED
