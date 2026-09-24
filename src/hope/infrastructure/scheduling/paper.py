@@ -216,7 +216,7 @@ def _preflight_due_paper_job_states(
     with engine.connect() as connection:
         repository = SqlAlchemyJobRunRepository(connection)
         for job_run in job_runs:
-            record = repository.get_record(job_run.job_run_id)
+            record = repository.get_record_for_run(job_run)
             if record is None:
                 continue
             if record.status is JobRunStatus.CLAIMED:
