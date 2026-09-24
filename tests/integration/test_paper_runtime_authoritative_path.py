@@ -15,6 +15,7 @@ from hope.application.paper.jobs import (
     PaperSignalPersistenceJob,
 )
 from hope.domain.execution import Fill, OrderSide
+from hope.domain.market_intelligence.gate import IntelligenceEntryGateContext
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import (
     PortfolioEntryRiskRequest,
@@ -135,6 +136,7 @@ def test_authoritative_paper_runtime_persists_signal_risk_order_and_fill_in_sepa
                     risk_inputs,
                     risk_engine,
                     OrderSide.BUY,
+                    IntelligenceEntryGateContext(),
                 ),
             ),
             PaperJobDefinition(

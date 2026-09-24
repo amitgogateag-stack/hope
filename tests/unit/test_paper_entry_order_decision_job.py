@@ -265,7 +265,13 @@ def test_paper_entry_order_job_rejects_future_signal_before_any_effect() -> None
         update={"decision_time": datetime(2026, 9, 13, 15, 2, tzinfo=UTC)}
     )
     runtime = _runtime()
-    job = PaperEntryOrderDecisionJob(signal, _inputs(signal), _engine(), OrderSide.BUY)
+    job = PaperEntryOrderDecisionJob(
+        signal,
+        _inputs(signal),
+        _engine(),
+        OrderSide.BUY,
+        IntelligenceEntryGateContext(),
+    )
 
     with pytest.raises(ValueError, match="PAPER_ENTRY_RISK_SIGNAL_AFTER_JOB_SCHEDULE"):
         job(runtime)
