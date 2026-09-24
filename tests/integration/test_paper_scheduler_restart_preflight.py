@@ -252,3 +252,38 @@ def test_stale_unclaimed_run_blocks_entire_due_batch_before_any_claim() -> None:
         repository = SqlAlchemyJobRunRepository(connection)
         assert repository.get_record(stale.job_run_id) is None
         assert repository.get_record(fresh.job_run_id) is None
+
+
+@pytest.mark.integration
+def test_run_exactly_at_max_lateness_remains_eligible() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 40, tzinfo=UTC)
+    boundary = create_scheduled_job_run(
+        "paper-batch-exact-lateness-boundary",
+        now - timedelta(minutes=5),
+    )
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("DELETE FROM job_runs WHERE job_key = :job_key AND scheduled_for = :scheduled_for"),
+            {"job_key": boundary.job_key, "scheduled_for": boundary.scheduled_for},
+        )
+    registry = PaperJobRegistry(
+        [PaperJobDefinition(boundary.job_key, lambda runtime: calls.append(boundary.job_run_id))]
+    )
+    results = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        [boundary],
+        now=lambda: now,
+        max_lateness=timedelta(minutes=5),
+    )
+    assert [run.job_run_id for run, _ in results] == [boundary.job_run_id]
+    assert [outcome.value for _, outcome in results] == ["EXECUTED"]
+    assert calls == [boundary.job_run_id]
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(boundary.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
