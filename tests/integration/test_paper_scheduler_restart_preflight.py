@@ -10,7 +10,10 @@ from hope.application.jobs import JobRunStatus, create_job_run_completion, creat
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
-from hope.infrastructure.scheduling.paper import run_due_operational_paper_jobs
+from hope.infrastructure.scheduling.paper import (
+    _PAPER_SCHEDULER_LOCK_NAME,
+    run_due_operational_paper_jobs,
+)
 
 
 def _engine():
@@ -370,3 +373,61 @@ def test_conflicting_persisted_schedule_identity_blocks_entire_due_batch() -> No
             },
         ).scalar_one()
         assert stored_id == conflicting_id
+
+
+@pytest.mark.integration
+def test_concurrent_scheduler_lock_blocks_entire_due_batch_before_claim() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 50, tzinfo=UTC)
+    due = create_scheduled_job_run(
+        "paper-batch-concurrent-lock",
+        now - timedelta(minutes=1),
+    )
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "DELETE FROM job_runs "
+                "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+            ),
+            {
+                "job_key": due.job_key,
+                "scheduled_for": due.scheduled_for,
+            },
+        )
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                due.job_key,
+                lambda runtime: calls.append(due.job_run_id),
+            )
+        ]
+    )
+
+    with engine.connect() as lock_connection:
+        assert lock_connection.execute(
+            text("SELECT pg_try_advisory_lock(hashtext(:lock_name)::bigint)"),
+            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+        ).scalar_one() is True
+        try:
+            with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_CONCURRENT_RUN"):
+                run_due_operational_paper_jobs(
+                    engine,
+                    registry,
+                    [due],
+                    now=lambda: now,
+                    max_lateness=timedelta(minutes=5),
+                )
+        finally:
+            assert lock_connection.execute(
+                text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"),
+                {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+            ).scalar_one() is True
+
+    assert calls == []
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(due.job_run_id) is None
