@@ -216,3 +216,39 @@ def test_stale_failed_history_does_not_block_fresh_due_work() -> None:
         assert failed_record.failure_code == "EXPECTED_STALE_FAILURE"
         assert fresh_record is not None
         assert fresh_record.status is JobRunStatus.SUCCEEDED
+
+
+@pytest.mark.integration
+def test_stale_unclaimed_run_blocks_entire_due_batch_before_any_claim() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 35, tzinfo=UTC)
+    stale = create_scheduled_job_run("paper-batch-stale-unclaimed", now - timedelta(hours=2))
+    fresh = create_scheduled_job_run("paper-batch-fresh-with-stale-unclaimed", now - timedelta(minutes=1))
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        for job_run in (stale, fresh):
+            connection.execute(
+                text("DELETE FROM job_runs WHERE job_key = :job_key AND scheduled_for = :scheduled_for"),
+                {"job_key": job_run.job_key, "scheduled_for": job_run.scheduled_for},
+            )
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(stale.job_key, lambda runtime: calls.append(stale.job_run_id)),
+            PaperJobDefinition(fresh.job_key, lambda runtime: calls.append(fresh.job_run_id)),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            [fresh, stale],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+    assert calls == []
+    with engine.connect() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.get_record(stale.job_run_id) is None
+        assert repository.get_record(fresh.job_run_id) is None
