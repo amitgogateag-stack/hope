@@ -1,6 +1,7 @@
 import os
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -287,3 +288,85 @@ def test_run_exactly_at_max_lateness_remains_eligible() -> None:
         record = SqlAlchemyJobRunRepository(connection).get_record(boundary.job_run_id)
         assert record is not None
         assert record.status is JobRunStatus.SUCCEEDED
+
+
+@pytest.mark.integration
+def test_conflicting_persisted_schedule_identity_blocks_entire_due_batch() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 14, 45, tzinfo=UTC)
+    earlier = create_scheduled_job_run(
+        "paper-batch-before-identity-conflict",
+        now - timedelta(minutes=2),
+    )
+    conflicted = create_scheduled_job_run(
+        "paper-batch-identity-conflict",
+        now - timedelta(minutes=1),
+    )
+    conflicting_id = uuid4()
+    assert conflicting_id != conflicted.job_run_id
+    calls = []
+
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        for job_run in (earlier, conflicted):
+            connection.execute(
+                text(
+                    "DELETE FROM job_runs "
+                    "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+                ),
+                {
+                    "job_key": job_run.job_key,
+                    "scheduled_for": job_run.scheduled_for,
+                },
+            )
+        connection.execute(
+            text(
+                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for) "
+                "VALUES (:job_run_id, :job_key, :scheduled_for)"
+            ),
+            {
+                "job_run_id": conflicting_id,
+                "job_key": conflicted.job_key,
+                "scheduled_for": conflicted.scheduled_for,
+            },
+        )
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                earlier.job_key,
+                lambda runtime: calls.append(earlier.job_run_id),
+            ),
+            PaperJobDefinition(
+                conflicted.job_key,
+                lambda runtime: calls.append(conflicted.job_run_id),
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="JOB_RUN_IDENTITY_CONFLICT"):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            [earlier, conflicted],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+    with engine.connect() as connection:
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.get_record(earlier.job_run_id) is None
+        assert repository.get_record(conflicted.job_run_id) is None
+        stored_id = connection.execute(
+            text(
+                "SELECT job_run_id FROM job_runs "
+                "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+            ),
+            {
+                "job_key": conflicted.job_key,
+                "scheduled_for": conflicted.scheduled_for,
+            },
+        ).scalar_one()
+        assert stored_id == conflicting_id
