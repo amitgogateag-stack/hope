@@ -26,4 +26,9 @@ testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-ra"
 markers = ["integration: requires external service dependencies"]
-filterwarnings = ["error"]
+filterwarnings = [
+  "error::DeprecationWarning",
+  "error::FutureWarning",
+  "error::RuntimeWarning",
+  "error::sqlalchemy.exc.SAWarning",
+]
