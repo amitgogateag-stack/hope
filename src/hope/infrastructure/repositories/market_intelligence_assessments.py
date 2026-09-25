@@ -75,6 +75,7 @@ class SqlAlchemyIntelligenceAssessmentRepository:
             Column("assessment_id", Uuid, nullable=False),
             Column("policy_version", String, nullable=False),
             Column("outcome", String, nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
     def persist(self, assessment_id: UUID, assessment: IntelligenceAssessment) -> bool:
@@ -128,18 +129,39 @@ class SqlAlchemyIntelligenceAssessmentRepository:
         if not policy_version or policy_version != policy_version.strip():
             raise ValueError("INTELLIGENCE_ENTRY_GATE_POLICY_NOT_CANONICAL")
 
+        assessment_resolution = self._assessments.outerjoin(
+            self._resolutions,
+            and_(
+                self._resolutions.c.assessment_id == self._assessments.c.assessment_id,
+                self._resolutions.c.policy_version == self._assessments.c.policy_version,
+            ),
+        )
+        source = assessment_resolution.join(
+            self._events,
+            self._events.c.event_id == self._assessments.c.event_id,
+        )
         rows = self._connection.execute(
-            select(self._entry_blocks.c.assessment_id).where(
-                self._entry_blocks.c.policy_version == policy_version,
-                self._entry_blocks.c.available_time <= as_of,
+            select(self._assessments.c.assessment_id)
+            .select_from(source)
+            .where(
+                self._assessments.c.policy_version == policy_version,
+                self._assessments.c.created_at <= as_of,
+                self._events.c.available_time <= as_of,
+                self._assessments.c.disposition != "OBSERVE_ONLY",
                 or_(
-                    self._entry_blocks.c.scope == "MARKET",
+                    self._events.c.scope == "MARKET",
                     and_(
-                        self._entry_blocks.c.scope == "COMPANY",
-                        self._entry_blocks.c.instrument_id == instrument_id,
+                        self._events.c.scope == "COMPANY",
+                        self._events.c.instrument_id == instrument_id,
                     ),
                 ),
-            ).order_by(self._entry_blocks.c.assessment_id)
+                or_(
+                    self._resolutions.c.resolution_id.is_(None),
+                    self._resolutions.c.created_at > as_of,
+                    self._resolutions.c.outcome == "BLOCK_CONFIRMED",
+                ),
+            )
+            .order_by(self._assessments.c.assessment_id)
         ).scalars().all()
         return IntelligenceEntryGateContext(
             blocker_assessment_ids=tuple(rows)

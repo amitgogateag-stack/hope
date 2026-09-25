@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
@@ -262,7 +262,8 @@ def test_intelligence_entry_gate_uses_pit_scope_and_review_resolution() -> None:
                 ),
                 {"iid": instrument_id, "symbol": f"INTEL-{str(instrument_id)[:8]}"},
             )
-            event_time = datetime(2026, 9, 18, 10, 0, tzinfo=timezone.utc)
+            base_time = datetime.now(timezone.utc)
+            event_time = base_time - timedelta(minutes=2)
             event = MarketIntelligenceEvent(
                 event_id=uuid4(),
                 scope=IntelligenceScope.COMPANY,
@@ -284,25 +285,38 @@ def test_intelligence_entry_gate_uses_pit_scope_and_review_resolution() -> None:
             assessments = SqlAlchemyIntelligenceAssessmentRepository(connection)
             assessments.persist(assessment_id, assessment)
 
+            decision_time = base_time + timedelta(minutes=1)
             before = assessments.entry_gate_context(
                 instrument_id,
-                as_of=event_time,
+                as_of=decision_time,
             )
             assert before.blocker_assessment_ids == (assessment_id,)
 
-            review = IntelligenceReviewResolution(
-                assessment_id=assessment_id,
-                policy_version=assessment.policy_version,
-                outcome=IntelligenceReviewOutcome.CLEARED,
-                rationale="Primary filing reviewed; no entry block required",
+            future_resolution_time = decision_time + timedelta(minutes=5)
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_review_resolutions("
+                    "resolution_id,assessment_id,policy_version,outcome,rationale,created_at"
+                    ") VALUES (:rid,:aid,:policy,'CLEARED',:rationale,:created_at)"
+                ),
+                {
+                    "rid": uuid4(),
+                    "aid": assessment_id,
+                    "policy": assessment.policy_version,
+                    "rationale": "Primary filing reviewed; no entry block required",
+                    "created_at": future_resolution_time,
+                },
             )
-            SqlAlchemyIntelligenceReviewRepository(connection).resolve(
-                uuid4(),
-                review,
+
+            still_blocked = assessments.entry_gate_context(
+                instrument_id,
+                as_of=decision_time,
             )
+            assert still_blocked.blocker_assessment_ids == (assessment_id,)
+
             after = assessments.entry_gate_context(
                 instrument_id,
-                as_of=event_time,
+                as_of=future_resolution_time,
             )
             assert after.blocker_assessment_ids == ()
         finally:
