@@ -773,7 +773,7 @@ def test_entry_gate_does_not_use_intelligence_before_system_ingestion_time() -> 
                     "policy": assessment.policy_version,
                     "disposition": assessment.disposition.value,
                     "source_action": assessment.source_action.value,
-                    "created_at": base_time,
+                    "created_at": ingestion_time,
                 },
             )
 
