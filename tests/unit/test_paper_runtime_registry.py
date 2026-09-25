@@ -1,9 +1,21 @@
 from datetime import datetime, timezone
+from decimal import Decimal
+from uuid import uuid4
 
 import pytest
 
 from hope.application.jobs import create_scheduled_job_run
+from hope.domain.execution.models import OrderSide
+from hope.domain.risk.inputs import PortfolioEntryRiskInputs
+from hope.domain.risk.portfolio import (
+    PortfolioEntryRiskRequest,
+    PortfolioRiskEngine,
+    PortfolioRiskLimits,
+    PortfolioRiskSnapshot,
+)
+from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import (
+    DurablePaperEntryOrderDecision,
     PaperJobDefinition,
     PaperJobRegistry,
     SqlAlchemyPaperRuntime,
@@ -54,4 +66,50 @@ def test_run_paper_once_rejects_raw_callback_before_engine_use() -> None:
             job_run,
             lambda runtime: None,
             now=lambda: job_run.scheduled_for,
+        )
+
+
+def test_durable_paper_entry_rejects_unsupported_intelligence_policy() -> None:
+    signal = Signal(
+        signal_id=uuid4(),
+        instrument_id=uuid4(),
+        strategy_version="paper-policy-v1",
+        decision_time=datetime(2026, 9, 25, 12, 0, tzinfo=UTC),
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash="a" * 64,
+    )
+    risk_inputs = PortfolioEntryRiskInputs(
+        request=PortfolioEntryRiskRequest(
+            signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id,
+            strategy_version=signal.strategy_version,
+            proposed_quantity=Decimal("1"),
+            reference_price=Decimal("100"),
+            current_instrument_exposure=Decimal("0"),
+            current_strategy_exposure=Decimal("0"),
+            opens_new_position=True,
+        ),
+        snapshot=PortfolioRiskSnapshot(
+            gross_exposure=Decimal("0"),
+            open_positions=0,
+            current_daily_loss=Decimal("0"),
+            current_drawdown=Decimal("0"),
+        ),
+    )
+    engine = PortfolioRiskEngine(
+        PortfolioRiskLimits(
+            max_position_notional=Decimal("1000"),
+            max_gross_exposure=Decimal("5000"),
+            max_open_positions=5,
+        )
+    )
+
+    with pytest.raises(ValueError, match="PAPER_DURABLE_ENTRY_POLICY_UNSUPPORTED"):
+        DurablePaperEntryOrderDecision(
+            signal,
+            risk_inputs,
+            engine,
+            OrderSide.BUY,
+            policy_version="hope.intelligence-policy.v999",
         )

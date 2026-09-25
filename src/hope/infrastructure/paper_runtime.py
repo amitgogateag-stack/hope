@@ -110,6 +110,8 @@ class DurablePaperEntryOrderDecision:
             raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_ORDER_SIDE")
         if not self.policy_version or self.policy_version != self.policy_version.strip():
             raise ValueError("PAPER_DURABLE_ENTRY_POLICY_NOT_CANONICAL")
+        if self.policy_version != "hope.intelligence-policy.v1":
+            raise ValueError("PAPER_DURABLE_ENTRY_POLICY_UNSUPPORTED")
 
     def bind(self, connection: Connection) -> PaperJobWork:
         intelligence_gate = SqlAlchemyIntelligenceAssessmentRepository(
