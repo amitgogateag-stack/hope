@@ -318,10 +318,21 @@ def test_authoritative_paper_entry_resolves_durable_intelligence_block_before_or
         assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
         assessment = assess_intelligence_event(event)
         assessment_id = uuid4()
-        assert SqlAlchemyIntelligenceAssessmentRepository(connection).persist(
-            assessment_id,
-            assessment,
-        ) is True
+        connection.execute(
+            text(
+                "INSERT INTO market_intelligence_assessments("
+                "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+            ),
+            {
+                "aid": assessment_id,
+                "eid": assessment.event_id,
+                "policy": assessment.policy_version,
+                "disposition": assessment.disposition.value,
+                "source_action": assessment.source_action.value,
+                "created_at": decision_time - timedelta(seconds=30),
+            },
+        )
 
     registry = PaperJobRegistry(
         [
