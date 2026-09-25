@@ -54,6 +54,7 @@ class SqlAlchemyIntelligenceAssessmentRepository:
             Column("scope", String, nullable=False),
             Column("instrument_id", Uuid, nullable=True),
             Column("available_time", DateTime(timezone=True), nullable=False),
+            Column("ingestion_time", DateTime(timezone=True), nullable=False),
         )
         self._entry_blocks = Table(
             "current_market_intelligence_entry_blocks",
@@ -147,6 +148,7 @@ class SqlAlchemyIntelligenceAssessmentRepository:
                 self._assessments.c.policy_version == policy_version,
                 self._assessments.c.created_at <= as_of,
                 self._events.c.available_time <= as_of,
+                self._events.c.ingestion_time <= as_of,
                 self._assessments.c.disposition.in_((
                     "ENTRY_ELIGIBILITY_REVIEW",
                     "MARKET_RISK_REVIEW",
