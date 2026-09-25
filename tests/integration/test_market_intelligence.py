@@ -319,5 +319,54 @@ def test_intelligence_entry_gate_uses_pit_scope_and_review_resolution() -> None:
                 as_of=future_resolution_time,
             )
             assert after.blocker_assessment_ids == ()
+
+            second_event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="FIXTURE",
+                source_item_id=f"entry-gate-future-assessment-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.REGULATORY,
+                materiality=IntelligenceMateriality.HIGH,
+                recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+                event_time=event_time,
+                available_time=event_time,
+                ingestion_time=event_time,
+                source_payload_hash="f" * 64,
+            )
+            assert SqlAlchemyMarketIntelligenceRepository(connection).persist(second_event) is True
+            second_assessment = assess_intelligence_event(second_event)
+            second_assessment_id = uuid4()
+            second_assessment_time = future_resolution_time + timedelta(minutes=5)
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_assessments("
+                    "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                    ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+                ),
+                {
+                    "aid": second_assessment_id,
+                    "eid": second_assessment.event_id,
+                    "policy": second_assessment.policy_version,
+                    "disposition": second_assessment.disposition.value,
+                    "source_action": second_assessment.source_action.value,
+                    "created_at": second_assessment_time,
+                },
+            )
+
+            before_second_assessment = assessments.entry_gate_context(
+                instrument_id,
+                as_of=future_resolution_time,
+            )
+            assert before_second_assessment.blocker_assessment_ids == ()
+
+            after_second_assessment = assessments.entry_gate_context(
+                instrument_id,
+                as_of=second_assessment_time,
+            )
+            assert after_second_assessment.blocker_assessment_ids == (
+                second_assessment_id,
+            )
         finally:
             transaction.rollback()
