@@ -333,6 +333,20 @@ def test_authoritative_paper_entry_resolves_durable_intelligence_block_before_or
                 "created_at": decision_time - timedelta(seconds=30),
             },
         )
+        connection.execute(
+            text(
+                "INSERT INTO market_intelligence_review_resolutions("
+                "resolution_id,assessment_id,policy_version,outcome,rationale,created_at"
+                ") VALUES (:rid,:aid,:policy,'CLEARED',:rationale,:created_at)"
+            ),
+            {
+                "rid": uuid4(),
+                "aid": assessment_id,
+                "policy": assessment.policy_version,
+                "rationale": "Cleared only after the PAPER decision timestamp",
+                "created_at": decision_time + timedelta(minutes=1),
+            },
+        )
 
     registry = PaperJobRegistry(
         [
