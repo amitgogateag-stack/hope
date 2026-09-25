@@ -791,3 +791,70 @@ def test_entry_gate_does_not_use_intelligence_before_system_ingestion_time() -> 
             assert after_ingestion.blocker_assessment_ids == (assessment_id,)
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+def test_intelligence_assessment_cannot_predate_event_ingestion() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"ASSESS-INGEST-{str(instrument_id)[:8]}"},
+            )
+
+            base_time = datetime.now(timezone.utc)
+            ingestion_time = base_time + timedelta(minutes=5)
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="FIXTURE",
+                source_item_id=f"assessment-ingestion-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.REGULATORY,
+                materiality=IntelligenceMateriality.HIGH,
+                recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+                event_time=base_time - timedelta(minutes=2),
+                available_time=base_time - timedelta(minutes=1),
+                ingestion_time=ingestion_time,
+                source_payload_hash="4" * 64,
+            )
+            assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
+            assessment = assess_intelligence_event(event)
+
+            with pytest.raises(
+                IntegrityError,
+                match="INTELLIGENCE_ASSESSMENT_PRECEDES_EVENT_INGESTION",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO market_intelligence_assessments("
+                            "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                            ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+                        ),
+                        {
+                            "aid": uuid4(),
+                            "eid": assessment.event_id,
+                            "policy": assessment.policy_version,
+                            "disposition": assessment.disposition.value,
+                            "source_action": assessment.source_action.value,
+                            "created_at": base_time,
+                        },
+                    )
+        finally:
+            transaction.rollback()
