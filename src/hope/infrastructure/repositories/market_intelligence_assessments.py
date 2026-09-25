@@ -147,7 +147,10 @@ class SqlAlchemyIntelligenceAssessmentRepository:
                 self._assessments.c.policy_version == policy_version,
                 self._assessments.c.created_at <= as_of,
                 self._events.c.available_time <= as_of,
-                self._assessments.c.disposition != "OBSERVE_ONLY",
+                self._assessments.c.disposition.in_((
+                    "ENTRY_ELIGIBILITY_REVIEW",
+                    "MARKET_RISK_REVIEW",
+                )),
                 or_(
                     self._events.c.scope == "MARKET",
                     and_(
