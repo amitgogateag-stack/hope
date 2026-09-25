@@ -14,6 +14,15 @@ from hope.application.paper.jobs import (
     PaperSignalPersistenceJob,
 )
 from hope.domain.execution import Fill, OrderSide
+from hope.domain.market_intelligence.assessment import assess_intelligence_event
+from hope.domain.market_intelligence.models import (
+    IntelligenceAction,
+    IntelligenceCategory,
+    IntelligenceMateriality,
+    IntelligenceScope,
+    IntelligenceSourceTier,
+    MarketIntelligenceEvent,
+)
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import (
     PortfolioEntryRiskRequest,
@@ -30,6 +39,12 @@ from hope.infrastructure.paper_runtime import (
 )
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.market_intelligence import (
+    SqlAlchemyMarketIntelligenceRepository,
+)
+from hope.infrastructure.repositories.market_intelligence_assessments import (
+    SqlAlchemyIntelligenceAssessmentRepository,
+)
 
 UTC = timezone.utc
 INPUTS_HASH = "f" * 64
@@ -212,3 +227,133 @@ def test_authoritative_paper_runtime_persists_signal_risk_order_and_fill_in_sepa
             record = jobs.get_record(run.job_run_id)
             assert record is not None
             assert record.status is JobRunStatus.SUCCEEDED
+
+
+@pytest.mark.integration
+def test_authoritative_paper_entry_resolves_durable_intelligence_block_before_order() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    signal_run = create_scheduled_job_run(
+        "paper-runtime-intel-signal",
+        datetime(2026, 9, 10, 7, 0, tzinfo=UTC),
+    )
+    risk_order_run = create_scheduled_job_run(
+        "paper-runtime-intel-risk-order",
+        datetime(2026, 9, 10, 7, 1, tzinfo=UTC),
+    )
+    decision_time = datetime(2026, 9, 10, 6, 59, tzinfo=UTC)
+    signal_context = PaperCycleContext(signal_run)
+    signal_id = signal_context.signal_id(
+        instrument_id=instrument_id,
+        strategy_version="paper-runtime-intel-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    signal = Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-runtime-intel-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    risk_inputs = PortfolioEntryRiskInputs(
+        request=PortfolioEntryRiskRequest(
+            signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id,
+            strategy_version=signal.strategy_version,
+            proposed_quantity=Decimal("1"),
+            reference_price=Decimal("100"),
+            current_instrument_exposure=Decimal("0"),
+            current_strategy_exposure=Decimal("0"),
+            opens_new_position=True,
+        ),
+        snapshot=PortfolioRiskSnapshot(
+            gross_exposure=Decimal("0"),
+            open_positions=0,
+            current_daily_loss=Decimal("0"),
+            current_drawdown=Decimal("0"),
+        ),
+    )
+    risk_engine = PortfolioRiskEngine(
+        PortfolioRiskLimits(
+            max_position_notional=Decimal("1000"),
+            max_gross_exposure=Decimal("5000"),
+            max_open_positions=5,
+        )
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id, "symbol": f"PAPER-INTEL-{str(instrument_id)[:8]}"},
+        )
+        event = MarketIntelligenceEvent(
+            event_id=uuid4(),
+            scope=IntelligenceScope.COMPANY,
+            instrument_id=instrument_id,
+            source="PAPER_RUNTIME_FIXTURE",
+            source_item_id=f"block-{uuid4()}",
+            source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+            category=IntelligenceCategory.REGULATORY,
+            materiality=IntelligenceMateriality.HIGH,
+            recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+            event_time=decision_time - timedelta(minutes=2),
+            available_time=decision_time - timedelta(minutes=1),
+            ingestion_time=decision_time - timedelta(minutes=1),
+            source_payload_hash="d" * 64,
+        )
+        assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
+        assessment = assess_intelligence_event(event)
+        assessment_id = uuid4()
+        assert SqlAlchemyIntelligenceAssessmentRepository(connection).persist(
+            assessment_id,
+            assessment,
+        ) is True
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(signal_run.job_key, PaperSignalPersistenceJob(signal)),
+            PaperJobDefinition(
+                risk_order_run.job_key,
+                DurablePaperEntryOrderDecision(
+                    signal,
+                    risk_inputs,
+                    risk_engine,
+                    OrderSide.BUY,
+                ),
+            ),
+        ]
+    )
+    now = lambda: risk_order_run.scheduled_for + timedelta(minutes=1)
+
+    assert run_paper_once(engine, signal_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+    assert run_paper_once(engine, risk_order_run, registry, now=now) is PaperCycleOutcome.EXECUTED
+
+    with engine.connect() as connection:
+        risk_row = connection.execute(
+            text(
+                "SELECT decision, reason_code, approved_quantity "
+                "FROM paper_risk_assessments WHERE signal_id=:id"
+            ),
+            {"id": signal.signal_id},
+        ).mappings().one()
+        assert risk_row["decision"] == "REJECT"
+        assert risk_row["reason_code"] == "INTELLIGENCE_ENTRY_REVIEW_REQUIRED"
+        assert risk_row["approved_quantity"] == Decimal("0")
+        assert connection.execute(
+            text("SELECT count(*) FROM orders WHERE signal_id=:id"),
+            {"id": signal.signal_id},
+        ).scalar_one() == 0
