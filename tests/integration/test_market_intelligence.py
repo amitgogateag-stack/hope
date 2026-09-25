@@ -626,3 +626,93 @@ def test_data_review_required_blocks_new_entry_until_reviewed() -> None:
             assert cleared.blocker_assessment_ids == ()
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+def test_block_confirmed_review_keeps_entry_gate_closed() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"BLOCK-CONFIRMED-{str(instrument_id)[:8]}"},
+            )
+
+            base_time = datetime.now(timezone.utc)
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="FIXTURE",
+                source_item_id=f"block-confirmed-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.REGULATORY,
+                materiality=IntelligenceMateriality.HIGH,
+                recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+                event_time=base_time - timedelta(minutes=2),
+                available_time=base_time - timedelta(minutes=1),
+                ingestion_time=base_time - timedelta(minutes=1),
+                source_payload_hash="6" * 64,
+            )
+            assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
+            assessment = assess_intelligence_event(event)
+            assessment_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_assessments("
+                    "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                    ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+                ),
+                {
+                    "aid": assessment_id,
+                    "eid": assessment.event_id,
+                    "policy": assessment.policy_version,
+                    "disposition": assessment.disposition.value,
+                    "source_action": assessment.source_action.value,
+                    "created_at": base_time,
+                },
+            )
+
+            confirmation_time = base_time + timedelta(minutes=2)
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_review_resolutions("
+                    "resolution_id,assessment_id,policy_version,outcome,rationale,created_at"
+                    ") VALUES (:rid,:aid,:policy,'BLOCK_CONFIRMED',:rationale,:created_at)"
+                ),
+                {
+                    "rid": uuid4(),
+                    "aid": assessment_id,
+                    "policy": assessment.policy_version,
+                    "rationale": "Primary evidence confirms the entry block remains required",
+                    "created_at": confirmation_time,
+                },
+            )
+
+            assessments = SqlAlchemyIntelligenceAssessmentRepository(connection)
+            before_confirmation = assessments.entry_gate_context(
+                instrument_id,
+                as_of=base_time + timedelta(minutes=1),
+            )
+            assert before_confirmation.blocker_assessment_ids == (assessment_id,)
+
+            after_confirmation = assessments.entry_gate_context(
+                instrument_id,
+                as_of=confirmation_time,
+            )
+            assert after_confirmation.blocker_assessment_ids == (assessment_id,)
+        finally:
+            transaction.rollback()
