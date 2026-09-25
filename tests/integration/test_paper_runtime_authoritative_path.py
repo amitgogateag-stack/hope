@@ -382,3 +382,96 @@ def test_authoritative_paper_entry_resolves_durable_intelligence_block_before_or
             text("SELECT count(*) FROM orders WHERE signal_id=:id"),
             {"id": signal.signal_id},
         ).scalar_one() == 0
+
+    cleared_decision_time = decision_time + timedelta(minutes=1, seconds=30)
+    cleared_signal_run = create_scheduled_job_run(
+        "paper-runtime-intel-cleared-signal",
+        decision_time + timedelta(minutes=2),
+    )
+    cleared_risk_run = create_scheduled_job_run(
+        "paper-runtime-intel-cleared-risk-order",
+        decision_time + timedelta(minutes=3),
+    )
+    cleared_context = PaperCycleContext(cleared_signal_run)
+    cleared_signal_id = cleared_context.signal_id(
+        instrument_id=instrument_id,
+        strategy_version="paper-runtime-intel-v1",
+        decision_time=cleared_decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    cleared_signal = Signal(
+        signal_id=cleared_signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-runtime-intel-v1",
+        decision_time=cleared_decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    cleared_risk_inputs = PortfolioEntryRiskInputs(
+        request=PortfolioEntryRiskRequest(
+            signal_id=cleared_signal.signal_id,
+            instrument_id=cleared_signal.instrument_id,
+            strategy_version=cleared_signal.strategy_version,
+            proposed_quantity=Decimal("1"),
+            reference_price=Decimal("100"),
+            current_instrument_exposure=Decimal("0"),
+            current_strategy_exposure=Decimal("0"),
+            opens_new_position=True,
+        ),
+        snapshot=PortfolioRiskSnapshot(
+            gross_exposure=Decimal("0"),
+            open_positions=0,
+            current_daily_loss=Decimal("0"),
+            current_drawdown=Decimal("0"),
+        ),
+    )
+    cleared_registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                cleared_signal_run.job_key,
+                PaperSignalPersistenceJob(cleared_signal),
+            ),
+            PaperJobDefinition(
+                cleared_risk_run.job_key,
+                DurablePaperEntryOrderDecision(
+                    cleared_signal,
+                    cleared_risk_inputs,
+                    risk_engine,
+                    OrderSide.BUY,
+                ),
+            ),
+        ]
+    )
+    cleared_now = lambda: cleared_risk_run.scheduled_for + timedelta(minutes=1)
+
+    assert run_paper_once(
+        engine,
+        cleared_signal_run,
+        cleared_registry,
+        now=cleared_now,
+    ) is PaperCycleOutcome.EXECUTED
+    assert run_paper_once(
+        engine,
+        cleared_risk_run,
+        cleared_registry,
+        now=cleared_now,
+    ) is PaperCycleOutcome.EXECUTED
+
+    with engine.connect() as connection:
+        cleared_risk_row = connection.execute(
+            text(
+                "SELECT decision, reason_code, approved_quantity "
+                "FROM paper_risk_assessments WHERE signal_id=:id"
+            ),
+            {"id": cleared_signal.signal_id},
+        ).mappings().one()
+        assert cleared_risk_row["decision"] == "APPROVE"
+        assert cleared_risk_row["reason_code"] == "PORTFOLIO_RISK_APPROVED"
+        assert cleared_risk_row["approved_quantity"] == Decimal("1")
+        assert connection.execute(
+            text("SELECT count(*) FROM orders WHERE signal_id=:id"),
+            {"id": cleared_signal.signal_id},
+        ).scalar_one() == 1
