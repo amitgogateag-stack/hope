@@ -531,3 +531,98 @@ def test_position_risk_review_does_not_block_new_entry_gate() -> None:
             assert gate.blocker_assessment_ids == ()
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+def test_data_review_required_blocks_new_entry_until_reviewed() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"DATA-REVIEW-{str(instrument_id)[:8]}"},
+            )
+
+            base_time = datetime.now(timezone.utc)
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="SECONDARY_FIXTURE",
+                source_item_id=f"data-review-{uuid4()}",
+                source_tier=IntelligenceSourceTier.SECONDARY_OR_SOCIAL,
+                category=IntelligenceCategory.OTHER,
+                materiality=IntelligenceMateriality.MEDIUM,
+                recommended_action=IntelligenceAction.DATA_REVIEW_REQUIRED,
+                event_time=base_time - timedelta(minutes=2),
+                available_time=base_time - timedelta(minutes=1),
+                ingestion_time=base_time - timedelta(minutes=1),
+                source_payload_hash="7" * 64,
+            )
+            assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
+            assessment = assess_intelligence_event(event)
+            assessment_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_assessments("
+                    "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                    ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+                ),
+                {
+                    "aid": assessment_id,
+                    "eid": assessment.event_id,
+                    "policy": assessment.policy_version,
+                    "disposition": assessment.disposition.value,
+                    "source_action": assessment.source_action.value,
+                    "created_at": base_time,
+                },
+            )
+
+            assessments = SqlAlchemyIntelligenceAssessmentRepository(connection)
+            blocked = assessments.entry_gate_context(
+                instrument_id,
+                as_of=base_time + timedelta(minutes=1),
+            )
+            assert blocked.blocker_assessment_ids == (assessment_id,)
+
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_review_resolutions("
+                    "resolution_id,assessment_id,policy_version,outcome,rationale,created_at"
+                    ") VALUES (:rid,:aid,:policy,'NO_ACTION_REQUIRED',:rationale,:created_at)"
+                ),
+                {
+                    "rid": uuid4(),
+                    "aid": assessment_id,
+                    "policy": assessment.policy_version,
+                    "rationale": "Secondary-source item reviewed; no entry action required",
+                    "created_at": base_time + timedelta(minutes=2),
+                },
+            )
+
+            still_blocked = assessments.entry_gate_context(
+                instrument_id,
+                as_of=base_time + timedelta(minutes=1),
+            )
+            assert still_blocked.blocker_assessment_ids == (assessment_id,)
+
+            cleared = assessments.entry_gate_context(
+                instrument_id,
+                as_of=base_time + timedelta(minutes=2),
+            )
+            assert cleared.blocker_assessment_ids == ()
+        finally:
+            transaction.rollback()
