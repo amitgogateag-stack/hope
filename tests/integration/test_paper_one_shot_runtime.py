@@ -468,6 +468,18 @@ def test_paper_environment_control_transition_is_serialized_and_conflict_safe() 
         halt_sequence = repository.transition("RUNNING", "HALTED", "TEST_SERIALIZED_HALT", actor="TEST_OPERATOR")
         assert halt_sequence > 0
         assert repository.current_state() == "HALTED"
+        attribution = connection.execute(
+            text(
+                "SELECT actor, database_principal "
+                "FROM paper_environment_control_events "
+                "WHERE control_sequence = :control_sequence"
+            ),
+            {"control_sequence": halt_sequence},
+        ).one()
+        assert attribution.actor == "TEST_OPERATOR"
+        assert attribution.database_principal == connection.execute(
+            text("SELECT session_user")
+        ).scalar_one()
 
         with pytest.raises(
             RuntimeError,

@@ -16,6 +16,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             Column("state", String, nullable=False),
             Column("reason", String, nullable=False),
             Column("actor", String, nullable=False),
+            Column("database_principal", String, nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
