@@ -37,7 +37,7 @@ BEGIN
            SELECT 1
              FROM job_runs
             WHERE status = 'CLAIMED'
-              AND job_key LIKE 'paper:%'
+              AND job_key LIKE 'paper:%%'
        )
     THEN
         RAISE EXCEPTION 'PAPER_ENVIRONMENT_RESUME_BLOCKED_BY_INCOMPLETE_CLAIM'
