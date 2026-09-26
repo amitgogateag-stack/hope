@@ -9,6 +9,7 @@ from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.scheduling.paper import (
     _PAPER_SCHEDULER_LOCK_NAME,
     run_due_operational_paper_jobs,
@@ -77,3 +78,62 @@ def test_successful_paper_batch_releases_scheduler_lock() -> None:
             text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"),
             {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
         ).scalar_one() is True
+
+
+@pytest.mark.integration
+def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 15, 10, tzinfo=UTC)
+    first = create_scheduled_job_run(
+        "paper-batch-halt-first",
+        now - timedelta(minutes=2),
+    )
+    second = create_scheduled_job_run(
+        "paper-batch-halt-second",
+        now - timedelta(minutes=1),
+    )
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    calls = []
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        if control.current_state() == "HALTED":
+            control.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
+        control.transition("RUNNING", "HALTED", "TEST_BATCH_GLOBAL_HALT")
+        for run in (first, second):
+            connection.execute(
+                text(
+                    "DELETE FROM job_runs "
+                    "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+                ),
+                {"job_key": run.job_key, "scheduled_for": run.scheduled_for},
+            )
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(first.job_key, lambda runtime: calls.append(first.job_run_id)),
+            PaperJobDefinition(second.job_key, lambda runtime: calls.append(second.job_run_id)),
+        ]
+    )
+
+    try:
+        with pytest.raises(RuntimeError, match="PAPER_ENVIRONMENT_HALTED"):
+            run_due_operational_paper_jobs(
+                engine,
+                registry,
+                [first, second],
+                now=lambda: now,
+                max_lateness=timedelta(minutes=5),
+            )
+
+        assert calls == []
+        with engine.connect() as connection:
+            repository = SqlAlchemyJobRunRepository(connection)
+            assert repository.get_record(first.job_run_id) is None
+            assert repository.get_record(second.job_run_id) is None
+    finally:
+        with engine.begin() as connection:
+            control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+            if control.current_state() == "HALTED":
+                control.transition("HALTED", "RUNNING", "TEST_BATCH_GLOBAL_RESUME")

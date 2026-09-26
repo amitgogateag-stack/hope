@@ -17,6 +17,7 @@ from hope.infrastructure.paper_runtime import (
     run_paper_once,
 )
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
 from sqlalchemy import Engine, text
 
@@ -288,6 +289,11 @@ def run_due_operational_paper_jobs(
         registry.resolve(job_run)
 
     with _operational_paper_scheduler_lock(engine):
+        with engine.connect() as control_connection:
+            SqlAlchemyPaperEnvironmentControlRepository(
+                control_connection
+            ).assert_running()
+
         terminal_run_ids = _preflight_due_paper_job_states(engine, due)
         if any(
             job_run.job_run_id not in terminal_run_ids
