@@ -50,6 +50,11 @@ class PaperRuntimeContext:
     _risk_writer: PaperRiskWriter
     _order_writer: PaperOrderWriter
     _fill_writer: PaperFillAccountingWriter
+    _environment_guard: Callable[[], None] = field(
+        default=lambda: None,
+        repr=False,
+        compare=False,
+    )
     _approved_quantities: dict[UUID, Decimal] = field(
         default_factory=dict,
         init=False,
@@ -67,6 +72,7 @@ class PaperRuntimeContext:
         return recorded
 
     def record_order(self, order: Order) -> bool:
+        self._environment_guard()
         approved_quantity = self._approved_quantities.get(order.signal_id)
         if approved_quantity is None:
             raise ValueError("PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL")

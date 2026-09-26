@@ -5,7 +5,9 @@ from uuid import uuid4
 import pytest
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.domain.execution.models import OrderSide
+from hope.application.paper.context import PaperCycleContext
+from hope.application.paper.runner import PaperRuntimeContext
+from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import (
     PortfolioEntryRiskRequest,
@@ -272,3 +274,51 @@ def test_paper_market_data_freshness_policy_rejects_just_beyond_boundary() -> No
             context,
             (active,),
         )
+
+
+class _RecordingWriter:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def record(self, *args):
+        self.calls.append(args)
+        return True
+
+
+def test_paper_runtime_rechecks_environment_before_order_effect() -> None:
+    job_run = create_scheduled_job_run(
+        "paper-runtime-environment-guard",
+        datetime(2026, 9, 26, 15, 0, tzinfo=UTC),
+    )
+    signal_id = uuid4()
+    instrument_id = uuid4()
+    order_writer = _RecordingWriter()
+    guard_calls = []
+
+    def halt_guard() -> None:
+        guard_calls.append("checked")
+        raise RuntimeError("PAPER_ENVIRONMENT_HALTED")
+
+    runtime = PaperRuntimeContext(
+        PaperCycleContext(job_run),
+        _RecordingWriter(),
+        _RecordingWriter(),
+        order_writer,
+        _RecordingWriter(),
+        _environment_guard=halt_guard,
+    )
+    runtime._approved_quantities[signal_id] = Decimal("1")
+    order = Order(
+        order_id=uuid4(),
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_ENVIRONMENT_HALTED"):
+        runtime.record_order(order)
+
+    assert guard_calls == ["checked"]
+    assert order_writer.calls == []

@@ -220,6 +220,7 @@ class SqlAlchemyPaperRuntime:
         *,
         now: Callable[[], datetime],
     ) -> None:
+        self._environment_control = SqlAlchemyPaperEnvironmentControlRepository(connection)
         self._runner = PaperCycleRunner(
             SqlAlchemyJobRunRepository(connection),
             now=now,
