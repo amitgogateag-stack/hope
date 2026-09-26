@@ -78,6 +78,20 @@ class SqlAlchemyPaperEnvironmentControlRepository:
         if current != expected_state:
             raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_TRANSITION_CONFLICT")
 
+        if expected_state == "HALTED" and new_state == "RUNNING":
+            incomplete_claim_exists = self._connection.execute(
+                text(
+                    "SELECT EXISTS ("
+                    "SELECT 1 FROM job_runs "
+                    "WHERE status = 'CLAIMED' AND job_key LIKE 'paper:%'"
+                    ")"
+                )
+            ).scalar_one()
+            if incomplete_claim_exists is True:
+                raise RuntimeError(
+                    "PAPER_ENVIRONMENT_RESUME_BLOCKED_BY_INCOMPLETE_CLAIM"
+                )
+
         sequence = self._connection.execute(
             insert(self._events)
             .values(state=new_state, reason=reason, actor=actor)

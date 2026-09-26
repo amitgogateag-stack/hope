@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from sqlalchemy import create_engine, text
 
-from hope.application.jobs import JobRunStatus, create_scheduled_job_run
+from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -137,3 +137,62 @@ def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None
             control = SqlAlchemyPaperEnvironmentControlRepository(connection)
             if control.current_state() == "HALTED":
                 control.transition("HALTED", "RUNNING", "TEST_BATCH_GLOBAL_RESUME", actor="TEST_OPERATOR")
+
+
+@pytest.mark.integration
+def test_paper_environment_resume_fails_closed_with_incomplete_operational_claim() -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    now = datetime(2026, 9, 10, 15, 20, tzinfo=UTC)
+    claimed = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000001:resume-guard",
+        now - timedelta(minutes=1),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "DELETE FROM job_runs "
+                "WHERE job_key = :job_key AND scheduled_for = :scheduled_for"
+            ),
+            {"job_key": claimed.job_key, "scheduled_for": claimed.scheduled_for},
+        )
+        control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        if control.current_state() == "RUNNING":
+            control.transition(
+                "RUNNING",
+                "HALTED",
+                "TEST_RESUME_GUARD_HALT",
+                actor="TEST_OPERATOR",
+            )
+
+        repository = SqlAlchemyJobRunRepository(connection)
+        assert repository.claim(claimed) is True
+
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_ENVIRONMENT_RESUME_BLOCKED_BY_INCOMPLETE_CLAIM",
+        ):
+            control.transition(
+                "HALTED",
+                "RUNNING",
+                "TEST_UNSAFE_RESUME",
+                actor="TEST_OPERATOR",
+            )
+
+        repository.complete(
+            create_job_run_completion(
+                claimed,
+                JobRunStatus.FAILED,
+                now,
+                failure_code="TEST_QUARANTINED",
+            )
+        )
+        control.transition(
+            "HALTED",
+            "RUNNING",
+            "TEST_SAFE_RESUME",
+            actor="TEST_OPERATOR",
+        )
+        assert control.current_state() == "RUNNING"
