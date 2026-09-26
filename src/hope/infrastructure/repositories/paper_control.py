@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Connection, MetaData, Table, Column, BigInteger, String, DateTime, select
+from sqlalchemy import Connection, MetaData, Table, Column, BigInteger, String, DateTime, insert, select
 
 
 class SqlAlchemyPaperEnvironmentControlRepository:
@@ -34,3 +34,34 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             if state == "HALTED":
                 raise RuntimeError("PAPER_ENVIRONMENT_HALTED")
             raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_INVALID")
+
+
+    def transition(self, expected_state: str, new_state: str, reason: str) -> int:
+        """Append one serialized control transition and reject stale/operator-invalid writes."""
+        valid_states = {"RUNNING", "HALTED"}
+        if expected_state not in valid_states or new_state not in valid_states:
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_STATE_UNSUPPORTED")
+        if expected_state == new_state:
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_NOOP_TRANSITION")
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_REASON_REQUIRED")
+        if reason != reason.strip():
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_REASON_NOT_CANONICAL")
+
+        current = self._connection.execute(
+            select(self._events.c.state)
+            .order_by(self._events.c.control_sequence.desc())
+            .limit(1)
+            .with_for_update()
+        ).scalar_one_or_none()
+        if current is None:
+            raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_MISSING")
+        if current != expected_state:
+            raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_TRANSITION_CONFLICT")
+
+        sequence = self._connection.execute(
+            insert(self._events)
+            .values(state=new_state, reason=reason)
+            .returning(self._events.c.control_sequence)
+        ).scalar_one()
+        return int(sequence)

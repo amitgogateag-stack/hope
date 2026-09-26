@@ -19,6 +19,7 @@ from hope.infrastructure.paper_runtime import (
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.scheduling.paper import _preflight_due_paper_job_states
 from hope.infrastructure.repositories.market_data_finalizer import (
     SqlAlchemyMarketDataVersionFinalizer,
@@ -451,6 +452,57 @@ def test_durable_strategy_decision_fails_closed_on_stale_market_data_before_clai
     assert strategy.calls == []
     with engine.connect() as connection:
         assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
+
+
+@pytest.mark.integration
+def test_paper_environment_control_transition_is_serialized_and_conflict_safe() -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        repository = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        if repository.current_state() == "HALTED":
+            repository.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
+
+        halt_sequence = repository.transition("RUNNING", "HALTED", "TEST_SERIALIZED_HALT")
+        assert halt_sequence > 0
+        assert repository.current_state() == "HALTED"
+
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_ENVIRONMENT_CONTROL_TRANSITION_CONFLICT",
+        ):
+            repository.transition("RUNNING", "HALTED", "TEST_STALE_OPERATOR_STATE")
+
+        resume_sequence = repository.transition("HALTED", "RUNNING", "TEST_SERIALIZED_RESUME")
+        assert resume_sequence > halt_sequence
+        assert repository.current_state() == "RUNNING"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    ("expected_state", "new_state", "reason", "error"),
+    [
+        ("RUNNING", "RUNNING", "NOOP", "PAPER_ENVIRONMENT_CONTROL_NOOP_TRANSITION"),
+        ("BROKEN", "HALTED", "BAD", "PAPER_ENVIRONMENT_CONTROL_STATE_UNSUPPORTED"),
+        ("RUNNING", "BROKEN", "BAD", "PAPER_ENVIRONMENT_CONTROL_STATE_UNSUPPORTED"),
+        ("RUNNING", "HALTED", "", "PAPER_ENVIRONMENT_CONTROL_REASON_REQUIRED"),
+        ("RUNNING", "HALTED", " padded ", "PAPER_ENVIRONMENT_CONTROL_REASON_NOT_CANONICAL"),
+    ],
+)
+def test_paper_environment_control_transition_rejects_invalid_operator_input(
+    expected_state: str,
+    new_state: str,
+    reason: str,
+    error: str,
+) -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        repository = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        with pytest.raises((ValueError, RuntimeError), match=error):
+            repository.transition(expected_state, new_state, reason)
 
 
 @pytest.mark.integration
