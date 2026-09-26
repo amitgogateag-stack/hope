@@ -18,7 +18,7 @@ from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.execution.models import OrderSide
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import PortfolioRiskEngine
-from hope.domain.signal.models import Signal
+from hope.domain.signal.models import Signal, SignalType
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
@@ -102,8 +102,17 @@ class DurablePaperEntryOrderDecision:
     def __post_init__(self) -> None:
         if not isinstance(self.signal, Signal):
             raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_SIGNAL")
+        if self.signal.signal_type is not SignalType.ENTRY:
+            raise ValueError("PAPER_DURABLE_ENTRY_REQUIRES_ENTRY_SIGNAL")
         if not isinstance(self.risk_inputs, PortfolioEntryRiskInputs):
             raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_RISK_INPUTS")
+        request = self.risk_inputs.request
+        if request.signal_id != self.signal.signal_id:
+            raise ValueError("PAPER_DURABLE_ENTRY_RISK_SIGNAL_MISMATCH")
+        if request.instrument_id != self.signal.instrument_id:
+            raise ValueError("PAPER_DURABLE_ENTRY_RISK_INSTRUMENT_MISMATCH")
+        if request.strategy_version != self.signal.strategy_version:
+            raise ValueError("PAPER_DURABLE_ENTRY_RISK_STRATEGY_VERSION_MISMATCH")
         if not isinstance(self.risk_engine, PortfolioRiskEngine):
             raise TypeError("PAPER_DURABLE_ENTRY_REQUIRES_RISK_ENGINE")
         if not isinstance(self.side, OrderSide):
