@@ -113,3 +113,87 @@ def test_durable_paper_entry_rejects_unsupported_intelligence_policy() -> None:
             OrderSide.BUY,
             policy_version="hope.intelligence-policy.v999",
         )
+
+
+def _durable_entry_fixture():
+    signal = Signal(
+        signal_id=uuid4(),
+        instrument_id=uuid4(),
+        strategy_version="paper-durable-v1",
+        decision_time=datetime(2026, 9, 26, 12, 0, tzinfo=UTC),
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash="b" * 64,
+    )
+    risk_inputs = PortfolioEntryRiskInputs(
+        request=PortfolioEntryRiskRequest(
+            signal_id=signal.signal_id,
+            instrument_id=signal.instrument_id,
+            strategy_version=signal.strategy_version,
+            proposed_quantity=Decimal("1"),
+            reference_price=Decimal("100"),
+            current_instrument_exposure=Decimal("0"),
+            current_strategy_exposure=Decimal("0"),
+            opens_new_position=True,
+        ),
+        snapshot=PortfolioRiskSnapshot(
+            gross_exposure=Decimal("0"),
+            open_positions=0,
+            current_daily_loss=Decimal("0"),
+            current_drawdown=Decimal("0"),
+        ),
+    )
+    engine = PortfolioRiskEngine(
+        PortfolioRiskLimits(
+            max_position_notional=Decimal("1000"),
+            max_gross_exposure=Decimal("5000"),
+            max_open_positions=5,
+        )
+    )
+    return signal, risk_inputs, engine
+
+
+def test_durable_paper_entry_rejects_non_entry_signal_before_runtime_claim() -> None:
+    signal, risk_inputs, engine = _durable_entry_fixture()
+    exit_signal = signal.model_copy(update={"signal_type": SignalType.EXIT})
+
+    with pytest.raises(ValueError, match="PAPER_DURABLE_ENTRY_REQUIRES_ENTRY_SIGNAL"):
+        DurablePaperEntryOrderDecision(
+            exit_signal,
+            risk_inputs,
+            engine,
+            OrderSide.BUY,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "error"),
+    [
+        ("signal_id", "PAPER_DURABLE_ENTRY_RISK_SIGNAL_MISMATCH"),
+        ("instrument_id", "PAPER_DURABLE_ENTRY_RISK_INSTRUMENT_MISMATCH"),
+        ("strategy_version", "PAPER_DURABLE_ENTRY_RISK_STRATEGY_VERSION_MISMATCH"),
+    ],
+)
+def test_durable_paper_entry_rejects_risk_lineage_mismatch_before_runtime_claim(
+    field,
+    error,
+) -> None:
+    signal, risk_inputs, engine = _durable_entry_fixture()
+    replacement = {
+        "signal_id": uuid4(),
+        "instrument_id": uuid4(),
+        "strategy_version": "other-strategy-v1",
+    }[field]
+    bad_request = risk_inputs.request.model_copy(update={field: replacement})
+    bad_inputs = PortfolioEntryRiskInputs(
+        request=bad_request,
+        snapshot=risk_inputs.snapshot,
+    )
+
+    with pytest.raises(ValueError, match=error):
+        DurablePaperEntryOrderDecision(
+            signal,
+            bad_inputs,
+            engine,
+            OrderSide.BUY,
+        )
