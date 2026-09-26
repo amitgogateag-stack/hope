@@ -13,6 +13,8 @@ from hope.domain.risk.portfolio import (
     PortfolioRiskLimits,
     PortfolioRiskSnapshot,
 )
+from hope.domain.market_data.context import PITMarketContext
+from hope.domain.market_data.models import MarketBar
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import (
     DurablePaperEntryOrderDecision,
@@ -204,3 +206,69 @@ def test_durable_paper_entry_rejects_risk_lineage_mismatch_before_runtime_claim(
 def test_paper_market_data_freshness_policy_requires_positive_age(max_age) -> None:
     with pytest.raises(ValueError, match="PAPER_MARKET_DATA_FRESHNESS_MUST_BE_POSITIVE"):
         PaperMarketDataFreshnessPolicy(max_age)
+
+
+def _freshness_bar(instrument_id, event_time, *, ingestion_time=None):
+    ingestion = ingestion_time or event_time
+    return MarketBar(
+        instrument_id=str(instrument_id),
+        event_time=event_time,
+        available_time=event_time,
+        ingestion_time=ingestion,
+        open=Decimal("100"),
+        high=Decimal("101"),
+        low=Decimal("99"),
+        close=Decimal("100"),
+        volume=Decimal("1000"),
+    )
+
+
+def test_paper_market_data_freshness_policy_fails_closed_when_active_instrument_missing() -> None:
+    as_of = datetime(2026, 9, 26, 14, 0, tzinfo=UTC)
+    active = uuid4()
+    other = uuid4()
+    context = PITMarketContext(
+        as_of=as_of,
+        bars=(
+            _freshness_bar(other, as_of - timedelta(minutes=1)),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT"):
+        PaperMarketDataFreshnessPolicy(timedelta(minutes=5)).assert_context_fresh(
+            context,
+            (active,),
+        )
+
+
+def test_paper_market_data_freshness_policy_allows_exact_age_boundary() -> None:
+    as_of = datetime(2026, 9, 26, 14, 0, tzinfo=UTC)
+    active = uuid4()
+    context = PITMarketContext(
+        as_of=as_of,
+        bars=(
+            _freshness_bar(active, as_of - timedelta(minutes=5)),
+        ),
+    )
+
+    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)).assert_context_fresh(
+        context,
+        (active,),
+    )
+
+
+def test_paper_market_data_freshness_policy_rejects_just_beyond_boundary() -> None:
+    as_of = datetime(2026, 9, 26, 14, 0, tzinfo=UTC)
+    active = uuid4()
+    context = PITMarketContext(
+        as_of=as_of,
+        bars=(
+            _freshness_bar(active, as_of - timedelta(minutes=5, microseconds=1)),
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_MARKET_DATA_STALE"):
+        PaperMarketDataFreshnessPolicy(timedelta(minutes=5)).assert_context_fresh(
+            context,
+            (active,),
+        )
