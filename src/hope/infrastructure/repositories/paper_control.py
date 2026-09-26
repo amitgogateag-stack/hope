@@ -83,7 +83,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
                 text(
                     "SELECT EXISTS ("
                     "SELECT 1 FROM job_runs "
-                    "WHERE status = 'CLAIMED' AND job_key LIKE 'paper:%'"
+                    "WHERE status = 'CLAIMED' AND left(job_key, 6) = 'paper:'"
                     ")"
                 )
             ).scalar_one()
