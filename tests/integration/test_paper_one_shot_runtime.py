@@ -11,6 +11,7 @@ from hope.application.paper import PaperCycleOutcome
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.paper_runtime import (
     DurableUniversePaperStrategyDecision,
+    PaperMarketDataFreshnessPolicy,
     PaperJobDefinition,
     PaperJobRegistry,
     run_paper_once,
@@ -301,6 +302,7 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
                     job_run.scheduled_for,
                     universe_version_id,
                     parameters,
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
                 ),
             )
         ]
@@ -349,6 +351,7 @@ def test_durable_strategy_decision_missing_universe_fails_before_lifecycle_claim
                     job_run.scheduled_for,
                     uuid4(),
                     _Parameters(),
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
                 ),
             )
         ]
@@ -387,12 +390,57 @@ def test_durable_strategy_decision_missing_dataset_fails_before_lifecycle_claim(
                     job_run.scheduled_for,
                     universe_version_id,
                     _Parameters(),
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
                 ),
             )
         ]
     )
 
     with pytest.raises(RuntimeError, match="PIT_MARKET_CONTEXT_DATASET_VERSION_NOT_FOUND"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert strategy.calls == []
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
+
+
+
+
+@pytest.mark.integration
+def test_durable_strategy_decision_fails_closed_on_stale_market_data_before_claim() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-stale-market-data",
+        datetime(2026, 9, 10, 13, 35, 30, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, _, dataset_version_id = _insert_durable_decision_inputs(
+        engine,
+        job_run.scheduled_for,
+    )
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                job_run.job_key,
+                DurableUniversePaperStrategyDecision(
+                    strategy,
+                    dataset_version_id,
+                    job_run.scheduled_for,
+                    universe_version_id,
+                    _Parameters(),
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=4)),
+                ),
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_MARKET_DATA_STALE"):
         run_paper_once(
             engine,
             job_run,

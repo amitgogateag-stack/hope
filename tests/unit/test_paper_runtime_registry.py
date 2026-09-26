@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -16,6 +16,7 @@ from hope.domain.risk.portfolio import (
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import (
     DurablePaperEntryOrderDecision,
+    PaperMarketDataFreshnessPolicy,
     PaperJobDefinition,
     PaperJobRegistry,
     SqlAlchemyPaperRuntime,
@@ -197,3 +198,9 @@ def test_durable_paper_entry_rejects_risk_lineage_mismatch_before_runtime_claim(
             engine,
             OrderSide.BUY,
         )
+
+
+@pytest.mark.parametrize("max_age", [timedelta(0), timedelta(seconds=-1)])
+def test_paper_market_data_freshness_policy_requires_positive_age(max_age) -> None:
+    with pytest.raises(ValueError, match="PAPER_MARKET_DATA_FRESHNESS_MUST_BE_POSITIVE"):
+        PaperMarketDataFreshnessPolicy(max_age)

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Callable, Iterable, Protocol, runtime_checkable
 from uuid import UUID
@@ -44,6 +44,32 @@ class ConnectionBoundPaperJob(Protocol):
 
 
 @dataclass(frozen=True)
+class PaperMarketDataFreshnessPolicy:
+    """Explicit maximum market-data age permitted for autonomous PAPER decisions."""
+
+    max_age: timedelta
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.max_age, timedelta):
+            raise TypeError("PAPER_MARKET_DATA_FRESHNESS_REQUIRES_TIMEDELTA")
+        if self.max_age <= timedelta(0):
+            raise ValueError("PAPER_MARKET_DATA_FRESHNESS_MUST_BE_POSITIVE")
+
+    def assert_context_fresh(
+        self,
+        market_context,
+        active_instrument_ids: tuple[UUID, ...],
+    ) -> None:
+        for instrument_id in active_instrument_ids:
+            bars = market_context.for_instrument(str(instrument_id))
+            if not bars:
+                raise RuntimeError("PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT")
+            latest_event_time = max(bar.event_time for bar in bars)
+            if market_context.as_of - latest_event_time > self.max_age:
+                raise RuntimeError("PAPER_MARKET_DATA_STALE")
+
+
+@dataclass(frozen=True)
 class DurableUniversePaperStrategyDecision:
     """Bind one strategy decision to persisted universe and market-data inputs."""
 
@@ -52,6 +78,7 @@ class DurableUniversePaperStrategyDecision:
     as_of: datetime
     universe_version_id: UUID
     parameters: ParameterSnapshot
+    freshness_policy: PaperMarketDataFreshnessPolicy
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -66,6 +93,8 @@ class DurableUniversePaperStrategyDecision:
             raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_UNIVERSE_VERSION_ID")
         if not isinstance(self.parameters, ParameterSnapshot):
             raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_PARAMETER_SNAPSHOT")
+        if not isinstance(self.freshness_policy, PaperMarketDataFreshnessPolicy):
+            raise TypeError("PAPER_DURABLE_DECISION_REQUIRES_FRESHNESS_POLICY")
 
     def bind(self, connection: Connection) -> PaperJobWork:
         snapshot = UniverseSnapshotRepository(connection).get(self.universe_version_id)
@@ -76,6 +105,10 @@ class DurableUniversePaperStrategyDecision:
             as_of=self.as_of,
             universe_version_id=self.universe_version_id,
             instrument_ids=tuple(member.instrument_id for member in snapshot.members),
+        )
+        self.freshness_policy.assert_context_fresh(
+            market_context,
+            snapshot.active_instrument_ids(self.as_of),
         )
         return PaperStrategyDecisionJob(
             self.strategy,
