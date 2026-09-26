@@ -454,6 +454,46 @@ def test_durable_strategy_decision_fails_closed_on_stale_market_data_before_clai
 
 
 @pytest.mark.integration
+def test_run_paper_once_fails_closed_when_environment_is_halted_before_claim() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-environment-halt",
+        datetime(2026, 9, 10, 13, 35, 45, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO paper_environment_control_events(state, reason) "
+                "VALUES ('HALTED', 'TEST_GLOBAL_HALT')"
+            )
+        )
+
+    registry = PaperJobRegistry(
+        [PaperJobDefinition(job_run.job_key, lambda runtime: None)]
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_ENVIRONMENT_HALTED"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
+        connection.execute(
+            text(
+                "INSERT INTO paper_environment_control_events(state, reason) "
+                "VALUES ('RUNNING', 'TEST_RESUME_AFTER_HALT')"
+            )
+        )
+        connection.commit()
+
+
+@pytest.mark.integration
 def test_run_paper_once_rolls_back_claim_when_success_terminalization_is_invalid() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(

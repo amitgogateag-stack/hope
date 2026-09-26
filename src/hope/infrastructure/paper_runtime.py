@@ -25,6 +25,7 @@ from hope.infrastructure.repositories.market_contexts import PITMarketContextRep
 from hope.infrastructure.repositories.market_intelligence_assessments import (
     SqlAlchemyIntelligenceAssessmentRepository,
 )
+from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
@@ -273,6 +274,7 @@ def run_paper_once(
     work_error: Exception | None = None
 
     with engine.begin() as connection:
+        SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
         runtime = SqlAlchemyPaperRuntime(connection, now=now)
         try:
             work = (

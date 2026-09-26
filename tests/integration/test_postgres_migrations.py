@@ -49,7 +49,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "071_market_data_manifest_identity_continuity.sql", "072_market_data_manifest_identity_canonical.sql",
             "073_market_data_manifest_window_contract.sql", "074_market_data_manifest_structure.sql", "075_experiment_market_data_provenance.sql",
             "076_research_run_provenance.sql", "077_research_run_evidence.sql", "078_research_run_evidence_identity.sql",
-            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql", "081_experiment_variant_predeclaration.sql", "082_research_decisions.sql", "083_research_comparisons.sql", "084_research_evaluation_plans.sql", "085_research_evaluation_results.sql", "086_canonical_research_comparison.sql", "087_research_decision_comparison_binding.sql", "088_strategy_candidate_registry.sql", "089_strategy_candidate_current_state.sql", "090_strategy_family_catalog.sql", "091_market_intelligence_events.sql", "092_market_intelligence_assessments.sql", "093_market_intelligence_review_resolutions.sql", "094_current_market_intelligence_entry_blocks.sql", "095_research_invariant_runs.sql", "096_research_stage_evidence.sql", "097_market_intelligence_assessment_disposition.sql", "098_identity_mapping_contract.sql", "099_universe_version_contract.sql", "100_experiment_universe_membership_immutability.sql", "101_experiment_universe_version_immutability.sql", "102_restore_draft_universe_version_updates.sql", "103_restore_unsealed_universe_version_updates.sql", "104_paper_portfolio_application_chronology.sql", "105_job_run_text_canonical.sql", "106_job_run_claim_time_immutability.sql", "107_preserve_job_run_terminal_contract.sql", "108_paper_effect_claim_chronology.sql", "109_strategy_version_text_canonical.sql", "110_dataset_version_text_canonical.sql", "111_configuration_hash_canonical.sql", "112_strategy_candidate_supported_decision.sql", "113_strategy_candidate_capacity_serialization.sql", "114_market_intelligence_entry_gate_scope.sql", "115_market_intelligence_assessment_ingestion_chronology.sql", "116_schema_migration_checksum_not_null.sql", "117_schema_migration_checksum_canonical.sql", "118_schema_migration_history_immutability.sql",
+            "079_research_run_market_data_provenance.sql", "080_research_run_evidence_market_data_identity.sql", "081_experiment_variant_predeclaration.sql", "082_research_decisions.sql", "083_research_comparisons.sql", "084_research_evaluation_plans.sql", "085_research_evaluation_results.sql", "086_canonical_research_comparison.sql", "087_research_decision_comparison_binding.sql", "088_strategy_candidate_registry.sql", "089_strategy_candidate_current_state.sql", "090_strategy_family_catalog.sql", "091_market_intelligence_events.sql", "092_market_intelligence_assessments.sql", "093_market_intelligence_review_resolutions.sql", "094_current_market_intelligence_entry_blocks.sql", "095_research_invariant_runs.sql", "096_research_stage_evidence.sql", "097_market_intelligence_assessment_disposition.sql", "098_identity_mapping_contract.sql", "099_universe_version_contract.sql", "100_experiment_universe_membership_immutability.sql", "101_experiment_universe_version_immutability.sql", "102_restore_draft_universe_version_updates.sql", "103_restore_unsealed_universe_version_updates.sql", "104_paper_portfolio_application_chronology.sql", "105_job_run_text_canonical.sql", "106_job_run_claim_time_immutability.sql", "107_preserve_job_run_terminal_contract.sql", "108_paper_effect_claim_chronology.sql", "109_strategy_version_text_canonical.sql", "110_dataset_version_text_canonical.sql", "111_configuration_hash_canonical.sql", "112_strategy_candidate_supported_decision.sql", "113_strategy_candidate_capacity_serialization.sql", "114_market_intelligence_entry_gate_scope.sql", "115_market_intelligence_assessment_ingestion_chronology.sql", "116_schema_migration_checksum_not_null.sql", "117_schema_migration_checksum_canonical.sql", "118_schema_migration_history_immutability.sql", "119_paper_environment_control.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -169,4 +169,33 @@ def test_schema_migration_history_is_immutable_after_recording() -> None:
                         "WHERE version = :version"
                     ),
                     {"version": recorded_version},
+                )
+
+
+@pytest.mark.integration
+def test_paper_environment_control_history_is_append_only() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+        assert connection.execute(
+            text(
+                "SELECT state FROM paper_environment_control_events "
+                "ORDER BY control_sequence DESC LIMIT 1"
+            )
+        ).scalar_one() == "RUNNING"
+
+        with pytest.raises(IntegrityError, match="PAPER_ENVIRONMENT_CONTROL_IMMUTABLE"):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "UPDATE paper_environment_control_events "
+                        "SET state='HALTED' WHERE control_sequence=("
+                        "SELECT min(control_sequence) FROM paper_environment_control_events)"
+                    )
                 )
