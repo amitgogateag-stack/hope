@@ -17,7 +17,7 @@ END;
 $$;
 
 CREATE OR REPLACE FUNCTION guard_market_intelligence_assessment_insert()
-RETURNS trigger AS $
+RETURNS trigger AS $$
 DECLARE
     expected_action TEXT;
     expected_disposition TEXT;
@@ -60,4 +60,4 @@ BEGIN
 
     RETURN NEW;
 END;
-$ LANGUAGE plpgsql;
+$$ LANGUAGE plpgsql;
