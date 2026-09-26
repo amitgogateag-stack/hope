@@ -494,12 +494,12 @@ def test_paper_environment_control_direct_sql_cannot_resume_with_incomplete_oper
                     "ORDER BY control_sequence DESC LIMIT 1"
                 )
             ).scalar_one()
-            if current == "RUNNING":
+            if current == "HALTED":
                 connection.execute(
                     text(
                         "INSERT INTO paper_environment_control_events("
                         "state, reason, actor"
-                        ") VALUES ('HALTED', 'DIRECT_SQL_RESUME_GUARD_HALT', 'TEST_OPERATOR')"
+                        ") VALUES ('RUNNING', 'DIRECT_SQL_RESUME_GUARD_PREPARE', 'TEST_OPERATOR')"
                     )
                 )
 
@@ -513,6 +513,14 @@ def test_paper_environment_control_direct_sql_cannot_resume_with_incomplete_oper
                     "clock_timestamp() - interval '1 minute', "
                     "'CLAIMED'"
                     ")"
+                )
+            )
+
+            connection.execute(
+                text(
+                    "INSERT INTO paper_environment_control_events("
+                    "state, reason, actor"
+                    ") VALUES ('HALTED', 'DIRECT_SQL_RESUME_GUARD_HALT', 'TEST_OPERATOR')"
                 )
             )
 

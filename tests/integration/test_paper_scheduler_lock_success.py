@@ -159,16 +159,22 @@ def test_paper_environment_resume_fails_closed_with_incomplete_operational_claim
             {"job_key": claimed.job_key, "scheduled_for": claimed.scheduled_for},
         )
         control = SqlAlchemyPaperEnvironmentControlRepository(connection)
-        if control.current_state() == "RUNNING":
+        if control.current_state() == "HALTED":
             control.transition(
-                "RUNNING",
                 "HALTED",
-                "TEST_RESUME_GUARD_HALT",
+                "RUNNING",
+                "TEST_RESUME_GUARD_PREPARE_RUNNING",
                 actor="TEST_OPERATOR",
             )
 
         repository = SqlAlchemyJobRunRepository(connection)
         assert repository.claim(claimed) is True
+        control.transition(
+            "RUNNING",
+            "HALTED",
+            "TEST_RESUME_GUARD_HALT",
+            actor="TEST_OPERATOR",
+        )
 
         with pytest.raises(
             RuntimeError,
