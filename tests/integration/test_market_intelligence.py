@@ -1,5 +1,4 @@
 import os
-import shutil
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
@@ -862,78 +861,77 @@ def test_intelligence_assessment_cannot_predate_event_ingestion() -> None:
 
 
 @pytest.mark.integration
-def test_ingestion_chronology_migration_fails_closed_on_legacy_invalid_assessment(
-    tmp_path,
-) -> None:
+def test_ingestion_chronology_migration_fails_closed_on_legacy_invalid_assessment() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
 
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
-    staged = tmp_path / "migrations"
-    staged.mkdir()
-
-    ordered = sorted(migrations_dir.glob("*.sql"))
-    for migration in ordered:
-        if migration.name == "115_market_intelligence_assessment_ingestion_chronology.sql":
-            break
-        shutil.copy2(migration, staged / migration.name)
+    migration_sql = (
+        migrations_dir / "115_market_intelligence_assessment_ingestion_chronology.sql"
+    ).read_text(encoding="utf-8")
 
     with engine.begin() as connection:
-        apply_migrations(connection, staged)
+        apply_migrations(connection, migrations_dir)
 
-        instrument_id = uuid4()
-        connection.execute(
-            text(
-                "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
-                "VALUES (:iid,:symbol,'TEST','ACTIVE')"
-            ),
-            {"iid": instrument_id, "symbol": f"LEGACY-INGEST-{str(instrument_id)[:8]}"},
-        )
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            instrument_id = uuid4()
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) "
+                    "VALUES (:iid,:symbol,'TEST','ACTIVE')"
+                ),
+                {"iid": instrument_id, "symbol": f"LEGACY-INGEST-{str(instrument_id)[:8]}"},
+            )
 
-        base_time = datetime.now(timezone.utc)
-        ingestion_time = base_time + timedelta(minutes=5)
-        event = MarketIntelligenceEvent(
-            event_id=uuid4(),
-            scope=IntelligenceScope.COMPANY,
-            instrument_id=instrument_id,
-            source="FIXTURE",
-            source_item_id=f"legacy-ingestion-{uuid4()}",
-            source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
-            category=IntelligenceCategory.REGULATORY,
-            materiality=IntelligenceMateriality.HIGH,
-            recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
-            event_time=base_time - timedelta(minutes=2),
-            available_time=base_time - timedelta(minutes=1),
-            ingestion_time=ingestion_time,
-            source_payload_hash="3" * 64,
-        )
-        assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
-        assessment = assess_intelligence_event(event)
-        connection.execute(
-            text(
-                "INSERT INTO market_intelligence_assessments("
-                "assessment_id,event_id,policy_version,disposition,source_action,created_at"
-                ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
-            ),
-            {
-                "aid": uuid4(),
-                "eid": assessment.event_id,
-                "policy": assessment.policy_version,
-                "disposition": assessment.disposition.value,
-                "source_action": assessment.source_action.value,
-                "created_at": base_time,
-            },
-        )
+            base_time = datetime.now(timezone.utc)
+            ingestion_time = base_time + timedelta(minutes=5)
+            event = MarketIntelligenceEvent(
+                event_id=uuid4(),
+                scope=IntelligenceScope.COMPANY,
+                instrument_id=instrument_id,
+                source="FIXTURE",
+                source_item_id=f"legacy-ingestion-{uuid4()}",
+                source_tier=IntelligenceSourceTier.PRIMARY_REGULATORY_OR_EXCHANGE,
+                category=IntelligenceCategory.REGULATORY,
+                materiality=IntelligenceMateriality.HIGH,
+                recommended_action=IntelligenceAction.BLOCK_NEW_ENTRY,
+                event_time=base_time - timedelta(minutes=2),
+                available_time=base_time - timedelta(minutes=1),
+                ingestion_time=ingestion_time,
+                source_payload_hash="3" * 64,
+            )
+            assert SqlAlchemyMarketIntelligenceRepository(connection).persist(event) is True
+            assessment = assess_intelligence_event(event)
 
-        shutil.copy2(
-            migrations_dir / "115_market_intelligence_assessment_ingestion_chronology.sql",
-            staged / "115_market_intelligence_assessment_ingestion_chronology.sql",
-        )
-        with pytest.raises(
-            IntegrityError,
-            match="INTELLIGENCE_ASSESSMENT_PRECEDES_EVENT_INGESTION",
-        ):
-            with connection.begin_nested():
-                apply_migrations(connection, staged)
+            connection.exec_driver_sql(
+                "ALTER TABLE market_intelligence_assessments "
+                "DISABLE TRIGGER trg_market_intelligence_assessment_insert_guard"
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO market_intelligence_assessments("
+                    "assessment_id,event_id,policy_version,disposition,source_action,created_at"
+                    ") VALUES (:aid,:eid,:policy,:disposition,:source_action,:created_at)"
+                ),
+                {
+                    "aid": uuid4(),
+                    "eid": assessment.event_id,
+                    "policy": assessment.policy_version,
+                    "disposition": assessment.disposition.value,
+                    "source_action": assessment.source_action.value,
+                    "created_at": base_time,
+                },
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="INTELLIGENCE_ASSESSMENT_PRECEDES_EVENT_INGESTION",
+            ):
+                with connection.begin_nested():
+                    connection.exec_driver_sql(migration_sql)
+        finally:
+            transaction.rollback()
