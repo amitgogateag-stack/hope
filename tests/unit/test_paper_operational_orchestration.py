@@ -17,6 +17,19 @@ from hope.infrastructure.scheduling.paper import (
 )
 
 
+class _RunningPaperControl:
+    def __init__(self, connection) -> None:
+        pass
+
+    def assert_running(self) -> None:
+        pass
+
+
+class _ControlEngine:
+    def connect(self):
+        return nullcontext(object())
+
+
 def _candidate(
     *,
     state: StrategyCandidateState = StrategyCandidateState.OPERATIONAL_CANDIDATE,
@@ -184,6 +197,10 @@ def test_operational_paper_schedule_requires_authoritative_market_calendar() -> 
 
 def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypatch) -> None:
     monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
+        _RunningPaperControl,
+    )
+    monkeypatch.setattr(
         "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
         lambda engine, job_runs: set(),
     )
@@ -211,7 +228,7 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
         ]
     )
     results = run_due_operational_paper_jobs(
-        object(),
+        _ControlEngine(),
         registry,
         [future, due_late, due_early],
         now=lambda: now,
@@ -250,6 +267,10 @@ def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
 
 def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) -> None:
     monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
+        _RunningPaperControl,
+    )
+    monkeypatch.setattr(
         "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
         lambda engine, job_runs: set(),
     )
@@ -277,7 +298,7 @@ def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) ->
 
     with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
         run_due_operational_paper_jobs(
-            object(),
+            _ControlEngine(),
             registry,
             [fresh, stale],
             now=lambda: now,
