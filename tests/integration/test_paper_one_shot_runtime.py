@@ -463,9 +463,9 @@ def test_paper_environment_control_transition_is_serialized_and_conflict_safe() 
         apply_migrations(connection, migrations_dir)
         repository = SqlAlchemyPaperEnvironmentControlRepository(connection)
         if repository.current_state() == "HALTED":
-            repository.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
+            repository.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING", actor="TEST_OPERATOR")
 
-        halt_sequence = repository.transition("RUNNING", "HALTED", "TEST_SERIALIZED_HALT")
+        halt_sequence = repository.transition("RUNNING", "HALTED", "TEST_SERIALIZED_HALT", actor="TEST_OPERATOR")
         assert halt_sequence > 0
         assert repository.current_state() == "HALTED"
 
@@ -473,9 +473,9 @@ def test_paper_environment_control_transition_is_serialized_and_conflict_safe() 
             RuntimeError,
             match="PAPER_ENVIRONMENT_CONTROL_TRANSITION_CONFLICT",
         ):
-            repository.transition("RUNNING", "HALTED", "TEST_STALE_OPERATOR_STATE")
+            repository.transition("RUNNING", "HALTED", "TEST_STALE_OPERATOR_STATE", actor="TEST_OPERATOR")
 
-        resume_sequence = repository.transition("HALTED", "RUNNING", "TEST_SERIALIZED_RESUME")
+        resume_sequence = repository.transition("HALTED", "RUNNING", "TEST_SERIALIZED_RESUME", actor="TEST_OPERATOR")
         assert resume_sequence > halt_sequence
         assert repository.current_state() == "RUNNING"
 
@@ -493,14 +493,14 @@ def test_paper_environment_control_transition_uses_transaction_advisory_lock() -
         apply_migrations(first, migrations_dir)
         first_repo = SqlAlchemyPaperEnvironmentControlRepository(first)
         if first_repo.current_state() == "HALTED":
-            first_repo.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
+            first_repo.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING", actor="TEST_OPERATOR")
 
-        first_repo.transition("RUNNING", "HALTED", "TEST_HOLD_CONTROL_LOCK")
+        first_repo.transition("RUNNING", "HALTED", "TEST_HOLD_CONTROL_LOCK", actor="TEST_OPERATOR")
 
         second.execute(text("SET LOCAL lock_timeout = '100ms'"))
         second_repo = SqlAlchemyPaperEnvironmentControlRepository(second)
         with pytest.raises(OperationalError):
-            second_repo.transition("RUNNING", "HALTED", "TEST_CONCURRENT_STALE_HALT")
+            second_repo.transition("RUNNING", "HALTED", "TEST_CONCURRENT_STALE_HALT", actor="TEST_OPERATOR")
     finally:
         second_tx.rollback()
         first_tx.rollback()
@@ -531,7 +531,37 @@ def test_paper_environment_control_transition_rejects_invalid_operator_input(
         apply_migrations(connection, migrations_dir)
         repository = SqlAlchemyPaperEnvironmentControlRepository(connection)
         with pytest.raises((ValueError, RuntimeError), match=error):
-            repository.transition(expected_state, new_state, reason)
+            repository.transition(
+                expected_state,
+                new_state,
+                reason,
+                actor="TEST_OPERATOR",
+            )
+
+
+@pytest.mark.integration
+def test_paper_environment_control_transition_requires_canonical_actor() -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        repository = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        current = repository.current_state()
+        new_state = "HALTED" if current == "RUNNING" else "RUNNING"
+
+        with pytest.raises(ValueError, match="PAPER_ENVIRONMENT_CONTROL_ACTOR_REQUIRED"):
+            repository.transition(current, new_state, "TEST_ACTOR_REQUIRED", actor="")
+
+        with pytest.raises(
+            ValueError,
+            match="PAPER_ENVIRONMENT_CONTROL_ACTOR_NOT_CANONICAL",
+        ):
+            repository.transition(
+                current,
+                new_state,
+                "TEST_ACTOR_CANONICAL",
+                actor=" padded ",
+            )
 
 
 @pytest.mark.integration

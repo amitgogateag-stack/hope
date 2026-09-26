@@ -15,6 +15,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             Column("control_sequence", BigInteger, primary_key=True),
             Column("state", String, nullable=False),
             Column("reason", String, nullable=False),
+            Column("actor", String, nullable=False),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
 
@@ -36,7 +37,14 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_INVALID")
 
 
-    def transition(self, expected_state: str, new_state: str, reason: str) -> int:
+    def transition(
+        self,
+        expected_state: str,
+        new_state: str,
+        reason: str,
+        *,
+        actor: str,
+    ) -> int:
         """Append one serialized control transition and reject stale/operator-invalid writes."""
         valid_states = {"RUNNING", "HALTED"}
         if expected_state not in valid_states or new_state not in valid_states:
@@ -47,6 +55,10 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             raise ValueError("PAPER_ENVIRONMENT_CONTROL_REASON_REQUIRED")
         if reason != reason.strip():
             raise ValueError("PAPER_ENVIRONMENT_CONTROL_REASON_NOT_CANONICAL")
+        if not isinstance(actor, str) or not actor.strip():
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_ACTOR_REQUIRED")
+        if actor != actor.strip():
+            raise ValueError("PAPER_ENVIRONMENT_CONTROL_ACTOR_NOT_CANONICAL")
 
         self._connection.execute(
             text(
@@ -67,7 +79,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
 
         sequence = self._connection.execute(
             insert(self._events)
-            .values(state=new_state, reason=reason)
+            .values(state=new_state, reason=reason, actor=actor)
             .returning(self._events.c.control_sequence)
         ).scalar_one()
         return int(sequence)

@@ -99,8 +99,8 @@ def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None
         apply_migrations(connection, migrations_dir)
         control = SqlAlchemyPaperEnvironmentControlRepository(connection)
         if control.current_state() == "HALTED":
-            control.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
-        control.transition("RUNNING", "HALTED", "TEST_BATCH_GLOBAL_HALT")
+            control.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING", actor="TEST_OPERATOR")
+        control.transition("RUNNING", "HALTED", "TEST_BATCH_GLOBAL_HALT", actor="TEST_OPERATOR")
         for run in (first, second):
             connection.execute(
                 text(
@@ -136,4 +136,4 @@ def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None
         with engine.begin() as connection:
             control = SqlAlchemyPaperEnvironmentControlRepository(connection)
             if control.current_state() == "HALTED":
-                control.transition("HALTED", "RUNNING", "TEST_BATCH_GLOBAL_RESUME")
+                control.transition("HALTED", "RUNNING", "TEST_BATCH_GLOBAL_RESUME", actor="TEST_OPERATOR")
