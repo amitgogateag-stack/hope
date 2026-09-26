@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from sqlalchemy import Connection, MetaData, Table, Column, BigInteger, String, DateTime, insert, select
+from sqlalchemy import Connection, MetaData, Table, Column, BigInteger, String, DateTime, insert, select, text
 
 
 class SqlAlchemyPaperEnvironmentControlRepository:
@@ -48,6 +48,12 @@ class SqlAlchemyPaperEnvironmentControlRepository:
         if reason != reason.strip():
             raise ValueError("PAPER_ENVIRONMENT_CONTROL_REASON_NOT_CANONICAL")
 
+        self._connection.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtext('hope:paper:environment-control')::bigint)"
+            )
+        )
         current = self._connection.execute(
             select(self._events.c.state)
             .order_by(self._events.c.control_sequence.desc())

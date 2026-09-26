@@ -5,6 +5,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
@@ -477,6 +478,34 @@ def test_paper_environment_control_transition_is_serialized_and_conflict_safe() 
         resume_sequence = repository.transition("HALTED", "RUNNING", "TEST_SERIALIZED_RESUME")
         assert resume_sequence > halt_sequence
         assert repository.current_state() == "RUNNING"
+
+
+@pytest.mark.integration
+def test_paper_environment_control_transition_uses_transaction_advisory_lock() -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    first = engine.connect()
+    second = engine.connect()
+    first_tx = first.begin()
+    second_tx = second.begin()
+    try:
+        apply_migrations(first, migrations_dir)
+        first_repo = SqlAlchemyPaperEnvironmentControlRepository(first)
+        if first_repo.current_state() == "HALTED":
+            first_repo.transition("HALTED", "RUNNING", "TEST_PREPARE_RUNNING")
+
+        first_repo.transition("RUNNING", "HALTED", "TEST_HOLD_CONTROL_LOCK")
+
+        second.execute(text("SET LOCAL lock_timeout = '100ms'"))
+        second_repo = SqlAlchemyPaperEnvironmentControlRepository(second)
+        with pytest.raises(OperationalError):
+            second_repo.transition("RUNNING", "HALTED", "TEST_CONCURRENT_STALE_HALT")
+    finally:
+        second_tx.rollback()
+        first_tx.rollback()
+        second.close()
+        first.close()
 
 
 @pytest.mark.integration
