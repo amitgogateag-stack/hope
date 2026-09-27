@@ -23,6 +23,29 @@ def _engine():
     return create_engine(url)
 
 
+def _ensure_resume_guard_strategy_version(connection) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO strategies(strategy_id, name, family) "
+            "VALUES ("
+            "'00000000-0000-0000-0000-000000000002', "
+            "'PAPER_RESUME_GUARD_TEST', 'TEST'"
+            ") ON CONFLICT DO NOTHING"
+        )
+    )
+    connection.execute(
+        text(
+            "INSERT INTO strategy_versions("
+            "strategy_version_id, strategy_id, version, code_commit"
+            ") VALUES ("
+            "'00000000-0000-0000-0000-000000000001', "
+            "'00000000-0000-0000-0000-000000000002', "
+            "'paper-resume-v1', 'paper-resume-test-commit'"
+            ") ON CONFLICT DO NOTHING"
+        )
+    )
+
+
 @pytest.mark.integration
 def test_successful_paper_batch_releases_scheduler_lock() -> None:
     engine = _engine()
@@ -151,6 +174,7 @@ def test_paper_environment_resume_fails_closed_with_incomplete_operational_claim
 
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
+        _ensure_resume_guard_strategy_version(connection)
         connection.execute(
             text(
                 "DELETE FROM job_runs "

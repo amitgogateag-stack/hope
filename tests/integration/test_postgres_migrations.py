@@ -8,6 +8,35 @@ from sqlalchemy.exc import IntegrityError
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
+_PAPER_TEST_STRATEGY_ID = "00000000-0000-0000-0000-000000000002"
+_PAPER_TEST_STRATEGY_VERSION_ID = "00000000-0000-0000-0000-000000000001"
+
+
+def _ensure_paper_test_strategy_version(connection) -> None:
+    connection.execute(
+        text(
+            "INSERT INTO strategies(strategy_id, name, family) "
+            "VALUES (:strategy_id, 'PAPER_STORAGE_GUARD_TEST', 'TEST') "
+            "ON CONFLICT DO NOTHING"
+        ),
+        {"strategy_id": _PAPER_TEST_STRATEGY_ID},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO strategy_versions("
+            "strategy_version_id, strategy_id, version, code_commit"
+            ") VALUES ("
+            ":strategy_version_id, :strategy_id, 'paper-storage-v1', "
+            "'paper-storage-test-commit'"
+            ") ON CONFLICT DO NOTHING"
+        ),
+        {
+            "strategy_version_id": _PAPER_TEST_STRATEGY_VERSION_ID,
+            "strategy_id": _PAPER_TEST_STRATEGY_ID,
+        },
+    )
+
+
 @pytest.mark.integration
 def test_postgres_migrations_apply_and_are_idempotent() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
@@ -54,6 +83,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "134_paper_job_claim_database_timestamp.sql",
             "135_paper_job_key_exact_structure.sql",
             "136_paper_registered_job_key_canonical.sql",
+            "137_paper_job_strategy_version_identity.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -492,6 +522,7 @@ def test_paper_environment_control_direct_sql_cannot_resume_with_incomplete_oper
         transaction = connection.begin()
         try:
             apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
             current = connection.execute(
                 text(
                     "SELECT state FROM paper_environment_control_events "
@@ -752,6 +783,7 @@ def test_paper_job_completion_timestamp_cannot_be_future_dated() -> None:
         transaction = connection.begin()
         try:
             apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
             run_id = connection.execute(
                 text(
                     "INSERT INTO job_runs("
@@ -899,6 +931,40 @@ def test_direct_sql_rejects_noncanonical_registered_paper_job_key(job_key: str) 
                             ")"
                         ),
                         {"job_key": job_key},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_direct_sql_rejects_unknown_paper_strategy_version() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_JOB_CLAIM_STRATEGY_VERSION_NOT_FOUND",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO job_runs("
+                            "job_run_id, job_key, scheduled_for"
+                            ") VALUES ("
+                            "gen_random_uuid(), "
+                            "'paper:USA:ffffffff-ffff-ffff-ffff-ffffffffffff:unknown-strategy', "
+                            "clock_timestamp() - interval '1 minute'"
+                            ")"
+                        )
                     )
         finally:
             transaction.rollback()
