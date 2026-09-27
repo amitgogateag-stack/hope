@@ -41,6 +41,8 @@ class OperationalPaperJobBinding:
             raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_REQUIRED")
         if key != self.job_key:
             raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_NOT_CANONICAL")
+        if ":" in key:
+            raise ValueError("PAPER_ORCHESTRATION_JOB_KEY_CONTAINS_SEPARATOR")
         PaperJobDefinition(self.job_key, self.work)
 
     @property
@@ -71,6 +73,8 @@ class OperationalPaperSchedule:
             raise ValueError("PAPER_SCHEDULE_JOB_KEY_REQUIRED")
         if key != self.job_key:
             raise ValueError("PAPER_SCHEDULE_JOB_KEY_NOT_CANONICAL")
+        if ":" in key:
+            raise ValueError("PAPER_SCHEDULE_JOB_KEY_CONTAINS_SEPARATOR")
         if not isinstance(self.session_offset, timedelta):
             raise TypeError("PAPER_SCHEDULE_REQUIRES_SESSION_OFFSET")
         if self.session_offset < timedelta(0):

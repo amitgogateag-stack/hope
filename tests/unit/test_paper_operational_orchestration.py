@@ -66,6 +66,26 @@ def _schedule(binding: OperationalPaperJobBinding, *, offset=timedelta(minutes=5
     )
 
 
+def test_operational_paper_job_keys_cannot_contain_durable_identity_separator() -> None:
+    candidate = _candidate()
+    with pytest.raises(
+        ValueError,
+        match="PAPER_ORCHESTRATION_JOB_KEY_CONTAINS_SEPARATOR",
+    ):
+        _binding(candidate, key="open:decision")
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_SCHEDULE_JOB_KEY_CONTAINS_SEPARATOR",
+    ):
+        OperationalPaperSchedule(
+            strategy_version_id=candidate.strategy_version_id,
+            market=StrategyMarket.USA,
+            job_key="open:decision",
+            session_offset=timedelta(),
+        )
+
+
 def test_operational_paper_registry_resolves_only_explicit_operational_binding() -> None:
     candidate = _candidate()
     binding = _binding(candidate)
