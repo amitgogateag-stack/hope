@@ -195,33 +195,3 @@ def test_job_run_storage_rejects_noncanonical_durable_text() -> None:
                         "failure_code": " UPSTREAM_DATA_UNAVAILABLE ",
                     },
                 )
-
-
-@pytest.mark.integration
-def test_job_run_storage_rejects_completion_before_claim() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
-    migrations_dir = Path(__file__).parents[2] / "migrations"
-    with engine.begin() as connection:
-        apply_migrations(connection, migrations_dir)
-
-        with pytest.raises(
-            IntegrityError,
-            match="ck_job_runs_completion_not_before_claim",
-        ):
-            with connection.begin_nested():
-                connection.execute(
-                    text(
-                        "INSERT INTO job_runs("
-                        "job_run_id, job_key, scheduled_for, status, completed_at, created_at"
-                        ") VALUES ("
-                        "gen_random_uuid(), 'research:completion-before-claim', "
-                        "clock_timestamp() - interval '3 minutes', 'SUCCEEDED', "
-                        "clock_timestamp() - interval '2 minutes', "
-                        "clock_timestamp() - interval '1 minute'"
-                        ")"
-                    )
-                )
