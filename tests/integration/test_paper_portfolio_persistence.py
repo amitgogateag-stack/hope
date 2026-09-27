@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
@@ -330,3 +331,79 @@ def test_paper_portfolio_rejects_fill_time_regression_without_state_mutation():
             text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).scalar_one() == 1
+
+@pytest.mark.integration
+def test_paper_portfolio_application_timestamp_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-applied-at-auth",
+        datetime(2026, 9, 9, 23, 50, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES ("
+                    ":id, 'PAPER-APPLICATION-CREATED-AT', 'TEST', 'ACTIVE'"
+                    ")"
+                ),
+                {"id": instrument_id},
+            )
+            assert SqlAlchemyJobRunRepository(connection).claim(run)
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                quantity=Decimal("1"),
+                price=Decimal("100"),
+                sequence=0,
+                decision_minute=51,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios("
+                    "portfolio_id, initial_cash, cash"
+                    ") VALUES (:portfolio_id, 1000, 1000)"
+                ),
+                {"portfolio_id": portfolio_id},
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match=(
+                    "PAPER_PORTFOLIO_APPLICATION_TIMESTAMP_"
+                    "NOT_DATABASE_AUTHENTICATED"
+                ),
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolio_fill_applications("
+                            "portfolio_id, fill_id, application_sequence, applied_at"
+                            ") VALUES ("
+                            ":portfolio_id, :fill_id, 1, "
+                            "transaction_timestamp() + interval '1 microsecond'"
+                            ")"
+                        ),
+                        {
+                            "portfolio_id": portfolio_id,
+                            "fill_id": fill.fill_id,
+                        },
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
