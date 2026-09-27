@@ -193,6 +193,13 @@ def test_paper_environment_resume_fails_closed_with_incomplete_operational_claim
 
         repository = SqlAlchemyJobRunRepository(connection)
         assert repository.claim(claimed) is True
+        claim_created_at = connection.execute(
+            text(
+                "SELECT created_at FROM job_runs "
+                "WHERE job_run_id = :job_run_id"
+            ),
+            {"job_run_id": claimed.job_run_id},
+        ).scalar_one()
         control.transition(
             "RUNNING",
             "HALTED",
@@ -215,7 +222,7 @@ def test_paper_environment_resume_fails_closed_with_incomplete_operational_claim
             create_job_run_completion(
                 claimed,
                 JobRunStatus.FAILED,
-                now,
+                claim_created_at,
                 failure_code="TEST_QUARANTINED",
             )
         )
