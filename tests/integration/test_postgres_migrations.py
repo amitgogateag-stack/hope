@@ -84,6 +84,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "135_paper_job_key_exact_structure.sql",
             "136_paper_registered_job_key_canonical.sql",
             "137_paper_job_strategy_version_identity.sql",
+            "138_paper_job_completion_claim_chronology.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -807,6 +808,52 @@ def test_paper_job_completion_timestamp_cannot_be_future_dated() -> None:
                             "UPDATE job_runs "
                             "SET status='SUCCEEDED', "
                             "completed_at=clock_timestamp() + interval '1 day' "
+                            "WHERE job_run_id=:job_run_id"
+                        ),
+                        {"job_run_id": run_id},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_job_completion_cannot_predate_durable_claim() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
+            run_id = connection.execute(
+                text(
+                    "INSERT INTO job_runs("
+                    "job_run_id, job_key, scheduled_for, status"
+                    ") VALUES ("
+                    "gen_random_uuid(), "
+                    "'paper:USA:00000000-0000-0000-0000-000000000001:claim-chronology', "
+                    "clock_timestamp() - interval '1 minute', "
+                    "'CLAIMED'"
+                    ") RETURNING job_run_id"
+                )
+            ).scalar_one()
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_JOB_COMPLETION_PRECEDES_CLAIM",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE job_runs "
+                            "SET status='FAILED', "
+                            "completed_at=created_at - interval '1 second', "
+                            "failure_code='BACKDATED_COMPLETION' "
                             "WHERE job_run_id=:job_run_id"
                         ),
                         {"job_run_id": run_id},
