@@ -184,6 +184,69 @@ def test_paper_scheduler_fails_closed_when_control_sequence_generator_is_invalid
 
 
 @pytest.mark.integration
+def test_paper_control_transition_fails_closed_when_sequence_generator_is_invalid() -> None:
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        if control.current_state() == "HALTED":
+            control.transition(
+                "HALTED",
+                "RUNNING",
+                "TEST_TRANSITION_SEQUENCE_PREPARE_RUNNING",
+                actor="TEST_OPERATOR",
+            )
+        history_max = connection.execute(
+            text(
+                "SELECT max(control_sequence) "
+                "FROM paper_environment_control_events"
+            )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "SELECT setval("
+                "'paper_environment_control_events_control_sequence_seq', "
+                ":history_max, false)"
+            ),
+            {"history_max": history_max},
+        )
+
+    try:
+        with engine.begin() as connection:
+            control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_ENVIRONMENT_CONTROL_SEQUENCE_GENERATOR_INVALID",
+            ):
+                control.transition(
+                    "RUNNING",
+                    "HALTED",
+                    "TEST_TRANSITION_SEQUENCE_INVALID",
+                    actor="TEST_OPERATOR",
+                )
+
+            assert control.current_state() == "RUNNING"
+    finally:
+        with engine.begin() as connection:
+            history_max = connection.execute(
+                text(
+                    "SELECT max(control_sequence) "
+                    "FROM paper_environment_control_events"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "'paper_environment_control_events_control_sequence_seq', "
+                    ":history_max, true)"
+                ),
+                {"history_max": history_max},
+            )
+
+
+@pytest.mark.integration
 def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None:
     engine = _engine()
     now = datetime(2026, 9, 10, 15, 10, tzinfo=UTC)

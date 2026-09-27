@@ -94,6 +94,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
                 "hashtext('hope:paper:environment-control')::bigint)"
             )
         )
+        self._assert_sequence_generator_ready()
         current = self._connection.execute(
             select(self._events.c.state)
             .order_by(self._events.c.control_sequence.desc())
