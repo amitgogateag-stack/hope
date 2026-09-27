@@ -55,6 +55,66 @@ def make_order(context: PaperCycleContext, signal: Signal, instrument_id=None) -
 
 
 @pytest.mark.integration
+def test_paper_order_created_at_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    signal_id = uuid4()
+    decision_time = datetime(2026, 9, 9, 23, 0, tzinfo=UTC)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:instrument_id, 'PAPER-ORDER-CREATED-AT', "
+                "'TEST', 'ACTIVE')"
+            ),
+            {"instrument_id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO signals("
+                "signal_id, instrument_id, decision_time, state"
+                ") VALUES (:signal_id, :instrument_id, :decision_time, 'SIGNAL')"
+            ),
+            {
+                "signal_id": signal_id,
+                "instrument_id": instrument_id,
+                "decision_time": decision_time,
+            },
+        )
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_ORDER_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO orders("
+                        "order_id, signal_id, instrument_id, environment, "
+                        "side, quantity, created_at"
+                        ") VALUES ("
+                        ":order_id, :signal_id, :instrument_id, 'PAPER', "
+                        "'BUY', 1, "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {
+                        "order_id": uuid4(),
+                        "signal_id": signal_id,
+                        "instrument_id": instrument_id,
+                    },
+                )
+
+
+@pytest.mark.integration
 def test_paper_order_is_durable_and_idempotent_across_scheduled_cycles() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
