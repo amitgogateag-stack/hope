@@ -566,6 +566,14 @@ def test_paper_control_sequence_readiness_migration_rejects_uncalled_current_val
                 with connection.begin_nested():
                     connection.exec_driver_sql(migration_sql)
         finally:
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "'paper_environment_control_events_control_sequence_seq', "
+                    ":history_max, true)"
+                ),
+                {"history_max": history_max},
+            )
             transaction.rollback()
             engine.dispose()
 
