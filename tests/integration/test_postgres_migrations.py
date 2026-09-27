@@ -53,6 +53,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "133_paper_job_key_structure.sql",
             "134_paper_job_claim_database_timestamp.sql",
             "135_paper_job_key_exact_structure.sql",
+            "136_paper_registered_job_key_canonical.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -844,6 +845,48 @@ def test_direct_sql_rejects_malformed_paper_job_key(job_key: str) -> None:
             with pytest.raises(
                 IntegrityError,
                 match="ck_job_runs_paper_job_key_structure",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO job_runs("
+                            "job_run_id, job_key, scheduled_for"
+                            ") VALUES ("
+                            "gen_random_uuid(), :job_key, "
+                            "clock_timestamp() - interval '1 minute'"
+                            ")"
+                        ),
+                        {"job_key": job_key},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "job_key",
+    [
+        "paper:USA:00000000-0000-0000-0000-000000000001: padded-job",
+        "paper:USA:00000000-0000-0000-0000-000000000001:\tpadded-job",
+        "paper:USA:00000000-0000-0000-0000-000000000001:padded-job\n",
+    ],
+)
+def test_direct_sql_rejects_noncanonical_registered_paper_job_key(job_key: str) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+
+            with pytest.raises(
+                IntegrityError,
+                match="ck_job_runs_paper_registered_job_key_canonical",
             ):
                 with connection.begin_nested():
                     connection.execute(
