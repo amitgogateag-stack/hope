@@ -86,6 +86,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "137_paper_job_strategy_version_identity.sql",
             "138_paper_job_completion_claim_chronology.sql",
             "139_restore_paper_logical_completion_time.sql",
+            "140_paper_environment_control_database_timestamp.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -385,6 +386,49 @@ def test_paper_environment_control_direct_sql_cannot_future_date_transition() ->
                             ") VALUES ("
                             ":state, 'DIRECT_SQL_FUTURE_TRANSITION', "
                             "clock_timestamp() + interval '1 day'"
+                            ")"
+                        ),
+                        {"state": next_state},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_environment_control_timestamp_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            current = connection.execute(
+                text(
+                    "SELECT state FROM paper_environment_control_events "
+                    "ORDER BY control_sequence DESC LIMIT 1"
+                )
+            ).scalar_one()
+            next_state = "HALTED" if current == "RUNNING" else "RUNNING"
+
+            with pytest.raises(
+                IntegrityError,
+                match=(
+                    "PAPER_ENVIRONMENT_CONTROL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED"
+                ),
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_environment_control_events("
+                            "state, reason, created_at"
+                            ") VALUES ("
+                            ":state, 'DIRECT_SQL_FORGED_TIMESTAMP', "
+                            "transaction_timestamp() + interval '1 microsecond'"
                             ")"
                         ),
                         {"state": next_state},
