@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
@@ -21,6 +22,73 @@ from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignal
 
 UTC = timezone.utc
 INPUTS_HASH = "e" * 64
+
+
+@pytest.mark.integration
+def test_paper_risk_created_at_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper-risk-created-at-auth",
+        datetime(2026, 9, 13, 15, 0, tzinfo=UTC),
+    )
+    context = PaperCycleContext(job_run)
+    signal = _signal(context, instrument_id, "paper-risk-created-at-v1")
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:instrument_id, 'PAPER-RISK-CREATED-AT', "
+                "'TEST', 'ACTIVE')"
+            ),
+            {"instrument_id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(job_run) is True
+        signal_writer = PaperSignalWriter(
+            SqlAlchemyPaperSignalRepository(connection)
+        )
+        assert signal_writer.record(context, signal) is True
+        connection.execute(
+            text(
+                "INSERT INTO paper_effects("
+                "effect_id, job_run_id, effect_type, entity_id, payload_hash"
+                ") VALUES ("
+                ":effect_id, :job_run_id, 'RISK', :signal_id, :payload_hash"
+                ")"
+            ),
+            {
+                "effect_id": uuid4(),
+                "job_run_id": job_run.job_run_id,
+                "signal_id": signal.signal_id,
+                "payload_hash": "f" * 64,
+            },
+        )
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_RISK_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_risk_assessments("
+                        "signal_id, decision, reason_code, approved_quantity, "
+                        "created_at"
+                        ") VALUES ("
+                        ":signal_id, 'APPROVE', 'APPROVED', 2, "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {"signal_id": signal.signal_id},
+                )
 
 
 def _signal(context: PaperCycleContext, instrument_id, strategy_version: str) -> Signal:
