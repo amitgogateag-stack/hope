@@ -91,6 +91,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "142_paper_environment_control_sequence_generator_guard.sql",
             "143_paper_effect_database_timestamp.sql",
             "144_paper_environment_control_sequence_readiness.sql",
+            "145_paper_job_claim_control_sequence_readiness.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -781,6 +782,82 @@ def test_paper_resume_claim_guard_index_exists() -> None:
                 "AND indexname = 'idx_job_runs_claimed_operational_paper'"
             )
         ).scalar_one() == 1
+
+
+@pytest.mark.integration
+def test_direct_sql_paper_claim_requires_control_sequence_readiness() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        history_max = None
+        try:
+            apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
+            current = connection.execute(
+                text(
+                    "SELECT state FROM paper_environment_control_events "
+                    "ORDER BY control_sequence DESC LIMIT 1"
+                )
+            ).scalar_one()
+            if current == "HALTED":
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_environment_control_events("
+                        "state, reason, actor"
+                        ") VALUES ('RUNNING', "
+                        "'TEST_CLAIM_SEQUENCE_PREPARE_RUNNING', 'TEST_OPERATOR')"
+                    )
+                )
+
+            history_max = connection.execute(
+                text(
+                    "SELECT max(control_sequence) "
+                    "FROM paper_environment_control_events"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "'paper_environment_control_events_control_sequence_seq', "
+                    ":history_max, false)"
+                ),
+                {"history_max": history_max},
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_JOB_CLAIM_REQUIRES_CONTROL_SEQUENCE_READY",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO job_runs("
+                            "job_run_id, job_key, scheduled_for"
+                            ") VALUES ("
+                            "gen_random_uuid(), "
+                            "'paper:USA:00000000-0000-0000-0000-000000000001:"
+                            "sequence-readiness-claim', "
+                            "clock_timestamp() - interval '1 minute'"
+                            ")"
+                        )
+                    )
+        finally:
+            if history_max is not None:
+                connection.execute(
+                    text(
+                        "SELECT setval("
+                        "'paper_environment_control_events_control_sequence_seq', "
+                        ":history_max, true)"
+                    ),
+                    {"history_max": history_max},
+                )
+            transaction.rollback()
+            engine.dispose()
 
 
 @pytest.mark.integration
