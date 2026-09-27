@@ -90,6 +90,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "141_paper_environment_control_sequence_order.sql",
             "142_paper_environment_control_sequence_generator_guard.sql",
             "143_paper_effect_database_timestamp.sql",
+            "144_paper_environment_control_sequence_readiness.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -522,6 +523,48 @@ def test_paper_environment_control_rejects_sequence_generator_jump() -> None:
                             "state": next_state,
                         },
                     )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_control_sequence_readiness_migration_rejects_uncalled_current_value() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    migration_sql = (
+        migrations_dir / "144_paper_environment_control_sequence_readiness.sql"
+    ).read_text(encoding="utf-8")
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            history_max = connection.execute(
+                text(
+                    "SELECT max(control_sequence) "
+                    "FROM paper_environment_control_events"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "'paper_environment_control_events_control_sequence_seq', "
+                    ":history_max, false)"
+                ),
+                {"history_max": history_max},
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_ENVIRONMENT_CONTROL_SEQUENCE_GENERATOR_NOT_READY",
+            ):
+                with connection.begin_nested():
+                    connection.exec_driver_sql(migration_sql)
         finally:
             transaction.rollback()
             engine.dispose()
