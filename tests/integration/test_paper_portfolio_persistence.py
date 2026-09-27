@@ -723,6 +723,20 @@ def test_paper_portfolio_projection_identities_are_immutable() -> None:
                             "instrument_id": instrument_id,
                         },
                     )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_INITIAL_CASH_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE paper_portfolios "
+                            "SET initial_cash=initial_cash + 1 "
+                            "WHERE portfolio_id=:portfolio_id"
+                        ),
+                        {"portfolio_id": portfolio_id},
+                    )
         finally:
             transaction.rollback()
             engine.dispose()
