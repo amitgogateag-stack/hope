@@ -87,6 +87,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "138_paper_job_completion_claim_chronology.sql",
             "139_restore_paper_logical_completion_time.sql",
             "140_paper_environment_control_database_timestamp.sql",
+            "141_paper_environment_control_sequence_order.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -430,6 +431,44 @@ def test_paper_environment_control_timestamp_is_database_authenticated() -> None
                             ":state, 'DIRECT_SQL_FORGED_TIMESTAMP', "
                             "transaction_timestamp() + interval '1 microsecond'"
                             ")"
+                        ),
+                        {"state": next_state},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_environment_control_rejects_hidden_sequence_insertion() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            current = connection.execute(
+                text(
+                    "SELECT state FROM paper_environment_control_events "
+                    "ORDER BY control_sequence DESC LIMIT 1"
+                )
+            ).scalar_one()
+            next_state = "HALTED" if current == "RUNNING" else "RUNNING"
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_ENVIRONMENT_CONTROL_SEQUENCE_NOT_MONOTONIC",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_environment_control_events("
+                            "control_sequence, state, reason"
+                            ") VALUES (0, :state, 'DIRECT_SQL_HIDDEN_TRANSITION')"
                         ),
                         {"state": next_state},
                     )
