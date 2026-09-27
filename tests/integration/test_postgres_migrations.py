@@ -1428,3 +1428,61 @@ def test_terminal_paper_job_run_cannot_be_deleted(terminal_status: str) -> None:
         finally:
             transaction.rollback()
             engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("terminal_status", ["SUCCEEDED", "FAILED"])
+def test_terminal_paper_job_run_cannot_be_rewritten(terminal_status: str) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
+            job_run_id = connection.execute(
+                text(
+                    "INSERT INTO job_runs("
+                    "job_run_id, job_key, scheduled_for"
+                    ") VALUES ("
+                    "gen_random_uuid(), "
+                    "'paper:USA:00000000-0000-0000-0000-000000000001:terminal-rewrite-guard', "
+                    "clock_timestamp() - interval '1 minute'"
+                    ") RETURNING job_run_id"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "UPDATE job_runs "
+                    "SET status=:terminal_status, "
+                    "completed_at=clock_timestamp(), "
+                    "failure_code=CASE WHEN :terminal_status='FAILED' "
+                    "THEN 'TEST_FAILURE' ELSE NULL END "
+                    "WHERE job_run_id=:job_run_id"
+                ),
+                {
+                    "job_run_id": job_run_id,
+                    "terminal_status": terminal_status,
+                },
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="JOB_RUN_TERMINAL_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE job_runs "
+                            "SET completed_at=completed_at + interval '1 second' "
+                            "WHERE job_run_id=:job_run_id"
+                        ),
+                        {"job_run_id": job_run_id},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
