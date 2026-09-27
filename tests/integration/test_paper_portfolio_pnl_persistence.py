@@ -74,6 +74,77 @@ def persist_fill(connection, context, instrument_id, side, price, decision_minut
 
 
 @pytest.mark.integration
+def test_paper_portfolio_pnl_created_at_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-pnl-created-at-auth",
+        datetime(2026, 9, 10, 0, 0, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-CREATED-AT', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            OrderSide.BUY,
+            "100",
+            1,
+        )
+        portfolio = SqlAlchemyPaperPortfolioRepository(connection)
+        transition = portfolio.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+        )
+        assert transition is not None
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_PNL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_portfolio_pnl_events("
+                        "pnl_event_id, portfolio_id, fill_id, instrument_id, "
+                        "realized_pnl_delta, commission_delta, event_time, created_at"
+                        ") VALUES ("
+                        ":pnl_event_id, :portfolio_id, :fill_id, :instrument_id, "
+                        ":realized_pnl_delta, :commission_delta, :event_time, "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {
+                        "pnl_event_id": uuid4(),
+                        "portfolio_id": portfolio_id,
+                        "fill_id": fill.fill_id,
+                        "instrument_id": fill.instrument_id,
+                        "realized_pnl_delta": transition.realized_pnl_delta,
+                        "commission_delta": transition.commission_delta,
+                        "event_time": fill.fill_time,
+                    },
+                )
+
+
+@pytest.mark.integration
 def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:

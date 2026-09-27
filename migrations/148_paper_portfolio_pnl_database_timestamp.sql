@@ -1,0 +1,37 @@
+-- PAPER portfolio P&L events are immutable accounting evidence.  Preserve
+-- event_time as the logical fill-derived accounting timestamp, and require the
+-- persistence created_at timestamp to be authenticated by PostgreSQL.
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+          FROM paper_portfolio_pnl_events
+         WHERE created_at > clock_timestamp()
+    ) THEN
+        RAISE EXCEPTION 'PAPER_PORTFOLIO_PNL_TIMESTAMP_IN_FUTURE'
+            USING ERRCODE = '23514';
+    END IF;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION hope_authenticate_paper_portfolio_pnl_timestamp()
+RETURNS trigger LANGUAGE plpgsql AS $$
+BEGIN
+    IF NEW.created_at > clock_timestamp() THEN
+        RAISE EXCEPTION 'PAPER_PORTFOLIO_PNL_TIMESTAMP_IN_FUTURE'
+            USING ERRCODE = '23514';
+    END IF;
+
+    IF NEW.created_at IS DISTINCT FROM transaction_timestamp() THEN
+        RAISE EXCEPTION 'PAPER_PORTFOLIO_PNL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED'
+            USING ERRCODE = '23514';
+    END IF;
+
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_paper_portfolio_pnl_database_timestamp
+BEFORE INSERT ON paper_portfolio_pnl_events
+FOR EACH ROW
+EXECUTE FUNCTION hope_authenticate_paper_portfolio_pnl_timestamp();
