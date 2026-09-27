@@ -407,3 +407,62 @@ def test_paper_portfolio_application_timestamp_is_database_authenticated() -> No
             transaction.rollback()
             engine.dispose()
 
+
+@pytest.mark.integration
+def test_paper_portfolio_created_at_is_database_authenticated_and_immutable() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolios("
+                            "portfolio_id, initial_cash, cash, created_at"
+                            ") VALUES ("
+                            ":portfolio_id, 1000, 1000, "
+                            "transaction_timestamp() - interval '1 microsecond'"
+                            ")"
+                        ),
+                        {"portfolio_id": portfolio_id},
+                    )
+
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios("
+                    "portfolio_id, initial_cash, cash"
+                    ") VALUES (:portfolio_id, 1000, 1000)"
+                ),
+                {"portfolio_id": portfolio_id},
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_CREATED_AT_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE paper_portfolios "
+                            "SET created_at = created_at + interval '1 microsecond' "
+                            "WHERE portfolio_id = :portfolio_id"
+                        ),
+                        {"portfolio_id": portfolio_id},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
