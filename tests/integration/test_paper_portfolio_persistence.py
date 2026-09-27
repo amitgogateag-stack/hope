@@ -615,3 +615,96 @@ def test_paper_portfolio_projection_rows_cannot_be_deleted() -> None:
             transaction.rollback()
             engine.dispose()
 
+
+@pytest.mark.integration
+def test_paper_portfolio_projection_identities_are_immutable() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id, replacement_portfolio_id = uuid4(), uuid4()
+    instrument_id, replacement_instrument_id = uuid4(), uuid4()
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES "
+                    "(:instrument_id, 'PAPER-POSITION-IDENTITY', 'TEST', 'ACTIVE'), "
+                    "(:replacement_instrument_id, "
+                    "'PAPER-POSITION-IDENTITY-REPLACEMENT', 'TEST', 'ACTIVE')"
+                ),
+                {
+                    "instrument_id": instrument_id,
+                    "replacement_instrument_id": replacement_instrument_id,
+                },
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios("
+                    "portfolio_id, initial_cash, cash"
+                    ") VALUES (:portfolio_id, 1000, 900)"
+                ),
+                {"portfolio_id": portfolio_id},
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_ID_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE paper_portfolios "
+                            "SET portfolio_id=:replacement_portfolio_id "
+                            "WHERE portfolio_id=:portfolio_id"
+                        ),
+                        {
+                            "portfolio_id": portfolio_id,
+                            "replacement_portfolio_id": replacement_portfolio_id,
+                        },
+                    )
+
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolio_positions("
+                    "portfolio_id, instrument_id, quantity, average_price, "
+                    "realized_pnl, total_commission"
+                    ") VALUES ("
+                    ":portfolio_id, :instrument_id, 1, 100, 0, 0"
+                    ")"
+                ),
+                {
+                    "portfolio_id": portfolio_id,
+                    "instrument_id": instrument_id,
+                },
+            )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_POSITION_IDENTITY_IMMUTABLE",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE paper_portfolio_positions "
+                            "SET instrument_id=:replacement_instrument_id "
+                            "WHERE portfolio_id=:portfolio_id "
+                            "AND instrument_id=:instrument_id"
+                        ),
+                        {
+                            "portfolio_id": portfolio_id,
+                            "instrument_id": instrument_id,
+                            "replacement_instrument_id": replacement_instrument_id,
+                        },
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
