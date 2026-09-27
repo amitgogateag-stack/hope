@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperPnLEvent, PaperSignalWriter
@@ -19,6 +20,39 @@ from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignal
 
 UTC = timezone.utc
 INPUTS_HASH = "e" * 64
+
+
+@pytest.mark.integration
+def test_paper_pnl_timestamp_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PNL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO pnl_events("
+                        "pnl_event_id, position_id, amount, event_time, created_at"
+                        ") VALUES ("
+                        ":pnl_event_id, :position_id, 0, "
+                        "transaction_timestamp(), "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {
+                        "pnl_event_id": uuid4(),
+                        "position_id": uuid4(),
+                    },
+                )
 
 
 def make_signal(context: PaperCycleContext, instrument_id, decision_time: datetime) -> Signal:
