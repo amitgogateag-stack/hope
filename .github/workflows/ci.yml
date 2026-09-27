@@ -6,7 +6,6 @@ on:
 
 permissions:
   contents: read
-  issues: write
 
 jobs:
   test:
@@ -38,6 +37,9 @@ jobs:
         run: pytest --cov=hope --cov-report=term-missing --cov-fail-under=89
 
   publish-ci-status:
+    permissions:
+      contents: read
+      issues: write
     if: ${{ always() && github.event_name == 'push' }}
     needs: test
     runs-on: ubuntu-latest
