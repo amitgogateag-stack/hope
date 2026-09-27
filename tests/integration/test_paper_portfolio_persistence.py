@@ -409,6 +409,74 @@ def test_paper_portfolio_application_timestamp_is_database_authenticated() -> No
 
 
 @pytest.mark.integration
+def test_paper_portfolio_updated_at_is_database_managed() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios("
+                    "portfolio_id, initial_cash, cash"
+                    ") VALUES (:portfolio_id, 1000, 1000)"
+                ),
+                {"portfolio_id": portfolio_id},
+            )
+            original = connection.execute(
+                text(
+                    "SELECT created_at, updated_at "
+                    "FROM paper_portfolios WHERE portfolio_id=:portfolio_id"
+                ),
+                {"portfolio_id": portfolio_id},
+            ).mappings().one()
+            assert original["updated_at"] == original["created_at"]
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_UPDATED_AT_CALLER_FORBIDDEN",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "UPDATE paper_portfolios "
+                            "SET cash=999, "
+                            "updated_at=transaction_timestamp() - interval '1 second' "
+                            "WHERE portfolio_id=:portfolio_id"
+                        ),
+                        {"portfolio_id": portfolio_id},
+                    )
+
+            connection.execute(
+                text(
+                    "UPDATE paper_portfolios "
+                    "SET cash=999 WHERE portfolio_id=:portfolio_id"
+                ),
+                {"portfolio_id": portfolio_id},
+            )
+            updated = connection.execute(
+                text(
+                    "SELECT created_at, updated_at, cash "
+                    "FROM paper_portfolios WHERE portfolio_id=:portfolio_id"
+                ),
+                {"portfolio_id": portfolio_id},
+            ).mappings().one()
+            assert updated["created_at"] == original["created_at"]
+            assert updated["updated_at"] >= original["updated_at"]
+            assert updated["cash"] == Decimal("999")
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_portfolio_created_at_is_database_authenticated_and_immutable() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
