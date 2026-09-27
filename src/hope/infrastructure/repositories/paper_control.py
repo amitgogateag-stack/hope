@@ -21,14 +21,16 @@ class SqlAlchemyPaperEnvironmentControlRepository:
         )
 
     def current_state(self) -> str:
-        row = self._connection.execute(
+        state = self._connection.execute(
             select(self._events.c.state)
             .order_by(self._events.c.control_sequence.desc())
             .limit(1)
         ).scalar_one_or_none()
-        if row is None:
+        if state is None:
             raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_MISSING")
-        return row
+        if state not in {"RUNNING", "HALTED"}:
+            raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_INVALID")
+        return state
 
     def assert_running(self) -> None:
         state = self.current_state()
