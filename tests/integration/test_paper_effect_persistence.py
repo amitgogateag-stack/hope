@@ -23,6 +23,49 @@ PAYLOAD = "b" * 64
 
 
 @pytest.mark.integration
+def test_paper_effect_timestamp_is_database_authenticated() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    job_run = create_scheduled_job_run(
+        "paper-effect-authenticated-timestamp",
+        datetime(2026, 9, 9, 20, 0, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(job_run) is True
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_EFFECT_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_effects("
+                        "effect_id, job_run_id, effect_type, entity_id, "
+                        "payload_hash, created_at"
+                        ") VALUES ("
+                        ":effect_id, :job_run_id, 'SIGNAL', :entity_id, "
+                        ":payload_hash, "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": job_run.job_run_id,
+                        "entity_id": uuid4(),
+                        "payload_hash": PAYLOAD,
+                    },
+                )
+
+
+@pytest.mark.integration
 def test_paper_effect_cannot_predate_its_job_claim() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
