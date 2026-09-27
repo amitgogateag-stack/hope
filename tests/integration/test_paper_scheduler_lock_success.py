@@ -104,6 +104,86 @@ def test_successful_paper_batch_releases_scheduler_lock() -> None:
 
 
 @pytest.mark.integration
+def test_paper_scheduler_fails_closed_when_control_sequence_generator_is_invalid() -> None:
+    engine = _engine()
+    now = datetime(2026, 9, 10, 15, 5, tzinfo=UTC)
+    due = create_scheduled_job_run(
+        "paper-batch-sequence-generator-health",
+        now - timedelta(minutes=1),
+    )
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    calls = []
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        control = SqlAlchemyPaperEnvironmentControlRepository(connection)
+        if control.current_state() == "HALTED":
+            control.transition(
+                "HALTED",
+                "RUNNING",
+                "TEST_SEQUENCE_HEALTH_PREPARE_RUNNING",
+                actor="TEST_OPERATOR",
+            )
+        history_max = connection.execute(
+            text(
+                "SELECT max(control_sequence) "
+                "FROM paper_environment_control_events"
+            )
+        ).scalar_one()
+        connection.execute(
+            text(
+                "SELECT setval("
+                "'paper_environment_control_events_control_sequence_seq', "
+                ":history_max, false)"
+            ),
+            {"history_max": history_max},
+        )
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                due.job_key,
+                lambda runtime: calls.append(due.job_run_id),
+            )
+        ]
+    )
+
+    try:
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_ENVIRONMENT_CONTROL_SEQUENCE_GENERATOR_INVALID",
+        ):
+            run_due_operational_paper_jobs(
+                engine,
+                registry,
+                [due],
+                now=lambda: now,
+                max_lateness=timedelta(minutes=5),
+            )
+        assert calls == []
+        with engine.connect() as connection:
+            assert SqlAlchemyJobRunRepository(connection).get_record(
+                due.job_run_id
+            ) is None
+    finally:
+        with engine.begin() as connection:
+            history_max = connection.execute(
+                text(
+                    "SELECT max(control_sequence) "
+                    "FROM paper_environment_control_events"
+                )
+            ).scalar_one()
+            connection.execute(
+                text(
+                    "SELECT setval("
+                    "'paper_environment_control_events_control_sequence_seq', "
+                    ":history_max, true)"
+                ),
+                {"history_max": history_max},
+            )
+
+
+@pytest.mark.integration
 def test_halted_paper_environment_blocks_entire_batch_before_any_claim() -> None:
     engine = _engine()
     now = datetime(2026, 9, 10, 15, 10, tzinfo=UTC)

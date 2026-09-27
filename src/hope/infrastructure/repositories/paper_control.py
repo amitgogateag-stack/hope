@@ -32,7 +32,32 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_INVALID")
         return state
 
+    def _assert_sequence_generator_ready(self) -> None:
+        row = self._connection.execute(
+            text(
+                "SELECT "
+                "(SELECT max(control_sequence) "
+                "FROM paper_environment_control_events) AS history_max, "
+                "last_value AS generator_last, "
+                "is_called AS generator_is_called "
+                "FROM paper_environment_control_events_control_sequence_seq"
+            )
+        ).mappings().one()
+        history_max = row["history_max"]
+        generator_last = row["generator_last"]
+        generator_is_called = row["generator_is_called"]
+        if history_max is None:
+            raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_STATE_MISSING")
+        if (
+            generator_last < history_max
+            or (generator_last == history_max and generator_is_called is not True)
+        ):
+            raise RuntimeError(
+                "PAPER_ENVIRONMENT_CONTROL_SEQUENCE_GENERATOR_INVALID"
+            )
+
     def assert_running(self) -> None:
+        self._assert_sequence_generator_ready()
         state = self.current_state()
         if state != "RUNNING":
             if state == "HALTED":
