@@ -104,6 +104,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "155_paper_portfolio_updated_at_integrity.sql",
             "156_paper_portfolio_deletion_integrity.sql",
             "157_paper_portfolio_identity_immutability.sql",
+            "158_paper_claim_delete_integrity.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1
@@ -1324,6 +1325,48 @@ def test_direct_sql_cannot_backdate_paper_claim_timestamp() -> None:
                             "clock_timestamp() - interval '1 minute'"
                             ")"
                         )
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
+
+
+@pytest.mark.integration
+def test_claimed_paper_job_run_cannot_be_deleted() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            _ensure_paper_test_strategy_version(connection)
+            job_run_id = connection.execute(
+                text(
+                    "INSERT INTO job_runs("
+                    "job_run_id, job_key, scheduled_for"
+                    ") VALUES ("
+                    "gen_random_uuid(), "
+                    "'paper:USA:00000000-0000-0000-0000-000000000001:delete-guard', "
+                    "clock_timestamp() - interval '1 minute'"
+                    ") RETURNING job_run_id"
+                )
+            ).scalar_one()
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_JOB_RUN_DELETE_FORBIDDEN",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "DELETE FROM job_runs "
+                            "WHERE job_run_id=:job_run_id"
+                        ),
+                        {"job_run_id": job_run_id},
                     )
         finally:
             transaction.rollback()
