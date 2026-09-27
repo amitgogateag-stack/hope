@@ -39,6 +39,80 @@ def make_chain(context, instrument_id):
 
 
 @pytest.mark.integration
+def test_new_paper_fill_persistence_timestamp_is_database_authenticated():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-fill-created-at-auth",
+        datetime(2026, 9, 9, 23, 42, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+    signal, order, fill = make_chain(context, instrument_id)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-FILL-CREATED-AT', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run)
+        PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(
+            context, signal
+        )
+        PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(
+            context, order
+        )
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_FILL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO fills("
+                        "fill_id, order_id, quantity, fill_price, slippage, "
+                        "transaction_cost, filled_at, cost_model_version, created_at"
+                        ") VALUES ("
+                        ":fill_id, :order_id, :quantity, :fill_price, :slippage, "
+                        ":transaction_cost, :filled_at, :cost_model_version, "
+                        "transaction_timestamp() + interval '1 microsecond'"
+                        ")"
+                    ),
+                    {
+                        "fill_id": fill.fill_id,
+                        "order_id": fill.order_id,
+                        "quantity": fill.quantity,
+                        "fill_price": fill.price,
+                        "slippage": fill.slippage,
+                        "transaction_cost": fill.commission,
+                        "filled_at": fill.fill_time,
+                        "cost_model_version": fill.cost_model_version,
+                    },
+                )
+
+        assert PaperFillWriter(
+            SqlAlchemyPaperFillRepository(connection)
+        ).record(context, fill, sequence=0)
+
+        persisted_at = connection.execute(
+            text("SELECT created_at FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one()
+        assert persisted_at is not None
+
+
+@pytest.mark.integration
 def test_paper_fill_is_durable_and_idempotent_across_scheduled_cycles():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url: pytest.skip("HOPE_DATABASE_URL is not configured")
