@@ -1,8 +1,7 @@
-import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -10,12 +9,11 @@ from hope.infrastructure.postgres.migrations import apply_migrations
 
 @pytest.mark.integration
 @pytest.mark.parametrize("configuration_hash", ["", "a" * 63, "A" * 64, "a" * 64 + " "])
-def test_configuration_snapshot_hash_is_canonical_sha256(configuration_hash: str) -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_configuration_snapshot_hash_is_canonical_sha256(
+    configuration_hash: str,
+    postgres_engine,
+) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
@@ -34,4 +32,3 @@ def test_configuration_snapshot_hash_is_canonical_sha256(configuration_hash: str
                     )
         finally:
             transaction.rollback()
-            engine.dispose()

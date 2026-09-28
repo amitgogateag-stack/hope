@@ -1,20 +1,15 @@
-import os
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
 @pytest.mark.integration
-def test_configuration_snapshots_are_append_only() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_configuration_snapshots_are_append_only(postgres_engine) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
