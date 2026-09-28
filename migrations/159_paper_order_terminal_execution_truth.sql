@@ -8,13 +8,13 @@ CREATE TABLE paper_order_terminal_events (
  CONSTRAINT paper_order_terminal_cancel_quantity CHECK ((outcome='CANCELLED' AND cancelled_quantity IS NOT NULL AND cancelled_quantity>0) OR (outcome='REJECTED' AND cancelled_quantity IS NULL))
 );
 CREATE OR REPLACE FUNCTION hope_guard_paper_order_terminal_event() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE order_row orders%ROWTYPE; filled NUMERIC;
+DECLARE order_environment TEXT; order_quantity NUMERIC; filled NUMERIC;
 BEGIN
  SELECT * INTO order_row FROM orders WHERE order_id=NEW.order_id FOR UPDATE;
  IF NOT FOUND OR order_row.environment<>'PAPER' THEN RAISE EXCEPTION 'PAPER_TERMINAL_REQUIRES_PAPER_ORDER' USING ERRCODE='23514'; END IF;
  SELECT COALESCE(SUM(quantity),0) INTO filled FROM fills WHERE order_id=NEW.order_id;
  IF NEW.outcome='REJECTED' AND filled<>0 THEN RAISE EXCEPTION 'PAPER_REJECTION_REQUIRES_UNFILLED_ORDER' USING ERRCODE='23514'; END IF;
- IF NEW.outcome='CANCELLED' AND NEW.cancelled_quantity<>order_row.quantity-filled THEN RAISE EXCEPTION 'PAPER_CANCELLATION_QUANTITY_MISMATCH' USING ERRCODE='23514'; END IF;
+ IF NEW.outcome='CANCELLED' AND NEW.cancelled_quantity<>order_quantity-filled THEN RAISE EXCEPTION 'PAPER_CANCELLATION_QUANTITY_MISMATCH' USING ERRCODE='23514'; END IF;
  IF filled>=order_row.quantity THEN RAISE EXCEPTION 'PAPER_TERMINAL_REQUIRES_REMAINING_QUANTITY' USING ERRCODE='23514'; END IF;
  IF NEW.created_at<>transaction_timestamp() THEN RAISE EXCEPTION 'PAPER_TERMINAL_TIMESTAMP_NOT_DATABASE_AUTHENTICATED' USING ERRCODE='23514'; END IF;
  RETURN NEW;
