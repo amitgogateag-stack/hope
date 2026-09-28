@@ -30,6 +30,5 @@ filterwarnings = [
   "error::DeprecationWarning",
   "error::FutureWarning",
   "error::RuntimeWarning",
-  "error::ResourceWarning",
   "error::sqlalchemy.exc.SAWarning",
 ]
