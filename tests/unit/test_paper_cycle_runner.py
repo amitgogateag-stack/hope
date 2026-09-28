@@ -13,6 +13,7 @@ from hope.application.paper import (
     PaperRiskWriter,
     PaperSignalWriter,
 )
+from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import SignalType
@@ -69,6 +70,15 @@ class RecordingOrderWriter(PaperOrderWriter):
 
     def record(self, context, order) -> bool:
         self.calls.append((context, order))
+        return True
+
+
+class RecordingTerminalWriter(PaperTerminalWriter):
+    def __init__(self) -> None:
+        self.calls = []
+
+    def record(self, context, outcome) -> bool:
+        self.calls.append((context, outcome))
         return True
 
 
@@ -225,6 +235,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         order_writer,
         fill_writer,
         work,
+        terminal_writer=RecordingTerminalWriter(),
     )
 
     assert outcome is PaperCycleOutcome.EXECUTED
@@ -282,6 +293,7 @@ def test_paper_cycle_runtime_authorizes_idempotent_existing_risk_approval() -> N
         order_writer,
         RecordingFillAccountingWriter(),
         work,
+        terminal_writer=RecordingTerminalWriter(),
     )
 
     assert outcome is PaperCycleOutcome.EXECUTED
@@ -311,6 +323,7 @@ def test_paper_cycle_runtime_rejects_order_without_runtime_risk_approval() -> No
             order_writer,
             RecordingFillAccountingWriter(),
             lambda runtime: runtime.record_order(order),
+            terminal_writer=RecordingTerminalWriter(),
         )
 
     assert order_writer.calls == []
@@ -351,6 +364,7 @@ def test_paper_cycle_runtime_rejects_order_quantity_beyond_runtime_approval() ->
             order_writer,
             RecordingFillAccountingWriter(),
             work,
+            terminal_writer=RecordingTerminalWriter(),
         )
 
     assert order_writer.calls == []
@@ -391,6 +405,7 @@ def test_paper_cycle_runtime_rejects_order_after_risk_rejection() -> None:
             order_writer,
             RecordingFillAccountingWriter(),
             work,
+            terminal_writer=RecordingTerminalWriter(),
         )
 
     assert order_writer.calls == []
@@ -424,7 +439,7 @@ def test_paper_cycle_runtime_facade_rejects_non_authoritative_writers(writers, m
     runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
 
     with pytest.raises(TypeError, match=message):
-        runner.run_runtime(job_run, *writers, lambda runtime: None)
+        runner.run_runtime(job_run, *writers, lambda runtime: None, terminal_writer=RecordingTerminalWriter())
 
     assert repository.completions == []
 
