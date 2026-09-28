@@ -288,3 +288,60 @@ def test_paper_fill_after_terminal_fails_closed_without_fill_effect():
             {"id": fill.fill_id},
         ).scalar_one() == 0
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_cancellation_after_partial_fill_requires_exact_remaining_quantity():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-terminal-partial-cancel",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        fill = Fill(
+            context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
+            instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),
+            Decimal("0.10"), Decimal("0.05"), "cost-v1",
+            datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+        assert PaperFillWriter(
+            SqlAlchemyPaperFillRepository(connection)
+        ).record(context, fill, sequence=0)
+
+        invalid = ExecutionCancellation(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "PARTIAL_CANCEL", datetime(2026, 9, 9, 20, 2, tzinfo=UTC), Decimal("2"),
+        )
+        with pytest.raises(IntegrityError, match="PAPER_CANCELLATION_QUANTITY_MISMATCH"):
+            PaperTerminalWriter(
+                SqlAlchemyPaperTerminalRepository(connection)
+            ).record(context, invalid)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_order_terminal_events WHERE order_id=:id"),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='CANCELLATION'"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+
+        valid = ExecutionCancellation(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "PARTIAL_CANCEL", datetime(2026, 9, 9, 20, 2, tzinfo=UTC), Decimal("1"),
+        )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        ).record(context, valid)
+    engine.dispose()
