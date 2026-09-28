@@ -1,12 +1,11 @@
 import hashlib
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -21,12 +20,8 @@ from hope.infrastructure.repositories.market_data_recovery import (
 
 
 @pytest.mark.integration
-def test_market_data_finalizer_uses_manifest_and_bound_universe() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_market_data_finalizer_uses_manifest_and_bound_universe(postgres_engine) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)

@@ -1,10 +1,9 @@
-import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -14,12 +13,8 @@ from hope.infrastructure.repositories.market_data_coverage import (
 
 
 @pytest.mark.integration
-def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_persisted_market_data_coverage_rejects_missing_extra_and_duplicate_keys(postgres_engine) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
