@@ -18,6 +18,7 @@ from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.signals import PaperSignalWriter
+from hope.application.paper.terminals import PaperTerminalOutcome, PaperTerminalWriter
 from hope.domain.execution.models import Order
 from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment, RiskDecision
@@ -50,6 +51,7 @@ class PaperRuntimeContext:
     _risk_writer: PaperRiskWriter
     _order_writer: PaperOrderWriter
     _fill_writer: PaperFillAccountingWriter
+    _terminal_writer: PaperTerminalWriter
     _environment_guard: Callable[[], None] = field(
         default=lambda: None,
         repr=False,
@@ -79,6 +81,10 @@ class PaperRuntimeContext:
         if approved_quantity != order.quantity:
             raise ValueError("PAPER_ORDER_RUNTIME_RISK_QUANTITY_MISMATCH")
         return self._order_writer.record(self.cycle, order)
+
+    def record_terminal(self, outcome: PaperTerminalOutcome) -> bool:
+        self._environment_guard()
+        return self._terminal_writer.record(self.cycle, outcome)
 
     def record_fill(
         self,
@@ -153,6 +159,7 @@ class PaperCycleRunner:
         risk_writer: PaperRiskWriter,
         order_writer: PaperOrderWriter,
         fill_writer: PaperFillAccountingWriter,
+        terminal_writer: PaperTerminalWriter,
         work: Callable[[PaperRuntimeContext], None],
     ) -> PaperCycleOutcome:
         """Run ordinary PAPER work through separate authoritative durable boundaries."""
@@ -164,6 +171,8 @@ class PaperCycleRunner:
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_ORDER_WRITER")
         if not isinstance(fill_writer, PaperFillAccountingWriter):
             raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_FILL_WRITER")
+        if not isinstance(terminal_writer, PaperTerminalWriter):
+            raise TypeError("PAPER_RUNTIME_REQUIRES_AUTHORITATIVE_TERMINAL_WRITER")
         return self._run_claimed_cycle(
             job_run,
             lambda context: work(
@@ -173,6 +182,7 @@ class PaperCycleRunner:
                     risk_writer,
                     order_writer,
                     fill_writer,
+                    terminal_writer,
                 )
             ),
         )
