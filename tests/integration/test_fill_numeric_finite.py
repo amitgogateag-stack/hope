@@ -1,9 +1,8 @@
-import os
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -23,12 +22,9 @@ def test_fill_economic_numerics_must_be_finite(
     column: str,
     constraint: str,
     invalid_value: str,
+    postgres_engine,
 ) -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
 
     with engine.connect() as connection:

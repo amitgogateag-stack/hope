@@ -1,22 +1,17 @@
-import os
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
 @pytest.mark.integration
-def test_fill_slippage_and_transaction_cost_must_be_nonnegative() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_fill_slippage_and_transaction_cost_must_be_nonnegative(postgres_engine) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
 
     with engine.connect() as connection:
