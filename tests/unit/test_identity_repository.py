@@ -21,7 +21,7 @@ def engine():
     try:
         yield database
     finally:
-        database.dispose()
+        database.dispose(close=True)
 
 
 def test_identity_round_trip_preserves_terminal_mapping(engine):
