@@ -239,3 +239,52 @@ def test_paper_terminal_event_cannot_precede_decision_or_latest_fill():
             {"id": order.order_id},
         ).scalar_one() == 0
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_fill_after_terminal_fails_closed_without_fill_effect():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-fill-after-terminal",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        terminal = ExecutionRejection(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        ).record(context, terminal)
+
+        fill = Fill(
+            context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
+            instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),
+            Decimal("0.10"), Decimal("0.05"), "cost-v1",
+            datetime(2026, 9, 9, 20, 2, tzinfo=UTC),
+        )
+        with pytest.raises(IntegrityError, match="PAPER_FILL_AFTER_TERMINAL_FORBIDDEN"):
+            PaperFillWriter(
+                SqlAlchemyPaperFillRepository(connection)
+            ).record(context, fill, sequence=0)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='FILL'"
+            ),
+            {"id": fill.fill_id},
+        ).scalar_one() == 0
+    engine.dispose()
