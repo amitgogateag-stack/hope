@@ -6,8 +6,16 @@ from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, String, Tab
 from hope.infrastructure.repositories.universes import UniverseRepository, UniverseVersionRecord
 
 
-def test_universe_version_round_trip() -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+@pytest.fixture
+def engine():
+    database = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        yield database
+    finally:
+        database.dispose(close=True)
+
+
+def test_universe_version_round_trip(engine) -> None:
     with engine.begin() as connection:
         metadata = MetaData()
         Table("universe_versions", metadata,
@@ -49,8 +57,7 @@ def test_universe_version_record_rejects_naive_created_at() -> None:
         )
 
 
-def test_universe_repository_rejects_noncanonical_stored_version() -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+def test_universe_repository_rejects_noncanonical_stored_version(engine) -> None:
     with engine.begin() as connection:
         metadata = MetaData()
         table = Table("universe_versions", metadata,

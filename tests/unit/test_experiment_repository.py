@@ -46,8 +46,16 @@ def create_test_schema(connection):
     metadata.create_all(connection)
 
 
-def test_experiment_round_trip_and_invalidation_are_append_only() -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+@pytest.fixture
+def engine():
+    database = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        yield database
+    finally:
+        database.dispose(close=True)
+
+
+def test_experiment_round_trip_and_invalidation_are_append_only(engine) -> None:
     with engine.begin() as connection:
         create_test_schema(connection)
         repo = SqlAlchemyExperimentRepository(connection)
@@ -96,8 +104,7 @@ def test_experiment_record_requires_canonical_durable_text(
 
 
 @pytest.mark.parametrize("reason", [" MIXED_VINTAGE", "MIXED_VINTAGE "])
-def test_experiment_invalidation_reason_must_be_canonical(reason) -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+def test_experiment_invalidation_reason_must_be_canonical(reason, engine) -> None:
     with engine.begin() as connection:
         create_test_schema(connection)
         repo = SqlAlchemyExperimentRepository(connection)
