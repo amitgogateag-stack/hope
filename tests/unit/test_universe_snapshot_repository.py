@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Boolean, Column, DateTime, Integer, MetaData, String, Table, Uuid, create_engine
+from sqlalchemy.pool import NullPool
 
 from hope.domain.universe.models import UniverseMember
 from hope.infrastructure.repositories.universe_members import UniverseMemberRepository
@@ -35,7 +36,7 @@ def _create_tables(connection) -> None:
 
 @pytest.fixture
 def sqlite_engine():
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+    engine = create_engine("sqlite+pysqlite:///:memory:", poolclass=NullPool)
     try:
         yield engine
     finally:

@@ -3,6 +3,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import Column, DateTime, MetaData, String, Table, Uuid, create_engine
+from sqlalchemy.pool import NullPool
 from hope.domain.identity.models import IdentityMapping, IdentityStatus, Instrument
 from hope.infrastructure.repositories.identity import IdentityRepository
 
@@ -17,7 +18,7 @@ def schema(connection):
 
 @pytest.fixture
 def engine():
-    database = create_engine('sqlite+pysqlite:///:memory:')
+    database = create_engine('sqlite+pysqlite:///:memory:', poolclass=NullPool)
     try:
         yield database
     finally:
