@@ -33,8 +33,17 @@ def _create_tables(connection) -> None:
     metadata.create_all(connection)
 
 
-def test_universe_snapshot_repository_loads_exact_durable_snapshot() -> None:
+@pytest.fixture
+def sqlite_engine():
     engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        yield engine
+    finally:
+        engine.dispose()
+
+
+def test_universe_snapshot_repository_loads_exact_durable_snapshot(sqlite_engine) -> None:
+    engine = sqlite_engine
     with engine.begin() as connection:
         _create_tables(connection)
         version_id = uuid4()
@@ -68,15 +77,15 @@ def test_universe_snapshot_repository_loads_exact_durable_snapshot() -> None:
         assert len(snapshot.membership_hash) == 64
 
 
-def test_universe_snapshot_repository_returns_none_for_unknown_version() -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+def test_universe_snapshot_repository_returns_none_for_unknown_version(sqlite_engine) -> None:
+    engine = sqlite_engine
     with engine.begin() as connection:
         _create_tables(connection)
         assert UniverseSnapshotRepository(connection).get(uuid4()) is None
 
 
-def test_universe_snapshot_repository_fails_closed_on_member_count_mismatch() -> None:
-    engine = create_engine("sqlite+pysqlite:///:memory:")
+def test_universe_snapshot_repository_fails_closed_on_member_count_mismatch(sqlite_engine) -> None:
+    engine = sqlite_engine
     with engine.begin() as connection:
         _create_tables(connection)
         version_id = uuid4()
