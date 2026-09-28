@@ -13,7 +13,7 @@ from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSig
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection, Order, OrderSide
-from hope.domain.execution.fills import Fill
+from hope.domain.execution import Fill
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
