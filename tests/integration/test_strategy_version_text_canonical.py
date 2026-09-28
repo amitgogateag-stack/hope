@@ -1,9 +1,8 @@
-import os
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -21,12 +20,13 @@ from hope.infrastructure.postgres.migrations import apply_migrations
         ("code_commit", "abc123 ", "ck_strategy_versions_code_commit_canonical"),
     ],
 )
-def test_strategy_version_provenance_text_is_canonical(column: str, value: str, constraint: str) -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_strategy_version_provenance_text_is_canonical(
+    column: str,
+    value: str,
+    constraint: str,
+    postgres_engine,
+) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
@@ -52,4 +52,3 @@ def test_strategy_version_provenance_text_is_canonical(column: str, value: str, 
                     )
         finally:
             transaction.rollback()
-            engine.dispose()
