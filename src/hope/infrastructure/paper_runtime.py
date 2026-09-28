@@ -15,6 +15,7 @@ from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner, PaperRuntimeContext
 from hope.application.paper.signals import PaperSignalWriter
+from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution.models import OrderSide
 from hope.domain.risk.inputs import PortfolioEntryRiskInputs
 from hope.domain.risk.portfolio import PortfolioRiskEngine
@@ -30,6 +31,7 @@ from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPap
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
+from hope.infrastructure.repositories.paper_terminals import SqlAlchemyPaperTerminalRepository
 from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
 
 
@@ -231,6 +233,9 @@ class SqlAlchemyPaperRuntime:
         self._fill_writer = PaperFillAccountingWriter(
             SqlAlchemyPaperFillAccountingRepository(connection)
         )
+        self._terminal_writer = PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        )
 
     def _run_registered(
         self,
@@ -245,6 +250,7 @@ class SqlAlchemyPaperRuntime:
             self._order_writer,
             self._fill_writer,
             work,
+            terminal_writer=self._terminal_writer,
         )
 
     def quarantine_incomplete_claim(self, job_run: ScheduledJobRun) -> PaperCycleOutcome:
