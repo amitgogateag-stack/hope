@@ -1,21 +1,16 @@
-import os
 from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
 @pytest.mark.integration
-def test_experiment_definition_rejects_invalid_immutable_fields() -> None:
-    url = os.getenv("HOPE_DATABASE_URL")
-    if not url:
-        pytest.skip("HOPE_DATABASE_URL is not configured")
-
-    engine = create_engine(url)
+def test_experiment_definition_rejects_invalid_immutable_fields(postgres_engine) -> None:
+    engine = postgres_engine
     migrations_dir = Path(__file__).parents[2] / "migrations"
     with engine.connect() as connection:
         transaction = connection.begin()
