@@ -183,3 +183,59 @@ def test_paper_rejection_after_fill_fails_closed_without_terminal_effect():
             {"id": order.order_id},
         ).scalar_one() == 0
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_terminal_event_cannot_precede_decision_or_latest_fill():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-terminal-chronology",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        writer = PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection))
+
+        before_decision = ExecutionCancellation(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "EARLY_CANCEL", datetime(2026, 9, 9, 19, 59, tzinfo=UTC), Decimal("2"),
+        )
+        with pytest.raises(IntegrityError, match="PAPER_TERMINAL_PRECEDES_DECISION_TIME"):
+            writer.record(context, before_decision)
+
+        fill = Fill(
+            context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
+            instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),
+            Decimal("0.10"), Decimal("0.05"), "cost-v1",
+            datetime(2026, 9, 9, 20, 2, tzinfo=UTC),
+        )
+        assert PaperFillWriter(
+            SqlAlchemyPaperFillRepository(connection)
+        ).record(context, fill, sequence=0)
+
+        before_latest_fill = ExecutionCancellation(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "STALE_CANCEL", datetime(2026, 9, 9, 20, 1, tzinfo=UTC), Decimal("1"),
+        )
+        with pytest.raises(IntegrityError, match="PAPER_TERMINAL_PRECEDES_LATEST_FILL"):
+            writer.record(context, before_latest_fill)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_order_terminal_events WHERE order_id=:id"),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='CANCELLATION'"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+    engine.dispose()
