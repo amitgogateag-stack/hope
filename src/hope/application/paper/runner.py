@@ -159,8 +159,9 @@ class PaperCycleRunner:
         risk_writer: PaperRiskWriter,
         order_writer: PaperOrderWriter,
         fill_writer: PaperFillAccountingWriter,
-        terminal_writer: PaperTerminalWriter,
         work: Callable[[PaperRuntimeContext], None],
+        *,
+        terminal_writer: PaperTerminalWriter,
     ) -> PaperCycleOutcome:
         """Run ordinary PAPER work through separate authoritative durable boundaries."""
         if not isinstance(signal_writer, PaperSignalWriter):
