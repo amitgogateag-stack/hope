@@ -305,6 +305,7 @@ def test_paper_runtime_rechecks_environment_before_order_effect() -> None:
         _RecordingWriter(),
         order_writer,
         _RecordingWriter(),
+        _RecordingWriter(),
         _environment_guard=halt_guard,
     )
     runtime._approved_quantities[signal_id] = Decimal("1")
