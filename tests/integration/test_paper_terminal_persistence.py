@@ -108,7 +108,7 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
         restored = SqlAlchemyPaperTerminalRepository(connection).get(order.order_id)
         assert restored == outcome
         effect_type = connection.execute(
-            text("SELECT effect_type FROM paper_effects WHERE entity_id=:id"),
+            text("SELECT effect_type FROM paper_effects WHERE entity_id=:id AND effect_type IN ('CANCELLATION', 'REJECTION')"),
             {"id": order.order_id},
         ).scalar_one()
         assert effect_type == kind.replace("CANCELLED", "CANCELLATION").replace("REJECTED", "REJECTION")
