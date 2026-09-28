@@ -15,8 +15,16 @@ def schema(connection):
     m.create_all(connection)
 
 
-def test_identity_round_trip_preserves_terminal_mapping():
-    engine = create_engine('sqlite+pysqlite:///:memory:')
+@pytest.fixture
+def engine():
+    database = create_engine('sqlite+pysqlite:///:memory:')
+    try:
+        yield database
+    finally:
+        database.dispose()
+
+
+def test_identity_round_trip_preserves_terminal_mapping(engine):
     with engine.begin() as connection:
         schema(connection)
         repo = IdentityRepository(connection)
@@ -30,8 +38,7 @@ def test_identity_round_trip_preserves_terminal_mapping():
         assert repo.get_mapping('KALPATPOWR', '123') == mapping
 
 
-def test_identity_lookup_is_bound_to_broker_namespace():
-    engine = create_engine('sqlite+pysqlite:///:memory:')
+def test_identity_lookup_is_bound_to_broker_namespace(engine):
     with engine.begin() as connection:
         schema(connection)
         repo = IdentityRepository(connection)
@@ -67,8 +74,8 @@ def test_identity_lookup_is_bound_to_broker_namespace():
 def test_identity_lookup_rejects_noncanonical_namespace(
     source_symbol: str,
     broker_instrument_id: str,
+    engine,
 ):
-    engine = create_engine('sqlite+pysqlite:///:memory:')
     with engine.begin() as connection:
         schema(connection)
         repo = IdentityRepository(connection)
@@ -77,8 +84,7 @@ def test_identity_lookup_rejects_noncanonical_namespace(
 
 
 @pytest.mark.parametrize("reason", [None, "", "   ", " padded reason "])
-def test_identity_repository_rejects_noncanonical_stored_nonactive_reason(reason):
-    engine = create_engine('sqlite+pysqlite:///:memory:')
+def test_identity_repository_rejects_noncanonical_stored_nonactive_reason(reason, engine):
     with engine.begin() as connection:
         schema(connection)
         repo = IdentityRepository(connection)
