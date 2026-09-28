@@ -13,7 +13,9 @@ class PaperEffectType(str, Enum):
     RISK = "RISK"
     ORDER = "ORDER"
     FILL = "FILL"
-    PNL = "PNL"\n    CANCELLATION = "CANCELLATION"\n    REJECTION = "REJECTION"
+    PNL = "PNL"
+    CANCELLATION = "CANCELLATION"
+    REJECTION = "REJECTION"
 
 
 def _deterministic_effect_id(effect_type: PaperEffectType, entity_id: UUID) -> UUID:
