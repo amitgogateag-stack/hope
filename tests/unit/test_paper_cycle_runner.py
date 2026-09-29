@@ -14,7 +14,7 @@ from hope.application.paper import (
     PaperSignalWriter,
 )
 from hope.application.paper.terminals import PaperTerminalWriter
-from hope.domain.execution.models import Environment, Order, OrderSide
+from hope.domain.execution.models import Environment, ExecutionRejection, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import SignalType
 
@@ -193,6 +193,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     risk_writer = RecordingRiskWriter()
     order_writer = RecordingOrderWriter()
     fill_writer = RecordingFillAccountingWriter()
+    terminal_writer = RecordingTerminalWriter()
     runner = PaperCycleRunner(
         repository,
         now=lambda: job_run.scheduled_for + timedelta(minutes=1),
@@ -200,6 +201,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     portfolio_id = UUID(int=1)
     signal = object()
     signal_id = UUID(int=2)
+    instrument_id = UUID(int=4)
     risk = RiskAssessment(
         signal_id=signal_id,
         decision=RiskDecision.APPROVE,
@@ -209,11 +211,19 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
     order = Order(
         order_id=UUID(int=3),
         signal_id=signal_id,
-        instrument_id=UUID(int=4),
+        instrument_id=instrument_id,
         side=OrderSide.BUY,
         quantity=Decimal("1"),
         environment=Environment.PAPER,
         signal_type=SignalType.ENTRY,
+    )
+    terminal = ExecutionRejection(
+        order_id=order.order_id,
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        environment=Environment.PAPER,
+        reason_code="TEST_REJECTION",
+        rejected_at=job_run.scheduled_for + timedelta(seconds=30),
     )
     fill = object()
 
@@ -221,6 +231,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         assert runtime.record_signal(signal) is True
         assert runtime.record_risk(risk) is True
         assert runtime.record_order(order) is True
+        assert runtime.record_terminal(terminal) is True
         assert runtime.record_fill(
             portfolio_id,
             Decimal("1000"),
@@ -235,19 +246,21 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         order_writer,
         fill_writer,
         work,
-        terminal_writer=RecordingTerminalWriter(),
+        terminal_writer=terminal_writer,
     )
 
     assert outcome is PaperCycleOutcome.EXECUTED
     assert signal_writer.calls == [(signal_writer.calls[0][0], signal)]
     assert risk_writer.calls == [(risk_writer.calls[0][0], risk)]
     assert order_writer.calls == [(order_writer.calls[0][0], order)]
+    assert terminal_writer.calls == [(terminal_writer.calls[0][0], terminal)]
     assert len(fill_writer.calls) == 1
     signal_context = signal_writer.calls[0][0]
     risk_context = risk_writer.calls[0][0]
     order_context = order_writer.calls[0][0]
+    terminal_context = terminal_writer.calls[0][0]
     fill_context, actual_portfolio_id, initial_cash, actual_fill, sequence = fill_writer.calls[0]
-    assert signal_context is risk_context is order_context is fill_context
+    assert signal_context is risk_context is order_context is terminal_context is fill_context
     assert signal_context.job_run.job_run_id == job_run.job_run_id
     assert actual_portfolio_id == portfolio_id
     assert initial_cash == Decimal("1000")
