@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
@@ -288,6 +288,82 @@ def test_paper_fill_after_terminal_fails_closed_without_fill_effect():
             {"id": fill.fill_id},
         ).scalar_one() == 0
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_fill_and_terminal_writes_serialize_on_source_order():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-fill-terminal-serialization",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as setup_connection:
+        apply_migrations(setup_connection, migrations_dir)
+        context, signal, order = _setup_order(
+            setup_connection, run, instrument_id
+        )
+
+    terminal_connection = engine.connect()
+    fill_connection = engine.connect()
+    terminal_transaction = terminal_connection.begin()
+    try:
+        terminal = ExecutionRejection(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(terminal_connection)
+        ).record(context, terminal)
+
+        fill = Fill(
+            context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
+            instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),
+            Decimal("0.10"), Decimal("0.05"), "cost-v1",
+            datetime(2026, 9, 9, 20, 2, tzinfo=UTC),
+        )
+        fill_transaction = fill_connection.begin()
+        try:
+            fill_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                PaperFillWriter(
+                    SqlAlchemyPaperFillRepository(fill_connection)
+                ).record(context, fill, sequence=0)
+        finally:
+            fill_transaction.rollback()
+
+        terminal_transaction.commit()
+
+        with fill_connection.begin():
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_FILL_AFTER_TERMINAL_FORBIDDEN",
+            ):
+                PaperFillWriter(
+                    SqlAlchemyPaperFillRepository(fill_connection)
+                ).record(context, fill, sequence=0)
+            assert fill_connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+                {"id": fill.fill_id},
+            ).scalar_one() == 0
+            assert fill_connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE entity_id=:id AND effect_type='FILL'"
+                ),
+                {"id": fill.fill_id},
+            ).scalar_one() == 0
+    finally:
+        if terminal_transaction.is_active:
+            terminal_transaction.rollback()
+        terminal_connection.close()
+        fill_connection.close()
+        engine.dispose()
 
 
 @pytest.mark.integration
