@@ -223,7 +223,7 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         instrument_id=instrument_id,
         environment=Environment.PAPER,
         reason_code="TEST_REJECTION",
-        rejected_at=job_run.scheduled_for + timedelta(seconds=30),
+        rejection_time=job_run.scheduled_for + timedelta(seconds=30),
     )
     fill = object()
 
