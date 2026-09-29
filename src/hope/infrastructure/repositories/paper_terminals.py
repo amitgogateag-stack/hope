@@ -29,6 +29,15 @@ class SqlAlchemyPaperTerminalRepository:
         row=self._connection.execute(select(self._events,self._orders.c.signal_id,self._orders.c.instrument_id,self._orders.c.environment).join(self._orders,self._events.c.order_id==self._orders.c.order_id).where(self._events.c.order_id==order_id)).mappings().one_or_none()
         if row is None:return None
         if row["environment"]!=Environment.PAPER.value: raise RuntimeError("PAPER_TERMINAL_NON_PAPER_ORDER")
-        if row["outcome"]=="CANCELLED": return ExecutionCancellation(row["order_id"],row["signal_id"],row["instrument_id"],Environment.PAPER,row["reason_code"],row["event_time"],row["cancelled_quantity"])
-        if row["outcome"]=="REJECTED": return ExecutionRejection(row["order_id"],row["signal_id"],row["instrument_id"],Environment.PAPER,row["reason_code"],row["event_time"])
-        raise RuntimeError("PAPER_TERMINAL_OUTCOME_INVALID")
+        if row["outcome"]=="CANCELLED":
+            outcome=ExecutionCancellation(row["order_id"],row["signal_id"],row["instrument_id"],Environment.PAPER,row["reason_code"],row["event_time"],row["cancelled_quantity"])
+            kind=PaperEffectType.CANCELLATION
+        elif row["outcome"]=="REJECTED":
+            outcome=ExecutionRejection(row["order_id"],row["signal_id"],row["instrument_id"],Environment.PAPER,row["reason_code"],row["event_time"])
+            kind=PaperEffectType.REJECTION
+        else:
+            raise RuntimeError("PAPER_TERMINAL_OUTCOME_INVALID")
+        effect=self._effects.get(kind,outcome.order_id)
+        if effect is None: raise RuntimeError("PAPER_TERMINAL_EVENT_WITHOUT_EFFECT")
+        if effect.payload_hash!=paper_terminal_payload_hash(outcome): raise ValueError("PAPER_TERMINAL_EFFECT_PAYLOAD_CONFLICT")
+        return outcome
