@@ -52,7 +52,7 @@ def test_paper_fill_event_time_cannot_be_in_future():
                     connection.execute(
                         text(
                             "INSERT INTO fills("
-                            "fill_id, order_id, quantity, price, commission, slippage, "
+                            "fill_id, order_id, quantity, fill_price, slippage, transaction_cost, "
                             "cost_model_version, filled_at"
                             ") VALUES ("
                             ":fill_id, :order_id, 1, 100, 0, 0, 'future-guard-v1', "
