@@ -153,7 +153,7 @@ def test_paper_fill_requires_tracked_order_and_rolls_back_failed_fill_effect():
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
         broken = Fill(fill.fill_id, uuid4(), fill.signal_id, fill.instrument_id, fill.side, fill.quantity, fill.price, fill.commission, fill.slippage, fill.cost_model_version, fill.fill_time)
-        with pytest.raises(ValueError, match="PAPER_FILL_SOURCE_ORDER_UNTRACKED"):
+        with pytest.raises(ValueError, match="PAPER_FILL_ORDER_IDENTITY_MISMATCH"):
             fw.record(context, broken, sequence=0)
         assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE effect_type='FILL' AND entity_id=:id"), {"id": fill.fill_id}).scalar_one() == 0
 
