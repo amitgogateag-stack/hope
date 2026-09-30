@@ -68,3 +68,65 @@ def test_paper_fill_event_time_cannot_be_in_future():
             ).scalar_one() == 0
     finally:
         engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_fill_future_guard_survives_new_database_transaction():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    signal_id = uuid4()
+    order_id = uuid4()
+    fill_id = uuid4()
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                    "VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id, "symbol": f"FILL-RST-{str(instrument_id)[:8]}"},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO signals(signal_id, instrument_id, decision_time, state) "
+                    "VALUES (:id, :instrument_id, transaction_timestamp(), 'SIGNAL')"
+                ),
+                {"id": signal_id, "instrument_id": instrument_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO orders(order_id, signal_id, instrument_id, environment, side, quantity) "
+                    "VALUES (:id, :signal_id, :instrument_id, 'PAPER', 'BUY', 1)"
+                ),
+                {"id": order_id, "signal_id": signal_id, "instrument_id": instrument_id},
+            )
+
+        with engine.begin() as restarted_connection:
+            with pytest.raises(IntegrityError, match="PAPER_FILL_TIME_IN_FUTURE"):
+                with restarted_connection.begin_nested():
+                    restarted_connection.execute(
+                        text(
+                            "INSERT INTO fills("
+                            "fill_id, order_id, quantity, fill_price, slippage, transaction_cost, "
+                            "cost_model_version, filled_at"
+                            ") VALUES ("
+                            ":fill_id, :order_id, 1, 100, 0, 0, 'future-guard-v1', "
+                            "transaction_timestamp() + interval '1 day'"
+                            ")"
+                        ),
+                        {"fill_id": fill_id, "order_id": order_id},
+                    )
+
+            assert restarted_connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
+                {"fill_id": fill_id},
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
