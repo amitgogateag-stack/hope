@@ -55,6 +55,14 @@ def test_writer_rejects_wrong_sequence_identity():
     assert repo.calls == []
 
 
+def test_writer_rejects_order_identity_not_derived_from_signal():
+    context = make_context(); fill = make_fill(context); repo = FakePersistence()
+    malformed = fill.__class__(**{**fill.__dict__, "order_id": uuid4()})
+    with pytest.raises(ValueError, match="PAPER_FILL_ORDER_IDENTITY_MISMATCH"):
+        PaperFillWriter(repo).record(context, malformed, sequence=0)
+    assert repo.calls == []
+
+
 @pytest.mark.parametrize("field,value,code", [
     ("quantity", Decimal("NaN"), "PAPER_FILL_QUANTITY_INVALID"),
     ("price", Decimal("Infinity"), "PAPER_FILL_PRICE_INVALID"),

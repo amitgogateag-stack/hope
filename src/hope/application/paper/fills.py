@@ -39,6 +39,9 @@ class PaperFillWriter:
         self._repository = repository
 
     def record(self, context: PaperCycleContext, fill: Fill, *, sequence: int) -> bool:
+        expected_order_id = context.order_id(fill.signal_id)
+        if fill.order_id != expected_order_id:
+            raise ValueError("PAPER_FILL_ORDER_IDENTITY_MISMATCH")
         expected_fill_id = context.fill_id(fill.signal_id, sequence)
         if fill.fill_id != expected_fill_id:
             raise ValueError("PAPER_FILL_IDENTITY_MISMATCH")
