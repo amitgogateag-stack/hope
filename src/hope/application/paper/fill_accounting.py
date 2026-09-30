@@ -36,6 +36,18 @@ class PaperFillAccountingWriter:
         *,
         sequence: int,
     ) -> bool:
+        if not isinstance(portfolio_id, UUID):
+            raise ValueError("PAPER_ACCOUNTING_PORTFOLIO_ID_INVALID")
+        if not initial_cash.is_finite() or initial_cash < 0:
+            raise ValueError("PAPER_ACCOUNTING_INITIAL_CASH_INVALID")
+
+        expected_order_id = context.order_id(fill.signal_id)
+        if fill.order_id != expected_order_id:
+            raise ValueError("PAPER_FILL_ORDER_IDENTITY_MISMATCH")
+        expected_fill_id = context.fill_id(fill.signal_id, sequence)
+        if fill.fill_id != expected_fill_id:
+            raise ValueError("PAPER_FILL_IDENTITY_MISMATCH")
+
         return self._repository.persist(
             context,
             portfolio_id,
