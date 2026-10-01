@@ -1,5 +1,6 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -7,8 +8,11 @@ from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.scheduling import recovery
 from hope.infrastructure.scheduling.recovery import (
+    PaperRecoveryAssessment,
+    PaperRecoveryDecision,
     PaperRecoveryDisposition,
     PaperRecoveryEvidence,
+    PaperRecoveryReport,
     _classify_recovery_evidence,
     assess_due_paper_recovery,
 )
@@ -61,9 +65,18 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
         incomplete.job_run_id: PaperRecoveryDisposition.INCOMPLETE,
         stale.job_run_id: PaperRecoveryDisposition.STALE,
     }
+    decisions = {item.job_run_id: item.decision for item in report.assessments}
+    assert decisions == {
+        fresh.job_run_id: PaperRecoveryDecision.EXECUTE_FRESH,
+        terminal.job_run_id: PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL,
+        incomplete.job_run_id: PaperRecoveryDecision.REQUIRE_RECONCILIATION,
+        stale.job_run_id: PaperRecoveryDecision.REJECT_STALE,
+    }
     assert report.terminal_run_ids == frozenset({terminal.job_run_id})
     assert report.incomplete_run_ids == frozenset({incomplete.job_run_id})
     assert report.incomplete_run_ids_with_effects == frozenset({incomplete.job_run_id})
+    assert report.reconciliation_run_ids == frozenset({incomplete.job_run_id})
+    assert report.completed_effect_run_ids == frozenset()
     assert report.stale_run_ids == frozenset({stale.job_run_id})
     incomplete_assessment = next(
         item for item in report.assessments if item.job_run_id == incomplete.job_run_id
@@ -113,6 +126,32 @@ def test_recovery_evidence_classifies_none_partial_complete_and_contradictory() 
     ) is PaperRecoveryEvidence.CONTRADICTORY
 
 
+def test_complete_effects_are_acknowledged_but_claimed_lifecycle_stays_fail_closed() -> None:
+    job_run_id = uuid4()
+    complete = PaperRecoveryAssessment(
+        job_run_id=job_run_id,
+        disposition=PaperRecoveryDisposition.INCOMPLETE,
+        status=JobRunStatus.CLAIMED,
+        durable_effect_types=frozenset(
+            {
+                PaperEffectType.SIGNAL,
+                PaperEffectType.RISK,
+                PaperEffectType.ORDER,
+                PaperEffectType.FILL,
+                PaperEffectType.PNL,
+            }
+        ),
+    )
+    report = PaperRecoveryReport((complete,))
+
+    assert complete.evidence is PaperRecoveryEvidence.COMPLETE
+    assert complete.decision is PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
+    assert report.completed_effect_run_ids == frozenset({job_run_id})
+    assert report.reconciliation_run_ids == frozenset()
+    with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
+        report.assert_safe_to_execute()
+
+
 def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) -> None:
     current = datetime(2026, 10, 1, 15, 0, tzinfo=UTC)
     incomplete = create_scheduled_job_run("paper-incomplete", current - timedelta(minutes=2))
@@ -148,5 +187,6 @@ def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) ->
         item for item in report.assessments if item.job_run_id == incomplete.job_run_id
     )
     assert incomplete_assessment.evidence is PaperRecoveryEvidence.NONE
+    assert incomplete_assessment.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
