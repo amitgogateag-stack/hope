@@ -88,6 +88,7 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
         (PaperEffectType.ORDER, 1),
         (PaperEffectType.SIGNAL, 1),
     )
+    assert incomplete_assessment.lineage_verified is False
     assert incomplete_assessment.evidence is PaperRecoveryEvidence.PARTIAL
 
 
@@ -130,10 +131,9 @@ def test_recovery_evidence_classifies_none_partial_complete_and_contradictory() 
     ) is PaperRecoveryEvidence.CONTRADICTORY
 
 
-def test_complete_effects_are_acknowledged_but_claimed_lifecycle_stays_fail_closed() -> None:
-    job_run_id = uuid4()
-    complete = PaperRecoveryAssessment(
-        job_run_id=job_run_id,
+def _complete_assessment(*, lineage_verified: bool) -> PaperRecoveryAssessment:
+    return PaperRecoveryAssessment(
+        job_run_id=uuid4(),
         disposition=PaperRecoveryDisposition.INCOMPLETE,
         status=JobRunStatus.CLAIMED,
         durable_effect_types=frozenset(
@@ -152,12 +152,29 @@ def test_complete_effects_are_acknowledged_but_claimed_lifecycle_stays_fail_clos
             (PaperEffectType.RISK, 1),
             (PaperEffectType.SIGNAL, 1),
         ),
+        lineage_verified=lineage_verified,
     )
+
+
+def test_complete_effect_types_without_lineage_proof_require_reconciliation() -> None:
+    complete = _complete_assessment(lineage_verified=False)
+    report = PaperRecoveryReport((complete,))
+
+    assert complete.evidence is PaperRecoveryEvidence.COMPLETE
+    assert complete.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
+    assert report.completed_effect_run_ids == frozenset()
+    assert report.reconciliation_run_ids == frozenset({complete.job_run_id})
+    with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
+        report.assert_safe_to_execute()
+
+
+def test_complete_effects_are_acknowledged_only_after_lineage_proof() -> None:
+    complete = _complete_assessment(lineage_verified=True)
     report = PaperRecoveryReport((complete,))
 
     assert complete.evidence is PaperRecoveryEvidence.COMPLETE
     assert complete.decision is PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
-    assert report.completed_effect_run_ids == frozenset({job_run_id})
+    assert report.completed_effect_run_ids == frozenset({complete.job_run_id})
     assert report.reconciliation_run_ids == frozenset()
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
@@ -185,6 +202,7 @@ def test_duplicate_effect_type_requires_reconciliation_even_when_type_set_is_com
             (PaperEffectType.RISK, 1),
             (PaperEffectType.SIGNAL, 1),
         ),
+        lineage_verified=True,
     )
     report = PaperRecoveryReport((ambiguous,))
 
