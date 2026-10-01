@@ -27,6 +27,14 @@ class PaperRecoveryEvidence(str, Enum):
     CONTRADICTORY = "CONTRADICTORY"
 
 
+class PaperRecoveryDecision(str, Enum):
+    EXECUTE_FRESH = "EXECUTE_FRESH"
+    ACKNOWLEDGE_TERMINAL = "ACKNOWLEDGE_TERMINAL"
+    ACKNOWLEDGE_COMPLETE_EFFECTS = "ACKNOWLEDGE_COMPLETE_EFFECTS"
+    REQUIRE_RECONCILIATION = "REQUIRE_RECONCILIATION"
+    REJECT_STALE = "REJECT_STALE"
+
+
 _TERMINAL_EFFECT_TYPES = frozenset(
     {
         PaperEffectType.FILL,
@@ -88,6 +96,18 @@ class PaperRecoveryAssessment:
     def evidence(self) -> PaperRecoveryEvidence:
         return _classify_recovery_evidence(self.durable_effect_types)
 
+    @property
+    def decision(self) -> PaperRecoveryDecision:
+        if self.disposition is PaperRecoveryDisposition.FRESH:
+            return PaperRecoveryDecision.EXECUTE_FRESH
+        if self.disposition is PaperRecoveryDisposition.TERMINAL:
+            return PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL
+        if self.disposition is PaperRecoveryDisposition.STALE:
+            return PaperRecoveryDecision.REJECT_STALE
+        if self.evidence is PaperRecoveryEvidence.COMPLETE:
+            return PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
+        return PaperRecoveryDecision.REQUIRE_RECONCILIATION
+
 
 @dataclass(frozen=True)
 class PaperRecoveryReport:
@@ -118,6 +138,22 @@ class PaperRecoveryReport:
         )
 
     @property
+    def reconciliation_run_ids(self) -> frozenset[UUID]:
+        return frozenset(
+            item.job_run_id
+            for item in self.assessments
+            if item.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
+        )
+
+    @property
+    def completed_effect_run_ids(self) -> frozenset[UUID]:
+        return frozenset(
+            item.job_run_id
+            for item in self.assessments
+            if item.decision is PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
+        )
+
+    @property
     def stale_run_ids(self) -> frozenset[UUID]:
         return frozenset(
             item.job_run_id
@@ -126,6 +162,9 @@ class PaperRecoveryReport:
         )
 
     def assert_safe_to_execute(self) -> None:
+        # Complete durable effects are recognized as economically complete, but a CLAIMED
+        # lifecycle row is still not silently mutated here. Scheduler execution remains
+        # fail-closed until a separate reconciliation transition is proven safe and durable.
         if self.incomplete_run_ids:
             raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
         if self.stale_run_ids:
