@@ -34,10 +34,10 @@ def test_paper_fill_accounting_restart_replay_is_idempotent_across_committed_con
     portfolio_id = uuid4()
     run = create_scheduled_job_run(
         "paper-accounting-restart-replay",
-        datetime(2026, 10, 1, 12, 0, tzinfo=UTC),
+        datetime(2026, 9, 30, 12, 0, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
-    decision = datetime(2026, 10, 1, 12, 1, tzinfo=UTC)
+    decision = datetime(2026, 9, 30, 12, 1, tzinfo=UTC)
     signal_id = context.signal_id(
         instrument_id=instrument_id,
         strategy_version="paper-accounting-restart-v1",
