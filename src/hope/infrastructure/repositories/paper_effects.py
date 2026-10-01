@@ -70,10 +70,23 @@ class SqlAlchemyPaperEffectRepository:
         ).mappings().one_or_none()
         if row is None:
             return None
+        return self._from_row(row)
+
+    def list_for_job_run(self, job_run_id: UUID) -> tuple[PaperEffect, ...]:
+        """Return all durable PAPER effects attributed to one scheduled run."""
+        rows = self._connection.execute(
+            select(self._paper_effects)
+            .where(self._paper_effects.c.job_run_id == job_run_id)
+            .order_by(self._paper_effects.c.created_at, self._paper_effects.c.effect_id)
+        ).mappings().all()
+        return tuple(self._from_row(row) for row in rows)
+
+    @staticmethod
+    def _from_row(row) -> PaperEffect:
         return PaperEffect(
             effect_id=row["effect_id"],
             job_run_id=row["job_run_id"],
-            effect_type=parsed_type,
+            effect_type=PaperEffectType(row["effect_type"]),
             entity_id=row["entity_id"],
             payload_hash=row["payload_hash"],
         )
