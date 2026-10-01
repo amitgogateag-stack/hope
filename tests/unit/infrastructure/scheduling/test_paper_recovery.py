@@ -84,6 +84,10 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
     assert incomplete_assessment.durable_effect_types == frozenset(
         {PaperEffectType.SIGNAL, PaperEffectType.ORDER}
     )
+    assert incomplete_assessment.effect_counts == (
+        (PaperEffectType.ORDER, 1),
+        (PaperEffectType.SIGNAL, 1),
+    )
     assert incomplete_assessment.evidence is PaperRecoveryEvidence.PARTIAL
 
 
@@ -141,6 +145,13 @@ def test_complete_effects_are_acknowledged_but_claimed_lifecycle_stays_fail_clos
                 PaperEffectType.PNL,
             }
         ),
+        effect_counts=(
+            (PaperEffectType.FILL, 1),
+            (PaperEffectType.ORDER, 1),
+            (PaperEffectType.PNL, 1),
+            (PaperEffectType.RISK, 1),
+            (PaperEffectType.SIGNAL, 1),
+        ),
     )
     report = PaperRecoveryReport((complete,))
 
@@ -150,6 +161,37 @@ def test_complete_effects_are_acknowledged_but_claimed_lifecycle_stays_fail_clos
     assert report.reconciliation_run_ids == frozenset()
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
+
+
+def test_duplicate_effect_type_requires_reconciliation_even_when_type_set_is_complete() -> None:
+    job_run_id = uuid4()
+    ambiguous = PaperRecoveryAssessment(
+        job_run_id=job_run_id,
+        disposition=PaperRecoveryDisposition.INCOMPLETE,
+        status=JobRunStatus.CLAIMED,
+        durable_effect_types=frozenset(
+            {
+                PaperEffectType.SIGNAL,
+                PaperEffectType.RISK,
+                PaperEffectType.ORDER,
+                PaperEffectType.FILL,
+                PaperEffectType.PNL,
+            }
+        ),
+        effect_counts=(
+            (PaperEffectType.FILL, 2),
+            (PaperEffectType.ORDER, 1),
+            (PaperEffectType.PNL, 1),
+            (PaperEffectType.RISK, 1),
+            (PaperEffectType.SIGNAL, 1),
+        ),
+    )
+    report = PaperRecoveryReport((ambiguous,))
+
+    assert ambiguous.evidence is PaperRecoveryEvidence.CONTRADICTORY
+    assert ambiguous.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
+    assert report.completed_effect_run_ids == frozenset()
+    assert report.reconciliation_run_ids == frozenset({job_run_id})
 
 
 def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) -> None:
