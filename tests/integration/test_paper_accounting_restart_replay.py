@@ -34,9 +34,37 @@ def _chain(context, instrument_id):
         conviction=Decimal("0.8"),
         inputs_hash=INPUTS_HASH,
     )
-    signal = Signal(signal_id, instrument_id, "paper-accounting-restart-v1", decision, SignalType.ENTRY, Decimal("0.8"), INPUTS_HASH)
-    order = Order(context.order_id(signal_id), signal_id, instrument_id, OrderSide.BUY, Decimal("2"), Environment.PAPER, SignalType.ENTRY)
-    fill = Fill(context.fill_id(signal_id, 0), order.order_id, signal_id, instrument_id, OrderSide.BUY, Decimal("2"), Decimal("100"), Decimal("0.50"), Decimal("0"), "paper-accounting-restart-cost-v1", decision)
+    signal = Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-accounting-restart-v1",
+        decision_time=decision,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    order = Order(
+        order_id=context.order_id(signal_id),
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+    fill = Fill(
+        context.fill_id(signal_id, 0),
+        order.order_id,
+        signal_id,
+        instrument_id,
+        OrderSide.BUY,
+        Decimal("2"),
+        Decimal("100"),
+        Decimal("0.50"),
+        Decimal("0"),
+        "paper-accounting-restart-cost-v1",
+        decision,
+    )
     return signal, order, fill
 
 
