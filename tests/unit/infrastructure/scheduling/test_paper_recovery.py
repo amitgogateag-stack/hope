@@ -1,6 +1,5 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
@@ -9,6 +8,8 @@ from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.scheduling import recovery
 from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDisposition,
+    PaperRecoveryEvidence,
+    _classify_recovery_evidence,
     assess_due_paper_recovery,
 )
 
@@ -70,6 +71,46 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
     assert incomplete_assessment.durable_effect_types == frozenset(
         {PaperEffectType.SIGNAL, PaperEffectType.ORDER}
     )
+    assert incomplete_assessment.evidence is PaperRecoveryEvidence.PARTIAL
+
+
+def test_recovery_evidence_classifies_none_partial_complete_and_contradictory() -> None:
+    assert _classify_recovery_evidence(frozenset()) is PaperRecoveryEvidence.NONE
+    assert _classify_recovery_evidence(
+        frozenset({PaperEffectType.SIGNAL, PaperEffectType.ORDER})
+    ) is PaperRecoveryEvidence.PARTIAL
+    assert _classify_recovery_evidence(
+        frozenset(
+            {
+                PaperEffectType.SIGNAL,
+                PaperEffectType.RISK,
+                PaperEffectType.ORDER,
+                PaperEffectType.FILL,
+                PaperEffectType.PNL,
+            }
+        )
+    ) is PaperRecoveryEvidence.COMPLETE
+    assert _classify_recovery_evidence(
+        frozenset(
+            {
+                PaperEffectType.SIGNAL,
+                PaperEffectType.RISK,
+                PaperEffectType.ORDER,
+                PaperEffectType.REJECTION,
+            }
+        )
+    ) is PaperRecoveryEvidence.COMPLETE
+    assert _classify_recovery_evidence(
+        frozenset(
+            {
+                PaperEffectType.SIGNAL,
+                PaperEffectType.RISK,
+                PaperEffectType.ORDER,
+                PaperEffectType.FILL,
+                PaperEffectType.REJECTION,
+            }
+        )
+    ) is PaperRecoveryEvidence.CONTRADICTORY
 
 
 def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) -> None:
@@ -103,5 +144,9 @@ def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) ->
     )
 
     assert report.incomplete_run_ids_with_effects == frozenset()
+    incomplete_assessment = next(
+        item for item in report.assessments if item.job_run_id == incomplete.job_run_id
+    )
+    assert incomplete_assessment.evidence is PaperRecoveryEvidence.NONE
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
