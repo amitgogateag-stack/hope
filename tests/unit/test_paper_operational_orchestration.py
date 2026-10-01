@@ -15,6 +15,11 @@ from hope.infrastructure.scheduling.paper import (
     build_operational_paper_runs,
     run_due_operational_paper_jobs,
 )
+from hope.infrastructure.scheduling.recovery import (
+    PaperRecoveryAssessment,
+    PaperRecoveryDisposition,
+    PaperRecoveryReport,
+)
 
 
 class _RunningPaperControl:
@@ -66,18 +71,20 @@ def _schedule(binding: OperationalPaperJobBinding, *, offset=timedelta(minutes=5
     )
 
 
+def _fresh_recovery(connection, job_runs, *, current, max_lateness):
+    return PaperRecoveryReport(
+        tuple(
+            PaperRecoveryAssessment(run.job_run_id, PaperRecoveryDisposition.FRESH, None)
+            for run in job_runs
+        )
+    )
+
+
 def test_operational_paper_job_keys_cannot_contain_durable_identity_separator() -> None:
     candidate = _candidate()
-    with pytest.raises(
-        ValueError,
-        match="PAPER_ORCHESTRATION_JOB_KEY_CONTAINS_SEPARATOR",
-    ):
+    with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_JOB_KEY_CONTAINS_SEPARATOR"):
         _binding(candidate, key="open:decision")
-
-    with pytest.raises(
-        ValueError,
-        match="PAPER_SCHEDULE_JOB_KEY_CONTAINS_SEPARATOR",
-    ):
+    with pytest.raises(ValueError, match="PAPER_SCHEDULE_JOB_KEY_CONTAINS_SEPARATOR"):
         OperationalPaperSchedule(
             strategy_version_id=candidate.strategy_version_id,
             market=StrategyMarket.USA,
@@ -90,11 +97,7 @@ def test_operational_paper_registry_resolves_only_explicit_operational_binding()
     candidate = _candidate()
     binding = _binding(candidate)
     registry = build_operational_paper_registry([candidate], [binding])
-
-    run = create_scheduled_job_run(
-        binding.durable_job_key,
-        datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
-    )
+    run = create_scheduled_job_run(binding.durable_job_key, datetime(2026, 9, 23, 14, 0, tzinfo=UTC))
     assert callable(registry.resolve(run))
 
 
@@ -141,11 +144,8 @@ def test_operational_paper_schedule_materializes_only_declared_market_sessions()
         )
     )
     runs = build_operational_paper_runs(
-        [binding],
-        [_schedule(binding)],
-        {StrategyMarket.USA: calendar},
-        start=datetime(2026, 9, 23, tzinfo=UTC),
-        end=datetime(2026, 9, 25, tzinfo=UTC),
+        [binding], [_schedule(binding)], {StrategyMarket.USA: calendar},
+        start=datetime(2026, 9, 23, tzinfo=UTC), end=datetime(2026, 9, 25, tzinfo=UTC),
     )
     assert [run.scheduled_for for run in runs] == [
         datetime(2026, 9, 23, 13, 35, tzinfo=UTC),
@@ -159,11 +159,8 @@ def test_operational_paper_schedule_requires_every_approved_binding() -> None:
     binding = _binding(candidate)
     with pytest.raises(ValueError, match="PAPER_SCHEDULE_APPROVED_BINDING_UNSCHEDULED"):
         build_operational_paper_runs(
-            [binding],
-            [],
-            {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
-            start=datetime(2026, 9, 23, tzinfo=UTC),
-            end=datetime(2026, 9, 24, tzinfo=UTC),
+            [binding], [], {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
+            start=datetime(2026, 9, 23, tzinfo=UTC), end=datetime(2026, 9, 24, tzinfo=UTC),
         )
 
 
@@ -178,11 +175,8 @@ def test_operational_paper_schedule_rejects_unapproved_job() -> None:
     )
     with pytest.raises(ValueError, match="PAPER_SCHEDULE_WITHOUT_APPROVED_BINDING"):
         build_operational_paper_runs(
-            [binding],
-            [rogue],
-            {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
-            start=datetime(2026, 9, 23, tzinfo=UTC),
-            end=datetime(2026, 9, 24, tzinfo=UTC),
+            [binding], [rogue], {StrategyMarket.USA: MarketSessionCalendar(sessions=())},
+            start=datetime(2026, 9, 23, tzinfo=UTC), end=datetime(2026, 9, 24, tzinfo=UTC),
         )
 
 
@@ -194,11 +188,8 @@ def test_operational_paper_schedule_rejects_offset_outside_session() -> None:
     )
     with pytest.raises(ValueError, match="PAPER_SCHEDULE_OFFSET_OUTSIDE_SESSION"):
         build_operational_paper_runs(
-            [binding],
-            [_schedule(binding, offset=timedelta(hours=7))],
-            {StrategyMarket.USA: calendar},
-            start=datetime(2026, 9, 23, tzinfo=UTC),
-            end=datetime(2026, 9, 24, tzinfo=UTC),
+            [binding], [_schedule(binding, offset=timedelta(hours=7))], {StrategyMarket.USA: calendar},
+            start=datetime(2026, 9, 23, tzinfo=UTC), end=datetime(2026, 9, 24, tzinfo=UTC),
         )
 
 
@@ -207,27 +198,15 @@ def test_operational_paper_schedule_requires_authoritative_market_calendar() -> 
     binding = _binding(candidate)
     with pytest.raises(ValueError, match="PAPER_SCHEDULE_MARKET_CALENDAR_REQUIRED"):
         build_operational_paper_runs(
-            [binding],
-            [_schedule(binding)],
-            {},
-            start=datetime(2026, 9, 23, tzinfo=UTC),
-            end=datetime(2026, 9, 24, tzinfo=UTC),
+            [binding], [_schedule(binding)], {},
+            start=datetime(2026, 9, 23, tzinfo=UTC), end=datetime(2026, 9, 24, tzinfo=UTC),
         )
 
 
 def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
-        _RunningPaperControl,
-    )
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
-        lambda engine, job_runs: set(),
-    )
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
-        lambda engine: nullcontext(),
-    )
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository", _RunningPaperControl)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.assess_due_paper_recovery", _fresh_recovery)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock", lambda engine: nullcontext())
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     due_late = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
     due_early = create_scheduled_job_run("paper-a", now - timedelta(minutes=2))
@@ -248,11 +227,7 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
         ]
     )
     results = run_due_operational_paper_jobs(
-        _ControlEngine(),
-        registry,
-        [future, due_late, due_early],
-        now=lambda: now,
-        max_lateness=timedelta(minutes=5),
+        _ControlEngine(), registry, [future, due_late, due_early], now=lambda: now, max_lateness=timedelta(minutes=5)
     )
     assert calls == [due_early, due_late]
     assert [run for run, _ in results] == [due_early, due_late]
@@ -265,49 +240,42 @@ def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) ->
         [__import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-us", lambda runtime: None)]
     )
     with pytest.raises(ValueError, match="PAPER_SCHEDULER_DUPLICATE_JOB_RUN"):
-        run_due_operational_paper_jobs(
-            object(),
-            registry,
-            [run, run],
-            now=lambda: now,
-            max_lateness=timedelta(minutes=5),
-        )
+        run_due_operational_paper_jobs(object(), registry, [run, run], now=lambda: now, max_lateness=timedelta(minutes=5))
 
 
 def test_due_paper_runner_rejects_nonregistry_before_engine_use() -> None:
     with pytest.raises(TypeError, match="PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY"):
         run_due_operational_paper_jobs(
-            object(),
-            object(),
-            [],
-            now=lambda: datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
-            max_lateness=timedelta(minutes=5),
+            object(), object(), [], now=lambda: datetime(2026, 9, 23, 14, 0, tzinfo=UTC), max_lateness=timedelta(minutes=5)
         )
 
 
 def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
-        _RunningPaperControl,
-    )
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper._preflight_due_paper_job_states",
-        lambda engine, job_runs: set(),
-    )
-    monkeypatch.setattr(
-        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
-        lambda engine: nullcontext(),
-    )
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository", _RunningPaperControl)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock", lambda engine: nullcontext())
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     stale = create_scheduled_job_run("paper-a", now - timedelta(minutes=6))
     fresh = create_scheduled_job_run("paper-b", now - timedelta(minutes=1))
     calls = []
+
+    def fake_recovery(connection, job_runs, *, current, max_lateness):
+        return PaperRecoveryReport(
+            tuple(
+                PaperRecoveryAssessment(
+                    run.job_run_id,
+                    PaperRecoveryDisposition.STALE if run.job_run_id == stale.job_run_id else PaperRecoveryDisposition.FRESH,
+                    None,
+                )
+                for run in job_runs
+            )
+        )
 
     def fake_run(engine, job_run, registry, *, now):
         calls.append(job_run)
         from hope.application.paper.runner import PaperCycleOutcome
         return PaperCycleOutcome.EXECUTED
 
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.assess_due_paper_recovery", fake_recovery)
     monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
     registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
         [
@@ -315,40 +283,20 @@ def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) ->
             __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-b", lambda runtime: None),
         ]
     )
-
     with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
         run_due_operational_paper_jobs(
-            _ControlEngine(),
-            registry,
-            [fresh, stale],
-            now=lambda: now,
-            max_lateness=timedelta(minutes=5),
+            _ControlEngine(), registry, [fresh, stale], now=lambda: now, max_lateness=timedelta(minutes=5)
         )
-
     assert calls == []
 
 
 def test_due_paper_runner_requires_explicit_nonnegative_lateness_policy() -> None:
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry([])
-
     with pytest.raises(TypeError, match="PAPER_SCHEDULER_REQUIRES_MAX_LATENESS"):
-        run_due_operational_paper_jobs(
-            object(),
-            registry,
-            [],
-            now=lambda: now,
-            max_lateness=None,
-        )
-
+        run_due_operational_paper_jobs(object(), registry, [], now=lambda: now, max_lateness=None)
     with pytest.raises(ValueError, match="PAPER_SCHEDULER_MAX_LATENESS_MUST_BE_NONNEGATIVE"):
-        run_due_operational_paper_jobs(
-            object(),
-            registry,
-            [],
-            now=lambda: now,
-            max_lateness=timedelta(seconds=-1),
-        )
+        run_due_operational_paper_jobs(object(), registry, [], now=lambda: now, max_lateness=timedelta(seconds=-1))
 
 
 def test_due_paper_runner_preflights_registry_before_any_execution(monkeypatch) -> None:
@@ -364,23 +312,10 @@ def test_due_paper_runner_preflights_registry_before_any_execution(monkeypatch) 
 
     monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
     registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
-        [
-            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition(
-                "paper-a",
-                lambda runtime: None,
-            ),
-        ]
+        [__import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-a", lambda runtime: None)]
     )
-
     with pytest.raises(RuntimeError, match="PAPER_JOB_NOT_REGISTERED"):
-        run_due_operational_paper_jobs(
-            object(),
-            registry,
-            [valid, rogue],
-            now=lambda: now,
-            max_lateness=timedelta(minutes=5),
-        )
-
+        run_due_operational_paper_jobs(object(), registry, [valid, rogue], now=lambda: now, max_lateness=timedelta(minutes=5))
     assert calls == []
 
 
@@ -389,7 +324,6 @@ def test_operational_paper_durable_job_key_binds_strategy_market_and_declared_ke
     second = _candidate()
     first_binding = _binding(first, key="paper-open")
     second_binding = _binding(second, key="paper-open")
-
     assert first_binding.durable_job_key != second_binding.durable_job_key
     assert str(first.strategy_version_id) in first_binding.durable_job_key
     assert first_binding.market.value in first_binding.durable_job_key
@@ -403,16 +337,11 @@ def test_operational_paper_schedule_uses_same_durable_binding_identity_as_regist
     calendar = MarketSessionCalendar(
         sessions=((datetime(2026, 9, 23, 13, 30, tzinfo=UTC), datetime(2026, 9, 23, 20, 0, tzinfo=UTC)),)
     )
-
     registry = build_operational_paper_registry([candidate], [binding])
     runs = build_operational_paper_runs(
-        [binding],
-        [schedule],
-        {StrategyMarket.USA: calendar},
-        start=datetime(2026, 9, 23, 13, 0, tzinfo=UTC),
-        end=datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
+        [binding], [schedule], {StrategyMarket.USA: calendar},
+        start=datetime(2026, 9, 23, 13, 0, tzinfo=UTC), end=datetime(2026, 9, 23, 14, 0, tzinfo=UTC),
     )
-
     assert len(runs) == 1
     assert runs[0].job_key == binding.durable_job_key
     assert callable(registry.resolve(runs[0]))
