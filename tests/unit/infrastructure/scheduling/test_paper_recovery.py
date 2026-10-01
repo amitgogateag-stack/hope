@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
+from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.scheduling import recovery
 from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDisposition,
@@ -31,7 +32,20 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
         def get_record_for_run(self, job_run):
             return records.get(job_run.job_run_id)
 
+    class FakeEffectRepository:
+        def __init__(self, connection):
+            self.connection = connection
+
+        def list_for_job_run(self, job_run_id):
+            if job_run_id == incomplete.job_run_id:
+                return (
+                    SimpleNamespace(effect_type=PaperEffectType.SIGNAL),
+                    SimpleNamespace(effect_type=PaperEffectType.ORDER),
+                )
+            return ()
+
     monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeRepository)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffectRepository)
     report = assess_due_paper_recovery(
         object(),
         [fresh, terminal, incomplete, stale],
@@ -48,7 +62,14 @@ def test_recovery_assessment_classifies_full_restart_matrix(monkeypatch) -> None
     }
     assert report.terminal_run_ids == frozenset({terminal.job_run_id})
     assert report.incomplete_run_ids == frozenset({incomplete.job_run_id})
+    assert report.incomplete_run_ids_with_effects == frozenset({incomplete.job_run_id})
     assert report.stale_run_ids == frozenset({stale.job_run_id})
+    incomplete_assessment = next(
+        item for item in report.assessments if item.job_run_id == incomplete.job_run_id
+    )
+    assert incomplete_assessment.durable_effect_types == frozenset(
+        {PaperEffectType.SIGNAL, PaperEffectType.ORDER}
+    )
 
 
 def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) -> None:
@@ -65,7 +86,15 @@ def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) ->
                 return SimpleNamespace(status=JobRunStatus.CLAIMED)
             return None
 
+    class FakeEffectRepository:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            return ()
+
     monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeRepository)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffectRepository)
     report = assess_due_paper_recovery(
         object(),
         [stale, incomplete],
@@ -73,5 +102,6 @@ def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) ->
         max_lateness=timedelta(minutes=5),
     )
 
+    assert report.incomplete_run_ids_with_effects == frozenset()
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
