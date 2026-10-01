@@ -85,12 +85,7 @@ def _classify_recovery_evidence(
 def _has_unambiguous_recovery_cardinality(
     effect_counts: tuple[tuple[PaperEffectType, int], ...],
 ) -> bool:
-    """Require exactly one durable effect for every observed type before auto-acknowledgement.
-
-    Multiple effects of the same type may be legitimate in a future batch execution model, but
-    the current recovery contract cannot yet prove their cross-entity lineage. Such runs must
-    therefore reconcile explicitly instead of being treated as economically complete.
-    """
+    """Require exactly one durable effect for every observed type before auto-acknowledgement."""
     return all(count == 1 for _, count in effect_counts)
 
 
@@ -101,6 +96,7 @@ class PaperRecoveryAssessment:
     status: JobRunStatus | None
     durable_effect_types: frozenset[PaperEffectType] = frozenset()
     effect_counts: tuple[tuple[PaperEffectType, int], ...] = ()
+    lineage_verified: bool = False
 
     @property
     def has_durable_effects(self) -> bool:
@@ -122,7 +118,7 @@ class PaperRecoveryAssessment:
             return PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL
         if self.disposition is PaperRecoveryDisposition.STALE:
             return PaperRecoveryDecision.REJECT_STALE
-        if self.evidence is PaperRecoveryEvidence.COMPLETE:
+        if self.evidence is PaperRecoveryEvidence.COMPLETE and self.lineage_verified:
             return PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
         return PaperRecoveryDecision.REQUIRE_RECONCILIATION
 
@@ -193,7 +189,13 @@ def assess_due_paper_recovery(
     current: datetime,
     max_lateness: timedelta,
 ) -> PaperRecoveryReport:
-    """Classify all due PAPER work from durable truth before any execution begins."""
+    """Classify all due PAPER work from durable truth before any execution begins.
+
+    Effect presence and cardinality are intentionally insufficient to set lineage_verified.
+    That flag is reserved for a dedicated cross-entity verifier that proves the persisted
+    signal/risk/order/terminal/accounting chain. Until then, interrupted CLAIMED work remains
+    reconciliation-required and cannot be silently acknowledged or replayed.
+    """
     repository = SqlAlchemyJobRunRepository(connection)
     effects = SqlAlchemyPaperEffectRepository(connection)
     assessments: list[PaperRecoveryAssessment] = []
@@ -220,6 +222,7 @@ def assess_due_paper_recovery(
                 status=record.status if record is not None else None,
                 durable_effect_types=durable_effect_types,
                 effect_counts=effect_counts,
+                lineage_verified=False,
             )
         )
     return PaperRecoveryReport(tuple(assessments))
