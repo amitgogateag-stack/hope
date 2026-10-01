@@ -20,6 +20,59 @@ class PaperRecoveryDisposition(str, Enum):
     STALE = "STALE"
 
 
+class PaperRecoveryEvidence(str, Enum):
+    NONE = "NONE"
+    PARTIAL = "PARTIAL"
+    COMPLETE = "COMPLETE"
+    CONTRADICTORY = "CONTRADICTORY"
+
+
+_TERMINAL_EFFECT_TYPES = frozenset(
+    {
+        PaperEffectType.FILL,
+        PaperEffectType.CANCELLATION,
+        PaperEffectType.REJECTION,
+    }
+)
+
+
+def _classify_recovery_evidence(
+    durable_effect_types: frozenset[PaperEffectType],
+) -> PaperRecoveryEvidence:
+    if not durable_effect_types:
+        return PaperRecoveryEvidence.NONE
+
+    terminal_types = durable_effect_types & _TERMINAL_EFFECT_TYPES
+    if len(terminal_types) > 1:
+        return PaperRecoveryEvidence.CONTRADICTORY
+
+    if terminal_types:
+        terminal_type = next(iter(terminal_types))
+        if terminal_type is PaperEffectType.FILL:
+            required = frozenset(
+                {
+                    PaperEffectType.SIGNAL,
+                    PaperEffectType.RISK,
+                    PaperEffectType.ORDER,
+                    PaperEffectType.FILL,
+                    PaperEffectType.PNL,
+                }
+            )
+        else:
+            required = frozenset(
+                {
+                    PaperEffectType.SIGNAL,
+                    PaperEffectType.RISK,
+                    PaperEffectType.ORDER,
+                    terminal_type,
+                }
+            )
+        if required <= durable_effect_types:
+            return PaperRecoveryEvidence.COMPLETE
+
+    return PaperRecoveryEvidence.PARTIAL
+
+
 @dataclass(frozen=True)
 class PaperRecoveryAssessment:
     job_run_id: UUID
@@ -30,6 +83,10 @@ class PaperRecoveryAssessment:
     @property
     def has_durable_effects(self) -> bool:
         return bool(self.durable_effect_types)
+
+    @property
+    def evidence(self) -> PaperRecoveryEvidence:
+        return _classify_recovery_evidence(self.durable_effect_types)
 
 
 @dataclass(frozen=True)
