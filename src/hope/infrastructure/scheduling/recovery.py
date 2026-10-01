@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -81,12 +82,25 @@ def _classify_recovery_evidence(
     return PaperRecoveryEvidence.PARTIAL
 
 
+def _has_unambiguous_recovery_cardinality(
+    effect_counts: tuple[tuple[PaperEffectType, int], ...],
+) -> bool:
+    """Require exactly one durable effect for every observed type before auto-acknowledgement.
+
+    Multiple effects of the same type may be legitimate in a future batch execution model, but
+    the current recovery contract cannot yet prove their cross-entity lineage. Such runs must
+    therefore reconcile explicitly instead of being treated as economically complete.
+    """
+    return all(count == 1 for _, count in effect_counts)
+
+
 @dataclass(frozen=True)
 class PaperRecoveryAssessment:
     job_run_id: UUID
     disposition: PaperRecoveryDisposition
     status: JobRunStatus | None
     durable_effect_types: frozenset[PaperEffectType] = frozenset()
+    effect_counts: tuple[tuple[PaperEffectType, int], ...] = ()
 
     @property
     def has_durable_effects(self) -> bool:
@@ -94,7 +108,11 @@ class PaperRecoveryAssessment:
 
     @property
     def evidence(self) -> PaperRecoveryEvidence:
-        return _classify_recovery_evidence(self.durable_effect_types)
+        evidence = _classify_recovery_evidence(self.durable_effect_types)
+        if evidence is PaperRecoveryEvidence.COMPLETE and self.effect_counts:
+            if not _has_unambiguous_recovery_cardinality(self.effect_counts):
+                return PaperRecoveryEvidence.CONTRADICTORY
+        return evidence
 
     @property
     def decision(self) -> PaperRecoveryDecision:
@@ -162,9 +180,6 @@ class PaperRecoveryReport:
         )
 
     def assert_safe_to_execute(self) -> None:
-        # Complete durable effects are recognized as economically complete, but a CLAIMED
-        # lifecycle row is still not silently mutated here. Scheduler execution remains
-        # fail-closed until a separate reconciliation transition is proven safe and durable.
         if self.incomplete_run_ids:
             raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
         if self.stale_run_ids:
@@ -185,11 +200,13 @@ def assess_due_paper_recovery(
     for job_run in job_runs:
         record = repository.get_record_for_run(job_run)
         durable_effect_types: frozenset[PaperEffectType] = frozenset()
+        effect_counts: tuple[tuple[PaperEffectType, int], ...] = ()
         if record is not None and record.status is JobRunStatus.CLAIMED:
             disposition = PaperRecoveryDisposition.INCOMPLETE
-            durable_effect_types = frozenset(
-                effect.effect_type for effect in effects.list_for_job_run(job_run.job_run_id)
-            )
+            run_effects = effects.list_for_job_run(job_run.job_run_id)
+            counts = Counter(effect.effect_type for effect in run_effects)
+            durable_effect_types = frozenset(counts)
+            effect_counts = tuple(sorted(counts.items(), key=lambda item: item[0].value))
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
         elif current - job_run.scheduled_for > max_lateness:
@@ -202,6 +219,7 @@ def assess_due_paper_recovery(
                 disposition=disposition,
                 status=record.status if record is not None else None,
                 durable_effect_types=durable_effect_types,
+                effect_counts=effect_counts,
             )
         )
     return PaperRecoveryReport(tuple(assessments))
