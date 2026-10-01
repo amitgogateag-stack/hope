@@ -184,6 +184,29 @@ def _operational_paper_scheduler_lock(engine: Engine):
             connection.execute(text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"), {"lock_name": _PAPER_SCHEDULER_LOCK_NAME})
 
 
+def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[ScheduledJobRun]) -> frozenset[UUID]:
+    """Compatibility boundary backed by the centralized durable recovery classifier.
+
+    Legacy callers only ask whether durable runs are terminal or incompletely claimed; lateness is
+    intentionally disabled here because the authoritative scheduler supplies its explicit replay
+    window to assess_due_paper_recovery().
+    """
+    runs = tuple(job_runs)
+    if not runs:
+        return frozenset()
+    current = max(run.scheduled_for for run in runs)
+    with engine.connect() as connection:
+        recovery = assess_due_paper_recovery(
+            connection,
+            runs,
+            current=current,
+            max_lateness=timedelta.max,
+        )
+        if recovery.incomplete_run_ids:
+            raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+        return recovery.terminal_run_ids
+
+
 def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, job_runs: Iterable[ScheduledJobRun], *, now: Callable[[], datetime], max_lateness: timedelta) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute due PAPER work after one centralized durable recovery assessment."""
     if not isinstance(registry, PaperJobRegistry):
