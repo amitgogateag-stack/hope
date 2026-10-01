@@ -11,6 +11,7 @@ from hope.application.jobs import JobRunStatus, ScheduledJobRun
 from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
+from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
 from sqlalchemy import Connection
 
 
@@ -50,11 +51,9 @@ def _classify_recovery_evidence(
 ) -> PaperRecoveryEvidence:
     if not durable_effect_types:
         return PaperRecoveryEvidence.NONE
-
     terminal_types = durable_effect_types & _TERMINAL_EFFECT_TYPES
     if len(terminal_types) > 1:
         return PaperRecoveryEvidence.CONTRADICTORY
-
     if terminal_types:
         terminal_type = next(iter(terminal_types))
         if terminal_type is PaperEffectType.FILL:
@@ -78,14 +77,12 @@ def _classify_recovery_evidence(
             )
         if required <= durable_effect_types:
             return PaperRecoveryEvidence.COMPLETE
-
     return PaperRecoveryEvidence.PARTIAL
 
 
 def _has_unambiguous_recovery_cardinality(
     effect_counts: tuple[tuple[PaperEffectType, int], ...],
 ) -> bool:
-    """Require exactly one durable effect for every observed type before auto-acknowledgement."""
     return all(count == 1 for _, count in effect_counts)
 
 
@@ -129,51 +126,27 @@ class PaperRecoveryReport:
 
     @property
     def terminal_run_ids(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.disposition is PaperRecoveryDisposition.TERMINAL
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.TERMINAL)
 
     @property
     def incomplete_run_ids(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.disposition is PaperRecoveryDisposition.INCOMPLETE
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.INCOMPLETE)
 
     @property
     def incomplete_run_ids_with_effects(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.disposition is PaperRecoveryDisposition.INCOMPLETE and item.has_durable_effects
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.INCOMPLETE and item.has_durable_effects)
 
     @property
     def reconciliation_run_ids(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION)
 
     @property
     def completed_effect_run_ids(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.decision is PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.decision is PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS)
 
     @property
     def stale_run_ids(self) -> frozenset[UUID]:
-        return frozenset(
-            item.job_run_id
-            for item in self.assessments
-            if item.disposition is PaperRecoveryDisposition.STALE
-        )
+        return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.STALE)
 
     def assert_safe_to_execute(self) -> None:
         if self.incomplete_run_ids:
@@ -189,13 +162,7 @@ def assess_due_paper_recovery(
     current: datetime,
     max_lateness: timedelta,
 ) -> PaperRecoveryReport:
-    """Classify all due PAPER work from durable truth before any execution begins.
-
-    Effect presence and cardinality are intentionally insufficient to set lineage_verified.
-    That flag is reserved for a dedicated cross-entity verifier that proves the persisted
-    signal/risk/order/terminal/accounting chain. Until then, interrupted CLAIMED work remains
-    reconciliation-required and cannot be silently acknowledged or replayed.
-    """
+    """Classify due PAPER work and prove filled execution lineage from durable state."""
     repository = SqlAlchemyJobRunRepository(connection)
     effects = SqlAlchemyPaperEffectRepository(connection)
     assessments: list[PaperRecoveryAssessment] = []
@@ -203,12 +170,18 @@ def assess_due_paper_recovery(
         record = repository.get_record_for_run(job_run)
         durable_effect_types: frozenset[PaperEffectType] = frozenset()
         effect_counts: tuple[tuple[PaperEffectType, int], ...] = ()
+        lineage_verified = False
         if record is not None and record.status is JobRunStatus.CLAIMED:
             disposition = PaperRecoveryDisposition.INCOMPLETE
             run_effects = effects.list_for_job_run(job_run.job_run_id)
             counts = Counter(effect.effect_type for effect in run_effects)
             durable_effect_types = frozenset(counts)
             effect_counts = tuple(sorted(counts.items(), key=lambda item: item[0].value))
+            if (
+                _classify_recovery_evidence(durable_effect_types) is PaperRecoveryEvidence.COMPLETE
+                and _has_unambiguous_recovery_cardinality(effect_counts)
+            ):
+                lineage_verified = verify_paper_recovery_lineage(connection, run_effects)
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
         elif current - job_run.scheduled_for > max_lateness:
@@ -222,7 +195,7 @@ def assess_due_paper_recovery(
                 status=record.status if record is not None else None,
                 durable_effect_types=durable_effect_types,
                 effect_counts=effect_counts,
-                lineage_verified=False,
+                lineage_verified=lineage_verified,
             )
         )
     return PaperRecoveryReport(tuple(assessments))
