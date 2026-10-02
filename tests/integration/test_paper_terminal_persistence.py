@@ -13,6 +13,7 @@ from hope.application.paper import (
     PaperCycleContext,
     PaperEffectType,
     PaperOrderWriter,
+    PaperRiskWriter,
     PaperSignalWriter,
     create_paper_effect,
 )
@@ -21,11 +22,13 @@ from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection, Order, OrderSide
 from hope.domain.execution import Fill
 from hope.domain.signal.models import Signal, SignalType
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.repositories.paper_terminals import SqlAlchemyPaperTerminalRepository
 from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
@@ -140,13 +143,14 @@ def test_complete_non_fill_lineage_reconciles_without_replaying_effects(kind):
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
-        assert SqlAlchemyPaperEffectRepository(connection).record(
-            create_paper_effect(
-                run,
-                PaperEffectType.RISK,
-                signal.signal_id,
-                "1" * 64,
-            )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=signal.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=Decimal("2"),
+            ),
         )
         if kind == "CANCELLED":
             outcome = ExecutionCancellation(

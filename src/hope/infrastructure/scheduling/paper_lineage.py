@@ -5,8 +5,10 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, Table, Uuid, select
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.terminals import paper_terminal_payload_hash
 from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection
+from hope.domain.risk.models import RiskAssessment
 
 
 def verify_paper_recovery_lineage(
@@ -94,6 +96,40 @@ def verify_paper_recovery_lineage(
         Column("event_time", DateTime(timezone=True), nullable=False),
         Column("cancelled_quantity", Numeric),
     )
+    risk_assessments = Table(
+        "paper_risk_assessments",
+        metadata,
+        Column("signal_id", Uuid, primary_key=True),
+        Column("decision", String, nullable=False),
+        Column("reason_code", String, nullable=False),
+        Column("approved_quantity", Numeric, nullable=False),
+    )
+
+    risk_row = connection.execute(
+        select(
+            risk_assessments.c.decision,
+            risk_assessments.c.reason_code,
+            risk_assessments.c.approved_quantity,
+        ).where(risk_assessments.c.signal_id == signal_id)
+    ).mappings().one_or_none()
+    if risk_row is None:
+        return False
+    try:
+        risk_assessment = RiskAssessment(
+            signal_id=signal_id,
+            decision=risk_row["decision"],
+            reason_code=risk_row["reason_code"],
+            approved_quantity=risk_row["approved_quantity"],
+        )
+    except (TypeError, ValueError):
+        return False
+    if not risk_assessment.approved:
+        return False
+    if (
+        by_type[PaperEffectType.RISK][0].payload_hash
+        != paper_risk_payload_hash(risk_assessment)
+    ):
+        return False
 
     if terminal_type is not None:
         terminal_effect = by_type[terminal_type][0]
