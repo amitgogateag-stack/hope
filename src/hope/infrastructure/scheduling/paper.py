@@ -18,6 +18,7 @@ from hope.infrastructure.paper_runtime import (
 )
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
+from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
 from hope.infrastructure.scheduling.recovery import assess_due_paper_recovery
 from sqlalchemy import Engine, text
 
@@ -208,7 +209,7 @@ def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[Scheduled
 
 
 def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, job_runs: Iterable[ScheduledJobRun], *, now: Callable[[], datetime], max_lateness: timedelta) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
-    """Execute due PAPER work after one centralized durable recovery assessment."""
+    """Execute due PAPER work after durable restart reconciliation and safety preflight."""
     if not isinstance(registry, PaperJobRegistry):
         raise TypeError("PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY")
     if not isinstance(max_lateness, timedelta):
@@ -230,9 +231,33 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
     for job_run in due:
         registry.resolve(job_run)
     with _operational_paper_scheduler_lock(engine):
-        with engine.connect() as control_connection:
+        with engine.begin() as control_connection:
             SqlAlchemyPaperEnvironmentControlRepository(control_connection).assert_running()
             recovery = assess_due_paper_recovery(control_connection, due, current=current, max_lateness=max_lateness)
+
+            # Reconciliation is permitted only when every incomplete run is independently proven
+            # complete.  Any partial/contradictory lineage or stale work fails the entire batch
+            # before lifecycle history is mutated.
+            unreconciled = recovery.incomplete_run_ids - recovery.completed_effect_run_ids
+            if unreconciled:
+                raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+            if recovery.stale_run_ids:
+                raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
+
+            if recovery.completed_effect_run_ids:
+                due_by_id = {job_run.job_run_id: job_run for job_run in due}
+                for job_run_id in sorted(recovery.completed_effect_run_ids, key=str):
+                    reconcile_completed_paper_run(
+                        control_connection,
+                        due_by_id[job_run_id],
+                        current=current,
+                    )
+                recovery = assess_due_paper_recovery(
+                    control_connection,
+                    due,
+                    current=current,
+                    max_lateness=max_lateness,
+                )
             recovery.assert_safe_to_execute()
         results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
         for job_run in due:
