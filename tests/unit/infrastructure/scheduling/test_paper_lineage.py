@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from uuid import uuid4
+from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
@@ -7,7 +7,7 @@ from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_l
 
 def _effect(job_run_id, effect_type, entity_id):
     return PaperEffect(
-        effect_id=uuid4(),
+        effect_id=uuid5(NAMESPACE_URL, f"hope:paper:effect:{effect_type.value}:{entity_id}"),
         job_run_id=job_run_id,
         effect_type=effect_type,
         entity_id=entity_id,
