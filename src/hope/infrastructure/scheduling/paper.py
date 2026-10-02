@@ -197,12 +197,7 @@ def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[Scheduled
         return frozenset()
     current = max(run.scheduled_for for run in runs)
     with engine.connect() as connection:
-        recovery = assess_due_paper_recovery(
-            connection,
-            runs,
-            current=current,
-            max_lateness=timedelta.max,
-        )
+        recovery = assess_due_paper_recovery(connection, runs, current=current, max_lateness=timedelta.max)
         if recovery.incomplete_run_ids:
             raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
         return recovery.terminal_run_ids
@@ -231,34 +226,34 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
     for job_run in due:
         registry.resolve(job_run)
     with _operational_paper_scheduler_lock(engine):
-        with engine.begin() as control_connection:
+        with engine.connect() as control_connection:
             SqlAlchemyPaperEnvironmentControlRepository(control_connection).assert_running()
             recovery = assess_due_paper_recovery(control_connection, due, current=current, max_lateness=max_lateness)
+        unreconciled = recovery.incomplete_run_ids - recovery.completed_effect_run_ids
+        if unreconciled:
+            raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+        if recovery.stale_run_ids:
+            raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
-            # Reconciliation is permitted only when every incomplete run is independently proven
-            # complete.  Any partial/contradictory lineage or stale work fails the entire batch
-            # before lifecycle history is mutated.
-            unreconciled = recovery.incomplete_run_ids - recovery.completed_effect_run_ids
-            if unreconciled:
-                raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
-            if recovery.stale_run_ids:
-                raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
-
-            if recovery.completed_effect_run_ids:
-                due_by_id = {job_run.job_run_id: job_run for job_run in due}
+        if recovery.completed_effect_run_ids:
+            due_by_id = {job_run.job_run_id: job_run for job_run in due}
+            with engine.begin() as reconciliation_connection:
                 for job_run_id in sorted(recovery.completed_effect_run_ids, key=str):
                     reconcile_completed_paper_run(
-                        control_connection,
+                        reconciliation_connection,
                         due_by_id[job_run_id],
                         current=current,
                     )
                 recovery = assess_due_paper_recovery(
-                    control_connection,
+                    reconciliation_connection,
                     due,
                     current=current,
                     max_lateness=max_lateness,
                 )
+                recovery.assert_safe_to_execute()
+        else:
             recovery.assert_safe_to_execute()
+
         results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
         for job_run in due:
             results.append((job_run, run_paper_once(engine, job_run, registry, now=now)))
