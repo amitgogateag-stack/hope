@@ -24,7 +24,9 @@ def reconcile_completed_paper_run(
     """Terminalize one proven-complete interrupted PAPER run without replaying effects.
 
     This operation only updates the durable job lifecycle. It never invokes signal,
-    risk, order, fill, position, accounting, or P&L writers.
+    risk, order, fill, position, accounting, or P&L writers. A concurrent reconciler
+    that has already terminalized the same durable run as SUCCEEDED is treated as an
+    idempotent success regardless of its completion timestamp.
     """
     report = assess_due_paper_recovery(
         connection,
@@ -47,6 +49,8 @@ def reconcile_completed_paper_run(
     durable = repository.get_record_for_run(job_run)
     if durable is None or durable.status is not JobRunStatus.SUCCEEDED:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_NOT_DURABLE")
-    if durable.completed_at != completion.completed_at or durable.failure_code is not None:
+    if durable.failure_code is not None:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
+    if transitioned and durable.completed_at != completion.completed_at:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
     return transitioned
