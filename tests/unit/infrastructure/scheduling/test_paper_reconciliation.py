@@ -1,6 +1,5 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from uuid import uuid4
 
 import pytest
 
@@ -47,8 +46,10 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     assert reconcile_completed_paper_run(object(), job_run, current=current) is True
-    assert _FakeRepository.completion.job_run_id == job_run.job_run_id
+    assert _FakeRepository.completion.run == job_run
     assert _FakeRepository.completion.status is JobRunStatus.SUCCEEDED
+    assert _FakeRepository.completion.completed_at == current
+    assert _FakeRepository.completion.failure_code is None
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
