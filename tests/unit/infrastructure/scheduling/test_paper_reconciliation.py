@@ -11,11 +11,15 @@ from hope.infrastructure.scheduling.recovery import PaperRecoveryDecision
 
 class _FakeRepository:
     record = None
+    lock_result = True
     transition_result = True
     completion = None
 
     def __init__(self, connection):
         self.connection = connection
+
+    def lock_claimed_for_reconciliation(self, job_run):
+        return type(self).lock_result
 
     def complete(self, completion):
         type(self).completion = completion
@@ -32,6 +36,7 @@ def _report(decision):
 def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-reconcile", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    _FakeRepository.lock_result = True
     _FakeRepository.transition_result = True
     _FakeRepository.record = SimpleNamespace(
         status=JobRunStatus.SUCCEEDED,
@@ -55,6 +60,7 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-unproven", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    _FakeRepository.lock_result = True
     _FakeRepository.completion = None
     monkeypatch.setattr(
         paper_reconciliation,
@@ -68,40 +74,30 @@ def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypat
     assert _FakeRepository.completion is None
 
 
-def test_reconciliation_is_idempotent_when_race_already_terminalized_same_completion(monkeypatch) -> None:
+def test_reconciliation_is_idempotent_when_race_already_terminalized_success(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-race", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
-    _FakeRepository.transition_result = False
+    _FakeRepository.lock_result = False
     _FakeRepository.record = SimpleNamespace(
         status=JobRunStatus.SUCCEEDED,
         completed_at=current,
         failure_code=None,
-    )
-    monkeypatch.setattr(
-        paper_reconciliation,
-        "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     assert reconcile_completed_paper_run(object(), job_run, current=current) is False
 
 
-def test_reconciliation_fails_closed_when_terminal_reread_disagrees(monkeypatch) -> None:
+def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-mismatch", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
-    _FakeRepository.transition_result = False
+    _FakeRepository.lock_result = False
     _FakeRepository.record = SimpleNamespace(
         status=JobRunStatus.FAILED,
         completed_at=current,
         failure_code="OTHER_TERMINAL",
     )
-    monkeypatch.setattr(
-        paper_reconciliation,
-        "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
-    )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
-    with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_TERMINAL_STATE_NOT_DURABLE"):
+    with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_NOT_CLAIMED"):
         reconcile_completed_paper_run(object(), job_run, current=current)
