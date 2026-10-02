@@ -23,11 +23,19 @@ def reconcile_completed_paper_run(
 ) -> bool:
     """Terminalize one proven-complete interrupted PAPER run without replaying effects.
 
-    This operation only updates the durable job lifecycle. It never invokes signal,
+    The durable job row is locked before recovery evidence is assessed. PAPER effect
+    insertion takes the same row lock at the database boundary, so no new effect can
+    appear between proof and terminalization. This operation never invokes signal,
     risk, order, fill, position, accounting, or P&L writers. A concurrent reconciler
-    that has already terminalized the same durable run as SUCCEEDED is treated as an
-    idempotent success regardless of its completion timestamp.
+    that already terminalized the run as SUCCEEDED remains an idempotent success.
     """
+    repository = SqlAlchemyJobRunRepository(connection)
+    if not repository.lock_claimed_for_reconciliation(job_run):
+        durable = repository.get_record_for_run(job_run)
+        if durable is not None and durable.status is JobRunStatus.SUCCEEDED and durable.failure_code is None:
+            return False
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_CLAIMED")
+
     report = assess_due_paper_recovery(
         connection,
         (job_run,),
@@ -38,7 +46,6 @@ def reconcile_completed_paper_run(
     if assessment.decision is not PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_PROVEN")
 
-    repository = SqlAlchemyJobRunRepository(connection)
     completion = create_job_run_completion(
         job_run,
         JobRunStatus.SUCCEEDED,
