@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import (
     PaperCycleContext,
     PaperEffectType,
@@ -28,6 +28,7 @@ from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepo
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.repositories.paper_terminals import SqlAlchemyPaperTerminalRepository
+from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
 
 UTC = timezone.utc
 INPUTS_HASH = "f" * 64
@@ -119,6 +120,74 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
             {"id": order.order_id},
         ).scalar_one()
         assert effect_type == kind.replace("CANCELLED", "CANCELLATION").replace("REJECTED", "REJECTION")
+    engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("kind", ["CANCELLED", "REJECTED"])
+def test_complete_non_fill_lineage_reconciles_without_replaying_effects(kind):
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        f"paper-terminal-reconcile-{kind.lower()}",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        assert SqlAlchemyPaperEffectRepository(connection).record(
+            create_paper_effect(
+                run,
+                PaperEffectType.RISK,
+                signal.signal_id,
+                "1" * 64,
+            )
+        )
+        if kind == "CANCELLED":
+            outcome = ExecutionCancellation(
+                order.order_id,
+                signal.signal_id,
+                instrument_id,
+                Environment.PAPER,
+                "TEST_CANCEL",
+                datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+                Decimal("2"),
+            )
+        else:
+            outcome = ExecutionRejection(
+                order.order_id,
+                signal.signal_id,
+                instrument_id,
+                Environment.PAPER,
+                "TEST_REJECT",
+                datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+            )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        ).record(context, outcome)
+        effect_count = connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": run.job_run_id},
+        ).scalar_one()
+
+        assert reconcile_completed_paper_run(
+            connection,
+            run,
+            current=datetime.now(tz=UTC),
+        ) is True
+        record = SqlAlchemyJobRunRepository(connection).get_record(run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": run.job_run_id},
+        ).scalar_one() == effect_count
+
     engine.dispose()
 
 
