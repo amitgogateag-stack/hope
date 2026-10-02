@@ -52,6 +52,24 @@ class SqlAlchemyJobRunRepository:
             raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
         return False
 
+    def lock_claimed_for_reconciliation(self, job_run: ScheduledJobRun) -> bool:
+        """Lock a claimed run so PAPER effect writers cannot race reconciliation proof."""
+        row = self._connection.execute(
+            select(
+                self._job_runs.c.job_run_id,
+                self._job_runs.c.job_key,
+                self._job_runs.c.scheduled_for,
+                self._job_runs.c.status,
+            )
+            .where(self._job_runs.c.job_run_id == job_run.job_run_id)
+            .with_for_update()
+        ).mappings().one_or_none()
+        if row is None:
+            return False
+        if row["job_key"] != job_run.job_key or row["scheduled_for"] != job_run.scheduled_for:
+            raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+        return row["status"] == JobRunStatus.CLAIMED.value
+
     def complete(self, completion: JobRunRecord) -> bool:
         """Apply one terminal transition; return False when the run is already terminal or absent."""
         if completion.status is JobRunStatus.CLAIMED:
