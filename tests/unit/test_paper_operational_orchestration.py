@@ -4,8 +4,10 @@ from uuid import uuid4
 
 import pytest
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.market_data.calendar import MarketSessionCalendar
+from hope.application.paper.effects import PaperEffectType
+from hope.application.paper.runner import PaperCycleOutcome
 from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
 from hope.infrastructure.scheduling.paper import (
@@ -32,6 +34,9 @@ class _RunningPaperControl:
 
 class _ControlEngine:
     def connect(self):
+        return nullcontext(object())
+
+    def begin(self):
         return nullcontext(object())
 
 
@@ -231,6 +236,87 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
     )
     assert calls == [due_early, due_late]
     assert [run for run, _ in results] == [due_early, due_late]
+
+
+def test_due_paper_runner_never_reenters_runtime_after_no_replay_reconciliation(monkeypatch) -> None:
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository", _RunningPaperControl)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock", lambda engine: nullcontext())
+    current = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    interrupted = create_scheduled_job_run("paper-a", current - timedelta(minutes=2))
+    fresh = create_scheduled_job_run("paper-b", current - timedelta(minutes=1))
+    complete_types = frozenset(
+        {
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.REJECTION,
+        }
+    )
+    reports = iter(
+        (
+            PaperRecoveryReport(
+                (
+                    PaperRecoveryAssessment(
+                        interrupted.job_run_id,
+                        PaperRecoveryDisposition.INCOMPLETE,
+                        JobRunStatus.CLAIMED,
+                        complete_types,
+                        tuple((effect_type, 1) for effect_type in sorted(complete_types, key=lambda item: item.value)),
+                        True,
+                    ),
+                    PaperRecoveryAssessment(fresh.job_run_id, PaperRecoveryDisposition.FRESH, None),
+                )
+            ),
+            PaperRecoveryReport(
+                (
+                    PaperRecoveryAssessment(
+                        interrupted.job_run_id,
+                        PaperRecoveryDisposition.TERMINAL,
+                        JobRunStatus.SUCCEEDED,
+                    ),
+                    PaperRecoveryAssessment(fresh.job_run_id, PaperRecoveryDisposition.FRESH, None),
+                )
+            ),
+        )
+    )
+    reconciled = []
+    executed = []
+
+    def fake_recovery(connection, job_runs, *, current, max_lateness):
+        return next(reports)
+
+    def fake_reconcile(connection, job_run, *, current):
+        reconciled.append(job_run)
+        return True
+
+    def fake_run(engine, job_run, registry, *, now):
+        executed.append(job_run)
+        return PaperCycleOutcome.EXECUTED
+
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.assess_due_paper_recovery", fake_recovery)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.reconcile_completed_paper_run", fake_reconcile)
+    monkeypatch.setattr("hope.infrastructure.scheduling.paper.run_paper_once", fake_run)
+    registry = __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]).PaperJobRegistry(
+        [
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-a", lambda runtime: None),
+            __import__("hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]).PaperJobDefinition("paper-b", lambda runtime: None),
+        ]
+    )
+
+    results = run_due_operational_paper_jobs(
+        _ControlEngine(),
+        registry,
+        [fresh, interrupted],
+        now=lambda: current,
+        max_lateness=timedelta(minutes=5),
+    )
+
+    assert reconciled == [interrupted]
+    assert executed == [fresh]
+    assert results == (
+        (interrupted, PaperCycleOutcome.SKIPPED_TERMINAL),
+        (fresh, PaperCycleOutcome.EXECUTED),
+    )
 
 
 def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) -> None:

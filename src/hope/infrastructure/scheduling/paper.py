@@ -256,5 +256,8 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
 
         results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
         for job_run in due:
-            results.append((job_run, run_paper_once(engine, job_run, registry, now=now)))
+            if job_run.job_run_id in recovery.terminal_run_ids:
+                results.append((job_run, PaperCycleOutcome.SKIPPED_TERMINAL))
+            else:
+                results.append((job_run, run_paper_once(engine, job_run, registry, now=now)))
         return tuple(results)
