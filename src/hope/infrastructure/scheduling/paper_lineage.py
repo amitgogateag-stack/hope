@@ -8,6 +8,10 @@ from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
+from hope.application.paper.portfolio_pnl import (
+    PaperPortfolioPnLEvent,
+    paper_portfolio_pnl_payload_hash,
+)
 from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.signals import paper_signal_payload_hash
 from hope.application.paper.terminals import paper_terminal_payload_hash
@@ -108,6 +112,17 @@ def verify_paper_recovery_lineage(
         Column("pnl_event_id", Uuid, primary_key=True),
         Column("position_id", Uuid, nullable=False),
         Column("amount", Numeric, nullable=False),
+        Column("event_time", DateTime(timezone=True), nullable=False),
+    )
+    portfolio_pnl_events = Table(
+        "paper_portfolio_pnl_events",
+        metadata,
+        Column("pnl_event_id", Uuid, primary_key=True),
+        Column("portfolio_id", Uuid, nullable=False),
+        Column("fill_id", Uuid, nullable=False),
+        Column("instrument_id", Uuid, nullable=False),
+        Column("realized_pnl_delta", Numeric, nullable=False),
+        Column("commission_delta", Numeric, nullable=False),
         Column("event_time", DateTime(timezone=True), nullable=False),
     )
     positions = Table(
@@ -315,27 +330,57 @@ def verify_paper_recovery_lineage(
             pnl_events.c.event_time,
         ).where(pnl_events.c.pnl_event_id == pnl_event_id)
     ).mappings().one_or_none()
-    if pnl is None:
+    if pnl is not None:
+        try:
+            durable_pnl = PaperPnLEvent(
+                pnl_event_id=pnl_event_id,
+                position_id=pnl["position_id"],
+                amount=pnl["amount"],
+                event_time=pnl["event_time"],
+            )
+            expected_pnl_hash = paper_pnl_payload_hash(durable_pnl)
+        except (TypeError, ValueError):
+            return False
+        if by_type[PaperEffectType.PNL][0].payload_hash != expected_pnl_hash:
+            return False
+
+        position = connection.execute(
+            select(positions.c.opened_from_signal_id).where(
+                positions.c.position_id == pnl["position_id"]
+            )
+        ).mappings().one_or_none()
+        return position is not None and position["opened_from_signal_id"] == signal_id
+
+    portfolio_pnl = connection.execute(
+        select(
+            portfolio_pnl_events.c.portfolio_id,
+            portfolio_pnl_events.c.fill_id,
+            portfolio_pnl_events.c.instrument_id,
+            portfolio_pnl_events.c.realized_pnl_delta,
+            portfolio_pnl_events.c.commission_delta,
+            portfolio_pnl_events.c.event_time,
+        ).where(portfolio_pnl_events.c.pnl_event_id == pnl_event_id)
+    ).mappings().one_or_none()
+    if portfolio_pnl is None:
         return False
     try:
-        durable_pnl = PaperPnLEvent(
+        durable_portfolio_pnl = PaperPortfolioPnLEvent(
             pnl_event_id=pnl_event_id,
-            position_id=pnl["position_id"],
-            amount=pnl["amount"],
-            event_time=pnl["event_time"],
+            portfolio_id=portfolio_pnl["portfolio_id"],
+            fill_id=portfolio_pnl["fill_id"],
+            instrument_id=portfolio_pnl["instrument_id"],
+            realized_pnl_delta=portfolio_pnl["realized_pnl_delta"],
+            commission_delta=portfolio_pnl["commission_delta"],
+            event_time=portfolio_pnl["event_time"],
         )
-        expected_pnl_hash = paper_pnl_payload_hash(durable_pnl)
     except (TypeError, ValueError):
         return False
-    if by_type[PaperEffectType.PNL][0].payload_hash != expected_pnl_hash:
+    if (
+        durable_portfolio_pnl.fill_id != durable_fill.fill_id
+        or durable_portfolio_pnl.instrument_id != durable_fill.instrument_id
+        or durable_portfolio_pnl.event_time != durable_fill.fill_time
+    ):
         return False
-
-    position = connection.execute(
-        select(positions.c.opened_from_signal_id).where(
-            positions.c.position_id == pnl["position_id"]
-        )
-    ).mappings().one_or_none()
-    if position is None or position["opened_from_signal_id"] != signal_id:
-        return False
-
-    return True
+    return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(
+        durable_portfolio_pnl
+    )
