@@ -187,7 +187,11 @@ def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
             _order_row(order),
             _fill_row(fill),
             _pnl_row(pnl_event),
-            {"opened_from_signal_id": signal.signal_id},
+            {
+                "instrument_id": signal.instrument_id,
+                "opened_from_signal_id": signal.signal_id,
+                "opened_at": signal.decision_time,
+            },
         )
     )
 
@@ -521,7 +525,51 @@ def test_verifier_rejects_pnl_position_from_different_signal() -> None:
             _order_row(order),
             _fill_row(fill),
             _pnl_row(pnl_event),
-            {"opened_from_signal_id": uuid4()},
+            {
+                "instrument_id": signal.instrument_id,
+                "opened_from_signal_id": uuid4(),
+                "opened_at": signal.decision_time,
+            },
+        )
+    )
+
+    assert verify_paper_recovery_lineage(connection, effects) is False
+
+
+def test_verifier_rejects_pnl_position_for_different_instrument() -> None:
+    effects, signal, order, risk, fill, pnl_event = _filled_fixture()
+    connection = _LineageConnection(
+        (
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            _pnl_row(pnl_event),
+            {
+                "instrument_id": uuid4(),
+                "opened_from_signal_id": signal.signal_id,
+                "opened_at": signal.decision_time,
+            },
+        )
+    )
+
+    assert verify_paper_recovery_lineage(connection, effects) is False
+
+
+def test_verifier_rejects_pnl_position_opened_after_fill() -> None:
+    effects, signal, order, risk, fill, pnl_event = _filled_fixture()
+    connection = _LineageConnection(
+        (
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            _pnl_row(pnl_event),
+            {
+                "instrument_id": signal.instrument_id,
+                "opened_from_signal_id": signal.signal_id,
+                "opened_at": fill.fill_time + timedelta(seconds=1),
+            },
         )
     )
 

@@ -129,7 +129,9 @@ def verify_paper_recovery_lineage(
         "positions",
         metadata,
         Column("position_id", Uuid, primary_key=True),
+        Column("instrument_id", Uuid, nullable=False),
         Column("opened_from_signal_id", Uuid, nullable=False),
+        Column("opened_at", DateTime(timezone=True), nullable=False),
     )
     terminal_events = Table(
         "paper_order_terminal_events",
@@ -358,11 +360,20 @@ def verify_paper_recovery_lineage(
             return False
 
         position = connection.execute(
-            select(positions.c.opened_from_signal_id).where(
+            select(
+                positions.c.instrument_id,
+                positions.c.opened_from_signal_id,
+                positions.c.opened_at,
+            ).where(
                 positions.c.position_id == pnl["position_id"]
             )
         ).mappings().one_or_none()
-        return position is not None and position["opened_from_signal_id"] == signal_id
+        return (
+            position is not None
+            and position["opened_from_signal_id"] == signal_id
+            and position["instrument_id"] == durable_fill.instrument_id
+            and position["opened_at"] <= durable_fill.fill_time
+        )
 
     portfolio_pnl = connection.execute(
         select(
