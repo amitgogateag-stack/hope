@@ -31,6 +31,9 @@ from hope.domain.execution.models import Environment, ExecutionCancellation, Exe
 from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
+from hope.infrastructure.repositories.paper_portfolio import (
+    SqlAlchemyPaperPortfolioRepository,
+)
 
 
 def verify_paper_recovery_lineage(
@@ -471,6 +474,15 @@ def verify_paper_recovery_lineage(
         or application["version"] != application["application_count"]
     ):
         return False
-    return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(
-        durable_portfolio_pnl
-    )
+    if (
+        by_type[PaperEffectType.PNL][0].payload_hash
+        != paper_portfolio_pnl_payload_hash(durable_portfolio_pnl)
+    ):
+        return False
+    try:
+        verified_ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
+            durable_portfolio_pnl.portfolio_id
+        )
+    except (RuntimeError, ValueError):
+        return False
+    return verified_ledger is not None
