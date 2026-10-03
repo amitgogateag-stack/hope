@@ -222,6 +222,7 @@ def verify_paper_recovery_lineage(
         or order_row["instrument_id"] != signal.instrument_id
         or order_row["environment"] != Environment.PAPER.value
         or order_row["signal_type"] != signal.signal_type.value
+        or order_row["quantity"] != risk_assessment.approved_quantity
     ):
         return False
     try:

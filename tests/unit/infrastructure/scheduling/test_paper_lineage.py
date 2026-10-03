@@ -317,6 +317,31 @@ def test_verifier_rejects_order_signal_type_mismatch() -> None:
     ) is False
 
 
+def test_verifier_rejects_order_quantity_above_durable_risk_approval() -> None:
+    effects, signal, order, _, _, _ = _filled_fixture()
+    risk = RiskAssessment(
+        signal_id=signal.signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=order.quantity - Decimal("1"),
+    )
+    effects = effects[:1] + (
+        _effect(
+            effects[1].job_run_id,
+            PaperEffectType.RISK,
+            signal.signal_id,
+            paper_risk_payload_hash(risk),
+        ),
+    ) + effects[2:]
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(
+            (_signal_row(signal), _risk_row(risk), _order_row(order))
+        ),
+        effects,
+    ) is False
+
+
 def test_verifier_rejects_fill_linked_to_different_order() -> None:
     effects, signal, order, risk, fill, _ = _filled_fixture()
     mismatched_fill = _fill_row(fill)
