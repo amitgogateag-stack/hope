@@ -9,6 +9,9 @@ from hope.application.jobs import (
 )
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
+from hope.infrastructure.repositories.paper_reconciliation_audit import (
+    SqlAlchemyPaperReconciliationAuditRepository,
+)
 from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDecision,
     assess_due_paper_recovery,
@@ -72,4 +75,9 @@ def reconcile_completed_paper_run(
     effects_after = effects_repository.list_for_job_run(job_run.job_run_id)
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
+    if not SqlAlchemyPaperReconciliationAuditRepository(connection).record(
+        completion,
+        effects_after,
+    ):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED")
     return True

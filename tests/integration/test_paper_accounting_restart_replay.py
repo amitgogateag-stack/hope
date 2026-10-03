@@ -162,6 +162,26 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay() 
             text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).one() == (Decimal("799.50"), 1)
+        audit = connection.execute(
+            text(
+                "SELECT event_type, entity_type, entity_id, payload "
+                "FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' "
+                "AND entity_id=:id"
+            ),
+            {"id": str(run.job_run_id)},
+        ).one()
+        assert audit.event_type == "PAPER_RUN_RECONCILED"
+        assert audit.entity_type == "JOB_RUN"
+        assert audit.entity_id == str(run.job_run_id)
+        assert audit.payload["decision"] == "ACKNOWLEDGE_COMPLETE_EFFECTS"
+        assert audit.payload["schema_version"] == 1
+        assert {effect["effect_type"] for effect in audit.payload["effects"]} == {
+            "SIGNAL",
+            "RISK",
+            "ORDER",
+            "FILL",
+            "PNL",
+        }
 
     engine.dispose()
 

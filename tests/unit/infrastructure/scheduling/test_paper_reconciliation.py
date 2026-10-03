@@ -43,6 +43,18 @@ class _FakeEffectRepository:
         return type(self).snapshots[index]
 
 
+class _FakeAuditRepository:
+    result = True
+    calls = []
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def record(self, completion, effects):
+        type(self).calls.append((completion, effects))
+        return type(self).result
+
+
 @pytest.fixture(autouse=True)
 def _reset_effect_repository(monkeypatch):
     _FakeEffectRepository.snapshots = ((), ())
@@ -51,6 +63,13 @@ def _reset_effect_repository(monkeypatch):
         paper_reconciliation,
         "SqlAlchemyPaperEffectRepository",
         _FakeEffectRepository,
+    )
+    _FakeAuditRepository.result = True
+    _FakeAuditRepository.calls = []
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyPaperReconciliationAuditRepository",
+        _FakeAuditRepository,
     )
 
 
@@ -86,6 +105,7 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     assert _FakeRepository.completion.completed_at == current
     assert _FakeRepository.completion.failure_code is None
     assert _FakeEffectRepository.calls == 2
+    assert _FakeAuditRepository.calls == [(_FakeRepository.completion, ())]
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
@@ -228,4 +248,36 @@ def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminaliza
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED"):
+        reconcile_completed_paper_run(object(), job_run, current=current)
+    assert _FakeAuditRepository.calls == []
+
+
+def test_reconciliation_fails_closed_if_audit_receipt_is_not_new(monkeypatch) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-audit-conflict",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeAuditRepository.result = False
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED",
+    ):
         reconcile_completed_paper_run(object(), job_run, current=current)

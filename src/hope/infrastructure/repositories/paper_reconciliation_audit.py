@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from uuid import NAMESPACE_URL, UUID, uuid5
+
+from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
+from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
+
+from hope.application.jobs import JobRunRecord, JobRunStatus
+from hope.application.paper.effects import PaperEffect
+
+
+class SqlAlchemyPaperReconciliationAuditRepository:
+    """Append an immutable receipt for one no-replay PAPER reconciliation."""
+
+    _EVENT_TYPE = "PAPER_RUN_RECONCILED"
+    _ENTITY_TYPE = "JOB_RUN"
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+        metadata = MetaData()
+        self._audit_events = Table(
+            "audit_events",
+            metadata,
+            Column("audit_event_id", Uuid, primary_key=True),
+            Column("event_type", String, nullable=False),
+            Column("entity_type", String, nullable=False),
+            Column("entity_id", String, nullable=False),
+            Column("payload", JSONB, nullable=False),
+            Column("created_at", DateTime(timezone=True), nullable=False),
+        )
+
+    @staticmethod
+    def _event_id(job_run_id: UUID) -> UUID:
+        return uuid5(NAMESPACE_URL, f"hope:paper:reconciliation:{job_run_id}")
+
+    def record(
+        self,
+        completion: JobRunRecord,
+        effects: tuple[PaperEffect, ...],
+    ) -> bool:
+        if completion.status is not JobRunStatus.SUCCEEDED:
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_SUCCESS")
+        if completion.completed_at is None:
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_COMPLETION_TIME")
+        if any(effect.job_run_id != completion.run.job_run_id for effect in effects):
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_RUN_MISMATCH")
+
+        event_id = self._event_id(completion.run.job_run_id)
+        entity_id = str(completion.run.job_run_id)
+        payload = {
+            "schema_version": 1,
+            "decision": "ACKNOWLEDGE_COMPLETE_EFFECTS",
+            "job_key": completion.run.job_key,
+            "scheduled_for": completion.run.scheduled_for.isoformat(),
+            "completed_at": completion.completed_at.isoformat(),
+            "effects": [
+                {
+                    "effect_id": str(effect.effect_id),
+                    "effect_type": effect.effect_type.value,
+                    "entity_id": str(effect.entity_id),
+                    "payload_hash": effect.payload_hash,
+                }
+                for effect in effects
+            ],
+        }
+        statement = (
+            pg_insert(self._audit_events)
+            .values(
+                audit_event_id=event_id,
+                event_type=self._EVENT_TYPE,
+                entity_type=self._ENTITY_TYPE,
+                entity_id=entity_id,
+                payload=payload,
+            )
+            .on_conflict_do_nothing(index_elements=["audit_event_id"])
+            .returning(self._audit_events.c.audit_event_id)
+        )
+        inserted_id = self._connection.execute(statement).scalar_one_or_none()
+        if inserted_id is not None:
+            return True
+
+        existing = self._connection.execute(
+            select(
+                self._audit_events.c.event_type,
+                self._audit_events.c.entity_type,
+                self._audit_events.c.entity_id,
+                self._audit_events.c.payload,
+            ).where(self._audit_events.c.audit_event_id == event_id)
+        ).mappings().one()
+        if dict(existing) != {
+            "event_type": self._EVENT_TYPE,
+            "entity_type": self._ENTITY_TYPE,
+            "entity_id": entity_id,
+            "payload": payload,
+        }:
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT")
+        return False
