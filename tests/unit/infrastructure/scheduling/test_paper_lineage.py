@@ -280,6 +280,47 @@ def test_verifier_rejects_portfolio_pnl_linked_to_different_fill() -> None:
     assert verify_paper_recovery_lineage(connection, effects) is False
 
 
+def test_verifier_rejects_portfolio_pnl_commission_mismatch() -> None:
+    effects, signal, order, risk, fill, _ = _filled_fixture()
+    portfolio_id = uuid4()
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill.fill_id,
+        instrument_id=fill.instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=fill.commission + Decimal("0.01"),
+        event_time=fill.fill_time,
+    )
+    effects = effects[:-1] + (
+        _effect(
+            effects[-1].job_run_id,
+            PaperEffectType.PNL,
+            pnl_event.pnl_event_id,
+            paper_portfolio_pnl_payload_hash(pnl_event),
+        ),
+    )
+    connection = _LineageConnection(
+        (
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            None,
+            {
+                "portfolio_id": pnl_event.portfolio_id,
+                "fill_id": pnl_event.fill_id,
+                "instrument_id": pnl_event.instrument_id,
+                "realized_pnl_delta": pnl_event.realized_pnl_delta,
+                "commission_delta": pnl_event.commission_delta,
+                "event_time": pnl_event.event_time,
+            },
+        )
+    )
+
+    assert verify_paper_recovery_lineage(connection, effects) is False
+
+
 def test_verifier_rejects_missing_canonical_signal_recovery_material() -> None:
     effects, signal, _, _, _, _ = _filled_fixture()
     row = _signal_row(signal)

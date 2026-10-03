@@ -403,6 +403,7 @@ def verify_paper_recovery_lineage(
         durable_portfolio_pnl.fill_id != durable_fill.fill_id
         or durable_portfolio_pnl.instrument_id != durable_fill.instrument_id
         or durable_portfolio_pnl.event_time != durable_fill.fill_time
+        or durable_portfolio_pnl.commission_delta != durable_fill.commission
     ):
         return False
     return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(
