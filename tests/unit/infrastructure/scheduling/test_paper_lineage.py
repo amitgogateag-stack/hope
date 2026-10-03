@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
@@ -382,6 +382,43 @@ def test_verifier_rejects_fill_payload_mismatch() -> None:
     ) is False
 
 
+def test_verifier_rejects_fill_that_predates_signal_decision() -> None:
+    effects, signal, order, risk, fill, _ = _filled_fixture()
+    premature_fill = Fill(
+        fill_id=fill.fill_id,
+        order_id=fill.order_id,
+        signal_id=fill.signal_id,
+        instrument_id=fill.instrument_id,
+        side=fill.side,
+        quantity=fill.quantity,
+        price=fill.price,
+        commission=fill.commission,
+        slippage=fill.slippage,
+        cost_model_version=fill.cost_model_version,
+        fill_time=signal.decision_time - timedelta(minutes=1),
+    )
+    effects = effects[:3] + (
+        _effect(
+            effects[3].job_run_id,
+            PaperEffectType.FILL,
+            premature_fill.fill_id,
+            paper_fill_payload_hash(premature_fill),
+        ),
+    ) + effects[4:]
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(
+            (
+                _signal_row(signal),
+                _risk_row(risk),
+                _order_row(order),
+                _fill_row(premature_fill),
+            )
+        ),
+        effects,
+    ) is False
+
+
 def test_verifier_rejects_partial_fill_as_complete_execution() -> None:
     effects, signal, order, risk, fill, _ = _filled_fixture()
     partial_fill = Fill(
@@ -545,6 +582,33 @@ def test_verifier_rejects_terminal_payload_mismatch() -> None:
     )
     assert verify_paper_recovery_lineage(
         _LineageConnection(_terminal_rows(signal, order, outcome, risk)), corrupted
+    ) is False
+
+
+def test_verifier_rejects_terminal_event_that_predates_signal_decision() -> None:
+    effects, signal, order, outcome, risk = _non_fill_fixture(
+        PaperEffectType.REJECTION
+    )
+    premature = ExecutionRejection(
+        outcome.order_id,
+        outcome.signal_id,
+        outcome.instrument_id,
+        outcome.environment,
+        outcome.reason_code,
+        signal.decision_time - timedelta(minutes=1),
+    )
+    effects = effects[:-1] + (
+        _effect(
+            effects[-1].job_run_id,
+            PaperEffectType.REJECTION,
+            premature.order_id,
+            paper_terminal_payload_hash(premature),
+        ),
+    )
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(_terminal_rows(signal, order, premature, risk)),
+        effects,
     ) is False
 
 

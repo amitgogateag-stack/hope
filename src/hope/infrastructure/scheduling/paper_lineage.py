@@ -256,7 +256,7 @@ def verify_paper_recovery_lineage(
                 terminal_events.c.cancelled_quantity,
             ).where(terminal_events.c.order_id == order_id)
         ).mappings().one_or_none()
-        if terminal is None:
+        if terminal is None or terminal["event_time"] < signal.decision_time:
             return False
         try:
             if terminal_type is PaperEffectType.REJECTION:
@@ -306,7 +306,11 @@ def verify_paper_recovery_lineage(
             fills.c.cost_model_version,
         ).where(fills.c.fill_id == fill_id)
     ).mappings().one_or_none()
-    if fill is None or fill["order_id"] != order_id:
+    if (
+        fill is None
+        or fill["order_id"] != order_id
+        or fill["filled_at"] < signal.decision_time
+    ):
         return False
     try:
         durable_fill = Fill(
