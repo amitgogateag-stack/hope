@@ -342,6 +342,8 @@ def verify_paper_recovery_lineage(
         ).where(pnl_events.c.pnl_event_id == pnl_event_id)
     ).mappings().one_or_none()
     if pnl is not None:
+        if pnl["event_time"] < durable_fill.fill_time:
+            return False
         try:
             durable_pnl = PaperPnLEvent(
                 pnl_event_id=pnl_event_id,

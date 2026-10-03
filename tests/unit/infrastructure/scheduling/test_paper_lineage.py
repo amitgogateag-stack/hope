@@ -481,6 +481,37 @@ def test_verifier_rejects_pnl_payload_mismatch() -> None:
     ) is False
 
 
+def test_verifier_rejects_pnl_that_predates_fill() -> None:
+    effects, signal, order, risk, fill, pnl_event = _filled_fixture()
+    premature_pnl = PaperPnLEvent(
+        pnl_event_id=pnl_event.pnl_event_id,
+        position_id=pnl_event.position_id,
+        amount=pnl_event.amount,
+        event_time=fill.fill_time - timedelta(minutes=1),
+    )
+    effects = effects[:-1] + (
+        _effect(
+            effects[-1].job_run_id,
+            PaperEffectType.PNL,
+            premature_pnl.pnl_event_id,
+            paper_pnl_payload_hash(premature_pnl),
+        ),
+    )
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(
+            (
+                _signal_row(signal),
+                _risk_row(risk),
+                _order_row(order),
+                _fill_row(fill),
+                _pnl_row(premature_pnl),
+            )
+        ),
+        effects,
+    ) is False
+
+
 def test_verifier_rejects_pnl_position_from_different_signal() -> None:
     effects, signal, order, risk, fill, pnl_event = _filled_fixture()
     connection = _LineageConnection(
