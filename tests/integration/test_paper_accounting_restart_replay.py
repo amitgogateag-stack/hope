@@ -34,7 +34,7 @@ INPUTS_HASH = "f" * 64
 
 
 def _chain(context, instrument_id):
-    decision = datetime(2026, 9, 30, 12, 1, tzinfo=UTC)
+    decision = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
     signal_id = context.signal_id(
         instrument_id=instrument_id,
         strategy_version="paper-accounting-restart-v1",
