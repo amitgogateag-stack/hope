@@ -5,11 +5,13 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, Table, Uuid, select
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.signals import paper_signal_payload_hash
 from hope.application.paper.terminals import paper_terminal_payload_hash
 from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection, Order
+from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
 
@@ -92,6 +94,12 @@ def verify_paper_recovery_lineage(
         metadata,
         Column("fill_id", Uuid, primary_key=True),
         Column("order_id", Uuid, nullable=False),
+        Column("quantity", Numeric, nullable=False),
+        Column("fill_price", Numeric, nullable=False),
+        Column("slippage", Numeric, nullable=False),
+        Column("transaction_cost", Numeric, nullable=False),
+        Column("filled_at", DateTime(timezone=True), nullable=False),
+        Column("cost_model_version", String, nullable=False),
     )
     pnl_events = Table(
         "pnl_events",
@@ -265,9 +273,36 @@ def verify_paper_recovery_lineage(
     fill_id = by_type[PaperEffectType.FILL][0].entity_id
     pnl_event_id = by_type[PaperEffectType.PNL][0].entity_id
     fill = connection.execute(
-        select(fills.c.order_id).where(fills.c.fill_id == fill_id)
+        select(
+            fills.c.order_id,
+            fills.c.quantity,
+            fills.c.fill_price,
+            fills.c.slippage,
+            fills.c.transaction_cost,
+            fills.c.filled_at,
+            fills.c.cost_model_version,
+        ).where(fills.c.fill_id == fill_id)
     ).mappings().one_or_none()
     if fill is None or fill["order_id"] != order_id:
+        return False
+    try:
+        durable_fill = Fill(
+            fill_id=fill_id,
+            order_id=order_id,
+            signal_id=signal_id,
+            instrument_id=order_object.instrument_id,
+            side=order_object.side,
+            quantity=fill["quantity"],
+            price=fill["fill_price"],
+            commission=fill["transaction_cost"],
+            slippage=fill["slippage"],
+            cost_model_version=fill["cost_model_version"],
+            fill_time=fill["filled_at"],
+        )
+        expected_fill_hash = paper_fill_payload_hash(durable_fill)
+    except (TypeError, ValueError):
+        return False
+    if by_type[PaperEffectType.FILL][0].payload_hash != expected_fill_hash:
         return False
 
     pnl = connection.execute(

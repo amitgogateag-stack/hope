@@ -3,6 +3,7 @@ from decimal import Decimal
 from uuid import NAMESPACE_URL, uuid4, uuid5
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.signals import paper_signal_payload_hash
@@ -14,6 +15,7 @@ from hope.domain.execution.models import (
     Order,
     OrderSide,
 )
+from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
@@ -121,25 +123,50 @@ def _filled_fixture():
     signal = _signal(signal_id)
     order = _order(order_id, signal)
     risk = _approved_risk(signal_id)
+    fill = Fill(
+        fill_id=fill_id,
+        order_id=order_id,
+        signal_id=signal_id,
+        instrument_id=signal.instrument_id,
+        side=order.side,
+        quantity=order.quantity,
+        price=Decimal("100.25"),
+        commission=Decimal("0.50"),
+        slippage=Decimal("0.10"),
+        cost_model_version="paper-recovery-cost-v1",
+        fill_time=datetime(2026, 10, 2, 15, 0, tzinfo=UTC),
+    )
     effects = (
         _effect(job_run_id, PaperEffectType.SIGNAL, signal_id, paper_signal_payload_hash(signal)),
         _effect(job_run_id, PaperEffectType.RISK, signal_id, paper_risk_payload_hash(risk)),
         _effect(job_run_id, PaperEffectType.ORDER, order_id, paper_order_payload_hash(order)),
-        _effect(job_run_id, PaperEffectType.FILL, fill_id),
+        _effect(job_run_id, PaperEffectType.FILL, fill_id, paper_fill_payload_hash(fill)),
         _effect(job_run_id, PaperEffectType.PNL, pnl_event_id),
     )
-    return effects, signal, order, risk
+    return effects, signal, order, risk, fill
+
+
+def _fill_row(fill):
+    return {
+        "order_id": fill.order_id,
+        "quantity": fill.quantity,
+        "fill_price": fill.price,
+        "slippage": fill.slippage,
+        "transaction_cost": fill.commission,
+        "filled_at": fill.fill_time,
+        "cost_model_version": fill.cost_model_version,
+    }
 
 
 def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
-    effects, signal, order, risk = _filled_fixture()
+    effects, signal, order, risk, fill = _filled_fixture()
     position_id = uuid4()
     connection = _LineageConnection(
         (
             _signal_row(signal),
             _risk_row(risk),
             _order_row(order),
-            {"order_id": order.order_id},
+            _fill_row(fill),
             {"position_id": position_id},
             {"opened_from_signal_id": signal.signal_id},
         )
@@ -149,7 +176,7 @@ def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
 
 
 def test_verifier_rejects_missing_canonical_signal_recovery_material() -> None:
-    effects, signal, _, _ = _filled_fixture()
+    effects, signal, _, _, _ = _filled_fixture()
     row = _signal_row(signal)
     row["strategy_version"] = None
 
@@ -157,7 +184,7 @@ def test_verifier_rejects_missing_canonical_signal_recovery_material() -> None:
 
 
 def test_verifier_rejects_signal_payload_mismatch() -> None:
-    effects, signal, _, _ = _filled_fixture()
+    effects, signal, _, _, _ = _filled_fixture()
     corrupted = (
         _effect(effects[0].job_run_id, PaperEffectType.SIGNAL, signal.signal_id, "f" * 64),
     ) + effects[1:]
@@ -168,7 +195,7 @@ def test_verifier_rejects_signal_payload_mismatch() -> None:
 
 
 def test_verifier_rejects_order_payload_mismatch() -> None:
-    effects, signal, order, risk = _filled_fixture()
+    effects, signal, order, risk, _ = _filled_fixture()
     corrupted = effects[:2] + (
         _effect(effects[2].job_run_id, PaperEffectType.ORDER, order.order_id, "f" * 64),
     ) + effects[3:]
@@ -180,7 +207,7 @@ def test_verifier_rejects_order_payload_mismatch() -> None:
 
 
 def test_verifier_rejects_order_signal_type_mismatch() -> None:
-    effects, signal, order, risk = _filled_fixture()
+    effects, signal, order, risk, _ = _filled_fixture()
     row = _order_row(order)
     row["signal_type"] = SignalType.EXIT.value
 
@@ -190,28 +217,54 @@ def test_verifier_rejects_order_signal_type_mismatch() -> None:
 
 
 def test_verifier_rejects_fill_linked_to_different_order() -> None:
-    effects, signal, order, risk = _filled_fixture()
+    effects, signal, order, risk, fill = _filled_fixture()
+    mismatched_fill = _fill_row(fill)
+    mismatched_fill["order_id"] = uuid4()
     connection = _LineageConnection(
         (
             _signal_row(signal),
             _risk_row(risk),
             _order_row(order),
-            {"order_id": uuid4()},
+            mismatched_fill,
         )
     )
 
     assert verify_paper_recovery_lineage(connection, effects) is False
 
 
+def test_verifier_rejects_fill_payload_mismatch() -> None:
+    effects, signal, order, risk, fill = _filled_fixture()
+    corrupted = effects[:3] + (
+        _effect(
+            effects[3].job_run_id,
+            PaperEffectType.FILL,
+            fill.fill_id,
+            "f" * 64,
+        ),
+    ) + effects[4:]
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(
+            (
+                _signal_row(signal),
+                _risk_row(risk),
+                _order_row(order),
+                _fill_row(fill),
+            )
+        ),
+        corrupted,
+    ) is False
+
+
 def test_verifier_rejects_pnl_position_from_different_signal() -> None:
-    effects, signal, order, risk = _filled_fixture()
+    effects, signal, order, risk, fill = _filled_fixture()
     position_id = uuid4()
     connection = _LineageConnection(
         (
             _signal_row(signal),
             _risk_row(risk),
             _order_row(order),
-            {"order_id": order.order_id},
+            _fill_row(fill),
             {"position_id": position_id},
             {"opened_from_signal_id": uuid4()},
         )
@@ -309,7 +362,7 @@ def test_verifier_rejects_terminal_payload_mismatch() -> None:
 
 
 def test_verifier_rejects_risk_effect_without_matching_assessment_payload() -> None:
-    effects, signal, _, risk = _filled_fixture()
+    effects, signal, _, risk, _ = _filled_fixture()
     corrupted = effects[:1] + (
         _effect(effects[1].job_run_id, PaperEffectType.RISK, signal.signal_id, "f" * 64),
     ) + effects[2:]
@@ -319,14 +372,14 @@ def test_verifier_rejects_risk_effect_without_matching_assessment_payload() -> N
 
 
 def test_verifier_rejects_missing_durable_risk_assessment() -> None:
-    effects, signal, _, _ = _filled_fixture()
+    effects, signal, _, _, _ = _filled_fixture()
     assert verify_paper_recovery_lineage(
         _LineageConnection((_signal_row(signal), None)), effects
     ) is False
 
 
 def test_verifier_rejects_non_approved_durable_risk_assessment() -> None:
-    effects, signal, _, _ = _filled_fixture()
+    effects, signal, _, _, _ = _filled_fixture()
     rejected = RiskAssessment(
         signal_id=signal.signal_id,
         decision=RiskDecision.REJECT,
