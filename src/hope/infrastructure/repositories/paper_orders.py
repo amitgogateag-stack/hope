@@ -26,6 +26,7 @@ class SqlAlchemyPaperOrderRepository:
             Column("environment", String, nullable=False),
             Column("side", String, nullable=False),
             Column("quantity", Numeric, nullable=False),
+            Column("signal_type", String, nullable=True),
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
@@ -38,6 +39,7 @@ class SqlAlchemyPaperOrderRepository:
                 self._orders.c.environment,
                 self._orders.c.side,
                 self._orders.c.quantity,
+                self._orders.c.signal_type,
             ).where(self._orders.c.order_id == order_id)
         ).mappings().one_or_none()
 
@@ -50,6 +52,7 @@ class SqlAlchemyPaperOrderRepository:
             or row["environment"] != Environment.PAPER.value
             or row["side"] != order.side.value
             or row["quantity"] != order.quantity
+            or row["signal_type"] != order.signal_type.value
         ):
             raise ValueError("PAPER_ORDER_IDENTITY_CONFLICT")
 
@@ -87,6 +90,7 @@ class SqlAlchemyPaperOrderRepository:
                     environment=order.environment.value,
                     side=order.side.value,
                     quantity=order.quantity,
+                    signal_type=order.signal_type.value,
                 )
                 .on_conflict_do_nothing(index_elements=["order_id"])
                 .returning(self._orders.c.order_id)
