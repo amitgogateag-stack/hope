@@ -2,7 +2,18 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, Table, Uuid, select
+from sqlalchemy import (
+    BigInteger,
+    Column,
+    Connection,
+    DateTime,
+    MetaData,
+    Numeric,
+    String,
+    Table,
+    Uuid,
+    select,
+)
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
@@ -130,7 +141,14 @@ def verify_paper_recovery_lineage(
         metadata,
         Column("portfolio_id", Uuid, primary_key=True),
         Column("fill_id", Uuid, primary_key=True),
+        Column("application_sequence", BigInteger, nullable=False),
         Column("applied_at", DateTime(timezone=True), nullable=False),
+    )
+    portfolios = Table(
+        "paper_portfolios",
+        metadata,
+        Column("portfolio_id", Uuid, primary_key=True),
+        Column("version", BigInteger, nullable=False),
     )
     positions = Table(
         "positions",
@@ -414,13 +432,28 @@ def verify_paper_recovery_lineage(
     ):
         return False
     application = connection.execute(
-        select(portfolio_fill_applications.c.applied_at).where(
+        select(
+            portfolio_fill_applications.c.application_sequence,
+            portfolio_fill_applications.c.applied_at,
+            portfolios.c.version,
+        )
+        .select_from(
+            portfolio_fill_applications.join(
+                portfolios,
+                portfolio_fill_applications.c.portfolio_id == portfolios.c.portfolio_id,
+            )
+        )
+        .where(
             portfolio_fill_applications.c.portfolio_id
             == durable_portfolio_pnl.portfolio_id,
             portfolio_fill_applications.c.fill_id == durable_fill.fill_id,
         )
     ).mappings().one_or_none()
-    if application is None or application["applied_at"] < durable_fill.fill_time:
+    if (
+        application is None
+        or application["applied_at"] < durable_fill.fill_time
+        or application["application_sequence"] > application["version"]
+    ):
         return False
     return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(
         durable_portfolio_pnl
