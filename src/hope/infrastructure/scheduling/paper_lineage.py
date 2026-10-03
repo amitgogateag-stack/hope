@@ -5,10 +5,13 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, Table, Uuid, select
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.risk import paper_risk_payload_hash
+from hope.application.paper.signals import paper_signal_payload_hash
 from hope.application.paper.terminals import paper_terminal_payload_hash
-from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection
+from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection, Order
 from hope.domain.risk.models import RiskAssessment
+from hope.domain.signal.models import Signal
 
 
 def verify_paper_recovery_lineage(
@@ -61,6 +64,18 @@ def verify_paper_recovery_lineage(
         return False
 
     metadata = MetaData()
+    signals = Table(
+        "signals",
+        metadata,
+        Column("signal_id", Uuid, primary_key=True),
+        Column("instrument_id", Uuid, nullable=False),
+        Column("decision_time", DateTime(timezone=True), nullable=False),
+        Column("state", String, nullable=False),
+        Column("strategy_version", String),
+        Column("signal_type", String),
+        Column("conviction", Numeric),
+        Column("inputs_hash", String),
+    )
     orders = Table(
         "orders",
         metadata,
@@ -68,6 +83,9 @@ def verify_paper_recovery_lineage(
         Column("signal_id", Uuid, nullable=False),
         Column("instrument_id", Uuid, nullable=False),
         Column("environment", String, nullable=False),
+        Column("side", String, nullable=False),
+        Column("quantity", Numeric, nullable=False),
+        Column("signal_type", String),
     )
     fills = Table(
         "fills",
@@ -105,6 +123,37 @@ def verify_paper_recovery_lineage(
         Column("approved_quantity", Numeric, nullable=False),
     )
 
+    signal_row = connection.execute(
+        select(
+            signals.c.instrument_id,
+            signals.c.decision_time,
+            signals.c.state,
+            signals.c.strategy_version,
+            signals.c.signal_type,
+            signals.c.conviction,
+            signals.c.inputs_hash,
+        ).where(signals.c.signal_id == signal_id)
+    ).mappings().one_or_none()
+    if signal_row is None or signal_row["state"] != "SIGNAL":
+        return False
+    try:
+        signal = Signal(
+            signal_id=signal_id,
+            instrument_id=signal_row["instrument_id"],
+            strategy_version=signal_row["strategy_version"],
+            decision_time=signal_row["decision_time"],
+            signal_type=signal_row["signal_type"],
+            conviction=signal_row["conviction"],
+            inputs_hash=signal_row["inputs_hash"],
+        )
+    except (TypeError, ValueError):
+        return False
+    if (
+        by_type[PaperEffectType.SIGNAL][0].payload_hash
+        != paper_signal_payload_hash(signal)
+    ):
+        return False
+
     risk_row = connection.execute(
         select(
             risk_assessments.c.decision,
@@ -131,23 +180,47 @@ def verify_paper_recovery_lineage(
     ):
         return False
 
+    order_row = connection.execute(
+        select(
+            orders.c.signal_id,
+            orders.c.instrument_id,
+            orders.c.environment,
+            orders.c.side,
+            orders.c.quantity,
+            orders.c.signal_type,
+        ).where(orders.c.order_id == order_id)
+    ).mappings().one_or_none()
+    if (
+        order_row is None
+        or order_row["signal_id"] != signal_id
+        or order_row["instrument_id"] != signal.instrument_id
+        or order_row["environment"] != Environment.PAPER.value
+        or order_row["signal_type"] != signal.signal_type.value
+    ):
+        return False
+    try:
+        order_object = Order(
+            order_id=order_id,
+            signal_id=signal_id,
+            instrument_id=order_row["instrument_id"],
+            side=order_row["side"],
+            quantity=order_row["quantity"],
+            environment=order_row["environment"],
+            signal_type=order_row["signal_type"],
+        )
+    except (TypeError, ValueError):
+        return False
+    if (
+        by_type[PaperEffectType.ORDER][0].payload_hash
+        != paper_order_payload_hash(order_object)
+    ):
+        return False
+
     if terminal_type is not None:
         terminal_effect = by_type[terminal_type][0]
         if terminal_effect.entity_id != order_id:
             return False
-        order = connection.execute(
-            select(
-                orders.c.signal_id,
-                orders.c.instrument_id,
-                orders.c.environment,
-            ).where(orders.c.order_id == order_id)
-        ).mappings().one_or_none()
-        if (
-            order is None
-            or order["signal_id"] != signal_id
-            or order["environment"] != Environment.PAPER.value
-        ):
-            return False
+        order = order_row
         terminal = connection.execute(
             select(
                 terminal_events.c.outcome,
@@ -191,12 +264,6 @@ def verify_paper_recovery_lineage(
 
     fill_id = by_type[PaperEffectType.FILL][0].entity_id
     pnl_event_id = by_type[PaperEffectType.PNL][0].entity_id
-    order = connection.execute(
-        select(orders.c.signal_id).where(orders.c.order_id == order_id)
-    ).mappings().one_or_none()
-    if order is None or order["signal_id"] != signal_id:
-        return False
-
     fill = connection.execute(
         select(fills.c.order_id).where(fills.c.fill_id == fill_id)
     ).mappings().one_or_none()
