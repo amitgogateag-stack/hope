@@ -125,6 +125,13 @@ def verify_paper_recovery_lineage(
         Column("commission_delta", Numeric, nullable=False),
         Column("event_time", DateTime(timezone=True), nullable=False),
     )
+    portfolio_fill_applications = Table(
+        "paper_portfolio_fill_applications",
+        metadata,
+        Column("portfolio_id", Uuid, primary_key=True),
+        Column("fill_id", Uuid, primary_key=True),
+        Column("applied_at", DateTime(timezone=True), nullable=False),
+    )
     positions = Table(
         "positions",
         metadata,
@@ -405,6 +412,15 @@ def verify_paper_recovery_lineage(
         or durable_portfolio_pnl.event_time != durable_fill.fill_time
         or durable_portfolio_pnl.commission_delta != durable_fill.commission
     ):
+        return False
+    application = connection.execute(
+        select(portfolio_fill_applications.c.applied_at).where(
+            portfolio_fill_applications.c.portfolio_id
+            == durable_portfolio_pnl.portfolio_id,
+            portfolio_fill_applications.c.fill_id == durable_fill.fill_id,
+        )
+    ).mappings().one_or_none()
+    if application is None or application["applied_at"] < durable_fill.fill_time:
         return False
     return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(
         durable_portfolio_pnl
