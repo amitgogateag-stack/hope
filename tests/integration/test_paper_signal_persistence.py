@@ -171,6 +171,17 @@ def test_paper_signal_is_durable_and_idempotent_across_scheduled_cycles() -> Non
             text("SELECT count(*) FROM signals WHERE signal_id = :signal_id"),
             {"signal_id": signal.signal_id},
         ).scalar_one() == 1
+        durable_signal = connection.execute(
+            text(
+                "SELECT strategy_version, signal_type, conviction, inputs_hash "
+                "FROM signals WHERE signal_id = :signal_id"
+            ),
+            {"signal_id": signal.signal_id},
+        ).mappings().one()
+        assert durable_signal["strategy_version"] == signal.strategy_version
+        assert durable_signal["signal_type"] == signal.signal_type.value
+        assert durable_signal["conviction"] == signal.conviction
+        assert durable_signal["inputs_hash"] == signal.inputs_hash
         effect = connection.execute(
             text(
                 "SELECT job_run_id, payload_hash FROM paper_effects "
