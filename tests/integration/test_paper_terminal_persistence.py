@@ -135,13 +135,25 @@ def test_complete_non_fill_lineage_reconciles_without_replaying_effects(kind):
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id = uuid4()
+    strategy_id, strategy_version_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
-        f"paper-terminal-reconcile-{kind.lower()}",
+        f"paper:USA:{strategy_version_id}:terminal-reconcile-{kind.lower()}",
         datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
     )
 
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"PAPER_TERMINAL_{strategy_id}"},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO strategy_versions(strategy_version_id, strategy_id, version, code_commit) "
+                "VALUES (:version_id, :strategy_id, 'v1', 'paper-terminal-reconcile-test')"
+            ),
+            {"version_id": strategy_version_id, "strategy_id": strategy_id},
+        )
         context, signal, order = _setup_order(connection, run, instrument_id)
         assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
             context,
