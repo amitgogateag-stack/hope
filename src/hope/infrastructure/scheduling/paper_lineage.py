@@ -7,6 +7,7 @@ from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
+from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
 from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.signals import paper_signal_payload_hash
 from hope.application.paper.terminals import paper_terminal_payload_hash
@@ -106,6 +107,8 @@ def verify_paper_recovery_lineage(
         metadata,
         Column("pnl_event_id", Uuid, primary_key=True),
         Column("position_id", Uuid, nullable=False),
+        Column("amount", Numeric, nullable=False),
+        Column("event_time", DateTime(timezone=True), nullable=False),
     )
     positions = Table(
         "positions",
@@ -306,9 +309,25 @@ def verify_paper_recovery_lineage(
         return False
 
     pnl = connection.execute(
-        select(pnl_events.c.position_id).where(pnl_events.c.pnl_event_id == pnl_event_id)
+        select(
+            pnl_events.c.position_id,
+            pnl_events.c.amount,
+            pnl_events.c.event_time,
+        ).where(pnl_events.c.pnl_event_id == pnl_event_id)
     ).mappings().one_or_none()
     if pnl is None:
+        return False
+    try:
+        durable_pnl = PaperPnLEvent(
+            pnl_event_id=pnl_event_id,
+            position_id=pnl["position_id"],
+            amount=pnl["amount"],
+            event_time=pnl["event_time"],
+        )
+        expected_pnl_hash = paper_pnl_payload_hash(durable_pnl)
+    except (TypeError, ValueError):
+        return False
+    if by_type[PaperEffectType.PNL][0].payload_hash != expected_pnl_hash:
         return False
 
     position = connection.execute(
