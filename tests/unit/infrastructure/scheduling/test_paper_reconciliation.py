@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from types import SimpleNamespace
+from uuid import uuid4
 
 import pytest
 
@@ -53,8 +54,10 @@ def _reset_effect_repository(monkeypatch):
     )
 
 
-def _report(decision):
-    return SimpleNamespace(assessments=(SimpleNamespace(decision=decision),))
+def _report(decision, job_run_id):
+    return SimpleNamespace(
+        assessments=(SimpleNamespace(decision=decision, job_run_id=job_run_id),)
+    )
 
 
 def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkeypatch) -> None:
@@ -70,7 +73,10 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     monkeypatch.setattr(
         paper_reconciliation,
         "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
@@ -90,7 +96,10 @@ def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypat
     monkeypatch.setattr(
         paper_reconciliation,
         "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.REQUIRE_RECONCILIATION),
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.REQUIRE_RECONCILIATION,
+            job_run.job_run_id,
+        ),
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
@@ -115,7 +124,10 @@ def test_reconciliation_fails_closed_when_locked_transition_is_not_applied(monke
     monkeypatch.setattr(
         paper_reconciliation,
         "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
@@ -156,6 +168,40 @@ def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success
         reconcile_completed_paper_run(object(), job_run, current=current)
 
 
+@pytest.mark.parametrize("assessment_ids", [(), (uuid4(),), (uuid4(), uuid4())])
+def test_reconciliation_fails_closed_on_mismatched_recovery_assessment(
+    monkeypatch,
+    assessment_ids,
+) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-assessment-mismatch",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.completion = None
+    assessments = tuple(
+        SimpleNamespace(
+            decision=PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run_id=assessment_id,
+        )
+        for assessment_id in assessment_ids
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: SimpleNamespace(assessments=assessments),
+    )
+    monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_ASSESSMENT_MISMATCH",
+    ):
+        reconcile_completed_paper_run(object(), job_run, current=current)
+    assert _FakeRepository.completion is None
+
+
 def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminalization(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
@@ -174,7 +220,10 @@ def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminaliza
     monkeypatch.setattr(
         paper_reconciliation,
         "assess_due_paper_recovery",
-        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 

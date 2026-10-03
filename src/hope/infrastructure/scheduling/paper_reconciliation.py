@@ -45,6 +45,8 @@ def reconcile_completed_paper_run(
         current=current,
         max_lateness=current - job_run.scheduled_for,
     )
+    if len(report.assessments) != 1 or report.assessments[0].job_run_id != job_run.job_run_id:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_ASSESSMENT_MISMATCH")
     assessment = report.assessments[0]
     if assessment.decision is not PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_PROVEN")
