@@ -382,6 +382,43 @@ def test_verifier_rejects_fill_payload_mismatch() -> None:
     ) is False
 
 
+def test_verifier_rejects_partial_fill_as_complete_execution() -> None:
+    effects, signal, order, risk, fill, _ = _filled_fixture()
+    partial_fill = Fill(
+        fill_id=fill.fill_id,
+        order_id=fill.order_id,
+        signal_id=fill.signal_id,
+        instrument_id=fill.instrument_id,
+        side=fill.side,
+        quantity=fill.quantity - Decimal("1"),
+        price=fill.price,
+        commission=fill.commission,
+        slippage=fill.slippage,
+        cost_model_version=fill.cost_model_version,
+        fill_time=fill.fill_time,
+    )
+    effects = effects[:3] + (
+        _effect(
+            effects[3].job_run_id,
+            PaperEffectType.FILL,
+            partial_fill.fill_id,
+            paper_fill_payload_hash(partial_fill),
+        ),
+    ) + effects[4:]
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(
+            (
+                _signal_row(signal),
+                _risk_row(risk),
+                _order_row(order),
+                _fill_row(partial_fill),
+            )
+        ),
+        effects,
+    ) is False
+
+
 def test_verifier_rejects_pnl_payload_mismatch() -> None:
     effects, signal, order, risk, fill, pnl_event = _filled_fixture()
     corrupted = effects[:-1] + (

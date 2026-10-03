@@ -321,6 +321,8 @@ def verify_paper_recovery_lineage(
         expected_fill_hash = paper_fill_payload_hash(durable_fill)
     except (TypeError, ValueError):
         return False
+    if durable_fill.quantity != order_object.quantity:
+        return False
     if by_type[PaperEffectType.FILL][0].payload_hash != expected_fill_hash:
         return False
 
