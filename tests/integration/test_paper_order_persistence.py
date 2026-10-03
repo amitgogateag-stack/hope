@@ -194,6 +194,13 @@ def test_paper_order_is_durable_and_idempotent_across_scheduled_cycles() -> None
             text("SELECT count(*) FROM orders WHERE order_id = :order_id"),
             {"order_id": order.order_id},
         ).scalar_one() == 1
+        durable_order = connection.execute(
+            text(
+                "SELECT signal_type FROM orders WHERE order_id = :order_id"
+            ),
+            {"order_id": order.order_id},
+        ).mappings().one()
+        assert durable_order["signal_type"] == order.signal_type.value
         effect = connection.execute(
             text(
                 "SELECT job_run_id, payload_hash FROM paper_effects "
