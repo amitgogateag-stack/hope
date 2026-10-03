@@ -274,7 +274,11 @@ def verify_paper_recovery_lineage(
                     terminal["event_time"],
                 )
             else:
-                if terminal["outcome"] != "CANCELLED" or terminal["cancelled_quantity"] is None:
+                if (
+                    terminal["outcome"] != "CANCELLED"
+                    or terminal["cancelled_quantity"] is None
+                    or terminal["cancelled_quantity"] != order_object.quantity
+                ):
                     return False
                 outcome = ExecutionCancellation(
                     order_id,

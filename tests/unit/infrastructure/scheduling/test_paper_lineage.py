@@ -548,6 +548,34 @@ def test_verifier_rejects_terminal_payload_mismatch() -> None:
     ) is False
 
 
+def test_verifier_rejects_cancellation_that_leaves_unfilled_quantity_open() -> None:
+    effects, signal, order, outcome, risk = _non_fill_fixture(
+        PaperEffectType.CANCELLATION
+    )
+    incomplete = ExecutionCancellation(
+        outcome.order_id,
+        outcome.signal_id,
+        outcome.instrument_id,
+        outcome.environment,
+        outcome.reason_code,
+        outcome.cancellation_time,
+        outcome.cancelled_quantity - Decimal("1"),
+    )
+    effects = effects[:-1] + (
+        _effect(
+            effects[-1].job_run_id,
+            PaperEffectType.CANCELLATION,
+            incomplete.order_id,
+            paper_terminal_payload_hash(incomplete),
+        ),
+    )
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(_terminal_rows(signal, order, incomplete, risk)),
+        effects,
+    ) is False
+
+
 def test_verifier_rejects_risk_effect_without_matching_assessment_payload() -> None:
     effects, signal, _, risk, _, _ = _filled_fixture()
     corrupted = effects[:1] + (
