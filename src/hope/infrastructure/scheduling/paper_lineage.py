@@ -12,6 +12,7 @@ from sqlalchemy import (
     String,
     Table,
     Uuid,
+    func,
     select,
 )
 
@@ -431,16 +432,30 @@ def verify_paper_recovery_lineage(
         or durable_portfolio_pnl.commission_delta != durable_fill.commission
     ):
         return False
+    counted_applications = portfolio_fill_applications.alias("counted_applications")
+    application_counts = (
+        select(
+            counted_applications.c.portfolio_id,
+            func.count().label("application_count"),
+        )
+        .group_by(counted_applications.c.portfolio_id)
+        .subquery()
+    )
     application = connection.execute(
         select(
             portfolio_fill_applications.c.application_sequence,
             portfolio_fill_applications.c.applied_at,
             portfolios.c.version,
+            application_counts.c.application_count,
         )
         .select_from(
             portfolio_fill_applications.join(
                 portfolios,
                 portfolio_fill_applications.c.portfolio_id == portfolios.c.portfolio_id,
+            ).join(
+                application_counts,
+                portfolio_fill_applications.c.portfolio_id
+                == application_counts.c.portfolio_id,
             )
         )
         .where(
@@ -453,6 +468,7 @@ def verify_paper_recovery_lineage(
         application is None
         or application["applied_at"] < durable_fill.fill_time
         or application["application_sequence"] > application["version"]
+        or application["version"] != application["application_count"]
     ):
         return False
     return by_type[PaperEffectType.PNL][0].payload_hash == paper_portfolio_pnl_payload_hash(

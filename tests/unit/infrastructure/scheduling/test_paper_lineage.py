@@ -233,7 +233,12 @@ def test_verifier_accepts_authoritative_portfolio_pnl_lineage() -> None:
                 "commission_delta": pnl_event.commission_delta,
                 "event_time": pnl_event.event_time,
             },
-            {"application_sequence": 1, "applied_at": fill.fill_time, "version": 1},
+            {
+                "application_sequence": 1,
+                "applied_at": fill.fill_time,
+                "version": 1,
+                "application_count": 1,
+            },
         )
     )
 
@@ -403,6 +408,7 @@ def test_verifier_rejects_portfolio_application_that_predates_fill() -> None:
                 "application_sequence": 1,
                 "applied_at": fill.fill_time - timedelta(microseconds=1),
                 "version": 1,
+                "application_count": 1,
             },
         )
     )
@@ -445,7 +451,59 @@ def test_verifier_rejects_portfolio_application_beyond_materialized_version() ->
                 "commission_delta": pnl_event.commission_delta,
                 "event_time": pnl_event.event_time,
             },
-            {"application_sequence": 2, "applied_at": fill.fill_time, "version": 1},
+            {
+                "application_sequence": 2,
+                "applied_at": fill.fill_time,
+                "version": 1,
+                "application_count": 2,
+            },
+        )
+    )
+
+    assert verify_paper_recovery_lineage(connection, effects) is False
+
+
+def test_verifier_rejects_portfolio_version_ahead_of_application_history() -> None:
+    effects, signal, order, risk, fill, _ = _filled_fixture()
+    portfolio_id = uuid4()
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill.fill_id,
+        instrument_id=fill.instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=fill.commission,
+        event_time=fill.fill_time,
+    )
+    effects = effects[:-1] + (
+        _effect(
+            effects[-1].job_run_id,
+            PaperEffectType.PNL,
+            pnl_event.pnl_event_id,
+            paper_portfolio_pnl_payload_hash(pnl_event),
+        ),
+    )
+    connection = _LineageConnection(
+        (
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            None,
+            {
+                "portfolio_id": pnl_event.portfolio_id,
+                "fill_id": pnl_event.fill_id,
+                "instrument_id": pnl_event.instrument_id,
+                "realized_pnl_delta": pnl_event.realized_pnl_delta,
+                "commission_delta": pnl_event.commission_delta,
+                "event_time": pnl_event.event_time,
+            },
+            {
+                "application_sequence": 1,
+                "applied_at": fill.fill_time,
+                "version": 2,
+                "application_count": 1,
+            },
         )
     )
 
