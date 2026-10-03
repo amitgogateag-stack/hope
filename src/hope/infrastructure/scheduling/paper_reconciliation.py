@@ -31,16 +31,25 @@ def reconcile_completed_paper_run(
     insertion takes the same row lock at the database boundary, so no new effect can
     appear between proof and terminalization. This operation never invokes signal,
     risk, order, fill, position, accounting, or P&L writers. A concurrent reconciler
-    that already terminalized the run as SUCCEEDED remains an idempotent success.
+    that already terminalized the run as SUCCEEDED is accepted only when its exact
+    immutable reconciliation receipt is durable.
     """
     repository = SqlAlchemyJobRunRepository(connection)
+    effects_repository = SqlAlchemyPaperEffectRepository(connection)
+    audit_repository = SqlAlchemyPaperReconciliationAuditRepository(connection)
     if not repository.lock_claimed_for_reconciliation(job_run):
         durable = repository.get_record_for_run(job_run)
         if durable is not None and durable.status is JobRunStatus.SUCCEEDED and durable.failure_code is None:
+            effects = effects_repository.list_for_job_run(job_run.job_run_id)
+            try:
+                verified = audit_repository.verify(durable, effects)
+            except ValueError as exc:
+                raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH") from exc
+            if not verified:
+                raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE")
             return False
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_CLAIMED")
 
-    effects_repository = SqlAlchemyPaperEffectRepository(connection)
     effects_before = effects_repository.list_for_job_run(job_run.job_run_id)
     report = assess_due_paper_recovery(
         connection,
@@ -75,7 +84,7 @@ def reconcile_completed_paper_run(
     effects_after = effects_repository.list_for_job_run(job_run.job_run_id)
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
-    if not SqlAlchemyPaperReconciliationAuditRepository(connection).record(
+    if not audit_repository.record(
         completion,
         effects_after,
     ):

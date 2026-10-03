@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
-from hope.application.jobs import JobRunStatus, create_scheduled_job_run
+from hope.application.jobs import (\n    JobRunStatus,\n    create_job_run_completion,\n    create_scheduled_job_run,\n)
 from hope.application.paper import (
     PaperCycleContext,
     PaperFillAccountingWriter,
@@ -198,6 +198,77 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay() 
             "FILL",
             "PNL",
         }
+
+    with engine.begin() as connection:
+        assert reconcile_completed_paper_run(
+            connection,
+            run,
+            current=datetime(2026, 9, 30, 12, 3, tzinfo=UTC),
+        ) is False
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM audit_events "
+                "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"
+            ),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 1
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_succeeded_run_without_reconciliation_receipt_fails_closed() -> None:
+    """An ordinary success cannot be mistaken for an idempotent reconciliation."""
+
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-success-without-reconciliation",
+            authenticated_job=True,
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        completion = create_job_run_completion(
+            run,
+            JobRunStatus.SUCCEEDED,
+            datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+        )
+        assert SqlAlchemyJobRunRepository(connection).complete(completion)
+
+    with engine.begin() as connection:
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE",
+        ):
+            reconcile_completed_paper_run(
+                connection,
+                run,
+                current=datetime(2026, 9, 30, 12, 3, tzinfo=UTC),
+            )
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM audit_events "
+                "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"
+            ),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 0
 
     engine.dispose()
 

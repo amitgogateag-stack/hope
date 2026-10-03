@@ -10,7 +10,7 @@ from hope.application.paper.effects import PaperEffect
 
 
 class SqlAlchemyPaperReconciliationAuditRepository:
-    """Append an immutable receipt for one no-replay PAPER reconciliation."""
+    """Append and verify an immutable receipt for one no-replay PAPER reconciliation."""
 
     _EVENT_TYPE = "PAPER_RUN_RECONCILED"
     _ENTITY_TYPE = "JOB_RUN"
@@ -33,11 +33,11 @@ class SqlAlchemyPaperReconciliationAuditRepository:
     def _event_id(job_run_id: UUID) -> UUID:
         return uuid5(NAMESPACE_URL, f"hope:paper:reconciliation:{job_run_id}")
 
-    def record(
+    def _expected(
         self,
         completion: JobRunRecord,
         effects: tuple[PaperEffect, ...],
-    ) -> bool:
+    ) -> tuple[UUID, str, dict[str, object]]:
         if completion.status is not JobRunStatus.SUCCEEDED:
             raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_SUCCESS")
         if completion.completed_at is None:
@@ -45,9 +45,8 @@ class SqlAlchemyPaperReconciliationAuditRepository:
         if any(effect.job_run_id != completion.run.job_run_id for effect in effects):
             raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_RUN_MISMATCH")
 
-        event_id = self._event_id(completion.run.job_run_id)
         entity_id = str(completion.run.job_run_id)
-        payload = {
+        payload: dict[str, object] = {
             "schema_version": 1,
             "decision": "ACKNOWLEDGE_COMPLETE_EFFECTS",
             "job_key": completion.run.job_key,
@@ -63,6 +62,41 @@ class SqlAlchemyPaperReconciliationAuditRepository:
                 for effect in effects
             ],
         }
+        return self._event_id(completion.run.job_run_id), entity_id, payload
+
+    def verify(
+        self,
+        completion: JobRunRecord,
+        effects: tuple[PaperEffect, ...],
+    ) -> bool:
+        """Return whether the exact durable reconciliation receipt already exists."""
+
+        event_id, entity_id, payload = self._expected(completion, effects)
+        existing = self._connection.execute(
+            select(
+                self._audit_events.c.event_type,
+                self._audit_events.c.entity_type,
+                self._audit_events.c.entity_id,
+                self._audit_events.c.payload,
+            ).where(self._audit_events.c.audit_event_id == event_id)
+        ).mappings().one_or_none()
+        if existing is None:
+            return False
+        if dict(existing) != {
+            "event_type": self._EVENT_TYPE,
+            "entity_type": self._ENTITY_TYPE,
+            "entity_id": entity_id,
+            "payload": payload,
+        }:
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT")
+        return True
+
+    def record(
+        self,
+        completion: JobRunRecord,
+        effects: tuple[PaperEffect, ...],
+    ) -> bool:
+        event_id, entity_id, payload = self._expected(completion, effects)
         statement = (
             pg_insert(self._audit_events)
             .values(
@@ -78,20 +112,6 @@ class SqlAlchemyPaperReconciliationAuditRepository:
         inserted_id = self._connection.execute(statement).scalar_one_or_none()
         if inserted_id is not None:
             return True
-
-        existing = self._connection.execute(
-            select(
-                self._audit_events.c.event_type,
-                self._audit_events.c.entity_type,
-                self._audit_events.c.entity_id,
-                self._audit_events.c.payload,
-            ).where(self._audit_events.c.audit_event_id == event_id)
-        ).mappings().one()
-        if dict(existing) != {
-            "event_type": self._EVENT_TYPE,
-            "entity_type": self._ENTITY_TYPE,
-            "entity_id": entity_id,
-            "payload": payload,
-        }:
-            raise ValueError("PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT")
+        if not self.verify(completion, effects):
+            raise RuntimeError("PAPER_RECONCILIATION_AUDIT_NOT_DURABLE")
         return False
