@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
+from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
@@ -25,6 +25,10 @@ class SqlAlchemyPaperSignalRepository:
             Column("instrument_id", Uuid, nullable=False),
             Column("decision_time", DateTime(timezone=True), nullable=False),
             Column("state", String, nullable=False),
+            Column("strategy_version", String, nullable=True),
+            Column("signal_type", String, nullable=True),
+            Column("conviction", Numeric, nullable=True),
+            Column("inputs_hash", String, nullable=True),
             Column("created_at", DateTime(timezone=True), nullable=False),
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
@@ -36,6 +40,10 @@ class SqlAlchemyPaperSignalRepository:
                 self._signals.c.instrument_id,
                 self._signals.c.decision_time,
                 self._signals.c.state,
+                self._signals.c.strategy_version,
+                self._signals.c.signal_type,
+                self._signals.c.conviction,
+                self._signals.c.inputs_hash,
             ).where(self._signals.c.signal_id == signal_id)
         ).mappings().one_or_none()
 
@@ -46,6 +54,10 @@ class SqlAlchemyPaperSignalRepository:
             or row["instrument_id"] != signal.instrument_id
             or row["decision_time"] != signal.decision_time
             or row["state"] != "SIGNAL"
+            or row["strategy_version"] != signal.strategy_version.strip()
+            or row["signal_type"] != signal.signal_type.value
+            or row["conviction"] != signal.conviction
+            or row["inputs_hash"] != signal.inputs_hash
         ):
             raise ValueError("PAPER_SIGNAL_IDENTITY_CONFLICT")
 
@@ -78,6 +90,10 @@ class SqlAlchemyPaperSignalRepository:
                     instrument_id=signal.instrument_id,
                     decision_time=signal.decision_time,
                     state="SIGNAL",
+                    strategy_version=signal.strategy_version.strip(),
+                    signal_type=signal.signal_type.value,
+                    conviction=signal.conviction,
+                    inputs_hash=signal.inputs_hash,
                 )
                 .on_conflict_do_nothing(index_elements=["signal_id"])
                 .returning(self._signals.c.signal_id)
