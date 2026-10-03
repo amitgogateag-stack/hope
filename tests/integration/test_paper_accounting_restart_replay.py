@@ -80,7 +80,20 @@ def _chain(context, instrument_id):
 def _setup(connection, migrations_dir, job_key):
     apply_migrations(connection, migrations_dir)
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run(job_key, datetime(2026, 9, 30, 12, 0, tzinfo=UTC))
+    strategy_id, strategy_version_id = uuid4(), uuid4()
+    connection.execute(
+        text("INSERT INTO strategies(strategy_id, name, family) VALUES (:id, :name, 'TEST')"),
+        {"id": strategy_id, "name": f"PAPER_ACCOUNTING_{strategy_id}"},
+    )
+    connection.execute(
+        text(
+            "INSERT INTO strategy_versions(strategy_version_id, strategy_id, version, code_commit) "
+            "VALUES (:version_id, :strategy_id, 'v1', 'paper-accounting-restart-test')"
+        ),
+        {"version_id": strategy_version_id, "strategy_id": strategy_id},
+    )
+    durable_job_key = f"paper:USA:{strategy_version_id}:{job_key}"
+    run = create_scheduled_job_run(durable_job_key, datetime(2026, 9, 30, 12, 0, tzinfo=UTC))
     context = PaperCycleContext(run)
     connection.execute(text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id, :symbol, 'TEST', 'ACTIVE')"), {"id": instrument_id, "symbol": job_key.upper()})
     assert SqlAlchemyJobRunRepository(connection).claim(run) is True
