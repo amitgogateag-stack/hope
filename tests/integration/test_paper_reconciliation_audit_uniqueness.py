@@ -152,53 +152,61 @@ def test_paper_reconciliation_receipt_requires_clean_succeeded_terminal_truth(
 
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
-    with engine.begin() as connection:
-        apply_migrations(connection, migrations_dir)
-        strategy_id = uuid4()
-        strategy_version_id = uuid4()
-        job_run_id = uuid4()
-        connection.execute(
-            text("INSERT INTO strategies(strategy_id, name, family) VALUES (:id, :name, 'TEST')"),
-            {"id": strategy_id, "name": f"RECONCILIATION_TERMINAL_{strategy_id}"},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO strategy_versions(strategy_version_id, strategy_id, version, code_commit) "
-                "VALUES (:version_id, :strategy_id, 'v1', 'reconciliation-terminal-test')"
-            ),
-            {"version_id": strategy_version_id, "strategy_id": strategy_id},
-        )
-        connection.execute(
-            text(
-                "INSERT INTO job_runs(job_run_id, job_key, scheduled_for, created_at) "
-                "VALUES (:id, :key, transaction_timestamp(), transaction_timestamp())"
-            ),
-            {
-                "id": job_run_id,
-                "key": f"paper:USA:{strategy_version_id}:reconciliation-terminal-test",
-            },
-        )
-        if status != "CLAIMED":
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            apply_migrations(connection, migrations_dir)
+            strategy_id = uuid4()
+            strategy_version_id = uuid4()
+            job_run_id = uuid4()
+            connection.execute(
+                text("INSERT INTO strategies(strategy_id, name, family) VALUES (:id, :name, 'TEST')"),
+                {"id": strategy_id, "name": f"RECONCILIATION_TERMINAL_{strategy_id}"},
+            )
             connection.execute(
                 text(
-                    "UPDATE job_runs SET status=:status, "
-                    "completed_at=CASE WHEN :completed THEN transaction_timestamp() ELSE NULL END, "
-                    "failure_code=:failure_code WHERE job_run_id=:id"
+                    "INSERT INTO strategy_versions(strategy_version_id, strategy_id, version, code_commit) "
+                    "VALUES (:version_id, :strategy_id, 'v1', 'reconciliation-terminal-test')"
+                ),
+                {"version_id": strategy_version_id, "strategy_id": strategy_id},
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO job_runs(job_run_id, job_key, scheduled_for, created_at) "
+                    "VALUES (:id, :key, transaction_timestamp(), transaction_timestamp())"
                 ),
                 {
-                    "status": status,
-                    "completed": completed,
-                    "failure_code": failure_code,
                     "id": job_run_id,
+                    "key": f"paper:USA:{strategy_version_id}:reconciliation-terminal-test",
                 },
             )
-
-        with pytest.raises(IntegrityError, match="PAPER_RECONCILIATION_AUDIT_TERMINAL_TRUTH_INVALID"):
-            with connection.begin_nested():
+            if status != "CLAIMED":
                 connection.execute(
                     text(
-                        "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
-                        "VALUES (:id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', :entity_id, '{}'::JSONB)"
+                        "UPDATE job_runs SET status=:status, "
+                        "completed_at=CASE WHEN :completed THEN transaction_timestamp() ELSE NULL END, "
+                        "failure_code=:failure_code WHERE job_run_id=:id"
                     ),
-                    {"id": uuid4(), "entity_id": str(job_run_id)},
+                    {
+                        "status": status,
+                        "completed": completed,
+                        "failure_code": failure_code,
+                        "id": job_run_id,
+                    },
                 )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RECONCILIATION_AUDIT_TERMINAL_TRUTH_INVALID",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
+                            "VALUES (:id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', :entity_id, '{}'::JSONB)"
+                        ),
+                        {"id": uuid4(), "entity_id": str(job_run_id)},
+                    )
+        finally:
+            transaction.rollback()
+            engine.dispose()
