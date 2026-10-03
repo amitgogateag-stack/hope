@@ -52,12 +52,16 @@ def reconcile_completed_paper_run(
         current,
     )
     transitioned = repository.complete(completion)
+    if not transitioned:
+        # The CLAIMED row is still held FOR UPDATE, so another lifecycle writer
+        # cannot legitimately win between the proof and this transition.
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_TRANSITION_NOT_APPLIED")
 
     durable = repository.get_record_for_run(job_run)
     if durable is None or durable.status is not JobRunStatus.SUCCEEDED:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_NOT_DURABLE")
     if durable.failure_code is not None:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
-    if transitioned and durable.completed_at != completion.completed_at:
+    if durable.completed_at != completion.completed_at:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
-    return transitioned
+    return True

@@ -74,6 +74,33 @@ def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypat
     assert _FakeRepository.completion is None
 
 
+def test_reconciliation_fails_closed_when_locked_transition_is_not_applied(monkeypatch) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-transition-lost",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = False
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS),
+    )
+    monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_TRANSITION_NOT_APPLIED",
+    ):
+        reconcile_completed_paper_run(object(), job_run, current=current)
+
+
 def test_reconciliation_is_idempotent_when_race_already_terminalized_success(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-race", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
