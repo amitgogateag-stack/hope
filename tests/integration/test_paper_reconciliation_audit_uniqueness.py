@@ -210,3 +210,30 @@ def test_paper_reconciliation_receipt_requires_clean_succeeded_terminal_truth(
         finally:
             transaction.rollback()
             engine.dispose()
+
+@pytest.mark.integration
+def test_paper_reconciliation_receipt_rejects_non_job_run_entity_type() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_RECONCILIATION_AUDIT_ENTITY_TYPE_INVALID",
+        ):
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO audit_events("
+                        "audit_event_id, event_type, entity_type, entity_id, payload"
+                        ") VALUES ("
+                        ":id, 'PAPER_RUN_RECONCILED', 'ORDER', :entity_id, '{}'::JSONB"
+                        ")"
+                    ),
+                    {"id": uuid4(), "entity_id": str(uuid4())},
+                )
+
