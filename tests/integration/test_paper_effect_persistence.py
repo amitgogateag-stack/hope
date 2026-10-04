@@ -164,7 +164,13 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
             entity_id,
             PAYLOAD,
         )
-        repeated_effect = create_paper_effect(
+        same_run_replay = create_paper_effect(
+            first_run,
+            PaperEffectType.SIGNAL,
+            entity_id,
+            PAYLOAD,
+        )
+        cross_run_replay = create_paper_effect(
             second_run,
             PaperEffectType.SIGNAL,
             entity_id,
@@ -172,7 +178,9 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
         )
 
         assert effects.record(first_effect) is True
-        assert effects.record(repeated_effect) is False
+        assert effects.record(same_run_replay) is False
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            effects.record(cross_run_replay)
 
         stored = effects.get(PaperEffectType.SIGNAL, entity_id)
         assert stored is not None
@@ -181,7 +189,7 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
         assert stored.payload_hash == PAYLOAD
 
         conflicting_effect = create_paper_effect(
-            second_run,
+            first_run,
             PaperEffectType.SIGNAL,
             entity_id,
             "c" * 64,
