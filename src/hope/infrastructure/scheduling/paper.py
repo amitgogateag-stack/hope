@@ -235,10 +235,11 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
         if recovery.stale_run_ids:
             raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
 
-        if recovery.completed_effect_run_ids:
+        reconciled_run_ids = recovery.completed_effect_run_ids
+        if reconciled_run_ids:
             due_by_id = {job_run.job_run_id: job_run for job_run in due}
             with engine.begin() as reconciliation_connection:
-                for job_run_id in sorted(recovery.completed_effect_run_ids, key=str):
+                for job_run_id in sorted(reconciled_run_ids, key=str):
                     reconcile_completed_paper_run(
                         reconciliation_connection,
                         due_by_id[job_run_id],
@@ -250,6 +251,8 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
                     current=current,
                     max_lateness=max_lateness,
                 )
+                if not reconciled_run_ids.issubset(recovery.terminal_run_ids):
+                    raise RuntimeError("PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL")
                 recovery.assert_safe_to_execute()
         else:
             recovery.assert_safe_to_execute()

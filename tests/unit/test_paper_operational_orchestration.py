@@ -319,6 +319,102 @@ def test_due_paper_runner_never_reenters_runtime_after_no_replay_reconciliation(
     )
 
 
+def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_terminal(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
+        _RunningPaperControl,
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
+        lambda engine: nullcontext(),
+    )
+    current = datetime(2026, 10, 4, 15, 0, tzinfo=UTC)
+    interrupted = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000001:reconcile",
+        current - timedelta(minutes=1),
+    )
+    complete_types = frozenset(
+        {
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.REJECTION,
+        }
+    )
+    reports = iter(
+        (
+            PaperRecoveryReport(
+                (
+                    PaperRecoveryAssessment(
+                        interrupted.job_run_id,
+                        PaperRecoveryDisposition.INCOMPLETE,
+                        JobRunStatus.CLAIMED,
+                        complete_types,
+                        tuple(
+                            (effect_type, 1)
+                            for effect_type in sorted(
+                                complete_types,
+                                key=lambda item: item.value,
+                            )
+                        ),
+                        True,
+                    ),
+                )
+            ),
+            PaperRecoveryReport(
+                (
+                    PaperRecoveryAssessment(
+                        interrupted.job_run_id,
+                        PaperRecoveryDisposition.FRESH,
+                        None,
+                    ),
+                )
+            ),
+        )
+    )
+    runtime_calls = []
+
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.assess_due_paper_recovery",
+        lambda *args, **kwargs: next(reports),
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.reconcile_completed_paper_run",
+        lambda *args, **kwargs: True,
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.run_paper_once",
+        lambda *args, **kwargs: runtime_calls.append(interrupted.job_run_id),
+    )
+    registry = __import__(
+        "hope.infrastructure.paper_runtime",
+        fromlist=["PaperJobRegistry"],
+    ).PaperJobRegistry(
+        [
+            __import__(
+                "hope.infrastructure.paper_runtime",
+                fromlist=["PaperJobDefinition"],
+            ).PaperJobDefinition(interrupted.job_key, lambda runtime: None)
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL",
+    ):
+        run_due_operational_paper_jobs(
+            _ControlEngine(),
+            registry,
+            [interrupted],
+            now=lambda: current,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert runtime_calls == []
+
+
 def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) -> None:
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     run = create_scheduled_job_run("paper-us", now)

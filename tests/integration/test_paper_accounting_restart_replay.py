@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -24,6 +24,7 @@ from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
+from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
@@ -31,6 +32,7 @@ from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPap
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
+from hope.infrastructure.scheduling.paper import run_due_operational_paper_jobs
 from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
 
 UTC = timezone.utc
@@ -216,6 +218,81 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay() 
             ),
             {"id": str(run.job_run_id)},
         ).scalar_one() == 1
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_scheduler_reconciles_committed_effects_without_runtime_replay() -> None:
+    """Restart preflight terminalizes durable effects before ordinary PAPER work."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    runtime_calls = []
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-scheduler-reconcile",
+            authenticated_job=True,
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        effect_count = connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": run.job_run_id},
+        ).scalar_one()
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                run.job_key,
+                lambda runtime: runtime_calls.append(run.job_run_id),
+            )
+        ]
+    )
+    results = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        [run],
+        now=lambda: datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+        max_lateness=timedelta(minutes=5),
+    )
+
+    assert [outcome.value for _, outcome in results] == ["SKIPPED_TERMINAL"]
+    assert runtime_calls == []
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": run.job_run_id},
+        ).scalar_one() == effect_count
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM audit_events "
+                "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"
+            ),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).one() == (Decimal("799.50"), 1)
 
     engine.dispose()
 
