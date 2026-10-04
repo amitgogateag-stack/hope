@@ -319,8 +319,26 @@ def test_due_paper_runner_never_reenters_runtime_after_no_replay_reconciliation(
     )
 
 
-def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_terminal(
+@pytest.mark.parametrize(
+    ("post_disposition", "post_status", "error_code"),
+    (
+        (
+            PaperRecoveryDisposition.FRESH,
+            None,
+            "PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL",
+        ),
+        (
+            PaperRecoveryDisposition.TERMINAL,
+            JobRunStatus.FAILED,
+            "PAPER_SCHEDULER_RECONCILIATION_NOT_SUCCEEDED",
+        ),
+    ),
+)
+def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_succeeded(
     monkeypatch,
+    post_disposition,
+    post_status,
+    error_code,
 ) -> None:
     monkeypatch.setattr(
         "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
@@ -367,8 +385,8 @@ def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_terminal(
                 (
                     PaperRecoveryAssessment(
                         interrupted.job_run_id,
-                        PaperRecoveryDisposition.FRESH,
-                        None,
+                        post_disposition,
+                        post_status,
                     ),
                 )
             ),
@@ -400,10 +418,7 @@ def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_terminal(
         ]
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL",
-    ):
+    with pytest.raises(RuntimeError, match=error_code):
         run_due_operational_paper_jobs(
             _ControlEngine(),
             registry,

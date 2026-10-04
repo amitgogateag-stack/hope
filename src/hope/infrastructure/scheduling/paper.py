@@ -253,6 +253,8 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
                 )
                 if not reconciled_run_ids.issubset(recovery.terminal_run_ids):
                     raise RuntimeError("PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL")
+                if not reconciled_run_ids.issubset(recovery.succeeded_run_ids):
+                    raise RuntimeError("PAPER_SCHEDULER_RECONCILIATION_NOT_SUCCEEDED")
                 recovery.assert_safe_to_execute()
         else:
             recovery.assert_safe_to_execute()

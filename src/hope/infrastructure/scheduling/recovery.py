@@ -129,6 +129,15 @@ class PaperRecoveryReport:
         return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.TERMINAL)
 
     @property
+    def succeeded_run_ids(self) -> frozenset[UUID]:
+        return frozenset(
+            item.job_run_id
+            for item in self.assessments
+            if item.disposition is PaperRecoveryDisposition.TERMINAL
+            and item.status is JobRunStatus.SUCCEEDED
+        )
+
+    @property
     def incomplete_run_ids(self) -> frozenset[UUID]:
         return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.INCOMPLETE)
 
