@@ -137,7 +137,7 @@ def test_reconciliation_rejects_non_paper_run_before_database_activity() -> None
 
 def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
-    job_run = create_scheduled_job_run("paper-reconcile", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    job_run = create_scheduled_job_run("paper:reconcile", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
     _FakeRepository.lock_result = True
     _FakeRepository.transition_result = True
     _FakeRepository.record = SimpleNamespace(
@@ -171,7 +171,7 @@ def test_reconciliation_normalizes_job_identity_conflict_before_effect_read(
 ) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-identity-conflict",
+        "paper:identity-conflict",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_error = ValueError("JOB_RUN_IDENTITY_CONFLICT")
@@ -200,7 +200,7 @@ def test_reconciliation_normalizes_job_identity_conflict_before_effect_read(
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
-    job_run = create_scheduled_job_run("paper-unproven", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    job_run = create_scheduled_job_run("paper:unproven", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
     _FakeRepository.lock_result = True
     _FakeRepository.completion = None
     monkeypatch.setattr(
@@ -221,7 +221,7 @@ def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypat
 def test_reconciliation_fails_closed_when_locked_transition_is_not_applied(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-transition-lost",
+        "paper:transition-lost",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
@@ -250,7 +250,7 @@ def test_reconciliation_fails_closed_when_locked_transition_is_not_applied(monke
 
 def test_reconciliation_is_idempotent_when_race_already_terminalized_success(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
-    job_run = create_scheduled_job_run("paper-race", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    job_run = create_scheduled_job_run("paper:race", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
     _FakeRepository.lock_result = False
     _FakeRepository.record = SimpleNamespace(
         status=JobRunStatus.SUCCEEDED,
@@ -266,7 +266,7 @@ def test_reconciliation_is_idempotent_when_race_already_terminalized_success(mon
 
 def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
-    job_run = create_scheduled_job_run("paper-mismatch", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
+    job_run = create_scheduled_job_run("paper:mismatch", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))
     _FakeRepository.lock_result = False
     _FakeRepository.record = SimpleNamespace(
         status=JobRunStatus.FAILED,
@@ -286,7 +286,7 @@ def test_reconciliation_fails_closed_on_mismatched_recovery_assessment(
 ) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-assessment-mismatch",
+        "paper:assessment-mismatch",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
@@ -316,7 +316,7 @@ def test_reconciliation_fails_closed_on_mismatched_recovery_assessment(
 def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminalization(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-effects-changed",
+        "paper:effects-changed",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     marker = object()
@@ -346,7 +346,7 @@ def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminaliza
 def test_reconciliation_fails_closed_if_audit_receipt_is_not_new(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-audit-conflict",
+        "paper:audit-conflict",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
@@ -376,7 +376,7 @@ def test_reconciliation_fails_closed_if_audit_receipt_is_not_new(monkeypatch) ->
 def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-audit-not-durable",
+        "paper:audit-not-durable",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
@@ -412,7 +412,7 @@ def test_reconciliation_maps_database_receipt_rejection_and_rolls_back(
 ) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-audit-database-rejected",
+        "paper:audit-database-rejected",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
@@ -462,7 +462,7 @@ def test_reconciliation_maps_audit_record_identity_conflict_to_mismatch(
 ) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
-        "paper-audit-identity-conflict",
+        "paper:audit-identity-conflict",
         datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
     )
     _FakeRepository.lock_result = True
