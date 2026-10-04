@@ -7,7 +7,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
-from hope.application.jobs import (\n    JobRunStatus,\n    create_job_run_completion,\n    create_scheduled_job_run,\n)
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper import (
     PaperCycleContext,
     PaperFillAccountingWriter,
