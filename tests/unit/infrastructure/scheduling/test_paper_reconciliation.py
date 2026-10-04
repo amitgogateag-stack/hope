@@ -46,6 +46,8 @@ class _FakeEffectRepository:
 class _FakeAuditRepository:
     result = True
     calls = []
+    verify_result = True
+    verify_calls = []
 
     def __init__(self, connection):
         self.connection = connection
@@ -53,6 +55,10 @@ class _FakeAuditRepository:
     def record(self, completion, effects):
         type(self).calls.append((completion, effects))
         return type(self).result
+
+    def verify(self, completion, effects):
+        type(self).verify_calls.append((completion, effects))
+        return type(self).verify_result
 
 
 @pytest.fixture(autouse=True)
@@ -66,6 +72,8 @@ def _reset_effect_repository(monkeypatch):
     )
     _FakeAuditRepository.result = True
     _FakeAuditRepository.calls = []
+    _FakeAuditRepository.verify_result = True
+    _FakeAuditRepository.verify_calls = []
     monkeypatch.setattr(
         paper_reconciliation,
         "SqlAlchemyPaperReconciliationAuditRepository",
@@ -170,7 +178,8 @@ def test_reconciliation_is_idempotent_when_race_already_terminalized_success(mon
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     assert reconcile_completed_paper_run(object(), job_run, current=current) is False
-    assert _FakeEffectRepository.calls == 0
+    assert _FakeEffectRepository.calls == 1
+    assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
 
 
 def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success(monkeypatch) -> None:
