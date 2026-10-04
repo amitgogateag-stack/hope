@@ -10,6 +10,21 @@ from hope.infrastructure.scheduling.paper_reconciliation import reconcile_comple
 from hope.infrastructure.scheduling.recovery import PaperRecoveryDecision
 
 
+class _FakeConnection:
+    exits = []
+
+    class _Savepoint:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            _FakeConnection.exits.append(exc_type)
+            return False
+
+    def begin_nested(self):
+        return self._Savepoint()
+
+
 class _FakeRepository:
     record = None
     lock_result = True
@@ -66,6 +81,7 @@ class _FakeAuditRepository:
 
 @pytest.fixture(autouse=True)
 def _reset_effect_repository(monkeypatch):
+    _FakeConnection.exits = []
     _FakeEffectRepository.snapshots = ((), ())
     _FakeEffectRepository.calls = 0
     monkeypatch.setattr(
@@ -111,7 +127,7 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
-    assert reconcile_completed_paper_run(object(), job_run, current=current) is True
+    assert reconcile_completed_paper_run(_FakeConnection(), job_run, current=current) is True
     assert _FakeRepository.completion.run == job_run
     assert _FakeRepository.completion.status is JobRunStatus.SUCCEEDED
     assert _FakeRepository.completion.completed_at == current
@@ -119,6 +135,7 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     assert _FakeEffectRepository.calls == 2
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+    assert _FakeConnection.exits == [None]
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
@@ -137,7 +154,7 @@ def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypat
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_NOT_PROVEN"):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
     assert _FakeRepository.completion is None
 
 
@@ -168,7 +185,7 @@ def test_reconciliation_fails_closed_when_locked_transition_is_not_applied(monke
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_TRANSITION_NOT_APPLIED",
     ):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
 
 
 def test_reconciliation_is_idempotent_when_race_already_terminalized_success(monkeypatch) -> None:
@@ -182,7 +199,7 @@ def test_reconciliation_is_idempotent_when_race_already_terminalized_success(mon
     )
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
-    assert reconcile_completed_paper_run(object(), job_run, current=current) is False
+    assert reconcile_completed_paper_run(_FakeConnection(), job_run, current=current) is False
     assert _FakeEffectRepository.calls == 1
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
 
@@ -199,7 +216,7 @@ def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_NOT_CLAIMED"):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
 
 
 @pytest.mark.parametrize("assessment_ids", [(), (uuid4(),), (uuid4(), uuid4())])
@@ -232,7 +249,7 @@ def test_reconciliation_fails_closed_on_mismatched_recovery_assessment(
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_ASSESSMENT_MISMATCH",
     ):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
     assert _FakeRepository.completion is None
 
 
@@ -262,7 +279,7 @@ def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminaliza
     monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED"):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
     assert _FakeAuditRepository.calls == []
 
 
@@ -294,7 +311,7 @@ def test_reconciliation_fails_closed_if_audit_receipt_is_not_new(monkeypatch) ->
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED",
     ):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
 
 def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
@@ -324,9 +341,11 @@ def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeyp
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE",
     ):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+    assert _FakeConnection.exits == [RuntimeError]
+
 
 def test_reconciliation_maps_audit_record_identity_conflict_to_mismatch(
     monkeypatch,
@@ -364,7 +383,7 @@ def test_reconciliation_maps_audit_record_identity_conflict_to_mismatch(
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH",
     ):
-        reconcile_completed_paper_run(object(), job_run, current=current)
+        reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
 
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == []

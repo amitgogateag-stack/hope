@@ -32,8 +32,24 @@ def reconcile_completed_paper_run(
     appear between proof and terminalization. This operation never invokes signal,
     risk, order, fill, position, accounting, or P&L writers. A concurrent reconciler
     that already terminalized the run as SUCCEEDED is accepted only when its exact
-    immutable reconciliation receipt is durable.
+    immutable reconciliation receipt is durable. The full proof, transition,
+    durable reread, effect comparison, and receipt write execute inside a savepoint
+    so any fail-closed error rolls back the transition even if a caller catches it.
     """
+    with connection.begin_nested():
+        return _reconcile_completed_paper_run(
+            connection,
+            job_run,
+            current=current,
+        )
+
+
+def _reconcile_completed_paper_run(
+    connection: Connection,
+    job_run: ScheduledJobRun,
+    *,
+    current: datetime,
+) -> bool:
     repository = SqlAlchemyJobRunRepository(connection)
     effects_repository = SqlAlchemyPaperEffectRepository(connection)
     audit_repository = SqlAlchemyPaperReconciliationAuditRepository(connection)
