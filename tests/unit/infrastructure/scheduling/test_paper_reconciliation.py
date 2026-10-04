@@ -113,7 +113,8 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     assert _FakeRepository.completion.completed_at == current
     assert _FakeRepository.completion.failure_code is None
     assert _FakeEffectRepository.calls == 2
-    assert _FakeAuditRepository.calls == [(_FakeRepository.completion, ())]
+    assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
+    assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
@@ -290,3 +291,36 @@ def test_reconciliation_fails_closed_if_audit_receipt_is_not_new(monkeypatch) ->
         match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED",
     ):
         reconcile_completed_paper_run(object(), job_run, current=current)
+
+def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeypatch) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-audit-not-durable",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeAuditRepository.verify_result = False
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE",
+    ):
+        reconcile_completed_paper_run(object(), job_run, current=current)
+    assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
+    assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+

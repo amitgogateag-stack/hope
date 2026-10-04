@@ -85,8 +85,14 @@ def reconcile_completed_paper_run(
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
     if not audit_repository.record(
-        completion,
+        durable,
         effects_after,
     ):
         raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED")
+    try:
+        audit_verified = audit_repository.verify(durable, effects_after)
+    except ValueError as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH") from exc
+    if not audit_verified:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE")
     return True
