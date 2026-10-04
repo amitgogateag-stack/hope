@@ -18,6 +18,7 @@ from hope.infrastructure.scheduling.recovery import (
     assess_due_paper_recovery,
 )
 from sqlalchemy import Connection
+from sqlalchemy.exc import IntegrityError
 
 
 _T = TypeVar("_T")
@@ -122,6 +123,8 @@ def _reconcile_completed_paper_run(
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
     try:
         audit_recorded = audit_repository.record(durable, effects_after)
+    except IntegrityError as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_REJECTED") from exc
     except ValueError as exc:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH") from exc
     if not audit_recorded:

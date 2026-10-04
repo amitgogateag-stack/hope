@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.infrastructure.scheduling import paper_reconciliation
@@ -380,6 +381,56 @@ def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeyp
         reconcile_completed_paper_run(_FakeConnection(), job_run, current=current)
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+    assert _FakeConnection.exits == [RuntimeError]
+
+
+def test_reconciliation_maps_database_receipt_rejection_and_rolls_back(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-audit-database-rejected",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeAuditRepository.record_error = IntegrityError(
+        "INSERT INTO audit_events",
+        {},
+        Exception("PAPER_RECONCILIATION_AUDIT_PAYLOAD_INVALID"),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_AUDIT_REJECTED",
+    ) as error:
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert isinstance(error.value.__cause__, IntegrityError)
+    assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
+    assert _FakeAuditRepository.verify_calls == []
     assert _FakeConnection.exits == [RuntimeError]
 
 
