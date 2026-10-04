@@ -23,6 +23,8 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
     strategy_id = uuid4()
     strategy_version_id = uuid4()
     job_run_id = uuid4()
+    effect_id = uuid4()
+    effect_entity_id = uuid4()
     with engine.connect() as connection:
         transaction = connection.begin()
         try:
@@ -49,6 +51,19 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
             )
             connection.execute(
                 text(
+                    "INSERT INTO paper_effects("
+                    "effect_id, job_run_id, effect_type, entity_id, payload_hash"
+                    ") VALUES (:effect_id, :job_run_id, 'SIGNAL', :entity_id, :payload_hash)"
+                ),
+                {
+                    "effect_id": effect_id,
+                    "job_run_id": job_run_id,
+                    "entity_id": effect_entity_id,
+                    "payload_hash": "a" * 64,
+                },
+            )
+            connection.execute(
+                text(
                     "UPDATE job_runs SET status='SUCCEEDED', completed_at=transaction_timestamp() "
                     "WHERE job_run_id=:id"
                 ),
@@ -69,7 +84,7 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                         {"id": uuid4(), "entity_id": str(job_run_id)},
                     )
 
-            receipt = (
+            forged_effect_receipt = (
                 "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
                 "SELECT :id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', job_run_id::text, "
                 "jsonb_build_object("
@@ -78,8 +93,43 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                 "'job_key', job_key, "
                 "'scheduled_for', scheduled_for::text, "
                 "'completed_at', completed_at::text, "
-                "'effects', '[]'::jsonb"
+                "'effects', jsonb_build_array(jsonb_build_object("
+                "'effect_id', '00000000-0000-0000-0000-000000000901', "
+                "'effect_type', 'SIGNAL', "
+                "'entity_id', '00000000-0000-0000-0000-000000000902', "
+                "'payload_hash', repeat('0', 64)"
+                "))"
                 ") FROM job_runs WHERE job_run_id=:job_run_id"
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RECONCILIATION_AUDIT_PAYLOAD_INVALID",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(forged_effect_receipt),
+                        {"id": uuid4(), "job_run_id": job_run_id},
+                    )
+
+            receipt = (
+                "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
+                "SELECT :id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', jr.job_run_id::text, "
+                "jsonb_build_object("
+                "'schema_version', 1, "
+                "'decision', 'ACKNOWLEDGE_COMPLETE_EFFECTS', "
+                "'job_key', jr.job_key, "
+                "'scheduled_for', jr.scheduled_for::text, "
+                "'completed_at', jr.completed_at::text, "
+                "'effects', ("
+                "SELECT jsonb_agg(jsonb_build_object("
+                "'effect_id', pe.effect_id::text, "
+                "'effect_type', pe.effect_type, "
+                "'entity_id', pe.entity_id::text, "
+                "'payload_hash', pe.payload_hash"
+                ") ORDER BY pe.created_at, pe.effect_id) "
+                "FROM paper_effects pe WHERE pe.job_run_id=jr.job_run_id"
+                ")"
+                ") FROM job_runs jr WHERE jr.job_run_id=:job_run_id"
             )
             connection.execute(
                 text(receipt),
