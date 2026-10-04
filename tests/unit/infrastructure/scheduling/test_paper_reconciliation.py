@@ -27,6 +27,7 @@ class _FakeConnection:
 
 class _FakeRepository:
     record = None
+    lock_error = None
     lock_result = True
     transition_result = True
     completion = None
@@ -35,6 +36,8 @@ class _FakeRepository:
         self.connection = connection
 
     def lock_claimed_for_reconciliation(self, job_run):
+        if type(self).lock_error is not None:
+            raise type(self).lock_error
         return type(self).lock_result
 
     def complete(self, completion):
@@ -82,6 +85,7 @@ class _FakeAuditRepository:
 @pytest.fixture(autouse=True)
 def _reset_effect_repository(monkeypatch):
     _FakeConnection.exits = []
+    _FakeRepository.lock_error = None
     _FakeEffectRepository.snapshots = ((), ())
     _FakeEffectRepository.calls = 0
     monkeypatch.setattr(
@@ -136,6 +140,38 @@ def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkey
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
     assert _FakeConnection.exits == [None]
+
+
+def test_reconciliation_normalizes_job_identity_conflict_before_effect_read(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-identity-conflict",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_error = ValueError("JOB_RUN_IDENTITY_CONFLICT")
+    _FakeRepository.completion = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_IDENTITY_MISMATCH",
+    ) as error:
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert isinstance(error.value.__cause__, ValueError)
+    assert _FakeRepository.completion is None
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeConnection.exits == [RuntimeError]
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:

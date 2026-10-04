@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Callable, TypeVar
 
 from hope.application.jobs import (
     JobRunStatus,
@@ -17,6 +18,16 @@ from hope.infrastructure.scheduling.recovery import (
     assess_due_paper_recovery,
 )
 from sqlalchemy import Connection
+
+
+_T = TypeVar("_T")
+
+
+def _job_identity_checked(operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except ValueError as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_IDENTITY_MISMATCH") from exc
 
 
 def reconcile_completed_paper_run(
@@ -53,8 +64,13 @@ def _reconcile_completed_paper_run(
     repository = SqlAlchemyJobRunRepository(connection)
     effects_repository = SqlAlchemyPaperEffectRepository(connection)
     audit_repository = SqlAlchemyPaperReconciliationAuditRepository(connection)
-    if not repository.lock_claimed_for_reconciliation(job_run):
-        durable = repository.get_record_for_run(job_run)
+    locked_claimed = _job_identity_checked(
+        lambda: repository.lock_claimed_for_reconciliation(job_run)
+    )
+    if not locked_claimed:
+        durable = _job_identity_checked(
+            lambda: repository.get_record_for_run(job_run)
+        )
         if durable is not None and durable.status is JobRunStatus.SUCCEEDED and durable.failure_code is None:
             effects = effects_repository.list_for_job_run(job_run.job_run_id)
             try:
@@ -84,13 +100,17 @@ def _reconcile_completed_paper_run(
         JobRunStatus.SUCCEEDED,
         current,
     )
-    transitioned = repository.complete(completion)
+    transitioned = _job_identity_checked(
+        lambda: repository.complete(completion)
+    )
     if not transitioned:
         # The CLAIMED row is still held FOR UPDATE, so another lifecycle writer
         # cannot legitimately win between the proof and this transition.
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TRANSITION_NOT_APPLIED")
 
-    durable = repository.get_record_for_run(job_run)
+    durable = _job_identity_checked(
+        lambda: repository.get_record_for_run(job_run)
+    )
     if durable is None or durable.status is not JobRunStatus.SUCCEEDED:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_NOT_DURABLE")
     if durable.failure_code is not None:
