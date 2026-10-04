@@ -5,6 +5,7 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
+from hope.application.jobs import JobRunStatus
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 
 
@@ -14,6 +15,12 @@ class SqlAlchemyPaperEffectRepository:
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
         metadata = MetaData()
+        self._job_runs = Table(
+            "job_runs",
+            metadata,
+            Column("job_run_id", Uuid, primary_key=True),
+            Column("status", String, nullable=False),
+        )
         self._paper_effects = Table(
             "paper_effects",
             metadata,
@@ -26,7 +33,7 @@ class SqlAlchemyPaperEffectRepository:
         )
 
     def record(self, effect: PaperEffect) -> bool:
-        """Record one logical effect; return False for an exact prior effect."""
+        """Record one logical effect; return False for a safely reusable prior effect."""
         statement = (
             pg_insert(self._paper_effects)
             .values(
@@ -48,15 +55,26 @@ class SqlAlchemyPaperEffectRepository:
                 self._paper_effects.c.effect_id,
                 self._paper_effects.c.job_run_id,
                 self._paper_effects.c.payload_hash,
-            ).where(
+                self._job_runs.c.status.label("owner_status"),
+            )
+            .select_from(
+                self._paper_effects.join(
+                    self._job_runs,
+                    self._job_runs.c.job_run_id == self._paper_effects.c.job_run_id,
+                )
+            )
+            .where(
                 self._paper_effects.c.effect_type == effect.effect_type.value,
                 self._paper_effects.c.entity_id == effect.entity_id,
             )
         ).mappings().one()
         if (
             existing["effect_id"] != effect.effect_id
-            or existing["job_run_id"] != effect.job_run_id
             or existing["payload_hash"] != effect.payload_hash
+            or (
+                existing["job_run_id"] != effect.job_run_id
+                and existing["owner_status"] != JobRunStatus.SUCCEEDED.value
+            )
         ):
             raise ValueError("PAPER_EFFECT_IDENTITY_CONFLICT")
         return False

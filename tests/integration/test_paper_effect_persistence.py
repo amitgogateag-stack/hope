@@ -182,6 +182,14 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
         with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
             effects.record(cross_run_replay)
 
+        first_completion = create_job_run_completion(
+            first_run,
+            JobRunStatus.SUCCEEDED,
+            first_run.scheduled_for + timedelta(minutes=1),
+        )
+        assert jobs.complete(first_completion) is True
+        assert effects.record(cross_run_replay) is False
+
         stored = effects.get(PaperEffectType.SIGNAL, entity_id)
         assert stored is not None
         assert stored.effect_id == first_effect.effect_id
