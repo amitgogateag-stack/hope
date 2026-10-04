@@ -55,20 +55,42 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                 {"id": job_run_id},
             )
 
+            malformed_receipt = (
+                "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
+                "VALUES (:id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', :entity_id, '{}'::JSONB)"
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RECONCILIATION_AUDIT_PAYLOAD_INVALID",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(malformed_receipt),
+                        {"id": uuid4(), "entity_id": str(job_run_id)},
+                    )
+
             receipt = (
                 "INSERT INTO audit_events(audit_event_id, event_type, entity_type, entity_id, payload) "
-                "VALUES (:id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', :entity_id, CAST(:payload AS JSONB))"
+                "SELECT :id, 'PAPER_RUN_RECONCILED', 'JOB_RUN', job_run_id::text, "
+                "jsonb_build_object("
+                "'schema_version', 1, "
+                "'decision', 'ACKNOWLEDGE_COMPLETE_EFFECTS', "
+                "'job_key', job_key, "
+                "'scheduled_for', scheduled_for::text, "
+                "'completed_at', completed_at::text, "
+                "'effects', '[]'::jsonb"
+                ") FROM job_runs WHERE job_run_id=:job_run_id"
             )
             connection.execute(
                 text(receipt),
-                {"id": uuid4(), "entity_id": str(job_run_id), "payload": '{"schema_version":1}'},
+                {"id": uuid4(), "job_run_id": job_run_id},
             )
 
             with pytest.raises(IntegrityError):
                 with connection.begin_nested():
                     connection.execute(
                         text(receipt),
-                        {"id": uuid4(), "entity_id": str(job_run_id), "payload": '{"schema_version":1}'},
+                        {"id": uuid4(), "job_run_id": job_run_id},
                     )
 
             count = connection.execute(
