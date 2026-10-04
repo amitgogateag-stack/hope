@@ -18,7 +18,7 @@ from hope.infrastructure.scheduling.recovery import (
     assess_due_paper_recovery,
 )
 from sqlalchemy import Connection
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
 _T = TypeVar("_T")
@@ -50,12 +50,15 @@ def reconcile_completed_paper_run(
     """
     if not job_run.job_key.startswith("paper:"):
         raise RuntimeError("PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB")
-    with connection.begin_nested():
-        return _reconcile_completed_paper_run(
-            connection,
-            job_run,
-            current=current,
-        )
+    try:
+        with connection.begin_nested():
+            return _reconcile_completed_paper_run(
+                connection,
+                job_run,
+                current=current,
+            )
+    except SQLAlchemyError as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_DATABASE_UNAVAILABLE") from exc
 
 
 def _reconcile_completed_paper_run(

@@ -3,7 +3,7 @@ from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.infrastructure.scheduling import paper_reconciliation
@@ -52,6 +52,7 @@ class _FakeRepository:
 class _FakeEffectRepository:
     snapshots = ((), ())
     calls = 0
+    error = None
 
     def __init__(self, connection):
         self.connection = connection
@@ -59,6 +60,8 @@ class _FakeEffectRepository:
     def list_for_job_run(self, job_run_id):
         index = min(type(self).calls, len(type(self).snapshots) - 1)
         type(self).calls += 1
+        if type(self).error is not None:
+            raise type(self).error
         return type(self).snapshots[index]
 
 
@@ -89,6 +92,7 @@ def _reset_effect_repository(monkeypatch):
     _FakeRepository.lock_error = None
     _FakeEffectRepository.snapshots = ((), ())
     _FakeEffectRepository.calls = 0
+    _FakeEffectRepository.error = None
     monkeypatch.setattr(
         paper_reconciliation,
         "SqlAlchemyPaperEffectRepository",
@@ -196,6 +200,39 @@ def test_reconciliation_normalizes_job_identity_conflict_before_effect_read(
     assert _FakeRepository.completion is None
     assert _FakeEffectRepository.calls == 0
     assert _FakeConnection.exits == [RuntimeError]
+
+
+def test_reconciliation_maps_database_unavailability_and_rolls_back(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 4, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:database-unavailable",
+        datetime(2026, 10, 4, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.completion = None
+    _FakeEffectRepository.error = SQLAlchemyError("effect ledger unavailable")
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_DATABASE_UNAVAILABLE",
+    ) as error:
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert isinstance(error.value.__cause__, SQLAlchemyError)
+    assert _FakeRepository.completion is None
+    assert _FakeEffectRepository.calls == 1
+    assert _FakeConnection.exits == [SQLAlchemyError]
 
 
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
