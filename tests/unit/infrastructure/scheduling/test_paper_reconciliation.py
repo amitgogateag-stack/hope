@@ -112,6 +112,29 @@ def _report(decision, job_run_id):
     )
 
 
+def test_reconciliation_rejects_non_paper_run_before_database_activity() -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "research:reconciliation-forbidden",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.completion = None
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB",
+    ):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeConnection.exits == []
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeRepository.completion is None
+
+
 def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper-reconcile", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))

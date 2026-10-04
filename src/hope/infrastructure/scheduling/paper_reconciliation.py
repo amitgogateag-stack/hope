@@ -48,6 +48,8 @@ def reconcile_completed_paper_run(
     durable reread, effect comparison, and receipt write execute inside a savepoint
     so any fail-closed error rolls back the transition even if a caller catches it.
     """
+    if not job_run.job_key.startswith("paper:"):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB")
     with connection.begin_nested():
         return _reconcile_completed_paper_run(
             connection,
