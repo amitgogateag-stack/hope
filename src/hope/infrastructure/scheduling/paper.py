@@ -179,13 +179,20 @@ _PAPER_SCHEDULER_LOCK_NAME = "hope:paper:operational-scheduler"
 @contextmanager
 def _operational_paper_scheduler_lock(engine: Engine):
     with engine.connect() as connection:
-        acquired = connection.execute(text("SELECT pg_try_advisory_lock(hashtext(:lock_name)::bigint)"), {"lock_name": _PAPER_SCHEDULER_LOCK_NAME}).scalar_one()
+        acquired = connection.execute(
+            text(
+                "SELECT pg_try_advisory_xact_lock("
+                "hashtext(:lock_name)::bigint)"
+            ),
+            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+        ).scalar_one()
         if acquired is not True:
             raise RuntimeError("PAPER_SCHEDULER_CONCURRENT_RUN")
-        try:
-            yield
-        finally:
-            connection.execute(text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"), {"lock_name": _PAPER_SCHEDULER_LOCK_NAME})
+        # The connection's implicit transaction owns the lock. Closing this
+        # context rolls that transaction back and releases the lock on every
+        # success or failure path, before the physical session returns to the
+        # SQLAlchemy pool.
+        yield
 
 
 def _assert_recovery_report_matches_due(
