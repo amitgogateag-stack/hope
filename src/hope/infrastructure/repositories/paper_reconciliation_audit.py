@@ -111,6 +111,8 @@ class SqlAlchemyPaperReconciliationAuditRepository:
         )
         inserted_id = self._connection.execute(statement).scalar_one_or_none()
         if inserted_id is not None:
+            if not self.verify(completion, effects):
+                raise RuntimeError("PAPER_RECONCILIATION_AUDIT_NOT_DURABLE")
             return True
         if not self.verify(completion, effects):
             raise RuntimeError("PAPER_RECONCILIATION_AUDIT_NOT_DURABLE")
