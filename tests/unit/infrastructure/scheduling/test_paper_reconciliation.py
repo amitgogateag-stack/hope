@@ -26,6 +26,19 @@ class _FakeConnection:
         return self._Savepoint()
 
 
+class _FakeControlRepository:
+    calls = 0
+    error = None
+
+    def __init__(self, connection):
+        self.connection = connection
+
+    def assert_running(self):
+        type(self).calls += 1
+        if type(self).error is not None:
+            raise type(self).error
+
+
 class _FakeRepository:
     record = None
     lock_error = None
@@ -89,6 +102,13 @@ class _FakeAuditRepository:
 @pytest.fixture(autouse=True)
 def _reset_effect_repository(monkeypatch):
     _FakeConnection.exits = []
+    _FakeControlRepository.calls = 0
+    _FakeControlRepository.error = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyPaperEnvironmentControlRepository",
+        _FakeControlRepository,
+    )
     _FakeRepository.lock_error = None
     _FakeEffectRepository.snapshots = ((), ())
     _FakeEffectRepository.calls = 0
@@ -137,6 +157,35 @@ def test_reconciliation_rejects_non_paper_run_before_database_activity() -> None
     assert _FakeConnection.exits == []
     assert _FakeEffectRepository.calls == 0
     assert _FakeRepository.completion is None
+
+
+def test_reconciliation_rejects_halted_environment_before_durable_access(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 4, 21, 0, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:halted-reconciliation",
+        datetime(2026, 10, 4, 20, 30, tzinfo=UTC),
+    )
+    _FakeControlRepository.error = RuntimeError("PAPER_ENVIRONMENT_HALTED")
+    _FakeRepository.completion = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_ENVIRONMENT_HALTED"):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeControlRepository.calls == 1
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeRepository.completion is None
+    assert _FakeConnection.exits == [RuntimeError]
 
 
 def test_reconciliation_terminalizes_proven_run_without_replaying_effects(monkeypatch) -> None:

@@ -9,6 +9,9 @@ from hope.application.jobs import (
     create_job_run_completion,
 )
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_control import (
+    SqlAlchemyPaperEnvironmentControlRepository,
+)
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_reconciliation_audit import (
     SqlAlchemyPaperReconciliationAuditRepository,
@@ -52,6 +55,9 @@ def reconcile_completed_paper_run(
         raise RuntimeError("PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB")
     try:
         with connection.begin_nested():
+            SqlAlchemyPaperEnvironmentControlRepository(
+                connection
+            ).assert_running()
             return _reconcile_completed_paper_run(
                 connection,
                 job_run,
