@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
 
-from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select
+from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, and_, or_, select
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 
 from hope.application.jobs import JobRunRecord, JobRunStatus
@@ -72,17 +72,28 @@ class SqlAlchemyPaperReconciliationAuditRepository:
         """Return whether the exact durable reconciliation receipt already exists."""
 
         event_id, entity_id, payload = self._expected(completion, effects)
-        existing = self._connection.execute(
+        matches = self._connection.execute(
             select(
+                self._audit_events.c.audit_event_id,
                 self._audit_events.c.event_type,
                 self._audit_events.c.entity_type,
                 self._audit_events.c.entity_id,
                 self._audit_events.c.payload,
-            ).where(self._audit_events.c.audit_event_id == event_id)
-        ).mappings().one_or_none()
-        if existing is None:
+            ).where(
+                or_(
+                    self._audit_events.c.audit_event_id == event_id,
+                    and_(
+                        self._audit_events.c.event_type == self._EVENT_TYPE,
+                        self._audit_events.c.entity_type == self._ENTITY_TYPE,
+                        self._audit_events.c.entity_id == entity_id,
+                    ),
+                )
+            )
+        ).mappings().all()
+        if not matches:
             return False
-        if dict(existing) != {
+        if len(matches) != 1 or dict(matches[0]) != {
+            "audit_event_id": event_id,
             "event_type": self._EVENT_TYPE,
             "entity_type": self._ENTITY_TYPE,
             "entity_id": entity_id,
@@ -106,7 +117,7 @@ class SqlAlchemyPaperReconciliationAuditRepository:
                 entity_id=entity_id,
                 payload=payload,
             )
-            .on_conflict_do_nothing(index_elements=["audit_event_id"])
+            .on_conflict_do_nothing()
             .returning(self._audit_events.c.audit_event_id)
         )
         inserted_id = self._connection.execute(statement).scalar_one_or_none()

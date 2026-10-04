@@ -46,3 +46,57 @@ def test_new_reconciliation_receipt_must_be_reread_before_record_succeeds(
         repository.record(completion, effects)
 
     assert verify_calls == [(completion, effects)]
+
+class _RowsResult:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return self._rows
+
+
+class _ReadConnection:
+    def __init__(self, rows):
+        self._rows = rows
+
+    def execute(self, statement):
+        return _RowsResult(self._rows)
+
+
+def test_verify_rejects_same_job_receipt_with_different_audit_identity(
+    monkeypatch,
+) -> None:
+    expected_id = uuid4()
+    conflicting_id = uuid4()
+    repository = SqlAlchemyPaperReconciliationAuditRepository(
+        _ReadConnection(
+            [
+                {
+                    "audit_event_id": conflicting_id,
+                    "event_type": "PAPER_RUN_RECONCILED",
+                    "entity_type": "JOB_RUN",
+                    "entity_id": "job-run",
+                    "payload": {"schema_version": 1},
+                }
+            ]
+        )
+    )
+    monkeypatch.setattr(
+        repository,
+        "_expected",
+        lambda completion, effects: (
+            expected_id,
+            "job-run",
+            {"schema_version": 1},
+        ),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT",
+    ):
+        repository.verify(object(), ())
+
