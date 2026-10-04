@@ -197,7 +197,7 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
         assert stored.payload_hash == PAYLOAD
 
         conflicting_effect = create_paper_effect(
-            first_run,
+            second_run,
             PaperEffectType.SIGNAL,
             entity_id,
             "c" * 64,
