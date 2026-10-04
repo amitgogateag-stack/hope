@@ -19,7 +19,10 @@ from hope.infrastructure.paper_runtime import (
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
 from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
-from hope.infrastructure.scheduling.recovery import assess_due_paper_recovery
+from hope.infrastructure.scheduling.recovery import (
+    PaperRecoveryReport,
+    assess_due_paper_recovery,
+)
 from sqlalchemy import Engine, text
 
 
@@ -185,6 +188,19 @@ def _operational_paper_scheduler_lock(engine: Engine):
             connection.execute(text("SELECT pg_advisory_unlock(hashtext(:lock_name)::bigint)"), {"lock_name": _PAPER_SCHEDULER_LOCK_NAME})
 
 
+def _assert_recovery_report_matches_due(
+    recovery: PaperRecoveryReport,
+    due: Iterable[ScheduledJobRun],
+) -> None:
+    expected_ids = frozenset(job_run.job_run_id for job_run in due)
+    assessed_ids = tuple(item.job_run_id for item in recovery.assessments)
+    if (
+        len(assessed_ids) != len(expected_ids)
+        or frozenset(assessed_ids) != expected_ids
+    ):
+        raise RuntimeError("PAPER_SCHEDULER_RECOVERY_ASSESSMENT_MISMATCH")
+
+
 def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[ScheduledJobRun]) -> frozenset[UUID]:
     """Compatibility boundary backed by the centralized durable recovery classifier.
 
@@ -229,6 +245,7 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
         with engine.connect() as control_connection:
             SqlAlchemyPaperEnvironmentControlRepository(control_connection).assert_running()
             recovery = assess_due_paper_recovery(control_connection, due, current=current, max_lateness=max_lateness)
+        _assert_recovery_report_matches_due(recovery, due)
         unreconciled = recovery.incomplete_run_ids - recovery.completed_effect_run_ids
         if unreconciled:
             raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
@@ -251,6 +268,7 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
                     current=current,
                     max_lateness=max_lateness,
                 )
+                _assert_recovery_report_matches_due(recovery, due)
                 if not reconciled_run_ids.issubset(recovery.terminal_run_ids):
                     raise RuntimeError("PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL")
                 if not reconciled_run_ids.issubset(recovery.succeeded_run_ids):

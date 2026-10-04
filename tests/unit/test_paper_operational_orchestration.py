@@ -430,6 +430,78 @@ def test_due_paper_runner_blocks_runtime_if_reconciliation_is_not_succeeded(
     assert runtime_calls == []
 
 
+@pytest.mark.parametrize("mismatch", ("missing", "foreign", "duplicate"))
+def test_due_paper_runner_rejects_mismatched_recovery_identity_set(
+    monkeypatch,
+    mismatch,
+) -> None:
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
+        _RunningPaperControl,
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
+        lambda engine: nullcontext(),
+    )
+    current = datetime(2026, 10, 4, 16, 0, tzinfo=UTC)
+    due = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000002:assessment",
+        current - timedelta(minutes=1),
+    )
+    if mismatch == "missing":
+        assessments = ()
+    elif mismatch == "foreign":
+        assessments = (
+            PaperRecoveryAssessment(
+                uuid4(),
+                PaperRecoveryDisposition.FRESH,
+                None,
+            ),
+        )
+    else:
+        assessment = PaperRecoveryAssessment(
+            due.job_run_id,
+            PaperRecoveryDisposition.FRESH,
+            None,
+        )
+        assessments = (assessment, assessment)
+    runtime_calls = []
+
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.assess_due_paper_recovery",
+        lambda *args, **kwargs: PaperRecoveryReport(assessments),
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.run_paper_once",
+        lambda *args, **kwargs: runtime_calls.append(due.job_run_id),
+    )
+    registry = __import__(
+        "hope.infrastructure.paper_runtime",
+        fromlist=["PaperJobRegistry"],
+    ).PaperJobRegistry(
+        [
+            __import__(
+                "hope.infrastructure.paper_runtime",
+                fromlist=["PaperJobDefinition"],
+            ).PaperJobDefinition(due.job_key, lambda runtime: None)
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_SCHEDULER_RECOVERY_ASSESSMENT_MISMATCH",
+    ):
+        run_due_operational_paper_jobs(
+            _ControlEngine(),
+            registry,
+            [due],
+            now=lambda: current,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert runtime_calls == []
+
+
 def test_due_paper_runner_rejects_duplicate_durable_run_identity(monkeypatch) -> None:
     now = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
     run = create_scheduled_job_run("paper-us", now)
