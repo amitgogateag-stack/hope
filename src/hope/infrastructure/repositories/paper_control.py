@@ -56,7 +56,16 @@ class SqlAlchemyPaperEnvironmentControlRepository:
                 "PAPER_ENVIRONMENT_CONTROL_SEQUENCE_GENERATOR_INVALID"
             )
 
+    def _lock_control_state(self) -> None:
+        self._connection.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtext('hope:paper:environment-control')::bigint)"
+            )
+        )
+
     def assert_running(self) -> None:
+        self._lock_control_state()
         self._assert_sequence_generator_ready()
         state = self.current_state()
         if state != "RUNNING":
@@ -88,12 +97,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
         if actor != actor.strip():
             raise ValueError("PAPER_ENVIRONMENT_CONTROL_ACTOR_NOT_CANONICAL")
 
-        self._connection.execute(
-            text(
-                "SELECT pg_advisory_xact_lock("
-                "hashtext('hope:paper:environment-control')::bigint)"
-            )
-        )
+        self._lock_control_state()
         self._assert_sequence_generator_ready()
         current = self._connection.execute(
             select(self._events.c.state)

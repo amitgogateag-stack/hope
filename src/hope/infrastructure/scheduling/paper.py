@@ -256,6 +256,9 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
         if reconciled_run_ids:
             due_by_id = {job_run.job_run_id: job_run for job_run in due}
             with engine.begin() as reconciliation_connection:
+                SqlAlchemyPaperEnvironmentControlRepository(
+                    reconciliation_connection
+                ).assert_running()
                 for job_run_id in sorted(reconciled_run_ids, key=str):
                     reconcile_completed_paper_run(
                         reconciliation_connection,
