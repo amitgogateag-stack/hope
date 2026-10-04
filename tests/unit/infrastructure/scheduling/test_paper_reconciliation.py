@@ -45,6 +45,7 @@ class _FakeEffectRepository:
 
 class _FakeAuditRepository:
     result = True
+    record_error = None
     calls = []
     verify_result = True
     verify_calls = []
@@ -54,6 +55,8 @@ class _FakeAuditRepository:
 
     def record(self, completion, effects):
         type(self).calls.append((completion, effects))
+        if type(self).record_error is not None:
+            raise type(self).record_error
         return type(self).result
 
     def verify(self, completion, effects):
@@ -71,6 +74,7 @@ def _reset_effect_repository(monkeypatch):
         _FakeEffectRepository,
     )
     _FakeAuditRepository.result = True
+    _FakeAuditRepository.record_error = None
     _FakeAuditRepository.calls = []
     _FakeAuditRepository.verify_result = True
     _FakeAuditRepository.verify_calls = []
@@ -323,4 +327,45 @@ def test_reconciliation_fails_closed_if_new_audit_receipt_is_not_durable(monkeyp
         reconcile_completed_paper_run(object(), job_run, current=current)
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+
+def test_reconciliation_maps_audit_record_identity_conflict_to_mismatch(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper-audit-identity-conflict",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeAuditRepository.record_error = ValueError(
+        "PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT"
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH",
+    ):
+        reconcile_completed_paper_run(object(), job_run, current=current)
+
+    assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
+    assert _FakeAuditRepository.verify_calls == []
 
