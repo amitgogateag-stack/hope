@@ -284,6 +284,40 @@ def test_reconciliation_maps_database_unavailability_and_rolls_back(
     assert _FakeConnection.exits == [SQLAlchemyError]
 
 
+def test_reconciliation_maps_malformed_effect_evidence_and_rolls_back(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 4, 15, 0, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:malformed-effect-evidence",
+        datetime(2026, 10, 4, 14, 30, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.completion = None
+    _FakeEffectRepository.error = ValueError("PAPER_EFFECT_IDENTITY_MISMATCH")
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_EFFECT_MISMATCH",
+    ) as error:
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert isinstance(error.value.__cause__, ValueError)
+    assert _FakeRepository.completion is None
+    assert _FakeEffectRepository.calls == 1
+    assert _FakeAuditRepository.calls == []
+    assert _FakeConnection.exits == [RuntimeError]
+
+
 def test_reconciliation_rejects_unproven_run_before_lifecycle_mutation(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run("paper:unproven", datetime(2026, 10, 2, 14, 0, tzinfo=UTC))

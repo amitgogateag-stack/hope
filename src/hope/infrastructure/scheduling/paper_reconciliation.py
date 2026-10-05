@@ -34,6 +34,13 @@ def _job_identity_checked(operation: Callable[[], _T]) -> _T:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_IDENTITY_MISMATCH") from exc
 
 
+def _durable_effects_checked(operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except ValueError as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECT_MISMATCH") from exc
+
+
 def reconcile_completed_paper_run(
     connection: Connection,
     job_run: ScheduledJobRun,
@@ -84,7 +91,9 @@ def _reconcile_completed_paper_run(
             lambda: repository.get_record_for_run(job_run)
         )
         if durable is not None and durable.status is JobRunStatus.SUCCEEDED and durable.failure_code is None:
-            effects = effects_repository.list_for_job_run(job_run.job_run_id)
+            effects = _durable_effects_checked(
+                lambda: effects_repository.list_for_job_run(job_run.job_run_id)
+            )
             try:
                 verified = audit_repository.verify(durable, effects)
             except ValueError as exc:
@@ -94,7 +103,9 @@ def _reconcile_completed_paper_run(
             return False
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_CLAIMED")
 
-    effects_before = effects_repository.list_for_job_run(job_run.job_run_id)
+    effects_before = _durable_effects_checked(
+        lambda: effects_repository.list_for_job_run(job_run.job_run_id)
+    )
     report = assess_due_paper_recovery(
         connection,
         (job_run,),
@@ -129,7 +140,9 @@ def _reconcile_completed_paper_run(
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
     if durable.completed_at != completion.completed_at:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TERMINAL_STATE_MISMATCH")
-    effects_after = effects_repository.list_for_job_run(job_run.job_run_id)
+    effects_after = _durable_effects_checked(
+        lambda: effects_repository.list_for_job_run(job_run.job_run_id)
+    )
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
     try:
