@@ -34,6 +34,23 @@ def _job_identity_checked(operation: Callable[[], _T]) -> _T:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_IDENTITY_MISMATCH") from exc
 
 
+_JOB_IDENTITY_ERRORS = frozenset(
+    {
+        "JOB_RUN_IDENTITY_CONFLICT",
+        "JOB_RUN_IDENTITY_MISMATCH",
+    }
+)
+
+
+def _durable_job_record_checked(operation: Callable[[], _T]) -> _T:
+    try:
+        return operation()
+    except ValueError as exc:
+        if str(exc) in _JOB_IDENTITY_ERRORS:
+            raise RuntimeError("PAPER_JOB_RECONCILIATION_IDENTITY_MISMATCH") from exc
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_LIFECYCLE_MISMATCH") from exc
+
+
 def _durable_effects_checked(operation: Callable[[], _T]) -> _T:
     try:
         return operation()
@@ -87,7 +104,7 @@ def _reconcile_completed_paper_run(
         lambda: repository.lock_claimed_for_reconciliation(job_run)
     )
     if not locked_claimed:
-        durable = _job_identity_checked(
+        durable = _durable_job_record_checked(
             lambda: repository.get_record_for_run(job_run)
         )
         if durable is not None and durable.status is JobRunStatus.SUCCEEDED and durable.failure_code is None:
@@ -131,7 +148,7 @@ def _reconcile_completed_paper_run(
         # cannot legitimately win between the proof and this transition.
         raise RuntimeError("PAPER_JOB_RECONCILIATION_TRANSITION_NOT_APPLIED")
 
-    durable = _job_identity_checked(
+    durable = _durable_job_record_checked(
         lambda: repository.get_record_for_run(job_run)
     )
     if durable is None or durable.status is not JobRunStatus.SUCCEEDED:

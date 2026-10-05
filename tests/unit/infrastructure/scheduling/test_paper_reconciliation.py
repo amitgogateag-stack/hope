@@ -41,6 +41,7 @@ class _FakeControlRepository:
 
 class _FakeRepository:
     record = None
+    record_error = None
     lock_error = None
     lock_result = True
     transition_result = True
@@ -59,6 +60,8 @@ class _FakeRepository:
         return type(self).transition_result
 
     def get_record_for_run(self, job_run):
+        if type(self).record_error is not None:
+            raise type(self).record_error
         return type(self).record
 
 
@@ -110,6 +113,7 @@ def _reset_effect_repository(monkeypatch):
         _FakeControlRepository,
     )
     _FakeRepository.lock_error = None
+    _FakeRepository.record_error = None
     _FakeEffectRepository.snapshots = ((), ())
     _FakeEffectRepository.calls = 0
     _FakeEffectRepository.error = None
@@ -248,6 +252,40 @@ def test_reconciliation_normalizes_job_identity_conflict_before_effect_read(
     assert isinstance(error.value.__cause__, ValueError)
     assert _FakeRepository.completion is None
     assert _FakeEffectRepository.calls == 0
+    assert _FakeConnection.exits == [RuntimeError]
+
+
+def test_reconciliation_classifies_malformed_lifecycle_before_effect_read(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 4, 15, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:malformed-lifecycle",
+        datetime(2026, 10, 4, 15, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = False
+    _FakeRepository.record_error = ValueError("JOB_RUN_STATUS_INVALID")
+    _FakeRepository.completion = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_LIFECYCLE_MISMATCH",
+    ) as error:
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert isinstance(error.value.__cause__, ValueError)
+    assert _FakeRepository.completion is None
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeAuditRepository.calls == []
     assert _FakeConnection.exits == [RuntimeError]
 
 
