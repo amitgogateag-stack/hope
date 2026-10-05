@@ -140,6 +140,62 @@ def _report(decision, job_run_id):
     )
 
 
+def test_reconciliation_rejects_unvalidated_run_before_database_activity() -> None:
+    current = datetime(2026, 10, 5, 2, 0, tzinfo=UTC)
+    _FakeRepository.completion = None
+
+    with pytest.raises(
+        TypeError,
+        match="PAPER_JOB_RECONCILIATION_REQUIRES_SCHEDULED_JOB_RUN",
+    ):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            object(),
+            current=current,
+        )
+
+    assert _FakeControlRepository.calls == 0
+    assert _FakeConnection.exits == []
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeRepository.completion is None
+
+
+@pytest.mark.parametrize(
+    ("current", "message"),
+    [
+        (
+            datetime(2026, 10, 5, 2, 0),
+            "PAPER_JOB_RECONCILIATION_CURRENT_MUST_BE_TIMEZONE_AWARE",
+        ),
+        (
+            datetime(2026, 10, 5, 1, 59, tzinfo=UTC),
+            "PAPER_JOB_RECONCILIATION_CURRENT_PRECEDES_SCHEDULE",
+        ),
+    ],
+)
+def test_reconciliation_rejects_invalid_current_before_database_activity(
+    current,
+    message,
+) -> None:
+    job_run = create_scheduled_job_run(
+        "paper:invalid-reconciliation-current",
+        datetime(2026, 10, 5, 2, 0, tzinfo=UTC),
+    )
+    _FakeRepository.completion = None
+
+    with pytest.raises(ValueError, match=message):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeControlRepository.calls == 0
+    assert _FakeConnection.exits == []
+    assert _FakeEffectRepository.calls == 0
+    assert _FakeRepository.completion is None
+
+
 def test_reconciliation_rejects_non_paper_run_before_database_activity() -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(

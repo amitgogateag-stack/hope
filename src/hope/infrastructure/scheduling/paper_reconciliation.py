@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, TypeVar
 
 from hope.application.jobs import (
@@ -58,6 +58,30 @@ def _durable_effects_checked(operation: Callable[[], _T]) -> _T:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECT_MISMATCH") from exc
 
 
+def _validated_reconciliation_current(
+    job_run: ScheduledJobRun,
+    current: datetime,
+) -> datetime:
+    if not isinstance(job_run, ScheduledJobRun):
+        raise TypeError(
+            "PAPER_JOB_RECONCILIATION_REQUIRES_SCHEDULED_JOB_RUN"
+        )
+    if not job_run.job_key.startswith("paper:"):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB")
+    if not isinstance(current, datetime):
+        raise TypeError("PAPER_JOB_RECONCILIATION_CURRENT_REQUIRES_DATETIME")
+    if current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError(
+            "PAPER_JOB_RECONCILIATION_CURRENT_MUST_BE_TIMEZONE_AWARE"
+        )
+    canonical = current.astimezone(timezone.utc)
+    if canonical < job_run.scheduled_for:
+        raise ValueError(
+            "PAPER_JOB_RECONCILIATION_CURRENT_PRECEDES_SCHEDULE"
+        )
+    return canonical
+
+
 def reconcile_completed_paper_run(
     connection: Connection,
     job_run: ScheduledJobRun,
@@ -75,8 +99,7 @@ def reconcile_completed_paper_run(
     durable reread, effect comparison, and receipt write execute inside a savepoint
     so any fail-closed error rolls back the transition even if a caller catches it.
     """
-    if not job_run.job_key.startswith("paper:"):
-        raise RuntimeError("PAPER_JOB_RECONCILIATION_REQUIRES_PAPER_JOB")
+    current = _validated_reconciliation_current(job_run, current)
     try:
         with connection.begin_nested():
             SqlAlchemyPaperEnvironmentControlRepository(
