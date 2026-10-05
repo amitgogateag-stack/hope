@@ -150,6 +150,24 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                         {"id": uuid4(), "job_run_id": job_run_id},
                     )
 
+            forged_timestamp_receipt = receipt.replace(
+                "entity_id, payload) ",
+                "entity_id, payload, created_at) ",
+            ).replace(
+                ") FROM job_runs jr WHERE jr.job_run_id=:job_run_id",
+                "), transaction_timestamp() - interval '1 microsecond' "
+                "FROM job_runs jr WHERE jr.job_run_id=:job_run_id",
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RECONCILIATION_AUDIT_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(forged_timestamp_receipt),
+                        {"id": uuid4(), "job_run_id": job_run_id},
+                    )
+
             connection.execute(
                 text(receipt),
                 {"id": uuid4(), "job_run_id": job_run_id},
