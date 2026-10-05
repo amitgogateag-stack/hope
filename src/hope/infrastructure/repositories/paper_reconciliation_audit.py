@@ -6,7 +6,32 @@ from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uu
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 
 from hope.application.jobs import JobRunRecord, JobRunStatus
-from hope.application.paper.effects import PaperEffect
+from hope.application.paper.effects import PaperEffect, PaperEffectType
+
+
+_FILLED_EFFECT_TYPES = frozenset(
+    {
+        PaperEffectType.SIGNAL,
+        PaperEffectType.RISK,
+        PaperEffectType.ORDER,
+        PaperEffectType.FILL,
+        PaperEffectType.PNL,
+    }
+)
+_NON_FILL_BASE_EFFECT_TYPES = frozenset(
+    {
+        PaperEffectType.SIGNAL,
+        PaperEffectType.RISK,
+        PaperEffectType.ORDER,
+    }
+)
+_COMPLETE_EFFECT_SHAPES = frozenset(
+    {
+        _FILLED_EFFECT_TYPES,
+        _NON_FILL_BASE_EFFECT_TYPES | {PaperEffectType.CANCELLATION},
+        _NON_FILL_BASE_EFFECT_TYPES | {PaperEffectType.REJECTION},
+    }
+)
 
 
 class SqlAlchemyPaperReconciliationAuditRepository:
@@ -44,6 +69,12 @@ class SqlAlchemyPaperReconciliationAuditRepository:
             raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_COMPLETION_TIME")
         if any(effect.job_run_id != completion.run.job_run_id for effect in effects):
             raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_RUN_MISMATCH")
+        effect_types = tuple(effect.effect_type for effect in effects)
+        if (
+            len(effect_types) != len(set(effect_types))
+            or frozenset(effect_types) not in _COMPLETE_EFFECT_SHAPES
+        ):
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID")
 
         entity_id = str(completion.run.job_run_id)
         payload: dict[str, object] = {

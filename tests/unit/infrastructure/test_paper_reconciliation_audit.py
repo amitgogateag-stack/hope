@@ -1,7 +1,14 @@
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
 
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.infrastructure.repositories.paper_reconciliation_audit import (
     SqlAlchemyPaperReconciliationAuditRepository,
 )
@@ -100,3 +107,103 @@ def test_verify_rejects_same_job_receipt_with_different_audit_identity(
     ):
         repository.verify(object(), ())
 
+
+
+def _completion_and_effects(
+    effect_types: tuple[PaperEffectType, ...],
+):
+    scheduled_for = datetime(2026, 10, 5, 5, 0, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000001:audit-shape",
+        scheduled_for,
+    )
+    completion = create_job_run_completion(
+        job_run,
+        JobRunStatus.SUCCEEDED,
+        scheduled_for + timedelta(minutes=1),
+    )
+    effects = tuple(
+        create_paper_effect(
+            job_run,
+            effect_type,
+            uuid4(),
+            "a" * 64,
+        )
+        for effect_type in effect_types
+    )
+    return completion, effects
+
+
+@pytest.mark.parametrize(
+    "effect_types",
+    [
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.CANCELLATION,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.REJECTION,
+        ),
+    ],
+)
+def test_reconciliation_receipt_accepts_only_complete_terminal_shapes(
+    effect_types,
+) -> None:
+    completion, effects = _completion_and_effects(effect_types)
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_Connection())
+
+    _, _, payload = repository._expected(completion, effects)
+
+    assert [item["effect_type"] for item in payload["effects"]] == [
+        effect_type.value for effect_type in effect_types
+    ]
+
+
+@pytest.mark.parametrize(
+    "effect_types",
+    [
+        (),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.REJECTION,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.CANCELLATION,
+            PaperEffectType.REJECTION,
+        ),
+    ],
+)
+def test_reconciliation_receipt_rejects_incomplete_or_ambiguous_effect_shape(
+    effect_types,
+) -> None:
+    completion, effects = _completion_and_effects(effect_types)
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_Connection())
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID",
+    ):
+        repository._expected(completion, effects)
