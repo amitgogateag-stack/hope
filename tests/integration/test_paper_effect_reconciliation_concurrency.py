@@ -30,8 +30,10 @@ def test_paper_effect_cannot_cross_reconciliation_terminalization() -> None:
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     scheduled_for = datetime(2026, 10, 5, 2, 30, tzinfo=UTC)
+    strategy_id = uuid4()
+    strategy_version_id = uuid4()
     job_run = create_scheduled_job_run(
-        f"paper:reconciliation-effect-race:{uuid4()}",
+        f"paper:USA:{strategy_version_id}:reconciliation-effect-race",
         scheduled_for,
     )
     effect = create_paper_effect(
@@ -43,6 +45,30 @@ def test_paper_effect_cannot_cross_reconciliation_terminalization() -> None:
 
     with engine.begin() as setup_connection:
         apply_migrations(setup_connection, migrations_dir)
+        setup_connection.execute(
+            text(
+                "INSERT INTO strategies(strategy_id, name, family) "
+                "VALUES (:id, :name, 'TEST')"
+            ),
+            {
+                "id": strategy_id,
+                "name": f"RECONCILIATION_EFFECT_RACE_{strategy_id}",
+            },
+        )
+        setup_connection.execute(
+            text(
+                "INSERT INTO strategy_versions("
+                "strategy_version_id, strategy_id, version, code_commit"
+                ") VALUES ("
+                ":version_id, :strategy_id, 'v1', "
+                "'effect-reconciliation-concurrency'"
+                ")"
+            ),
+            {
+                "version_id": strategy_version_id,
+                "strategy_id": strategy_id,
+            },
+        )
         assert SqlAlchemyJobRunRepository(setup_connection).claim(job_run)
 
     reconciliation_connection = engine.connect()
