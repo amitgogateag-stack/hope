@@ -136,6 +136,20 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                 ")"
                 ") FROM job_runs jr WHERE jr.job_run_id=:job_run_id"
             )
+            reordered_receipt = receipt.replace(
+                "ORDER BY pe.created_at, pe.effect_id",
+                "ORDER BY pe.created_at DESC, pe.effect_id DESC",
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RECONCILIATION_AUDIT_PAYLOAD_INVALID",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(reordered_receipt),
+                        {"id": uuid4(), "job_run_id": job_run_id},
+                    )
+
             connection.execute(
                 text(receipt),
                 {"id": uuid4(), "job_run_id": job_run_id},
