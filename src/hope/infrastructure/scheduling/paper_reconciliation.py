@@ -8,6 +8,7 @@ from hope.application.jobs import (
     ScheduledJobRun,
     create_job_run_completion,
 )
+from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_control import (
     SqlAlchemyPaperEnvironmentControlRepository,
@@ -20,7 +21,7 @@ from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDecision,
     assess_due_paper_recovery,
 )
-from sqlalchemy import Connection
+from sqlalchemy import Connection, text
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
@@ -56,6 +57,50 @@ def _durable_effects_checked(operation: Callable[[], _T]) -> _T:
         return operation()
     except ValueError as exc:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECT_MISMATCH") from exc
+
+
+def _assert_durable_accounting_truth(
+    connection: Connection,
+    effects: tuple[PaperEffect, ...],
+) -> None:
+    """Require a completed FILL lifecycle to have its durable economic projection.
+
+    Reconciliation deliberately never rebuilds accounting. If the effect ledger says
+    a fill and P&L completed, the authoritative fill, portfolio application, and P&L
+    event must already agree before the interrupted run may become SUCCEEDED.
+    Cancellation/rejection terminal paths have no fill accounting to verify.
+    """
+    by_type = {effect.effect_type: effect for effect in effects}
+    fill_effect = by_type.get(PaperEffectType.FILL)
+    pnl_effect = by_type.get(PaperEffectType.PNL)
+    if fill_effect is None and pnl_effect is None:
+        return
+    if fill_effect is None or pnl_effect is None:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_EFFECT_MISMATCH")
+
+    row = connection.execute(
+        text(
+            "SELECT f.fill_id, a.portfolio_id, p.pnl_event_id, p.fill_id AS pnl_fill_id, "
+            "p.portfolio_id AS pnl_portfolio_id "
+            "FROM fills f "
+            "LEFT JOIN paper_portfolio_fill_applications a ON a.fill_id = f.fill_id "
+            "LEFT JOIN paper_portfolio_pnl_events p "
+            "ON p.fill_id = f.fill_id AND p.portfolio_id = a.portfolio_id "
+            "WHERE f.fill_id = :fill_id"
+        ),
+        {"fill_id": fill_effect.entity_id},
+    ).mappings().all()
+    if len(row) != 1:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_NOT_DURABLE")
+    durable = row[0]
+    if (
+        durable["fill_id"] != fill_effect.entity_id
+        or durable["portfolio_id"] is None
+        or durable["pnl_event_id"] != pnl_effect.entity_id
+        or durable["pnl_fill_id"] != fill_effect.entity_id
+        or durable["pnl_portfolio_id"] != durable["portfolio_id"]
+    ):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_MISMATCH")
 
 
 def _validated_reconciliation_current(
@@ -95,9 +140,9 @@ def reconcile_completed_paper_run(
     appear between proof and terminalization. This operation never invokes signal,
     risk, order, fill, position, accounting, or P&L writers. A concurrent reconciler
     that already terminalized the run as SUCCEEDED is accepted only when its exact
-    immutable reconciliation receipt is durable. The full proof, transition,
-    durable reread, effect comparison, and receipt write execute inside a savepoint
-    so any fail-closed error rolls back the transition even if a caller catches it.
+    immutable reconciliation receipt is durable. The full proof, accounting check,
+    transition, durable reread, effect comparison, and receipt write execute inside
+    a savepoint so any fail-closed error rolls back the transition even if caught.
     """
     current = _validated_reconciliation_current(job_run, current)
     try:
@@ -134,6 +179,7 @@ def _reconcile_completed_paper_run(
             effects = _durable_effects_checked(
                 lambda: effects_repository.list_for_job_run(job_run.job_run_id)
             )
+            _assert_durable_accounting_truth(connection, effects)
             try:
                 verified = audit_repository.verify(durable, effects)
             except ValueError as exc:
@@ -157,6 +203,8 @@ def _reconcile_completed_paper_run(
     assessment = report.assessments[0]
     if assessment.decision is not PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_PROVEN")
+
+    _assert_durable_accounting_truth(connection, effects_before)
 
     completion = create_job_run_completion(
         job_run,
@@ -185,6 +233,7 @@ def _reconcile_completed_paper_run(
     )
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
+    _assert_durable_accounting_truth(connection, effects_after)
     try:
         audit_recorded = audit_repository.record(durable, effects_after)
     except IntegrityError as exc:
