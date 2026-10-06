@@ -641,12 +641,14 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
     pnl_id = uuid4()
     effects = (
         paper_reconciliation.PaperEffect(
+            effect_id=uuid4(),
             job_run_id=uuid4(),
             effect_type=paper_reconciliation.PaperEffectType.FILL,
             entity_id=fill_id,
             payload_hash="f" * 64,
         ),
         paper_reconciliation.PaperEffect(
+            effect_id=uuid4(),
             job_run_id=uuid4(),
             effect_type=paper_reconciliation.PaperEffectType.PNL,
             entity_id=pnl_id,
