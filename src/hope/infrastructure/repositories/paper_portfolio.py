@@ -192,9 +192,19 @@ class SqlAlchemyPaperPortfolioRepository:
             raise RuntimeError("PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT")
         return ledger
 
-    def load_ledger(self, portfolio_id: UUID) -> PortfolioLedger | None:
+    def load_ledger(
+        self,
+        portfolio_id: UUID,
+        *,
+        lock_for_update: bool = False,
+    ) -> PortfolioLedger | None:
+        statement = select(self._portfolios).where(
+            self._portfolios.c.portfolio_id == portfolio_id
+        )
+        if lock_for_update:
+            statement = statement.with_for_update()
         portfolio = self._connection.execute(
-            select(self._portfolios).where(self._portfolios.c.portfolio_id == portfolio_id)
+            statement
         ).mappings().one_or_none()
         if portfolio is None:
             return None
