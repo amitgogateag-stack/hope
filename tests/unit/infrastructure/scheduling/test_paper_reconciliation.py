@@ -633,6 +633,66 @@ def test_reconciliation_fails_closed_when_materialized_portfolio_state_is_incons
 
 
 
+
+def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
+    """Accounting verification must hold the portfolio projection lock."""
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    pnl_id = uuid4()
+    effects = (
+        paper_reconciliation.PaperEffect(
+            job_run_id=uuid4(),
+            effect_type=paper_reconciliation.PaperEffectType.FILL,
+            entity_id=fill_id,
+            payload_hash="f" * 64,
+        ),
+        paper_reconciliation.PaperEffect(
+            job_run_id=uuid4(),
+            effect_type=paper_reconciliation.PaperEffectType.PNL,
+            entity_id=pnl_id,
+            payload_hash="p" * 64,
+        ),
+    )
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{
+                "fill_id": fill_id,
+                "portfolio_id": portfolio_id,
+                "pnl_event_id": pnl_id,
+                "pnl_fill_id": fill_id,
+                "pnl_portfolio_id": portfolio_id,
+            }]
+
+    class _AccountingConnection:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    calls = []
+
+    def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
+        calls.append((requested_portfolio_id, lock_for_update))
+        return object()
+
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        _load_ledger,
+    )
+
+    paper_reconciliation._assert_durable_accounting_truth(
+        _AccountingConnection(),
+        effects,
+    )
+
+    assert calls == [(portfolio_id, True)]
+
+
+
 def test_reconciliation_database_error_rolls_back_before_terminalization(
     monkeypatch,
 ) -> None:
