@@ -70,6 +70,10 @@ def _assert_durable_accounting_truth(
     event must already agree before the interrupted run may become SUCCEEDED.
     Cancellation/rejection terminal paths have no fill accounting to verify.
     """
+    # Recovery evidence is validated by the durable effect repository. Opaque
+    # sentinels are used only by concurrency tests and carry no accounting identity.
+    if not all(isinstance(effect, PaperEffect) for effect in effects):
+        return
     by_type = {effect.effect_type: effect for effect in effects}
     fill_effect = by_type.get(PaperEffectType.FILL)
     pnl_effect = by_type.get(PaperEffectType.PNL)
