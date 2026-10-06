@@ -639,20 +639,23 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
     portfolio_id = uuid4()
     fill_id = uuid4()
     pnl_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:locked-portfolio-replay",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
     effects = (
-        paper_reconciliation.PaperEffect(
-            effect_id=uuid4(),
-            job_run_id=uuid4(),
-            effect_type=paper_reconciliation.PaperEffectType.FILL,
-            entity_id=fill_id,
-            payload_hash="f" * 64,
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "f" * 64,
         ),
-        paper_reconciliation.PaperEffect(
-            effect_id=uuid4(),
-            job_run_id=uuid4(),
-            effect_type=paper_reconciliation.PaperEffectType.PNL,
-            entity_id=pnl_id,
-            payload_hash="p" * 64,
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            "a" * 64,
         ),
     )
 
