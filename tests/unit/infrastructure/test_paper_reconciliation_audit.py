@@ -54,6 +54,7 @@ def test_new_reconciliation_receipt_must_be_reread_before_record_succeeds(
 
     assert verify_calls == [(completion, effects)]
 
+
 class _RowsResult:
     def __init__(self, rows):
         self._rows = rows
@@ -106,7 +107,6 @@ def test_verify_rejects_same_job_receipt_with_different_audit_identity(
         match="PAPER_RECONCILIATION_AUDIT_IDENTITY_CONFLICT",
     ):
         repository.verify(object(), ())
-
 
 
 def _completion_and_effects(
@@ -193,6 +193,36 @@ def test_reconciliation_receipt_accepts_only_complete_terminal_shapes(
             PaperEffectType.ORDER,
             PaperEffectType.CANCELLATION,
             PaperEffectType.REJECTION,
+        ),
+        # Recovery classifies both of these as contradictory. Reconciliation must
+        # reject them through the same canonical topology contract rather than
+        # accidentally accepting a locally maintained superset.
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.CANCELLATION,
+            PaperEffectType.PNL,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.REJECTION,
+            PaperEffectType.PNL,
+        ),
+        # A filled lifecycle is complete only when both FILL and PNL are durable.
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.FILL,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.PNL,
         ),
     ],
 )
