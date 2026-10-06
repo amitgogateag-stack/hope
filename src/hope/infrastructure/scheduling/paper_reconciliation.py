@@ -90,7 +90,8 @@ def _assert_durable_accounting_truth(
             "LEFT JOIN paper_portfolio_fill_applications a ON a.fill_id = f.fill_id "
             "LEFT JOIN paper_portfolio_pnl_events p "
             "ON p.fill_id = f.fill_id AND p.portfolio_id = a.portfolio_id "
-            "WHERE f.fill_id = :fill_id"
+            "WHERE f.fill_id = :fill_id "
+            "FOR UPDATE OF f, a, p"
         ),
         {"fill_id": fill_effect.entity_id},
     ).mappings().all()
