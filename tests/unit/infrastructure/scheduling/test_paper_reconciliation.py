@@ -632,6 +632,56 @@ def test_reconciliation_fails_closed_when_materialized_portfolio_state_is_incons
 
 
 
+
+def test_reconciliation_database_error_rolls_back_before_terminalization(
+    monkeypatch,
+) -> None:
+    """Database failure while authenticating accounting must never terminalize."""
+    current = datetime(2026, 10, 5, 4, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:accounting-database-failure",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.completion = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "_assert_durable_accounting_truth",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            paper_reconciliation.SQLAlchemyError("database unavailable")
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_DATABASE_UNAVAILABLE",
+    ):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeRepository.completion is None
+    assert _FakeAuditRepository.calls == []
+    assert _FakeAuditRepository.verify_calls == []
+    assert _FakeConnection.exits == [paper_reconciliation.SQLAlchemyError]
+
+
+
 def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminalization(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
