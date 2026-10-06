@@ -8,6 +8,10 @@ from typing import Iterable
 from uuid import UUID
 
 from hope.application.jobs import JobRunStatus, ScheduledJobRun
+from hope.application.paper.effect_topology import (
+    PaperEffectTopology,
+    classify_paper_effect_topology,
+)
 from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
@@ -37,55 +41,22 @@ class PaperRecoveryDecision(str, Enum):
     REJECT_STALE = "REJECT_STALE"
 
 
-_TERMINAL_EFFECT_TYPES = frozenset(
-    {
-        PaperEffectType.FILL,
-        PaperEffectType.CANCELLATION,
-        PaperEffectType.REJECTION,
-    }
-)
-
-
 def _classify_recovery_evidence(
     durable_effect_types: frozenset[PaperEffectType],
 ) -> PaperRecoveryEvidence:
-    if not durable_effect_types:
-        return PaperRecoveryEvidence.NONE
-    terminal_types = durable_effect_types & _TERMINAL_EFFECT_TYPES
-    if len(terminal_types) > 1:
-        return PaperRecoveryEvidence.CONTRADICTORY
-    if terminal_types:
-        terminal_type = next(iter(terminal_types))
-        if terminal_type is PaperEffectType.FILL:
-            required = frozenset(
-                {
-                    PaperEffectType.SIGNAL,
-                    PaperEffectType.RISK,
-                    PaperEffectType.ORDER,
-                    PaperEffectType.FILL,
-                    PaperEffectType.PNL,
-                }
-            )
-        else:
-            required = frozenset(
-                {
-                    PaperEffectType.SIGNAL,
-                    PaperEffectType.RISK,
-                    PaperEffectType.ORDER,
-                    terminal_type,
-                }
-            )
-        if required == durable_effect_types:
-            return PaperRecoveryEvidence.COMPLETE
-        if required < durable_effect_types:
-            return PaperRecoveryEvidence.CONTRADICTORY
-    return PaperRecoveryEvidence.PARTIAL
+    topology = classify_paper_effect_topology(durable_effect_types)
+    return PaperRecoveryEvidence(topology.value)
 
 
 def _has_unambiguous_recovery_cardinality(
     effect_counts: tuple[tuple[PaperEffectType, int], ...],
 ) -> bool:
-    return all(count == 1 for _, count in effect_counts)
+    topology = classify_paper_effect_topology(
+        effect_type
+        for effect_type, count in effect_counts
+        for _ in range(count)
+    )
+    return topology is PaperEffectTopology.COMPLETE
 
 
 @dataclass(frozen=True)
@@ -103,11 +74,14 @@ class PaperRecoveryAssessment:
 
     @property
     def evidence(self) -> PaperRecoveryEvidence:
-        evidence = _classify_recovery_evidence(self.durable_effect_types)
-        if evidence is PaperRecoveryEvidence.COMPLETE and self.effect_counts:
-            if not _has_unambiguous_recovery_cardinality(self.effect_counts):
-                return PaperRecoveryEvidence.CONTRADICTORY
-        return evidence
+        if self.effect_counts:
+            topology = classify_paper_effect_topology(
+                effect_type
+                for effect_type, count in self.effect_counts
+                for _ in range(count)
+            )
+            return PaperRecoveryEvidence(topology.value)
+        return _classify_recovery_evidence(self.durable_effect_types)
 
     @property
     def decision(self) -> PaperRecoveryDecision:
@@ -188,10 +162,9 @@ def assess_due_paper_recovery(
             counts = Counter(effect.effect_type for effect in run_effects)
             durable_effect_types = frozenset(counts)
             effect_counts = tuple(sorted(counts.items(), key=lambda item: item[0].value))
-            if (
-                _classify_recovery_evidence(durable_effect_types) is PaperRecoveryEvidence.COMPLETE
-                and _has_unambiguous_recovery_cardinality(effect_counts)
-            ):
+            if classify_paper_effect_topology(
+                effect.effect_type for effect in run_effects
+            ) is PaperEffectTopology.COMPLETE:
                 lineage_verified = verify_paper_recovery_lineage(connection, run_effects)
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
