@@ -106,6 +106,24 @@ def _assert_durable_accounting_truth(
     ):
         raise RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_MISMATCH")
 
+    # Presence alone is not enough: replay the immutable fill-application history
+    # and require the materialized cash/position projection to match it exactly.
+    # load_ledger is verification-only; it never repairs or reapplies a fill.
+    from hope.infrastructure.repositories.paper_portfolio import (
+        SqlAlchemyPaperPortfolioRepository,
+    )
+
+    try:
+        ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
+            durable["portfolio_id"]
+        )
+    except (RuntimeError, ValueError) as exc:
+        raise RuntimeError(
+            "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH"
+        ) from exc
+    if ledger is None:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_NOT_DURABLE")
+
 
 def _validated_reconciliation_current(
     job_run: ScheduledJobRun,
