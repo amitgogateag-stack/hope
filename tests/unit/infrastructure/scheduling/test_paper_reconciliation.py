@@ -527,6 +527,61 @@ def test_reconciliation_fails_closed_on_mismatched_recovery_assessment(
     assert _FakeRepository.completion is None
 
 
+
+def test_reconciliation_fails_closed_when_accounting_truth_rejects_proven_effects(
+    monkeypatch,
+) -> None:
+    """A proven recovery decision cannot bypass contradictory accounting truth."""
+    current = datetime(2026, 10, 5, 3, 0, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:accounting-mismatch",
+        datetime(2026, 10, 5, 2, 30, tzinfo=UTC),
+    )
+    effects = (
+        SimpleNamespace(effect_type=paper_reconciliation.PaperEffectType.FILL),
+        SimpleNamespace(effect_type=paper_reconciliation.PaperEffectType.PNL),
+    )
+    _FakeEffectRepository.snapshots = (effects, effects)
+    _FakeRepository.lock_result = True
+    _FakeRepository.completion = None
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            job_run.job_run_id,
+        ),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "_assert_durable_accounting_truth",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_MISMATCH")
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_ACCOUNTING_MISMATCH",
+    ):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeRepository.completion is None
+    assert _FakeAuditRepository.calls == []
+    assert _FakeAuditRepository.verify_calls == []
+    assert _FakeConnection.exits == [RuntimeError]
+
+
+
 def test_reconciliation_fails_closed_if_effect_ledger_changes_during_terminalization(monkeypatch) -> None:
     current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
     job_run = create_scheduled_job_run(
