@@ -116,7 +116,8 @@ def _assert_durable_accounting_truth(
 
     try:
         ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
-            durable["portfolio_id"]
+            durable["portfolio_id"],
+            lock_for_update=True,
         )
     except (RuntimeError, ValueError) as exc:
         raise RuntimeError(
