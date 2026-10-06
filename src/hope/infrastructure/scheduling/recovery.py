@@ -75,8 +75,10 @@ def _classify_recovery_evidence(
                     terminal_type,
                 }
             )
-        if required <= durable_effect_types:
+        if required == durable_effect_types:
             return PaperRecoveryEvidence.COMPLETE
+        if required < durable_effect_types:
+            return PaperRecoveryEvidence.CONTRADICTORY
     return PaperRecoveryEvidence.PARTIAL
 
 
