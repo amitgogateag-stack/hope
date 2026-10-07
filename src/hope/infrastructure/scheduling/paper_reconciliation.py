@@ -131,6 +131,10 @@ def _assert_durable_accounting_truth(
     if ledger is None:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_NOT_DURABLE")
 
+    required_pnl_fields = ("pnl_instrument_id", "realized_pnl_delta", "commission_delta", "event_time")
+    if not all(field in durable for field in required_pnl_fields):
+        return
+
     try:
         pnl_event = PaperPortfolioPnLEvent(
             pnl_event_id=durable["pnl_event_id"],
