@@ -641,12 +641,13 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
     from hope.application.paper.effects import create_paper_effect
     from hope.application.paper.portfolio_pnl import (
         PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
         paper_portfolio_pnl_payload_hash,
     )
 
     portfolio_id = uuid4()
     fill_id = uuid4()
-    pnl_id = uuid4()
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
     instrument_id = uuid4()
     event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
     pnl_event = PaperPortfolioPnLEvent(
@@ -924,12 +925,13 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     from hope.application.paper.effects import create_paper_effect
     from hope.application.paper.portfolio_pnl import (
         PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
         paper_portfolio_pnl_payload_hash,
     )
 
     portfolio_id = uuid4()
     fill_id = uuid4()
-    pnl_id = uuid4()
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
     instrument_id = uuid4()
     event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
     pnl_event = PaperPortfolioPnLEvent(
