@@ -117,6 +117,7 @@ def test_paper_portfolio_pnl_created_at_is_database_authenticated() -> None:
             portfolio_id,
             Decimal("1000"),
             fill,
+            job_run_id=run.job_run_id,
         )
         assert transition is not None
 
@@ -171,8 +172,18 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
         buy = persist_fill(connection, context, instrument_id, OrderSide.BUY, "100", 1)
         sell = persist_fill(connection, context, instrument_id, OrderSide.SELL, "110", 2)
         portfolio = SqlAlchemyPaperPortfolioRepository(connection)
-        assert portfolio.apply_fill_with_transition(portfolio_id, Decimal("1000"), buy) is not None
-        sell_transition = portfolio.apply_fill_with_transition(portfolio_id, Decimal("1000"), sell)
+        assert portfolio.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            buy,
+            job_run_id=run.job_run_id,
+        ) is not None
+        sell_transition = portfolio.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            sell,
+            job_run_id=run.job_run_id,
+        )
         assert sell_transition is not None
         assert sell_transition.realized_pnl_delta == Decimal("10")
         assert sell_transition.commission_delta == Decimal("0.25")
@@ -271,6 +282,7 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership() -> None:
             portfolio_id,
             Decimal("1000"),
             fill,
+            job_run_id=source_run.job_run_id,
         )
         assert transition is not None
 

@@ -202,7 +202,12 @@ def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> N
         fill = persist_fill(connection, context, instrument_id, side=OrderSide.BUY, price="100", minute=57)
 
         legacy_two_step = SqlAlchemyPaperPortfolioRepository(connection)
-        assert legacy_two_step.apply_fill_with_transition(portfolio_id, Decimal("500"), fill) is not None
+        assert legacy_two_step.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("500"),
+            fill,
+            job_run_id=context.job_run.job_run_id,
+        ) is not None
 
         accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
         with pytest.raises(RuntimeError, match="PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL"):

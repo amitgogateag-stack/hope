@@ -46,7 +46,7 @@ def _retry_boundary(*, realized: str = "4", commission: str = "0.50"):
 
 def _repository(event, replayed, *, pnl_recorded: bool = False):
     portfolio = SimpleNamespace(
-        apply_fill_with_transition=lambda *args: None,
+        apply_fill_with_transition=lambda *args, **kwargs: None,
         load_fill_transition=lambda *args, **kwargs: replayed,
     )
     pnl_calls = []

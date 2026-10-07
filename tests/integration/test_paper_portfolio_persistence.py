@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +8,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
 from hope.application.paper.fills import PaperFillWriter
 from hope.domain.execution import Environment, Fill, Order, OrderSide
@@ -98,19 +102,34 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
             side=OrderSide.SELL, quantity=Decimal("1"), price=Decimal("110"), sequence=0, decision_minute=23,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        buy_transition = repository.apply_fill_with_transition(portfolio_id, Decimal("1000"), buy)
+        buy_transition = repository.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            buy,
+            job_run_id=run.job_run_id,
+        )
         assert buy_transition is not None
         assert buy_transition.realized_pnl_delta == Decimal("0")
         assert buy_transition.commission_delta == Decimal("0.25")
         assert buy_transition.cash_delta == Decimal("-203.25")
 
-        sell_transition = repository.apply_fill_with_transition(portfolio_id, Decimal("1000"), sell)
+        sell_transition = repository.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            sell,
+            job_run_id=run.job_run_id,
+        )
         assert sell_transition is not None
         assert sell_transition.state_before == buy_transition.state_after
         assert sell_transition.realized_pnl_delta == Decimal("8.5")
         assert sell_transition.commission_delta == Decimal("0.20")
         assert sell_transition.cash_delta == Decimal("109.80")
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), sell) is False
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            sell,
+            job_run_id=run.job_run_id,
+        ) is False
 
         restored = repository.load_ledger(portfolio_id)
         assert restored is not None
@@ -145,8 +164,97 @@ def test_paper_portfolio_rejects_untracked_or_conflicting_fill_without_state_mut
         apply_migrations(connection, migrations_dir)
         repository = SqlAlchemyPaperPortfolioRepository(connection)
         with pytest.raises(ValueError, match="PAPER_PORTFOLIO_FILL_UNTRACKED"):
-            repository.apply_fill(portfolio_id, Decimal("500"), rogue)
+            repository.apply_fill(
+                portfolio_id,
+                Decimal("500"),
+                rogue,
+                job_run_id=uuid4(),
+            )
         assert connection.execute(text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"), {"id": portfolio_id}).scalar_one() == 0
+
+
+@pytest.mark.integration
+def test_paper_portfolio_requires_reusable_source_fill_ownership() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-portfolio-source-fill-owner",
+        datetime(2026, 9, 9, 23, 25, tzinfo=UTC),
+    )
+    consumer_run = create_scheduled_job_run(
+        "paper-portfolio-foreign-fill-consumer",
+        datetime(2026, 9, 9, 23, 27, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PORT-OWNER', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(source_run) is True
+        fill = persist_fill(
+            connection,
+            source_context,
+            instrument_id,
+            side=OrderSide.BUY,
+            quantity=Decimal("1"),
+            price=Decimal("100"),
+            sequence=0,
+            decision_minute=26,
+        )
+        assert jobs.claim(consumer_run) is True
+        repository = SqlAlchemyPaperPortfolioRepository(connection)
+
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            repository.apply_fill(
+                portfolio_id,
+                Decimal("1000"),
+                fill,
+                job_run_id=consumer_run.job_run_id,
+            )
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolios "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_fill_applications "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).scalar_one() == 0
+
+        assert jobs.complete(
+            create_job_run_completion(
+                source_run,
+                JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=consumer_run.job_run_id,
+        ) is True
+
+    engine.dispose()
 
 
 @pytest.mark.integration
@@ -239,7 +347,12 @@ def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
             side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"), sequence=0, decision_minute=33,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), fill)
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=run.job_run_id,
+        )
 
         assert repository.load_ledger(portfolio_id) is not None
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
@@ -264,7 +377,12 @@ def test_paper_fill_transition_recovery_requires_complete_accounting_history():
         assert SqlAlchemyJobRunRepository(connection).claim(run)
         fill = persist_fill(connection, context, instrument_id, side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"), sequence=0, decision_minute=36)
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill_with_transition(portfolio_id, Decimal("1000"), fill) is not None
+        assert repository.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=run.job_run_id,
+        ) is not None
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
             repository.load_fill_transition(portfolio_id, fill.fill_id)
     engine.dispose()
@@ -297,8 +415,18 @@ def test_paper_portfolio_restore_rejects_incomplete_application_history():
             side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("101"), sequence=0, decision_minute=43,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), first)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), second)
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            first,
+            job_run_id=run.job_run_id,
+        )
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            second,
+            job_run_id=run.job_run_id,
+        )
 
         connection.execute(
             text("UPDATE paper_portfolios SET version = 3 WHERE portfolio_id=:portfolio_id"),
@@ -332,7 +460,12 @@ def test_paper_portfolio_restore_rejects_corrupt_materialized_state():
             side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"), sequence=0, decision_minute=43,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), fill)
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=run.job_run_id,
+        )
 
         connection.execute(
             text("UPDATE paper_portfolios SET cash = cash + 1 WHERE portfolio_id=:portfolio_id"),
@@ -370,14 +503,24 @@ def test_paper_portfolio_rejects_fill_time_regression_without_state_mutation():
             side=OrderSide.SELL, quantity=Decimal("1"), price=Decimal("110"), sequence=0, decision_minute=48,
         )
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        assert repository.apply_fill(portfolio_id, Decimal("1000"), later)
+        assert repository.apply_fill(
+            portfolio_id,
+            Decimal("1000"),
+            later,
+            job_run_id=run.job_run_id,
+        )
         before = connection.execute(
             text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).one()
 
         with pytest.raises(ValueError, match="PAPER_PORTFOLIO_FILL_TIME_REGRESSION"):
-            repository.apply_fill(portfolio_id, Decimal("1000"), earlier)
+            repository.apply_fill(
+                portfolio_id,
+                Decimal("1000"),
+                earlier,
+                job_run_id=run.job_run_id,
+            )
 
         after = connection.execute(
             text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),

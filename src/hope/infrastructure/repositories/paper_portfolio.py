@@ -67,8 +67,12 @@ class SqlAlchemyPaperPortfolioRepository:
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
-    def _assert_tracked_fill(self, fill: Fill) -> None:
-        effect = self._effects.get(PaperEffectType.FILL, fill.fill_id)
+    def _assert_tracked_fill(self, fill: Fill, job_run_id: UUID) -> None:
+        effect = self._effects.get_reusable_for_job(
+            PaperEffectType.FILL,
+            fill.fill_id,
+            job_run_id,
+        )
         if effect is None:
             raise ValueError("PAPER_PORTFOLIO_FILL_UNTRACKED")
         if effect.payload_hash != paper_fill_payload_hash(fill):
@@ -296,10 +300,12 @@ class SqlAlchemyPaperPortfolioRepository:
         portfolio_id: UUID,
         initial_cash: Decimal,
         fill: Fill,
+        *,
+        job_run_id: UUID,
     ) -> PortfolioFillTransition | None:
         """Atomically apply one durable PAPER fill and return its accounting transition."""
         with self._connection.begin_nested():
-            self._assert_tracked_fill(fill)
+            self._assert_tracked_fill(fill, job_run_id)
             portfolio = self._ensure_and_lock_portfolio(portfolio_id, initial_cash)
             applications = self._load_application_history(portfolio_id, portfolio["version"])
             ledger = self._restore_verified_ledger(portfolio, applications)
@@ -352,6 +358,21 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise ValueError("PAPER_PORTFOLIO_FILL_APPLICATION_CONFLICT")
             return transition
 
-    def apply_fill(self, portfolio_id: UUID, initial_cash: Decimal, fill: Fill) -> bool:
-        """Backward-compatible boolean wrapper around the authoritative transition API."""
-        return self.apply_fill_with_transition(portfolio_id, initial_cash, fill) is not None
+    def apply_fill(
+        self,
+        portfolio_id: UUID,
+        initial_cash: Decimal,
+        fill: Fill,
+        *,
+        job_run_id: UUID,
+    ) -> bool:
+        """Boolean wrapper around the ownership-authenticated transition API."""
+        return (
+            self.apply_fill_with_transition(
+                portfolio_id,
+                initial_cash,
+                fill,
+                job_run_id=job_run_id,
+            )
+            is not None
+        )
