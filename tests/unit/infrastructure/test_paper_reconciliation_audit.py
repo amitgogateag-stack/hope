@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -237,3 +238,56 @@ def test_reconciliation_receipt_rejects_incomplete_or_ambiguous_effect_shape(
         match="PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID",
     ):
         repository._expected(completion, effects)
+
+
+@pytest.mark.parametrize("failure", ["missing", "conflicting", "owner"])
+def test_verify_rejects_receipt_without_exact_recoverable_effect_lineage(
+    monkeypatch,
+    failure,
+) -> None:
+    completion, effects = _completion_and_effects(
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+        )
+    )
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_ReadConnection([]))
+    event_id, entity_id, payload = repository._expected(completion, effects)
+    repository._connection._rows = [
+        {
+            "audit_event_id": event_id,
+            "event_type": "PAPER_RUN_RECONCILED",
+            "entity_type": "JOB_RUN",
+            "entity_id": entity_id,
+            "payload": payload,
+        }
+    ]
+
+    class _UnrecoverableEffects:
+        def get_recoverable(self, effect_type, effect_entity_id):
+            effect = next(
+                item
+                for item in effects
+                if item.effect_type is effect_type
+                and item.entity_id == effect_entity_id
+            )
+            if failure == "owner":
+                raise ValueError("PAPER_EFFECT_OWNER_NOT_RECOVERABLE")
+            if failure == "missing":
+                return None
+            return replace(effect, payload_hash="b" * 64)
+
+    monkeypatch.setattr(
+        "hope.infrastructure.repositories.paper_reconciliation_audit."
+        "SqlAlchemyPaperEffectRepository",
+        lambda connection: _UnrecoverableEffects(),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_RECONCILIATION_AUDIT_EFFECT_NOT_RECOVERABLE",
+    ):
+        repository.verify(completion, effects)
