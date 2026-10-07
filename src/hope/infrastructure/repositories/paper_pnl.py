@@ -57,18 +57,29 @@ class SqlAlchemyPaperPnLRepository:
         ):
             raise ValueError("PAPER_PNL_IDENTITY_CONFLICT")
 
-    def _assert_position_has_paper_lineage(self, position_id: UUID) -> None:
+    def _assert_position_has_paper_lineage(
+        self,
+        position_id: UUID,
+        job_run_id: UUID,
+    ) -> None:
         position = self._connection.execute(
-            select(self._positions.c.opened_from_signal_id).where(
-                self._positions.c.position_id == position_id
-            )
+            select(self._positions.c.opened_from_signal_id)
+            .where(self._positions.c.position_id == position_id)
+            .with_for_update()
         ).mappings().one_or_none()
         if position is None:
             raise ValueError("PAPER_PNL_POSITION_NOT_FOUND")
         signal_id = position["opened_from_signal_id"]
         if signal_id is None:
             raise ValueError("PAPER_PNL_POSITION_SIGNAL_MISSING")
-        if self._effects.get(PaperEffectType.SIGNAL, signal_id) is None:
+        if (
+            self._effects.get_reusable_for_job(
+                PaperEffectType.SIGNAL,
+                signal_id,
+                job_run_id,
+            )
+            is None
+        ):
             raise ValueError("PAPER_PNL_POSITION_UNTRACKED_SIGNAL")
 
     def persist(self, effect: PaperEffect, event: PaperPnLEvent) -> bool:
@@ -78,7 +89,10 @@ class SqlAlchemyPaperPnLRepository:
             raise ValueError("PAPER_PNL_EFFECT_PAYLOAD_MISMATCH")
 
         with self._connection.begin_nested():
-            self._assert_position_has_paper_lineage(event.position_id)
+            self._assert_position_has_paper_lineage(
+                event.position_id,
+                effect.job_run_id,
+            )
             existing_effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
             existing_event = self._get_row(event.pnl_event_id)
             if existing_effect is None and existing_event is not None:

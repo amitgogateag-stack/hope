@@ -144,6 +144,100 @@ def test_paper_pnl_is_durable_and_idempotent_across_scheduled_cycles() -> None:
 
 
 @pytest.mark.integration
+def test_paper_pnl_requires_reusable_position_signal_ownership() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    position_id = uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-pnl-position-source-owner",
+        datetime(2026, 9, 10, 0, 2, tzinfo=UTC),
+    )
+    pnl_run = create_scheduled_job_run(
+        "paper-pnl-position-foreign-consumer",
+        datetime(2026, 9, 10, 0, 3, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    pnl_context = PaperCycleContext(pnl_run)
+    signal = make_signal(
+        source_context,
+        instrument_id,
+        datetime(2026, 9, 10, 0, 1, tzinfo=UTC),
+    )
+    event = PaperPnLEvent(
+        pnl_context.pnl_event_id(position_id, 0),
+        position_id,
+        Decimal("12.50"),
+        pnl_run.scheduled_for,
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-OWNER', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(source_run) is True
+        assert PaperSignalWriter(
+            SqlAlchemyPaperSignalRepository(connection)
+        ).record(source_context, signal) is True
+        connection.execute(
+            text(
+                "INSERT INTO positions("
+                "position_id, instrument_id, opened_from_signal_id, "
+                "quantity, opened_at"
+                ") VALUES ("
+                ":position_id, :instrument_id, :signal_id, 1, :opened_at"
+                ")"
+            ),
+            {
+                "position_id": position_id,
+                "instrument_id": instrument_id,
+                "signal_id": signal.signal_id,
+                "opened_at": signal.decision_time,
+            },
+        )
+        assert jobs.claim(pnl_run) is True
+        with pytest.warns(DeprecationWarning, match="PaperPnLWriter is legacy"):
+            writer = PaperPnLWriter(SqlAlchemyPaperPnLRepository(connection))
+
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            writer.record(pnl_context, event, sequence=0)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM pnl_events WHERE pnl_event_id=:id"),
+            {"id": event.pnl_event_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='PNL' AND entity_id=:id"
+            ),
+            {"id": event.pnl_event_id},
+        ).scalar_one() == 0
+
+        assert jobs.complete(
+            create_job_run_completion(
+                source_run,
+                JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+        assert writer.record(pnl_context, event, sequence=0) is True
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_pnl_rejects_missing_or_untracked_position_without_orphan_effect() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
