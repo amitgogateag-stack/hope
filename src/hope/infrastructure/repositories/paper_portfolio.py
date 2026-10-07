@@ -187,7 +187,7 @@ class SqlAlchemyPaperPortfolioRepository:
                 PaperEffectType.PNL,
                 paper_portfolio_pnl_event_id(portfolio["portfolio_id"], fill.fill_id),
             )
-            if pnl_effect is not None and pnl_effect.job_run_id != effect.job_run_id:
+            if pnl_effect is not None:
                 try:
                     reusable_fill = self._effects.get_reusable_for_job(
                         PaperEffectType.FILL,
