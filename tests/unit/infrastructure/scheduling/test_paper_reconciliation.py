@@ -1394,3 +1394,50 @@ def test_reconciliation_rejects_tampered_pnl_commission(monkeypatch) -> None:
     monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(C(), effects)
+
+
+def test_reconciliation_rejects_tampered_pnl_instrument(monkeypatch) -> None:
+    """Instrument corruption must invalidate the committed PNL effect."""
+    from decimal import Decimal
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import PaperPortfolioPnLEvent, paper_portfolio_pnl_event_id, paper_portfolio_pnl_payload_hash
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    job_run = create_scheduled_job_run("paper:tampered-pnl-instrument", datetime(2026,10,5,4,0,tzinfo=UTC))
+    event_time = datetime(2026,10,5,4,1,tzinfo=UTC)
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
+    original = PaperPortfolioPnLEvent(pnl_id,portfolio_id,fill_id,instrument_id,Decimal("12.50"),Decimal("0.75"),event_time)
+    effects=(create_paper_effect(job_run,paper_reconciliation.PaperEffectType.FILL,fill_id,"5"*64),create_paper_effect(job_run,paper_reconciliation.PaperEffectType.PNL,pnl_id,paper_portfolio_pnl_payload_hash(original)))
+    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":uuid4(),"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time}
+    class R:
+        def mappings(self): return self
+        def all(self): return [durable]
+    class C:
+        def execute(self,*a,**k): return R()
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
+    with pytest.raises(RuntimeError,match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
+        paper_reconciliation._assert_durable_accounting_truth(C(),effects)
+
+
+def test_reconciliation_rejects_tampered_pnl_event_time(monkeypatch) -> None:
+    """Event-time corruption must invalidate the committed PNL effect."""
+    from decimal import Decimal
+    from datetime import timedelta
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import PaperPortfolioPnLEvent, paper_portfolio_pnl_event_id, paper_portfolio_pnl_payload_hash
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    job_run=create_scheduled_job_run("paper:tampered-pnl-time",datetime(2026,10,5,4,0,tzinfo=UTC))
+    event_time=datetime(2026,10,5,4,1,tzinfo=UTC)
+    pnl_id=paper_portfolio_pnl_event_id(portfolio_id,fill_id)
+    original=PaperPortfolioPnLEvent(pnl_id,portfolio_id,fill_id,instrument_id,Decimal("12.50"),Decimal("0.75"),event_time)
+    effects=(create_paper_effect(job_run,paper_reconciliation.PaperEffectType.FILL,fill_id,"6"*64),create_paper_effect(job_run,paper_reconciliation.PaperEffectType.PNL,pnl_id,paper_portfolio_pnl_payload_hash(original)))
+    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":instrument_id,"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time+timedelta(seconds=1)}
+    class R:
+        def mappings(self): return self
+        def all(self): return [durable]
+    class C:
+        def execute(self,*a,**k): return R()
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
+    with pytest.raises(RuntimeError,match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
+        paper_reconciliation._assert_durable_accounting_truth(C(),effects)
