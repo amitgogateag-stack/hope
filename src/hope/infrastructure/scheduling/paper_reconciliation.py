@@ -84,10 +84,13 @@ def _assert_durable_accounting_truth(
 
     row = connection.execute(
         text(
-            "SELECT f.fill_id, a.portfolio_id, p.pnl_event_id, p.fill_id AS pnl_fill_id, "
+            "SELECT f.fill_id, f.transaction_cost AS fill_transaction_cost, "
+            "f.filled_at AS fill_time, o.instrument_id AS fill_instrument_id, "
+            "a.portfolio_id, p.pnl_event_id, p.fill_id AS pnl_fill_id, "
             "p.portfolio_id AS pnl_portfolio_id, p.instrument_id AS pnl_instrument_id, "
             "p.realized_pnl_delta, p.commission_delta, p.event_time "
             "FROM fills f "
+            "JOIN orders o ON o.order_id = f.order_id "
             "LEFT JOIN paper_portfolio_fill_applications a ON a.fill_id = f.fill_id "
             "LEFT JOIN paper_portfolio_pnl_events p "
             "ON p.fill_id = f.fill_id AND p.portfolio_id = a.portfolio_id "
@@ -131,7 +134,15 @@ def _assert_durable_accounting_truth(
     if ledger is None:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_NOT_DURABLE")
 
-    required_pnl_fields = ("pnl_instrument_id", "realized_pnl_delta", "commission_delta", "event_time")
+    required_pnl_fields = (
+        "pnl_instrument_id",
+        "realized_pnl_delta",
+        "commission_delta",
+        "event_time",
+        "fill_instrument_id",
+        "fill_transaction_cost",
+        "fill_time",
+    )
     if not all(field in durable for field in required_pnl_fields):
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_NOT_DURABLE")
 
@@ -147,6 +158,12 @@ def _assert_durable_accounting_truth(
         )
     except (TypeError, ValueError) as exc:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH") from exc
+    if (
+        pnl_event.instrument_id != durable["fill_instrument_id"]
+        or pnl_event.commission_delta != durable["fill_transaction_cost"]
+        or pnl_event.event_time != durable["fill_time"]
+    ):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH")
     if paper_portfolio_pnl_payload_hash(pnl_event) != pnl_effect.payload_hash:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH")
 

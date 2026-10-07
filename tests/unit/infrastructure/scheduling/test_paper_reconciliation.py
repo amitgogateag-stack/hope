@@ -693,6 +693,9 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
                 "realized_pnl_delta": Decimal("12.50"),
                 "commission_delta": Decimal("0.75"),
                 "event_time": event_time,
+                "fill_instrument_id": instrument_id,
+                "fill_transaction_cost": Decimal("0.75"),
+                "fill_time": event_time,
             }]
 
     class _AccountingConnection:
@@ -977,6 +980,9 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
                 "realized_pnl_delta": Decimal("12.50"),
                 "commission_delta": Decimal("0.75"),
                 "event_time": event_time,
+                "fill_instrument_id": instrument_id,
+                "fill_transaction_cost": Decimal("0.75"),
+                "fill_time": event_time,
             }]
 
     class _AccountingConnection:
@@ -1407,6 +1413,8 @@ def test_reconciliation_rejects_tampered_durable_pnl_economics(monkeypatch) -> N
         "pnl_fill_id": fill_id, "pnl_portfolio_id": portfolio_id,
         "pnl_instrument_id": instrument_id, "realized_pnl_delta": Decimal("99.99"),
         "commission_delta": Decimal("0.75"), "event_time": event_time,
+        "fill_instrument_id": instrument_id,
+        "fill_transaction_cost": Decimal("0.75"), "fill_time": event_time,
     }
     class _Rows:
         def mappings(self): return self
@@ -1430,7 +1438,7 @@ def test_reconciliation_rejects_tampered_pnl_commission(monkeypatch) -> None:
     pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
     original = PaperPortfolioPnLEvent(pnl_id, portfolio_id, fill_id, instrument_id, Decimal("12.50"), Decimal("0.75"), event_time)
     effects = (create_paper_effect(job_run, paper_reconciliation.PaperEffectType.FILL, fill_id, "7"*64), create_paper_effect(job_run, paper_reconciliation.PaperEffectType.PNL, pnl_id, paper_portfolio_pnl_payload_hash(original)))
-    durable = {"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":instrument_id,"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("9.99"),"event_time":event_time}
+    durable = {"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":instrument_id,"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("9.99"),"event_time":event_time,"fill_instrument_id":instrument_id,"fill_transaction_cost":Decimal("0.75"),"fill_time":event_time}
     class R:
         def mappings(self): return self
         def all(self): return [durable]
@@ -1453,7 +1461,7 @@ def test_reconciliation_rejects_tampered_pnl_instrument(monkeypatch) -> None:
     pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
     original = PaperPortfolioPnLEvent(pnl_id,portfolio_id,fill_id,instrument_id,Decimal("12.50"),Decimal("0.75"),event_time)
     effects=(create_paper_effect(job_run,paper_reconciliation.PaperEffectType.FILL,fill_id,"5"*64),create_paper_effect(job_run,paper_reconciliation.PaperEffectType.PNL,pnl_id,paper_portfolio_pnl_payload_hash(original)))
-    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":uuid4(),"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time}
+    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":uuid4(),"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time,"fill_instrument_id":instrument_id,"fill_transaction_cost":Decimal("0.75"),"fill_time":event_time}
     class R:
         def mappings(self): return self
         def all(self): return [durable]
@@ -1477,7 +1485,7 @@ def test_reconciliation_rejects_tampered_pnl_event_time(monkeypatch) -> None:
     pnl_id=paper_portfolio_pnl_event_id(portfolio_id,fill_id)
     original=PaperPortfolioPnLEvent(pnl_id,portfolio_id,fill_id,instrument_id,Decimal("12.50"),Decimal("0.75"),event_time)
     effects=(create_paper_effect(job_run,paper_reconciliation.PaperEffectType.FILL,fill_id,"6"*64),create_paper_effect(job_run,paper_reconciliation.PaperEffectType.PNL,pnl_id,paper_portfolio_pnl_payload_hash(original)))
-    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":instrument_id,"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time+timedelta(seconds=1)}
+    durable={"fill_id":fill_id,"portfolio_id":portfolio_id,"pnl_event_id":pnl_id,"pnl_fill_id":fill_id,"pnl_portfolio_id":portfolio_id,"pnl_instrument_id":instrument_id,"realized_pnl_delta":Decimal("12.50"),"commission_delta":Decimal("0.75"),"event_time":event_time+timedelta(seconds=1),"fill_instrument_id":instrument_id,"fill_transaction_cost":Decimal("0.75"),"fill_time":event_time}
     class R:
         def mappings(self): return self
         def all(self): return [durable]
@@ -1487,3 +1495,93 @@ def test_reconciliation_rejects_tampered_pnl_event_time(monkeypatch) -> None:
     monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
     with pytest.raises(RuntimeError,match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(C(),effects)
+
+
+
+def test_reconciliation_rejects_self_consistent_pnl_that_conflicts_with_fill_cost(
+    monkeypatch,
+) -> None:
+    """A valid PNL effect cannot override the authoritative fill commission."""
+    from decimal import Decimal
+
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    instrument_id = uuid4()
+    event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_id,
+        portfolio_id,
+        fill_id,
+        instrument_id,
+        Decimal("12.50"),
+        Decimal("0.75"),
+        event_time,
+    )
+    job_run = create_scheduled_job_run(
+        "paper:pnl-fill-cost-conflict",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "8" * 64,
+        ),
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            paper_portfolio_pnl_payload_hash(pnl_event),
+        ),
+    )
+    durable = {
+        "fill_id": fill_id,
+        "portfolio_id": portfolio_id,
+        "pnl_event_id": pnl_id,
+        "pnl_fill_id": fill_id,
+        "pnl_portfolio_id": portfolio_id,
+        "pnl_instrument_id": instrument_id,
+        "realized_pnl_delta": Decimal("12.50"),
+        "commission_delta": Decimal("0.75"),
+        "event_time": event_time,
+        "fill_instrument_id": instrument_id,
+        "fill_transaction_cost": Decimal("0.50"),
+        "fill_time": event_time,
+    }
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [durable]
+
+    class _Connection:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    from hope.infrastructure.repositories import paper_portfolio
+
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        lambda *args, **kwargs: object(),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(
+            _Connection(),
+            effects,
+        )
