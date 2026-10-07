@@ -700,6 +700,74 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
 
 
+
+def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
+    monkeypatch,
+) -> None:
+    """Accounting truth must lock the authoritative fill row before replay."""
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    pnl_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:locked-fill-accounting",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "1" * 64,
+        ),
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            "2" * 64,
+        ),
+    )
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{
+                "fill_id": fill_id,
+                "portfolio_id": portfolio_id,
+                "pnl_event_id": pnl_id,
+                "pnl_fill_id": fill_id,
+                "pnl_portfolio_id": portfolio_id,
+            }]
+
+    class _AccountingConnection:
+        def __init__(self):
+            self.calls = []
+
+        def execute(self, statement, params):
+            self.calls.append((str(statement), params))
+            return _Rows()
+
+    connection = _AccountingConnection()
+
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        lambda self, requested_portfolio_id, *, lock_for_update=False: object(),
+    )
+
+    paper_reconciliation._assert_durable_accounting_truth(connection, effects)
+
+    assert len(connection.calls) == 1
+    statement, params = connection.calls[0]
+    assert "WHERE f.fill_id = :fill_id" in statement
+    assert "FOR UPDATE OF f" in statement
+    assert params == {"fill_id": fill_id}
+
+
+
 def test_reconciliation_translates_locked_portfolio_replay_mismatch(
     monkeypatch,
 ) -> None:
