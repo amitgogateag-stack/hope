@@ -40,7 +40,10 @@ class SqlAlchemyPaperTerminalRepository:
         if effect.payload_hash!=paper_terminal_payload_hash(outcome): raise ValueError("PAPER_TERMINAL_EFFECT_PAYLOAD_MISMATCH")
         with self._connection.begin_nested():
             self._lock_source_order(effect,outcome)
-            existing=self.get(outcome.order_id); recorded=self._effects.record(effect)
+            existing=self.get(
+                outcome.order_id,
+                current_job_run_id=effect.job_run_id,
+            ); recorded=self._effects.record(effect)
             if not recorded:
                 if existing is None or paper_terminal_payload_hash(existing)!=effect.payload_hash: raise RuntimeError("PAPER_TERMINAL_EFFECT_WITHOUT_MATCHING_EVENT")
                 return False
@@ -49,7 +52,7 @@ class SqlAlchemyPaperTerminalRepository:
             inserted=self._connection.execute(pg_insert(self._events).values(order_id=outcome.order_id,outcome="CANCELLED" if isinstance(outcome,ExecutionCancellation) else "REJECTED",reason_code=outcome.reason_code,event_time=t,cancelled_quantity=q).on_conflict_do_nothing(index_elements=["order_id"]).returning(self._events.c.order_id)).scalar_one_or_none()
             if inserted is None: raise ValueError("PAPER_ORDER_TERMINAL_CONFLICT")
             return True
-    def get(self,order_id):
+    def get(self,order_id,*,current_job_run_id=None):
         row=self._connection.execute(select(self._events,self._orders.c.signal_id,self._orders.c.instrument_id,self._orders.c.environment).join(self._orders,self._events.c.order_id==self._orders.c.order_id).where(self._events.c.order_id==order_id)).mappings().one_or_none()
         if row is None:return None
         if row["environment"]!=Environment.PAPER.value: raise RuntimeError("PAPER_TERMINAL_NON_PAPER_ORDER")
@@ -64,6 +67,17 @@ class SqlAlchemyPaperTerminalRepository:
         effect=self._effects.get(kind,outcome.order_id)
         if effect is None: raise RuntimeError("PAPER_TERMINAL_EVENT_WITHOUT_EFFECT")
         if effect.payload_hash!=paper_terminal_payload_hash(outcome): raise ValueError("PAPER_TERMINAL_EFFECT_PAYLOAD_CONFLICT")
+        try:
+            if current_job_run_id is None:
+                recoverable_effect=self._effects.get_recoverable(kind,outcome.order_id)
+            else:
+                recoverable_effect=self._effects.get_reusable_for_job(
+                    kind,outcome.order_id,current_job_run_id
+                )
+        except ValueError as exc:
+            raise RuntimeError("PAPER_TERMINAL_OWNER_NOT_RECOVERABLE") from exc
+        if recoverable_effect is None:
+            raise RuntimeError("PAPER_TERMINAL_EFFECT_NOT_RECOVERABLE")
         try:
             source_order=self._effects.get_reusable_for_job(PaperEffectType.ORDER,outcome.order_id,effect.job_run_id)
         except ValueError as exc:

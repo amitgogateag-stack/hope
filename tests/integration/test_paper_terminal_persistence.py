@@ -117,6 +117,32 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
             text("SELECT count(*) FROM paper_order_terminal_events WHERE order_id=:id"),
             {"id": order.order_id},
         ).scalar_one() == 1
+        repository = SqlAlchemyPaperTerminalRepository(connection)
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_TERMINAL_OWNER_NOT_RECOVERABLE",
+        ):
+            repository.get(order.order_id)
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_TERMINAL_OWNER_NOT_RECOVERABLE",
+        ):
+            repository.get(
+                order.order_id,
+                current_job_run_id=uuid4(),
+            )
+        assert repository.get(
+            order.order_id,
+            current_job_run_id=run.job_run_id,
+        ) == outcome
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.SUCCEEDED,
+                run.scheduled_for + timedelta(seconds=30),
+            )
+        )
 
     # A fresh transaction/repository must reconstruct the same terminal truth.
     with engine.begin() as connection:
@@ -732,12 +758,24 @@ def test_paper_terminal_restart_read_requires_source_order_lineage(monkeypatch):
         writer = PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection))
         assert writer.record(context, outcome)
         repository = SqlAlchemyPaperTerminalRepository(connection)
+        terminal_effect = repository._effects.get(
+            PaperEffectType.REJECTION,
+            order.order_id,
+        )
+        assert terminal_effect is not None
         monkeypatch.setattr(
             repository._effects,
             "get_reusable_for_job",
-            lambda effect_type, entity_id, job_run_id: None,
+            lambda effect_type, entity_id, job_run_id: (
+                None
+                if effect_type is PaperEffectType.ORDER
+                else terminal_effect
+            ),
         )
         with pytest.raises(ValueError, match="PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT"):
-            repository.get(order.order_id)
+            repository.get(
+                order.order_id,
+                current_job_run_id=run.job_run_id,
+            )
 
     engine.dispose()
