@@ -14,6 +14,8 @@ class SqlAlchemyPaperTerminalRepository:
     def _lock_source_order(self,effect:PaperEffect,outcome:PaperTerminalOutcome):
         source_effect=self._effects.get_reusable_for_job(PaperEffectType.ORDER,outcome.order_id,effect.job_run_id)
         if source_effect is None: raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_UNTRACKED")
+        durable_effect=self._effects.get(PaperEffectType.ORDER,outcome.order_id)
+        if durable_effect is None or durable_effect.payload_hash!=source_effect.payload_hash: raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_EFFECT_CONFLICT")
         row=self._connection.execute(
             select(
                 self._orders.c.order_id,
