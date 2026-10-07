@@ -11,11 +11,33 @@ class SqlAlchemyPaperTerminalRepository:
         self._events=Table("paper_order_terminal_events",m,Column("order_id",Uuid,primary_key=True),Column("outcome",String),Column("reason_code",String),Column("event_time",DateTime(timezone=True)),Column("cancelled_quantity",Numeric),Column("created_at",DateTime(timezone=True)))
         self._orders=Table("orders",m,Column("order_id",Uuid,primary_key=True),Column("signal_id",Uuid),Column("instrument_id",Uuid),Column("environment",String))
         self._effects=SqlAlchemyPaperEffectRepository(connection)
+    def _lock_source_order(self,effect:PaperEffect,outcome:PaperTerminalOutcome):
+        source_effect=self._effects.get_reusable_for_job(PaperEffectType.ORDER,outcome.order_id,effect.job_run_id)
+        if source_effect is None: raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_UNTRACKED")
+        row=self._connection.execute(
+            select(
+                self._orders.c.order_id,
+                self._orders.c.signal_id,
+                self._orders.c.instrument_id,
+                self._orders.c.environment,
+            )
+            .where(self._orders.c.order_id==outcome.order_id)
+            .with_for_update()
+        ).mappings().one_or_none()
+        if row is None: raise RuntimeError("PAPER_TERMINAL_ORDER_EFFECT_WITHOUT_ORDER")
+        if (
+            row["signal_id"]!=outcome.signal_id
+            or row["instrument_id"]!=outcome.instrument_id
+            or row["environment"]!=outcome.environment.value
+        ):
+            raise ValueError("PAPER_TERMINAL_ORDER_IDENTITY_MISMATCH")
+        return row
     def persist(self,effect:PaperEffect,outcome:PaperTerminalOutcome)->bool:
         kind=PaperEffectType.CANCELLATION if isinstance(outcome,ExecutionCancellation) else PaperEffectType.REJECTION
         if effect.effect_type is not kind or effect.entity_id!=outcome.order_id: raise ValueError("PAPER_TERMINAL_EFFECT_MISMATCH")
         if effect.payload_hash!=paper_terminal_payload_hash(outcome): raise ValueError("PAPER_TERMINAL_EFFECT_PAYLOAD_MISMATCH")
         with self._connection.begin_nested():
+            self._lock_source_order(effect,outcome)
             existing=self.get(outcome.order_id); recorded=self._effects.record(effect)
             if not recorded:
                 if existing is None or paper_terminal_payload_hash(existing)!=effect.payload_hash: raise RuntimeError("PAPER_TERMINAL_EFFECT_WITHOUT_MATCHING_EVENT")

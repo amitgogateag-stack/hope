@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +8,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
-from hope.application.jobs import JobRunStatus, create_scheduled_job_run
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper import (
     PaperCycleContext,
     PaperEffectType,
@@ -123,6 +127,123 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
             {"id": order.order_id},
         ).scalar_one()
         assert effect_type == kind.replace("CANCELLED", "CANCELLATION").replace("REJECTED", "REJECTION")
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_terminal_requires_reusable_source_order_ownership():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-terminal-source-owner",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+    terminal_run = create_scheduled_job_run(
+        "paper-terminal-foreign-consumer",
+        datetime(2026, 9, 9, 20, 6, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        source_context, signal, order = _setup_order(
+            connection, source_run, instrument_id
+        )
+        terminal_context = PaperCycleContext(terminal_run)
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(terminal_run)
+        outcome = ExecutionRejection(
+            order.order_id,
+            signal.signal_id,
+            instrument_id,
+            Environment.PAPER,
+            "TEST_REJECT",
+            datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+        writer = PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection))
+
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            writer.record(terminal_context, outcome)
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_order_terminal_events "
+                "WHERE order_id=:id"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='REJECTION'"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+
+        assert jobs.complete(
+            create_job_run_completion(
+                source_run,
+                JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            )
+        )
+        assert writer.record(terminal_context, outcome)
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("mismatch", ["signal", "instrument"])
+def test_paper_terminal_rejects_source_order_identity_mismatch(mismatch):
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        f"paper-terminal-{mismatch}-mismatch",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        outcome = ExecutionRejection(
+            order.order_id,
+            uuid4() if mismatch == "signal" else signal.signal_id,
+            uuid4() if mismatch == "instrument" else instrument_id,
+            Environment.PAPER,
+            "TEST_REJECT",
+            datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="PAPER_TERMINAL_ORDER_IDENTITY_MISMATCH",
+        ):
+            PaperTerminalWriter(
+                SqlAlchemyPaperTerminalRepository(connection)
+            ).record(context, outcome)
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_order_terminal_events "
+                "WHERE order_id=:id"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='REJECTION'"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
+
     engine.dispose()
 
 
