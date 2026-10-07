@@ -182,6 +182,17 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_EFFECT")
             if effect.payload_hash != paper_fill_payload_hash(fill):
                 raise ValueError("PAPER_PORTFOLIO_APPLIED_FILL_PAYLOAD_MISMATCH")
+            pnl_effect = self._effects.get(
+                PaperEffectType.PNL,
+                __import__(
+                    "hope.application.paper.portfolio_pnl",
+                    fromlist=["paper_portfolio_pnl_event_id"],
+                ).paper_portfolio_pnl_event_id(portfolio["portfolio_id"], fill.fill_id),
+            )
+            if pnl_effect is not None and (
+                pnl_effect.job_run_id != effect.job_run_id
+            ):
+                raise ValueError("PAPER_PORTFOLIO_FILL_PNL_RUN_LINEAGE_MISMATCH")
             ledger.apply_fill(fill)
 
         materialized = PortfolioState(
