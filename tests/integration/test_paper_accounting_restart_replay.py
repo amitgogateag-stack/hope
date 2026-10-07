@@ -32,6 +32,7 @@ from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPap
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
+from hope.infrastructure.scheduling import paper_reconciliation
 from hope.infrastructure.scheduling.paper import run_due_operational_paper_jobs
 from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
 
@@ -136,7 +137,9 @@ def test_paper_fill_accounting_restart_replay_is_idempotent_across_committed_con
 
 
 @pytest.mark.integration
-def test_completed_authoritative_accounting_reconciles_without_runtime_replay() -> None:
+def test_completed_authoritative_accounting_reconciles_without_runtime_replay(
+    monkeypatch,
+) -> None:
     """A committed portfolio-PNL chain can terminalize after process interruption."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
@@ -205,11 +208,34 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay() 
             "PNL",
         }
 
+    with monkeypatch.context() as patch, engine.begin() as connection:
+        patch.setattr(
+            paper_reconciliation,
+            "verify_paper_recovery_lineage",
+            lambda *args: False,
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH",
+        ):
+            reconcile_completed_paper_run(
+                connection,
+                run,
+                current=datetime(2026, 9, 30, 12, 3, tzinfo=UTC),
+            )
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM audit_events "
+                "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"
+            ),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 1
+
     with engine.begin() as connection:
         assert reconcile_completed_paper_run(
             connection,
             run,
-            current=datetime(2026, 9, 30, 12, 3, tzinfo=UTC),
+            current=datetime(2026, 9, 30, 12, 4, tzinfo=UTC),
         ) is False
         assert connection.execute(
             text(

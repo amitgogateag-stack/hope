@@ -17,6 +17,7 @@ from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffect
 from hope.infrastructure.repositories.paper_reconciliation_audit import (
     SqlAlchemyPaperReconciliationAuditRepository,
 )
+from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
 from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDecision,
     assess_due_paper_recovery,
@@ -57,6 +58,15 @@ def _durable_effects_checked(operation: Callable[[], _T]) -> _T:
         return operation()
     except ValueError as exc:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECT_MISMATCH") from exc
+
+
+def _assert_durable_execution_lineage(
+    connection: Connection,
+    effects: tuple[PaperEffect, ...],
+) -> None:
+    """Re-authenticate execution truth before trusting an existing receipt."""
+    if not verify_paper_recovery_lineage(connection, effects):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH")
 
 
 def _assert_durable_accounting_truth(
@@ -267,6 +277,7 @@ def _reconcile_completed_paper_run(
             effects = _durable_effects_checked(
                 lambda: effects_repository.list_for_job_run(job_run.job_run_id)
             )
+            _assert_durable_execution_lineage(connection, effects)
             _assert_durable_accounting_truth(connection, effects)
             try:
                 verified = audit_repository.verify(durable, effects)

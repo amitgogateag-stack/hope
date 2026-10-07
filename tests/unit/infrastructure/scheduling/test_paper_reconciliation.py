@@ -151,6 +151,11 @@ def _reset_effect_repository(monkeypatch):
         "SqlAlchemyPaperReconciliationAuditRepository",
         _FakeAuditRepository,
     )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "verify_paper_recovery_lineage",
+        lambda connection, effects: True,
+    )
 
 
 def _report(decision, job_run_id):
@@ -495,6 +500,47 @@ def test_reconciliation_is_idempotent_when_race_already_terminalized_success(mon
     assert reconcile_completed_paper_run(_FakeConnection(), job_run, current=current) is False
     assert _FakeEffectRepository.calls == 1
     assert _FakeAuditRepository.verify_calls == [(_FakeRepository.record, ())]
+
+
+def test_idempotent_reconciliation_rejects_broken_execution_lineage(
+    monkeypatch,
+) -> None:
+    current = datetime(2026, 10, 2, 14, 30, tzinfo=UTC)
+    job_run = create_scheduled_job_run(
+        "paper:idempotent-lineage-mismatch",
+        datetime(2026, 10, 2, 14, 0, tzinfo=UTC),
+    )
+    effects = (object(),)
+    _FakeRepository.lock_result = False
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeEffectRepository.snapshots = (effects,)
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "SqlAlchemyJobRunRepository",
+        _FakeRepository,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation,
+        "verify_paper_recovery_lineage",
+        lambda connection, durable_effects: False,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH",
+    ):
+        reconcile_completed_paper_run(
+            _FakeConnection(),
+            job_run,
+            current=current,
+        )
+
+    assert _FakeAuditRepository.verify_calls == []
+    assert _FakeConnection.exits == [RuntimeError]
 
 
 def test_reconciliation_fails_closed_when_locked_state_is_not_claimed_or_success(monkeypatch) -> None:
