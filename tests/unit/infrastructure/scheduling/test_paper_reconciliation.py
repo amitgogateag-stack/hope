@@ -699,6 +699,79 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
 
 
+
+def test_reconciliation_translates_locked_portfolio_replay_mismatch(
+    monkeypatch,
+) -> None:
+    """Materialized portfolio corruption must surface as reconciliation-specific failure."""
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    pnl_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:locked-portfolio-mismatch",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "d" * 64,
+        ),
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            "e" * 64,
+        ),
+    )
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{
+                "fill_id": fill_id,
+                "portfolio_id": portfolio_id,
+                "pnl_event_id": pnl_id,
+                "pnl_fill_id": fill_id,
+                "pnl_portfolio_id": portfolio_id,
+            }]
+
+    class _AccountingConnection:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    calls = []
+
+    def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
+        calls.append((requested_portfolio_id, lock_for_update))
+        raise RuntimeError("PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT")
+
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        _load_ledger,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
+    ) as error:
+        paper_reconciliation._assert_durable_accounting_truth(
+            _AccountingConnection(),
+            effects,
+        )
+
+    assert calls == [(portfolio_id, True)]
+    assert isinstance(error.value.__cause__, RuntimeError)
+    assert str(error.value.__cause__) == "PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT"
+
+
+
 def test_reconciliation_fails_closed_when_locked_portfolio_replay_is_missing(
     monkeypatch,
 ) -> None:
