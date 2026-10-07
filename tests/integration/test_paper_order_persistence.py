@@ -213,6 +213,66 @@ def test_paper_order_is_durable_and_idempotent_across_scheduled_cycles() -> None
 
 
 @pytest.mark.integration
+def test_paper_order_rejects_signal_owned_by_another_claimed_run() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-order-foreign-source",
+        datetime(2026, 9, 9, 23, 13, tzinfo=UTC),
+    )
+    foreign_run = create_scheduled_job_run(
+        "paper-order-foreign-consumer",
+        datetime(2026, 9, 9, 23, 14, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    foreign_context = PaperCycleContext(foreign_run)
+    signal = make_signal(
+        source_context,
+        instrument_id,
+        datetime(2026, 9, 9, 23, 12, tzinfo=UTC),
+    )
+    order = make_order(foreign_context, signal)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:instrument_id, 'PAPER-ORDER-FOREIGN', 'TEST', 'ACTIVE')"
+            ),
+            {"instrument_id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(source_run) is True
+        signal_writer = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection))
+        assert signal_writer.record(source_context, signal) is True
+        assert jobs.claim(foreign_run) is True
+
+        order_writer = PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection))
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            order_writer.record(foreign_context, order)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM orders WHERE order_id = :order_id"),
+            {"order_id": order.order_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type = 'ORDER' AND entity_id = :order_id"
+            ),
+            {"order_id": order.order_id},
+        ).scalar_one() == 0
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_order_requires_tracked_signal_and_rolls_back_failed_order_effect() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:

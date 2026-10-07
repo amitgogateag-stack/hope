@@ -55,7 +55,14 @@ class SqlAlchemyPaperRiskRepository:
             raise ValueError("PAPER_RISK_EFFECT_PAYLOAD_MISMATCH")
         if assessment.decision is RiskDecision.REJECT and assessment.approved_quantity != 0:
             raise ValueError("PAPER_RISK_REJECTION_QUANTITY_INVALID")
-        if self._effects.get(PaperEffectType.SIGNAL, assessment.signal_id) is None:
+        if (
+            self._effects.get_reusable_for_job(
+                PaperEffectType.SIGNAL,
+                assessment.signal_id,
+                effect.job_run_id,
+            )
+            is None
+        ):
             raise ValueError("PAPER_RISK_SOURCE_SIGNAL_UNTRACKED")
 
         with self._connection.begin_nested():

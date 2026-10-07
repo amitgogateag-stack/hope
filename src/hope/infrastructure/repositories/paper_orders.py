@@ -64,7 +64,14 @@ class SqlAlchemyPaperOrderRepository:
             raise ValueError("PAPER_ORDER_EFFECT_MISMATCH")
         if effect.payload_hash != paper_order_payload_hash(order):
             raise ValueError("PAPER_ORDER_EFFECT_PAYLOAD_MISMATCH")
-        if self._effects.get(PaperEffectType.SIGNAL, order.signal_id) is None:
+        if (
+            self._effects.get_reusable_for_job(
+                PaperEffectType.SIGNAL,
+                order.signal_id,
+                effect.job_run_id,
+            )
+            is None
+        ):
             raise ValueError("PAPER_ORDER_SOURCE_SIGNAL_UNTRACKED")
 
         with self._connection.begin_nested():

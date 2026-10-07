@@ -122,6 +122,64 @@ def _assessment(signal: Signal) -> RiskAssessment:
 
 
 @pytest.mark.integration
+def test_paper_risk_rejects_signal_owned_by_another_claimed_run() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-risk-foreign-source",
+        datetime(2026, 9, 13, 15, 1, tzinfo=UTC),
+    )
+    foreign_run = create_scheduled_job_run(
+        "paper-risk-foreign-consumer",
+        datetime(2026, 9, 13, 15, 2, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    foreign_context = PaperCycleContext(foreign_run)
+    signal = _signal(source_context, instrument_id, "paper-risk-foreign-v1")
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:instrument_id, 'PAPER-RISK-FOREIGN', 'TEST', 'ACTIVE')"
+            ),
+            {"instrument_id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(source_run) is True
+        signal_writer = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection))
+        assert signal_writer.record(source_context, signal) is True
+        assert jobs.claim(foreign_run) is True
+
+        risk_writer = PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection))
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            risk_writer.record(foreign_context, _assessment(signal))
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_risk_assessments "
+                "WHERE signal_id=:signal_id"
+            ),
+            {"signal_id": signal.signal_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='RISK' AND entity_id=:signal_id"
+            ),
+            {"signal_id": signal.signal_id},
+        ).scalar_one() == 0
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_risk_requires_tracked_signal_and_is_idempotent() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
