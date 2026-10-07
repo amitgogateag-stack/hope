@@ -701,6 +701,74 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
 
 
+
+def test_reconciliation_fails_closed_when_accounting_query_returns_duplicates(
+    monkeypatch,
+) -> None:
+    """Duplicate durable accounting truth must never be accepted as canonical."""
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    pnl_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:duplicate-accounting-truth",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "3" * 64,
+        ),
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            "4" * 64,
+        ),
+    )
+    durable = {
+        "fill_id": fill_id,
+        "portfolio_id": portfolio_id,
+        "pnl_event_id": pnl_id,
+        "pnl_fill_id": fill_id,
+        "pnl_portfolio_id": portfolio_id,
+    }
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [durable, durable.copy()]
+
+    class _AccountingConnection:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    from hope.infrastructure.repositories import paper_portfolio
+
+    def _must_not_replay(*args, **kwargs):
+        raise AssertionError("duplicate accounting truth must fail before replay")
+
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        _must_not_replay,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_ACCOUNTING_NOT_DURABLE",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(
+            _AccountingConnection(),
+            effects,
+        )
+
+
+
 def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     monkeypatch,
 ) -> None:
