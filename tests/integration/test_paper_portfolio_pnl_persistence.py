@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -8,7 +8,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import PaperPortfolioPnLWriter
@@ -219,3 +223,101 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
         ).mappings().one()
         assert durable["realized_pnl_delta"] == Decimal("10")
         assert durable["commission_delta"] == Decimal("0.25")
+
+
+@pytest.mark.integration
+def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    source_run = create_scheduled_job_run(
+        "paper-portfolio-pnl-source-fill-owner",
+        datetime(2026, 9, 10, 0, 3, tzinfo=UTC),
+    )
+    pnl_run = create_scheduled_job_run(
+        "paper-portfolio-pnl-foreign-consumer",
+        datetime(2026, 9, 10, 0, 4, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    pnl_context = PaperCycleContext(pnl_run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-FILL-OWNER', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(source_run) is True
+        fill = persist_fill(
+            connection,
+            source_context,
+            instrument_id,
+            OrderSide.BUY,
+            "100",
+            3,
+        )
+        transition = SqlAlchemyPaperPortfolioRepository(
+            connection
+        ).apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+        )
+        assert transition is not None
+
+        assert jobs.claim(pnl_run) is True
+        writer = PaperPortfolioPnLWriter(
+            SqlAlchemyPaperPortfolioPnLRepository(connection)
+        )
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            writer.record(pnl_context, portfolio_id, fill, transition)
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='PNL' AND job_run_id=:job_run_id"
+            ),
+            {"job_run_id": pnl_run.job_run_id},
+        ).scalar_one() == 0
+
+        assert jobs.complete(
+            create_job_run_completion(
+                source_run,
+                JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+        assert writer.record(pnl_context, portfolio_id, fill, transition) is True
+
+        owners = dict(
+            connection.execute(
+                text(
+                    "SELECT effect_type, job_run_id FROM paper_effects "
+                    "WHERE (effect_type='FILL' AND entity_id=:fill_id) "
+                    "OR (effect_type='PNL' AND job_run_id=:pnl_run_id)"
+                ),
+                {"fill_id": fill.fill_id, "pnl_run_id": pnl_run.job_run_id},
+            ).all()
+        )
+        assert owners == {
+            "FILL": source_run.job_run_id,
+            "PNL": pnl_run.job_run_id,
+        }
+
+    engine.dispose()

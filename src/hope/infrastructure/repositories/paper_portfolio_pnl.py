@@ -100,6 +100,15 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             ).scalar_one_or_none()
             if application is None:
                 raise ValueError("PAPER_PORTFOLIO_PNL_FILL_NOT_APPLIED")
+            if (
+                self._effects.get_reusable_for_job(
+                    PaperEffectType.FILL,
+                    event.fill_id,
+                    effect.job_run_id,
+                )
+                is None
+            ):
+                raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED")
 
             existing_effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
             existing_event = self._get_row(event.pnl_event_id)
