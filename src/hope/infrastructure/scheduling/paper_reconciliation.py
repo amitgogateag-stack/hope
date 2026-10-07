@@ -133,7 +133,7 @@ def _assert_durable_accounting_truth(
 
     required_pnl_fields = ("pnl_instrument_id", "realized_pnl_delta", "commission_delta", "event_time")
     if not all(field in durable for field in required_pnl_fields):
-        return
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_NOT_DURABLE")
 
     try:
         pnl_event = PaperPortfolioPnLEvent(
