@@ -735,7 +735,7 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
     from hope.infrastructure.repositories import paper_portfolio
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         _load_ledger,
     )
 
@@ -861,7 +861,7 @@ def test_reconciliation_fails_closed_when_accounting_truth_is_missing(
 
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         _must_not_replay,
     )
 
@@ -928,7 +928,7 @@ def test_reconciliation_fails_closed_when_accounting_query_returns_duplicates(
 
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         _must_not_replay,
     )
 
@@ -1022,7 +1022,7 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     from hope.infrastructure.repositories import paper_portfolio
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         lambda self, requested_portfolio_id, *, lock_for_update=False: (
             _ledger_with_transition(
                 fill_id,
@@ -1096,7 +1096,7 @@ def test_reconciliation_translates_locked_portfolio_replay_mismatch(
     from hope.infrastructure.repositories import paper_portfolio
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         _load_ledger,
     )
 
@@ -1168,7 +1168,7 @@ def test_reconciliation_fails_closed_when_locked_portfolio_replay_is_missing(
     from hope.infrastructure.repositories import paper_portfolio
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         _load_ledger,
     )
 
@@ -1453,7 +1453,7 @@ def test_reconciliation_rejects_tampered_durable_pnl_economics(monkeypatch) -> N
     class _Connection:
         def execute(self, *args, **kwargs): return _Rows()
     from hope.infrastructure.repositories import paper_portfolio
-    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository, "load_ledger", lambda *args, **kwargs: object())
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository, "verify_accounting_history", lambda *args, **kwargs: object())
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(_Connection(), effects)
 
@@ -1476,7 +1476,7 @@ def test_reconciliation_rejects_tampered_pnl_commission(monkeypatch) -> None:
     class C:
         def execute(self,*a,**k): return R()
     from hope.infrastructure.repositories import paper_portfolio
-    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"verify_accounting_history",lambda *a,**k: object())
     with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(C(), effects)
 
@@ -1499,7 +1499,7 @@ def test_reconciliation_rejects_tampered_pnl_instrument(monkeypatch) -> None:
     class C:
         def execute(self,*a,**k): return R()
     from hope.infrastructure.repositories import paper_portfolio
-    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"verify_accounting_history",lambda *a,**k: object())
     with pytest.raises(RuntimeError,match="PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(C(),effects)
 
@@ -1523,7 +1523,7 @@ def test_reconciliation_rejects_tampered_pnl_event_time(monkeypatch) -> None:
     class C:
         def execute(self,*a,**k): return R()
     from hope.infrastructure.repositories import paper_portfolio
-    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"load_ledger",lambda *a,**k: object())
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository,"verify_accounting_history",lambda *a,**k: object())
     with pytest.raises(RuntimeError,match="PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH"):
         paper_reconciliation._assert_durable_accounting_truth(C(),effects)
 
@@ -1604,7 +1604,7 @@ def test_reconciliation_rejects_self_consistent_pnl_that_conflicts_with_fill_cos
 
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         lambda *args, **kwargs: object(),
     )
 
@@ -1703,7 +1703,7 @@ def test_reconciliation_rejects_pnl_without_matching_replayed_transition(
 
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
-        "load_ledger",
+        "verify_accounting_history",
         lambda *args, **kwargs: (
             SimpleNamespace(transition_for_fill=lambda requested_fill_id: None)
             if replayed_realized is None
