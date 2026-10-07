@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 from hope.application.jobs import JobRunRecord, JobRunStatus
 from hope.application.paper.effect_topology import require_complete_paper_effects
 from hope.application.paper.effects import PaperEffect
+from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
 
 class SqlAlchemyPaperReconciliationAuditRepository:
@@ -97,6 +98,19 @@ class SqlAlchemyPaperReconciliationAuditRepository:
         ).mappings().all()
         if not matches:
             return False
+        effects_repository = SqlAlchemyPaperEffectRepository(self._connection)
+        for effect in effects:
+            try:
+                recoverable = effects_repository.get_recoverable(
+                    effect.effect_type,
+                    effect.entity_id,
+                )
+            except ValueError as exc:
+                raise ValueError(
+                    "PAPER_RECONCILIATION_AUDIT_EFFECT_NOT_RECOVERABLE"
+                ) from exc
+            if recoverable != effect:
+                raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_NOT_RECOVERABLE")
         if len(matches) != 1 or dict(matches[0]) != {
             "audit_event_id": event_id,
             "event_type": self._EVENT_TYPE,
