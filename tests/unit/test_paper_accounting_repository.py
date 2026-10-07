@@ -15,6 +15,10 @@ from hope.infrastructure.repositories.paper_accounting import (
 )
 
 
+def _context():
+    return SimpleNamespace(job_run=SimpleNamespace(job_run_id=uuid4()))
+
+
 def _retry_boundary(*, realized: str = "4", commission: str = "0.50"):
     portfolio_id = uuid4()
     fill = SimpleNamespace(
@@ -73,7 +77,7 @@ def test_idempotent_retry_authenticates_replayed_transition() -> None:
     repository, portfolio, pnl_calls = _repository(event, replayed)
     portfolio.load_fill_transition = load_fill_transition
 
-    context = object()
+    context = _context()
     assert repository.apply_fill(
         context,
         portfolio_id,
@@ -107,7 +111,7 @@ def test_idempotent_retry_rejects_conflicting_pnl_economics(
         ValueError,
         match="PAPER_ACCOUNTING_PNL_DURABLE_STATE_CONFLICT",
     ):
-        repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill)
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
 
 
 def test_idempotent_retry_requires_replayable_fill_lineage() -> None:
@@ -118,7 +122,7 @@ def test_idempotent_retry_requires_replayable_fill_lineage() -> None:
         RuntimeError,
         match="PAPER_ACCOUNTING_APPLIED_FILL_TRANSITION_NOT_DURABLE",
     ):
-        repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill)
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
 
 
 def test_idempotent_retry_never_recreates_missing_pnl() -> None:
@@ -129,4 +133,4 @@ def test_idempotent_retry_never_recreates_missing_pnl() -> None:
         RuntimeError,
         match="PAPER_ACCOUNTING_RETRY_RECREATED_PNL",
     ):
-        repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill)
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
