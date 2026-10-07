@@ -108,6 +108,8 @@ class SqlAlchemyPaperFillRepository:
                 if row is None:
                     raise RuntimeError("PAPER_FILL_EFFECT_WITHOUT_FILL")
                 self._assert_row_matches(row, fill)
+                if self._effects.record(effect):
+                    raise RuntimeError("PAPER_FILL_RETRY_RECREATED_EFFECT")
                 return False
 
             already_filled = self._connection.execute(

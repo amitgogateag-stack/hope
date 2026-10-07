@@ -136,6 +136,67 @@ def test_paper_fill_is_durable_and_idempotent_across_scheduled_cycles():
 
 
 @pytest.mark.integration
+def test_paper_fill_retry_rejects_effect_owned_by_another_claimed_run():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    first = create_scheduled_job_run(
+        "paper-fill-owned-retry",
+        datetime(2026, 9, 9, 23, 43, tzinfo=UTC),
+    )
+    second = create_scheduled_job_run(
+        "paper-fill-foreign-retry",
+        datetime(2026, 9, 9, 23, 44, tzinfo=UTC),
+    )
+    first_context = PaperCycleContext(first)
+    second_context = PaperCycleContext(second)
+    signal, order, fill = make_chain(first_context, instrument_id)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-FILL-OWNED-RETRY', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(first)
+        PaperSignalWriter(
+            SqlAlchemyPaperSignalRepository(connection)
+        ).record(first_context, signal)
+        PaperOrderWriter(
+            SqlAlchemyPaperOrderRepository(connection)
+        ).record(first_context, order)
+        writer = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
+        assert writer.record(first_context, fill, sequence=0)
+
+        assert jobs.claim(second)
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            writer.record(second_context, fill, sequence=0)
+
+        assert connection.execute(
+            text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text(
+                "SELECT job_run_id FROM paper_effects "
+                "WHERE effect_type='FILL' AND entity_id=:id"
+            ),
+            {"id": fill.fill_id},
+        ).scalar_one() == first.job_run_id
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_fill_requires_tracked_order_and_rolls_back_failed_fill_effect():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url: pytest.skip("HOPE_DATABASE_URL is not configured")
