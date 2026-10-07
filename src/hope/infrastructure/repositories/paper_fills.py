@@ -45,8 +45,12 @@ class SqlAlchemyPaperFillRepository:
             select(self._fills).where(self._fills.c.fill_id == fill_id)
         ).mappings().one_or_none()
 
-    def _lock_source_order(self, fill: Fill):
-        effect = self._effects.get(PaperEffectType.ORDER, fill.order_id)
+    def _lock_source_order(self, fill: Fill, job_run_id: UUID):
+        effect = self._effects.get_reusable_for_job(
+            PaperEffectType.ORDER,
+            fill.order_id,
+            job_run_id,
+        )
         if effect is None:
             raise ValueError("PAPER_FILL_SOURCE_ORDER_UNTRACKED")
         row = self._connection.execute(
@@ -95,7 +99,7 @@ class SqlAlchemyPaperFillRepository:
             raise ValueError("PAPER_FILL_EFFECT_PAYLOAD_MISMATCH")
 
         with self._connection.begin_nested():
-            source_order = self._lock_source_order(fill)
+            source_order = self._lock_source_order(fill, effect.job_run_id)
             existing_effect = self._effects.get(PaperEffectType.FILL, fill.fill_id)
             existing_fill = self._get_row(fill.fill_id)
             if existing_effect is None and existing_fill is not None:

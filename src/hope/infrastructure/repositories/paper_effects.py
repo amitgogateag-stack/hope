@@ -95,6 +95,39 @@ class SqlAlchemyPaperEffectRepository:
             return None
         return self._from_row(row)
 
+    def get_reusable_for_job(
+        self,
+        effect_type: PaperEffectType,
+        entity_id: UUID,
+        job_run_id: UUID,
+    ) -> PaperEffect | None:
+        """Return an effect only when its owner may safely supply current work."""
+        parsed_type = PaperEffectType(effect_type)
+        row = self._connection.execute(
+            select(
+                self._paper_effects,
+                self._job_runs.c.status.label("owner_status"),
+            )
+            .select_from(
+                self._paper_effects.join(
+                    self._job_runs,
+                    self._job_runs.c.job_run_id == self._paper_effects.c.job_run_id,
+                )
+            )
+            .where(
+                self._paper_effects.c.effect_type == parsed_type.value,
+                self._paper_effects.c.entity_id == entity_id,
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            return None
+        if (
+            row["job_run_id"] != job_run_id
+            and row["owner_status"] != JobRunStatus.SUCCEEDED.value
+        ):
+            raise ValueError("PAPER_EFFECT_IDENTITY_CONFLICT")
+        return self._from_row(row)
+
     def list_for_job_run(self, job_run_id: UUID) -> tuple[PaperEffect, ...]:
         """Return all durable PAPER effects attributed to one scheduled run."""
         rows = self._connection.execute(
