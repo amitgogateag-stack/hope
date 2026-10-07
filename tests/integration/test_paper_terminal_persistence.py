@@ -707,3 +707,37 @@ def test_paper_cancellation_after_partial_fill_requires_exact_remaining_quantity
             SqlAlchemyPaperTerminalRepository(connection)
         ).record(context, valid)
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_terminal_restart_read_requires_source_order_lineage(monkeypatch):
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-terminal-recovery-source-lineage",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        outcome = ExecutionRejection(
+            order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
+            "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+        )
+        writer = PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection))
+        assert writer.record(context, outcome)
+        repository = SqlAlchemyPaperTerminalRepository(connection)
+        monkeypatch.setattr(
+            repository._effects,
+            "get_reusable_for_job",
+            lambda effect_type, entity_id, job_run_id: None,
+        )
+        with pytest.raises(ValueError, match="PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT"):
+            repository.get(order.order_id)
+
+    engine.dispose()

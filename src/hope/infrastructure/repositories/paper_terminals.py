@@ -64,4 +64,9 @@ class SqlAlchemyPaperTerminalRepository:
         effect=self._effects.get(kind,outcome.order_id)
         if effect is None: raise RuntimeError("PAPER_TERMINAL_EVENT_WITHOUT_EFFECT")
         if effect.payload_hash!=paper_terminal_payload_hash(outcome): raise ValueError("PAPER_TERMINAL_EFFECT_PAYLOAD_CONFLICT")
+        try:
+            source_order=self._effects.get_reusable_for_job(PaperEffectType.ORDER,outcome.order_id,effect.job_run_id)
+        except ValueError as exc:
+            raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT") from exc
+        if source_order is None: raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT")
         return outcome
