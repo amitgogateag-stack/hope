@@ -214,6 +214,41 @@ def test_paper_portfolio_restore_rejects_applied_fill_without_effect():
 
 
 @pytest.mark.integration
+def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-accounting-recovery",
+        datetime(2026, 9, 9, 23, 32, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id,'PAPER-ACCOUNTING-RECOVERY','TEST','ACTIVE')"),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+        fill = persist_fill(
+            connection, context, instrument_id,
+            side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"), sequence=0, decision_minute=33,
+        )
+        repository = SqlAlchemyPaperPortfolioRepository(connection)
+        assert repository.apply_fill(portfolio_id, Decimal("1000"), fill)
+
+        assert repository.load_ledger(portfolio_id) is not None
+        with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
+            repository.verify_accounting_history(portfolio_id)
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_portfolio_restore_rejects_incomplete_application_history():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:

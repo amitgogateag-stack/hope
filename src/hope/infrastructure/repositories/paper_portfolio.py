@@ -227,6 +227,52 @@ class SqlAlchemyPaperPortfolioRepository:
             return None
         return ledger.transition_for_fill(fill_id)
 
+    def verify_accounting_history(
+        self,
+        portfolio_id: UUID,
+        *,
+        lock_for_update: bool = False,
+    ) -> PortfolioLedger | None:
+        """Restore a portfolio only when every applied fill has matching durable PNL."""
+        ledger = self.load_ledger(portfolio_id, lock_for_update=lock_for_update)
+        if ledger is None:
+            return None
+
+        from hope.infrastructure.repositories.paper_portfolio_pnl import (
+            SqlAlchemyPaperPortfolioPnLRepository,
+        )
+
+        rows = self._connection.execute(
+            select(self._applications.c.fill_id, self._fills.c.filled_at)
+            .select_from(
+                self._applications.join(
+                    self._fills,
+                    self._applications.c.fill_id == self._fills.c.fill_id,
+                )
+            )
+            .where(self._applications.c.portfolio_id == portfolio_id)
+        ).mappings().all()
+        if {row["fill_id"] for row in rows} != set(ledger.applied_fill_ids):
+            raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_HISTORY_INCONSISTENT")
+
+        pnl_repository = SqlAlchemyPaperPortfolioPnLRepository(self._connection)
+        for row in rows:
+            fill_id = row["fill_id"]
+            event = pnl_repository.get(portfolio_id, fill_id)
+            if event is None:
+                raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
+            transition = ledger.transition_for_fill(fill_id)
+            if transition is None:
+                raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_TRANSITION_MISSING")
+            if (
+                event.instrument_id != transition.instrument_id
+                or event.realized_pnl_delta != transition.realized_pnl_delta
+                or event.commission_delta != transition.commission_delta
+                or event.event_time != row["filled_at"]
+            ):
+                raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_HISTORY_MISMATCH")
+        return ledger
+
     def apply_fill_with_transition(
         self,
         portfolio_id: UUID,

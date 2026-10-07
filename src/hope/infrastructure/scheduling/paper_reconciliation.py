@@ -123,7 +123,7 @@ def _assert_durable_accounting_truth(
     )
 
     try:
-        ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
+        ledger = SqlAlchemyPaperPortfolioRepository(connection).verify_accounting_history(
             durable["portfolio_id"],
             lock_for_update=True,
         )
