@@ -85,7 +85,8 @@ def _assert_durable_accounting_truth(
     row = connection.execute(
         text(
             "SELECT f.fill_id, a.portfolio_id, p.pnl_event_id, p.fill_id AS pnl_fill_id, "
-            "p.portfolio_id AS pnl_portfolio_id "
+            "p.portfolio_id AS pnl_portfolio_id, p.instrument_id AS pnl_instrument_id, "
+            "p.realized_pnl_delta, p.commission_delta, p.event_time "
             "FROM fills f "
             "LEFT JOIN paper_portfolio_fill_applications a ON a.fill_id = f.fill_id "
             "LEFT JOIN paper_portfolio_pnl_events p "
@@ -113,6 +114,10 @@ def _assert_durable_accounting_truth(
     from hope.infrastructure.repositories.paper_portfolio import (
         SqlAlchemyPaperPortfolioRepository,
     )
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_payload_hash,
+    )
 
     try:
         ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
@@ -125,6 +130,21 @@ def _assert_durable_accounting_truth(
         ) from exc
     if ledger is None:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_NOT_DURABLE")
+
+    try:
+        pnl_event = PaperPortfolioPnLEvent(
+            pnl_event_id=durable["pnl_event_id"],
+            portfolio_id=durable["pnl_portfolio_id"],
+            fill_id=durable["pnl_fill_id"],
+            instrument_id=durable["pnl_instrument_id"],
+            realized_pnl_delta=durable["realized_pnl_delta"],
+            commission_delta=durable["commission_delta"],
+            event_time=durable["event_time"],
+        )
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH") from exc
+    if paper_portfolio_pnl_payload_hash(pnl_event) != pnl_effect.payload_hash:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH")
 
 
 def _validated_reconciliation_current(
