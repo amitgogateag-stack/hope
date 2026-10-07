@@ -480,7 +480,7 @@ def verify_paper_recovery_lineage(
     ):
         return False
     try:
-        verified_ledger = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
+        verified_ledger = SqlAlchemyPaperPortfolioRepository(connection).verify_accounting_history(
             durable_portfolio_pnl.portfolio_id
         )
     except (RuntimeError, ValueError):

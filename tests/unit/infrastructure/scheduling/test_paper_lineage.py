@@ -131,7 +131,7 @@ class _FakePortfolioRepository:
     def __init__(self, connection):
         self.connection = connection
 
-    def load_ledger(self, portfolio_id):
+    def verify_accounting_history(self, portfolio_id):
         type(self).loaded_portfolio_ids.append(portfolio_id)
         if type(self).load_error is not None:
             raise type(self).load_error
@@ -542,7 +542,7 @@ def test_verifier_rejects_portfolio_version_ahead_of_application_history() -> No
     assert verify_paper_recovery_lineage(connection, effects) is False
 
 
-def test_verifier_rejects_inconsistent_materialized_portfolio_ledger() -> None:
+def test_verifier_rejects_inconsistent_full_portfolio_accounting_history() -> None:
     effects, signal, order, risk, fill, _ = _filled_fixture()
     portfolio_id = uuid4()
     pnl_event = PaperPortfolioPnLEvent(
