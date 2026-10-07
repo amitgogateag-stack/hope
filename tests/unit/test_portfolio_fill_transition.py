@@ -53,3 +53,6 @@ def test_fill_transition_reports_authoritative_accounting_deltas():
     assert sell.state_before == buy.state_after
     assert sell.state_after == ledger.state
     assert sell.state_after.positions[instrument].realized_pnl == Decimal("100")
+    assert ledger.transition_for_fill(buy.fill_id) == buy
+    assert ledger.transition_for_fill(sell.fill_id) == sell
+    assert ledger.transition_for_fill(uuid4()) is None

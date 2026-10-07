@@ -61,6 +61,7 @@ class PortfolioLedger:
         self._initial_cash = initial_cash
         self._state = PortfolioState(initial_cash, {})
         self._applied_fill_ids: set[UUID] = set()
+        self._fill_transitions: dict[UUID, PortfolioFillTransition] = {}
 
     @classmethod
     def from_state(
@@ -107,6 +108,10 @@ class PortfolioLedger:
     @property
     def applied_fill_ids(self) -> frozenset[UUID]:
         return frozenset(self._applied_fill_ids)
+
+    def transition_for_fill(self, fill_id: UUID) -> PortfolioFillTransition | None:
+        """Return the exact transition produced while replaying one fill."""
+        return self._fill_transitions.get(fill_id)
 
     def apply_fill(self, fill: Fill) -> PortfolioState:
         return self.apply_fill_with_transition(fill).state_after
@@ -183,7 +188,7 @@ class PortfolioLedger:
         self._state = state_after
         self._applied_fill_ids.add(fill.fill_id)
         position_after = state_after.positions[fill.instrument_id]
-        return PortfolioFillTransition(
+        transition = PortfolioFillTransition(
             fill_id=fill.fill_id,
             instrument_id=fill.instrument_id,
             state_before=state_before,
@@ -192,6 +197,8 @@ class PortfolioLedger:
             commission_delta=position_after.total_commission - commission_before,
             cash_delta=state_after.cash - state_before.cash,
         )
+        self._fill_transitions[fill.fill_id] = transition
+        return transition
 
     def unrealized_pnl(self, marks: dict[UUID, Decimal]) -> Decimal:
         total = Decimal("0")

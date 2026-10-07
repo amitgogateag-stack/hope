@@ -167,6 +167,28 @@ def _assert_durable_accounting_truth(
     if paper_portfolio_pnl_payload_hash(pnl_event) != pnl_effect.payload_hash:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH")
 
+    try:
+        transition = ledger.transition_for_fill(fill_effect.entity_id)
+    except (AttributeError, TypeError) as exc:
+        raise RuntimeError(
+            "PAPER_JOB_RECONCILIATION_PNL_TRANSITION_NOT_DURABLE"
+        ) from exc
+    if transition is None:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_TRANSITION_NOT_DURABLE")
+    try:
+        transition_conflicts = (
+            transition.fill_id != fill_effect.entity_id
+            or transition.instrument_id != pnl_event.instrument_id
+            or transition.realized_pnl_delta != pnl_event.realized_pnl_delta
+            or transition.commission_delta != pnl_event.commission_delta
+        )
+    except AttributeError as exc:
+        raise RuntimeError(
+            "PAPER_JOB_RECONCILIATION_PNL_TRANSITION_NOT_DURABLE"
+        ) from exc
+    if transition_conflicts:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH")
+
 
 def _validated_reconciliation_current(
     job_run: ScheduledJobRun,

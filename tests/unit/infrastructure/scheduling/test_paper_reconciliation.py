@@ -81,6 +81,25 @@ class _FakeEffectRepository:
         return type(self).snapshots[index]
 
 
+def _ledger_with_transition(
+    fill_id,
+    instrument_id,
+    realized_pnl_delta,
+    commission_delta,
+):
+    transition = SimpleNamespace(
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=realized_pnl_delta,
+        commission_delta=commission_delta,
+    )
+    return SimpleNamespace(
+        transition_for_fill=lambda requested_fill_id: (
+            transition if requested_fill_id == fill_id else None
+        )
+    )
+
+
 class _FakeAuditRepository:
     result = True
     record_error = None
@@ -706,7 +725,12 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
     def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
         calls.append((requested_portfolio_id, lock_for_update))
-        return object()
+        return _ledger_with_transition(
+            fill_id,
+            instrument_id,
+            Decimal("12.50"),
+            Decimal("0.75"),
+        )
 
     from hope.infrastructure.repositories import paper_portfolio
     monkeypatch.setattr(
@@ -999,7 +1023,14 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
         "load_ledger",
-        lambda self, requested_portfolio_id, *, lock_for_update=False: object(),
+        lambda self, requested_portfolio_id, *, lock_for_update=False: (
+            _ledger_with_transition(
+                fill_id,
+                instrument_id,
+                Decimal("12.50"),
+                Decimal("0.75"),
+            )
+        ),
     )
 
     paper_reconciliation._assert_durable_accounting_truth(connection, effects)
@@ -1580,6 +1611,114 @@ def test_reconciliation_rejects_self_consistent_pnl_that_conflicts_with_fill_cos
     with pytest.raises(
         RuntimeError,
         match="PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(
+            _Connection(),
+            effects,
+        )
+
+
+
+@pytest.mark.parametrize(
+    ("replayed_realized", "expected_error"),
+    (
+        ("12.50", "PAPER_JOB_RECONCILIATION_PNL_EXECUTION_MISMATCH"),
+        (None, "PAPER_JOB_RECONCILIATION_PNL_TRANSITION_NOT_DURABLE"),
+    ),
+)
+def test_reconciliation_rejects_pnl_without_matching_replayed_transition(
+    monkeypatch,
+    replayed_realized,
+    expected_error,
+) -> None:
+    """PNL requires the matching transition from authoritative portfolio replay."""
+    from decimal import Decimal
+
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    instrument_id = uuid4()
+    event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_id,
+        portfolio_id,
+        fill_id,
+        instrument_id,
+        Decimal("99.99"),
+        Decimal("0.75"),
+        event_time,
+    )
+    job_run = create_scheduled_job_run(
+        "paper:pnl-replay-conflict",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "4" * 64,
+        ),
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            paper_portfolio_pnl_payload_hash(pnl_event),
+        ),
+    )
+    durable = {
+        "fill_id": fill_id,
+        "portfolio_id": portfolio_id,
+        "pnl_event_id": pnl_id,
+        "pnl_fill_id": fill_id,
+        "pnl_portfolio_id": portfolio_id,
+        "pnl_instrument_id": instrument_id,
+        "realized_pnl_delta": Decimal("99.99"),
+        "commission_delta": Decimal("0.75"),
+        "event_time": event_time,
+        "fill_instrument_id": instrument_id,
+        "fill_transaction_cost": Decimal("0.75"),
+        "fill_time": event_time,
+    }
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [durable]
+
+    class _Connection:
+        def execute(self, *args, **kwargs):
+            return _Rows()
+
+    from hope.infrastructure.repositories import paper_portfolio
+
+    monkeypatch.setattr(
+        paper_portfolio.SqlAlchemyPaperPortfolioRepository,
+        "load_ledger",
+        lambda *args, **kwargs: (
+            SimpleNamespace(transition_for_fill=lambda requested_fill_id: None)
+            if replayed_realized is None
+            else _ledger_with_transition(
+                fill_id,
+                instrument_id,
+                Decimal(replayed_realized),
+                Decimal("0.75"),
+            )
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match=expected_error,
     ):
         paper_reconciliation._assert_durable_accounting_truth(
             _Connection(),
