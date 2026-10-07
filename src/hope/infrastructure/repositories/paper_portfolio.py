@@ -236,8 +236,8 @@ class SqlAlchemyPaperPortfolioRepository:
         *,
         lock_for_update: bool = False,
     ) -> PortfolioFillTransition | None:
-        """Replay and return the authoritative transition for one durable fill."""
-        ledger = self.load_ledger(
+        """Return a transition only from fully verified durable accounting history."""
+        ledger = self.verify_accounting_history(
             portfolio_id,
             lock_for_update=lock_for_update,
         )
