@@ -189,6 +189,13 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
         )
         assert jobs.complete(first_completion) is True
         assert effects.record(cross_run_replay) is False
+        reusable = effects.get_reusable_for_job(
+            PaperEffectType.SIGNAL,
+            entity_id,
+            second_run.job_run_id,
+        )
+        assert reusable is not None
+        assert reusable.job_run_id == first_run.job_run_id
 
         stored = effects.get(PaperEffectType.SIGNAL, entity_id)
         assert stored is not None

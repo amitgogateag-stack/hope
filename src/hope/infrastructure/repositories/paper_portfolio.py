@@ -8,6 +8,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
+from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.domain.execution.models import Environment, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioFillTransition, PortfolioLedger, PortfolioState, PositionState
@@ -184,15 +185,21 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise ValueError("PAPER_PORTFOLIO_APPLIED_FILL_PAYLOAD_MISMATCH")
             pnl_effect = self._effects.get(
                 PaperEffectType.PNL,
-                __import__(
-                    "hope.application.paper.portfolio_pnl",
-                    fromlist=["paper_portfolio_pnl_event_id"],
-                ).paper_portfolio_pnl_event_id(portfolio["portfolio_id"], fill.fill_id),
+                paper_portfolio_pnl_event_id(portfolio["portfolio_id"], fill.fill_id),
             )
-            if pnl_effect is not None and (
-                pnl_effect.job_run_id != effect.job_run_id
-            ):
-                raise ValueError("PAPER_PORTFOLIO_FILL_PNL_RUN_LINEAGE_MISMATCH")
+            if pnl_effect is not None and pnl_effect.job_run_id != effect.job_run_id:
+                try:
+                    reusable_fill = self._effects.get_reusable_for_job(
+                        PaperEffectType.FILL,
+                        fill.fill_id,
+                        pnl_effect.job_run_id,
+                    )
+                except ValueError as exc:
+                    raise ValueError(
+                        "PAPER_PORTFOLIO_FILL_PNL_RUN_LINEAGE_MISMATCH"
+                    ) from exc
+                if reusable_fill is None:
+                    raise ValueError("PAPER_PORTFOLIO_FILL_PNL_RUN_LINEAGE_MISMATCH")
             ledger.apply_fill(fill)
 
         materialized = PortfolioState(
