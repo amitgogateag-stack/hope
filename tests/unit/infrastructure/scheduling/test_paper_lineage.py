@@ -126,13 +126,13 @@ class _LineageConnection:
 class _FakePortfolioRepository:
     load_result = object()
     load_error = None
-    loaded_portfolio_ids = []
+    loaded_portfolios = []
 
     def __init__(self, connection):
         self.connection = connection
 
-    def verify_accounting_history(self, portfolio_id):
-        type(self).loaded_portfolio_ids.append(portfolio_id)
+    def verify_accounting_history(self, portfolio_id, *, current_job_run_id=None):
+        type(self).loaded_portfolios.append((portfolio_id, current_job_run_id))
         if type(self).load_error is not None:
             raise type(self).load_error
         return type(self).load_result
@@ -142,7 +142,7 @@ class _FakePortfolioRepository:
 def _reset_portfolio_repository(monkeypatch):
     _FakePortfolioRepository.load_result = object()
     _FakePortfolioRepository.load_error = None
-    _FakePortfolioRepository.loaded_portfolio_ids = []
+    _FakePortfolioRepository.loaded_portfolios = []
     monkeypatch.setattr(
         paper_lineage,
         "SqlAlchemyPaperPortfolioRepository",
@@ -226,7 +226,7 @@ def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
     )
 
     assert verify_paper_recovery_lineage(connection, effects) is True
-    assert _FakePortfolioRepository.loaded_portfolio_ids == []
+    assert _FakePortfolioRepository.loaded_portfolios == []
 
 
 def test_verifier_accepts_authoritative_portfolio_pnl_lineage() -> None:
@@ -274,7 +274,9 @@ def test_verifier_accepts_authoritative_portfolio_pnl_lineage() -> None:
     )
 
     assert verify_paper_recovery_lineage(connection, effects) is True
-    assert _FakePortfolioRepository.loaded_portfolio_ids == [portfolio_id]
+    assert _FakePortfolioRepository.loaded_portfolios == [
+        (portfolio_id, effects[-1].job_run_id)
+    ]
 
 
 def test_verifier_rejects_portfolio_pnl_linked_to_different_fill() -> None:
@@ -590,7 +592,9 @@ def test_verifier_rejects_inconsistent_full_portfolio_accounting_history() -> No
     )
 
     assert verify_paper_recovery_lineage(connection, effects) is False
-    assert _FakePortfolioRepository.loaded_portfolio_ids == [portfolio_id]
+    assert _FakePortfolioRepository.loaded_portfolios == [
+        (portfolio_id, effects[-1].job_run_id)
+    ]
 
 
 def test_verifier_rejects_missing_canonical_signal_recovery_material() -> None:

@@ -723,8 +723,14 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
     calls = []
 
-    def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
-        calls.append((requested_portfolio_id, lock_for_update))
+    def _load_ledger(
+        self,
+        requested_portfolio_id,
+        *,
+        lock_for_update=False,
+        current_job_run_id=None,
+    ):
+        calls.append((requested_portfolio_id, lock_for_update, current_job_run_id))
         return _ledger_with_transition(
             fill_id,
             instrument_id,
@@ -744,7 +750,7 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
         effects,
     )
 
-    assert calls == [(portfolio_id, True)]
+    assert calls == [(portfolio_id, True, job_run.job_run_id)]
 
 
 
@@ -1023,7 +1029,8 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     monkeypatch.setattr(
         paper_portfolio.SqlAlchemyPaperPortfolioRepository,
         "verify_accounting_history",
-        lambda self, requested_portfolio_id, *, lock_for_update=False: (
+        lambda self, requested_portfolio_id, *, lock_for_update=False,
+        current_job_run_id=None: (
             _ledger_with_transition(
                 fill_id,
                 instrument_id,
@@ -1089,8 +1096,14 @@ def test_reconciliation_translates_locked_portfolio_replay_mismatch(
 
     calls = []
 
-    def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
-        calls.append((requested_portfolio_id, lock_for_update))
+    def _load_ledger(
+        self,
+        requested_portfolio_id,
+        *,
+        lock_for_update=False,
+        current_job_run_id=None,
+    ):
+        calls.append((requested_portfolio_id, lock_for_update, current_job_run_id))
         raise RuntimeError("PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT")
 
     from hope.infrastructure.repositories import paper_portfolio
@@ -1109,7 +1122,7 @@ def test_reconciliation_translates_locked_portfolio_replay_mismatch(
             effects,
         )
 
-    assert calls == [(portfolio_id, True)]
+    assert calls == [(portfolio_id, True, job_run.job_run_id)]
     assert isinstance(error.value.__cause__, RuntimeError)
     assert str(error.value.__cause__) == "PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT"
 
@@ -1161,8 +1174,14 @@ def test_reconciliation_fails_closed_when_locked_portfolio_replay_is_missing(
 
     calls = []
 
-    def _load_ledger(self, requested_portfolio_id, *, lock_for_update=False):
-        calls.append((requested_portfolio_id, lock_for_update))
+    def _load_ledger(
+        self,
+        requested_portfolio_id,
+        *,
+        lock_for_update=False,
+        current_job_run_id=None,
+    ):
+        calls.append((requested_portfolio_id, lock_for_update, current_job_run_id))
         return None
 
     from hope.infrastructure.repositories import paper_portfolio
@@ -1181,7 +1200,7 @@ def test_reconciliation_fails_closed_when_locked_portfolio_replay_is_missing(
             effects,
         )
 
-    assert calls == [(portfolio_id, True)]
+    assert calls == [(portfolio_id, True, job_run.job_run_id)]
 
 
 

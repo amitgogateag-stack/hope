@@ -402,6 +402,22 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner() -> None:
         ):
             portfolio.load_ledger(portfolio_id)
 
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE",
+        ):
+            portfolio.verify_accounting_history(
+                portfolio_id,
+                current_job_run_id=uuid4(),
+            )
+
+        current = portfolio.verify_accounting_history(
+            portfolio_id,
+            current_job_run_id=run.job_run_id,
+        )
+        assert current is not None
+        assert current.applied_fill_ids == frozenset({fill.fill_id})
+
         assert jobs.complete(
             create_job_run_completion(
                 run,
@@ -411,6 +427,6 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner() -> None:
         ) is True
         recovered = portfolio.load_ledger(portfolio_id)
         assert recovered is not None
-        assert recovered.applied_fill_ids == (fill.fill_id,)
+        assert recovered.applied_fill_ids == frozenset({fill.fill_id})
 
     engine.dispose()

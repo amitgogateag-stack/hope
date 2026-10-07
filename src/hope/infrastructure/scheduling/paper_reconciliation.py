@@ -126,6 +126,7 @@ def _assert_durable_accounting_truth(
         ledger = SqlAlchemyPaperPortfolioRepository(connection).verify_accounting_history(
             durable["portfolio_id"],
             lock_for_update=True,
+            current_job_run_id=pnl_effect.job_run_id,
         )
     except (RuntimeError, ValueError) as exc:
         raise RuntimeError(

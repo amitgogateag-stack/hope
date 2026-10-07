@@ -85,7 +85,13 @@ def test_idempotent_retry_authenticates_replayed_transition() -> None:
         fill,
     ) is False
     assert calls == [
-        ((portfolio_id, fill.fill_id), {"lock_for_update": True}),
+        (
+            (portfolio_id, fill.fill_id),
+            {
+                "lock_for_update": True,
+                "current_job_run_id": context.job_run.job_run_id,
+            },
+        ),
     ]
     assert pnl_calls == [(context, portfolio_id, fill, replayed)]
 

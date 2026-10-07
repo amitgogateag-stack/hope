@@ -251,11 +251,13 @@ class SqlAlchemyPaperPortfolioRepository:
         fill_id: UUID,
         *,
         lock_for_update: bool = False,
+        current_job_run_id: UUID | None = None,
     ) -> PortfolioFillTransition | None:
         """Return a transition only from fully verified durable accounting history."""
         ledger = self.verify_accounting_history(
             portfolio_id,
             lock_for_update=lock_for_update,
+            current_job_run_id=current_job_run_id,
         )
         if ledger is None:
             return None
@@ -266,8 +268,15 @@ class SqlAlchemyPaperPortfolioRepository:
         portfolio_id: UUID,
         *,
         lock_for_update: bool = False,
+        current_job_run_id: UUID | None = None,
     ) -> PortfolioLedger | None:
-        """Restore a portfolio only when every applied fill has matching durable PNL."""
+        """Restore a portfolio only when every applied fill has matching durable PNL.
+
+        Public recovery requires every PNL effect owner to be SUCCEEDED. A caller
+        executing an authenticated job may additionally verify effects owned by that
+        same in-flight job, which is required to prove its accounting before the
+        lifecycle can atomically transition from CLAIMED to SUCCEEDED.
+        """
         ledger = self._load_materialized_ledger(
             portfolio_id,
             lock_for_update=lock_for_update,
@@ -299,10 +308,17 @@ class SqlAlchemyPaperPortfolioRepository:
             if event is None:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
             try:
-                recoverable_pnl = self._effects.get_recoverable(
-                    PaperEffectType.PNL,
-                    event.pnl_event_id,
-                )
+                if current_job_run_id is None:
+                    recoverable_pnl = self._effects.get_recoverable(
+                        PaperEffectType.PNL,
+                        event.pnl_event_id,
+                    )
+                else:
+                    recoverable_pnl = self._effects.get_reusable_for_job(
+                        PaperEffectType.PNL,
+                        event.pnl_event_id,
+                        current_job_run_id,
+                    )
             except ValueError as exc:
                 raise RuntimeError(
                     "PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE"

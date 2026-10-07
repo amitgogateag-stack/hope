@@ -55,6 +55,7 @@ class SqlAlchemyPaperAccountingRepository:
                     portfolio_id,
                     fill.fill_id,
                     lock_for_update=True,
+                    current_job_run_id=context.job_run.job_run_id,
                 )
                 if replayed is None:
                     raise RuntimeError(

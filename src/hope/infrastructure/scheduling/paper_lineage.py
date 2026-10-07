@@ -481,7 +481,8 @@ def verify_paper_recovery_lineage(
         return False
     try:
         verified_ledger = SqlAlchemyPaperPortfolioRepository(connection).verify_accounting_history(
-            durable_portfolio_pnl.portfolio_id
+            durable_portfolio_pnl.portfolio_id,
+            current_job_run_id=by_type[PaperEffectType.PNL][0].job_run_id,
         )
     except (RuntimeError, ValueError):
         return False
