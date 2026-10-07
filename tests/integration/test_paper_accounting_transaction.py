@@ -212,3 +212,69 @@ def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> N
             text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).scalar_one() == 0
+
+
+@pytest.mark.integration
+def test_paper_accounting_retry_rejects_pnl_owned_by_another_claimed_run() -> None:
+    """Direct retries must not borrow PNL evidence from unfinished foreign work."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        instrument_id, portfolio_id, _, context = setup(
+            connection,
+            migrations_dir,
+            job_key="paper-accounting-owned-retry",
+        )
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            side=OrderSide.BUY,
+            price="100",
+            minute=58,
+        )
+        accounting = PaperAccountingWriter(
+            SqlAlchemyPaperAccountingRepository(connection)
+        )
+        assert accounting.apply_fill(
+            context,
+            portfolio_id,
+            Decimal("500"),
+            fill,
+        ) is True
+
+        competing_run = create_scheduled_job_run(
+            "paper-accounting-foreign-retry",
+            datetime(2026, 9, 10, 3, 1, tzinfo=UTC),
+        )
+        competing_context = PaperCycleContext(competing_run)
+        assert SqlAlchemyJobRunRepository(connection).claim(competing_run) is True
+
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            accounting.apply_fill(
+                competing_context,
+                portfolio_id,
+                Decimal("500"),
+                fill,
+            )
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text(
+                "SELECT version FROM paper_portfolios "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).scalar_one() == 1
+
+    engine.dispose()

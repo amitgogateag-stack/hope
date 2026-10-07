@@ -40,16 +40,23 @@ def _retry_boundary(*, realized: str = "4", commission: str = "0.50"):
     return portfolio_id, fill, event, replayed
 
 
-def _repository(event, replayed):
+def _repository(event, replayed, *, pnl_recorded: bool = False):
     portfolio = SimpleNamespace(
         apply_fill_with_transition=lambda *args: None,
         load_fill_transition=lambda *args, **kwargs: replayed,
     )
+    pnl_calls = []
+
+    def record(*args):
+        pnl_calls.append(args)
+        return pnl_recorded
+
     repository = object.__new__(SqlAlchemyPaperAccountingRepository)
     repository._connection = SimpleNamespace(begin_nested=nullcontext)
     repository._portfolio = portfolio
     repository._pnl = SimpleNamespace(get=lambda *args: event)
-    return repository, portfolio
+    repository._pnl_writer = SimpleNamespace(record=record)
+    return repository, portfolio, pnl_calls
 
 
 def test_idempotent_retry_authenticates_replayed_transition() -> None:
@@ -60,13 +67,20 @@ def test_idempotent_retry_authenticates_replayed_transition() -> None:
         calls.append((args, kwargs))
         return replayed
 
-    repository, portfolio = _repository(event, replayed)
+    repository, portfolio, pnl_calls = _repository(event, replayed)
     portfolio.load_fill_transition = load_fill_transition
 
-    assert repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill) is False
+    context = object()
+    assert repository.apply_fill(
+        context,
+        portfolio_id,
+        Decimal("1000"),
+        fill,
+    ) is False
     assert calls == [
         ((portfolio_id, fill.fill_id), {"lock_for_update": True}),
     ]
+    assert pnl_calls == [(context, portfolio_id, fill, replayed)]
 
 
 @pytest.mark.parametrize(
@@ -84,7 +98,7 @@ def test_idempotent_retry_rejects_conflicting_pnl_economics(
         realized=realized,
         commission=commission,
     )
-    repository, _ = _repository(event, replayed)
+    repository, _, _ = _repository(event, replayed)
 
     with pytest.raises(
         ValueError,
@@ -95,10 +109,21 @@ def test_idempotent_retry_rejects_conflicting_pnl_economics(
 
 def test_idempotent_retry_requires_replayable_fill_lineage() -> None:
     portfolio_id, fill, event, _ = _retry_boundary()
-    repository, _ = _repository(event, None)
+    repository, _, _ = _repository(event, None)
 
     with pytest.raises(
         RuntimeError,
         match="PAPER_ACCOUNTING_APPLIED_FILL_TRANSITION_NOT_DURABLE",
+    ):
+        repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill)
+
+
+def test_idempotent_retry_never_recreates_missing_pnl() -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, _, _ = _repository(event, replayed, pnl_recorded=True)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_ACCOUNTING_RETRY_RECREATED_PNL",
     ):
         repository.apply_fill(object(), portfolio_id, Decimal("1000"), fill)

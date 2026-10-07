@@ -58,6 +58,13 @@ class SqlAlchemyPaperAccountingRepository:
                     or replayed.commission_delta != event.commission_delta
                 ):
                     raise ValueError("PAPER_ACCOUNTING_PNL_DURABLE_STATE_CONFLICT")
+                if self._pnl_writer.record(
+                    context,
+                    portfolio_id,
+                    fill,
+                    replayed,
+                ):
+                    raise RuntimeError("PAPER_ACCOUNTING_RETRY_RECREATED_PNL")
                 return False
 
             recorded = self._pnl_writer.record(
