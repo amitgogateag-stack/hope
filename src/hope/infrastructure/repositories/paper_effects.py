@@ -128,6 +128,35 @@ class SqlAlchemyPaperEffectRepository:
             raise ValueError("PAPER_EFFECT_IDENTITY_CONFLICT")
         return self._from_row(row)
 
+    def get_recoverable(
+        self,
+        effect_type: PaperEffectType,
+        entity_id: UUID,
+    ) -> PaperEffect | None:
+        """Return durable recovery evidence only when its owner completed successfully."""
+        parsed_type = PaperEffectType(effect_type)
+        row = self._connection.execute(
+            select(
+                self._paper_effects,
+                self._job_runs.c.status.label("owner_status"),
+            )
+            .select_from(
+                self._paper_effects.join(
+                    self._job_runs,
+                    self._job_runs.c.job_run_id == self._paper_effects.c.job_run_id,
+                )
+            )
+            .where(
+                self._paper_effects.c.effect_type == parsed_type.value,
+                self._paper_effects.c.entity_id == entity_id,
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            return None
+        if row["owner_status"] != JobRunStatus.SUCCEEDED.value:
+            raise ValueError("PAPER_EFFECT_OWNER_NOT_RECOVERABLE")
+        return self._from_row(row)
+
     def list_for_job_run(self, job_run_id: UUID) -> tuple[PaperEffect, ...]:
         """Return all durable PAPER effects attributed to one scheduled run."""
         rows = self._connection.execute(

@@ -298,6 +298,17 @@ class SqlAlchemyPaperPortfolioRepository:
             event = pnl_repository.get(portfolio_id, fill_id)
             if event is None:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
+            try:
+                recoverable_pnl = self._effects.get_recoverable(
+                    PaperEffectType.PNL,
+                    event.pnl_event_id,
+                )
+            except ValueError as exc:
+                raise RuntimeError(
+                    "PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE"
+                ) from exc
+            if recoverable_pnl is None:
+                raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
             transition = ledger.transition_for_fill(fill_id)
             if transition is None:
                 raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_TRANSITION_MISSING")

@@ -346,3 +346,71 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
             repository.get(portfolio_id, fill.fill_id)
 
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_portfolio_recovery_requires_successful_pnl_owner() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-recovery-pnl-owner",
+        datetime(2026, 9, 10, 0, 6, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-RECOVERY-OWNER', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run) is True
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            OrderSide.BUY,
+            "100",
+            7,
+        )
+        portfolio = SqlAlchemyPaperPortfolioRepository(connection)
+        transition = portfolio.apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=run.job_run_id,
+        )
+        assert transition is not None
+        writer = PaperPortfolioPnLWriter(
+            SqlAlchemyPaperPortfolioPnLRepository(connection)
+        )
+        assert writer.record(context, portfolio_id, fill, transition) is True
+
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE",
+        ):
+            portfolio.load_ledger(portfolio_id)
+
+        assert jobs.complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.SUCCEEDED,
+                run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+        recovered = portfolio.load_ledger(portfolio_id)
+        assert recovered is not None
+        assert recovered.applied_fill_ids == (fill.fill_id,)
+
+    engine.dispose()
