@@ -38,7 +38,25 @@ class SqlAlchemyPaperAccountingRepository:
                 event = self._pnl.get(portfolio_id, fill.fill_id)
                 if event is None:
                     raise RuntimeError("PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL")
-                if event.instrument_id != fill.instrument_id or event.event_time != fill.fill_time:
+                replayed = self._portfolio.load_fill_transition(
+                    portfolio_id,
+                    fill.fill_id,
+                    lock_for_update=True,
+                )
+                if replayed is None:
+                    raise RuntimeError(
+                        "PAPER_ACCOUNTING_APPLIED_FILL_TRANSITION_NOT_DURABLE"
+                    )
+                if (
+                    event.portfolio_id != portfolio_id
+                    or event.fill_id != fill.fill_id
+                    or event.instrument_id != fill.instrument_id
+                    or event.event_time != fill.fill_time
+                    or replayed.fill_id != event.fill_id
+                    or replayed.instrument_id != event.instrument_id
+                    or replayed.realized_pnl_delta != event.realized_pnl_delta
+                    or replayed.commission_delta != event.commission_delta
+                ):
                     raise ValueError("PAPER_ACCOUNTING_PNL_DURABLE_STATE_CONFLICT")
                 return False
 

@@ -211,6 +211,22 @@ class SqlAlchemyPaperPortfolioRepository:
         applications = self._load_application_history(portfolio_id, portfolio["version"])
         return self._restore_verified_ledger(portfolio, applications)
 
+    def load_fill_transition(
+        self,
+        portfolio_id: UUID,
+        fill_id: UUID,
+        *,
+        lock_for_update: bool = False,
+    ) -> PortfolioFillTransition | None:
+        """Replay and return the authoritative transition for one durable fill."""
+        ledger = self.load_ledger(
+            portfolio_id,
+            lock_for_update=lock_for_update,
+        )
+        if ledger is None:
+            return None
+        return ledger.transition_for_fill(fill_id)
+
     def apply_fill_with_transition(
         self,
         portfolio_id: UUID,
