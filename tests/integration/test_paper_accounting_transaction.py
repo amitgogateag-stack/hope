@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -7,7 +7,11 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine, text
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper import (
     PaperAccountingWriter,
     PaperCycleContext,
@@ -212,6 +216,84 @@ def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> N
             text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).scalar_one() == 0
+
+
+@pytest.mark.integration
+def test_paper_accounting_requires_reusable_source_fill_ownership() -> None:
+    """Unfinished foreign fills must not mutate portfolio or PNL state."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        instrument_id, portfolio_id, source_run, source_context = setup(
+            connection,
+            migrations_dir,
+            job_key="paper-accounting-source-fill-owner",
+        )
+        fill = persist_fill(
+            connection,
+            source_context,
+            instrument_id,
+            side=OrderSide.BUY,
+            price="100",
+            minute=59,
+        )
+        accounting_run = create_scheduled_job_run(
+            "paper-accounting-foreign-fill-consumer",
+            datetime(2026, 9, 10, 3, 1, tzinfo=UTC),
+        )
+        accounting_context = PaperCycleContext(accounting_run)
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(accounting_run) is True
+        accounting = PaperAccountingWriter(
+            SqlAlchemyPaperAccountingRepository(connection)
+        )
+
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            accounting.apply_fill(
+                accounting_context,
+                portfolio_id,
+                Decimal("500"),
+                fill,
+            )
+
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_fill_applications "
+                "WHERE portfolio_id=:id"
+            ),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:id"
+            ),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+
+        assert jobs.complete(
+            create_job_run_completion(
+                source_run,
+                JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+        assert accounting.apply_fill(
+            accounting_context,
+            portfolio_id,
+            Decimal("500"),
+            fill,
+        ) is True
+
+    engine.dispose()
 
 
 @pytest.mark.integration

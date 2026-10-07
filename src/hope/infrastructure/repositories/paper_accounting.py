@@ -6,8 +6,10 @@ from uuid import UUID
 from sqlalchemy import Connection
 
 from hope.application.paper.context import PaperCycleContext
+from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.portfolio_pnl import PaperPortfolioPnLWriter
 from hope.domain.execution.simulator import Fill
+from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_portfolio import SqlAlchemyPaperPortfolioRepository
 from hope.infrastructure.repositories.paper_portfolio_pnl import SqlAlchemyPaperPortfolioPnLRepository
 
@@ -17,6 +19,7 @@ class SqlAlchemyPaperAccountingRepository:
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
+        self._effects = SqlAlchemyPaperEffectRepository(connection)
         self._portfolio = SqlAlchemyPaperPortfolioRepository(connection)
         self._pnl = SqlAlchemyPaperPortfolioPnLRepository(connection)
         self._pnl_writer = PaperPortfolioPnLWriter(self._pnl)
@@ -29,6 +32,15 @@ class SqlAlchemyPaperAccountingRepository:
         fill: Fill,
     ) -> bool:
         with self._connection.begin_nested():
+            if (
+                self._effects.get_reusable_for_job(
+                    PaperEffectType.FILL,
+                    fill.fill_id,
+                    context.job_run.job_run_id,
+                )
+                is None
+            ):
+                raise ValueError("PAPER_ACCOUNTING_SOURCE_FILL_UNTRACKED")
             transition = self._portfolio.apply_fill_with_transition(
                 portfolio_id,
                 initial_cash,
