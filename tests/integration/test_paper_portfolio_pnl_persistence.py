@@ -237,7 +237,7 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
 
 
 @pytest.mark.integration
-def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership() -> None:
+def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch) -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -331,5 +331,18 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership() -> None:
             "FILL": source_run.job_run_id,
             "PNL": pnl_run.job_run_id,
         }
+
+        repository = SqlAlchemyPaperPortfolioPnLRepository(connection)
+        assert repository.get(portfolio_id, fill.fill_id) is not None
+        monkeypatch.setattr(
+            repository._effects,
+            "get_reusable_for_job",
+            lambda *args, **kwargs: None,
+        )
+        with pytest.raises(
+            ValueError,
+            match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT",
+        ):
+            repository.get(portfolio_id, fill.fill_id)
 
     engine.dispose()

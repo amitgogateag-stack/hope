@@ -81,6 +81,16 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_EFFECT")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_CONFLICT")
+        try:
+            reusable_fill = self._effects.get_reusable_for_job(
+                PaperEffectType.FILL,
+                event.fill_id,
+                effect.job_run_id,
+            )
+        except ValueError as exc:
+            raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT") from exc
+        if reusable_fill is None:
+            raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT")
         return event
 
     def persist(self, effect: PaperEffect, event: PaperPortfolioPnLEvent) -> bool:
