@@ -1,3 +1,4 @@
+from contextlib import nullcontext
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -24,6 +25,9 @@ class _InsertedResult:
 
 
 class _Connection:
+    def begin_nested(self):
+        return nullcontext()
+
     def execute(self, statement):
         return _InsertedResult(uuid4())
 

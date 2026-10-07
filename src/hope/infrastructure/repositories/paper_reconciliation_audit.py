@@ -139,11 +139,10 @@ class SqlAlchemyPaperReconciliationAuditRepository:
             .on_conflict_do_nothing()
             .returning(self._audit_events.c.audit_event_id)
         )
-        inserted_id = self._connection.execute(statement).scalar_one_or_none()
-        if inserted_id is not None:
+        # Receipt insertion and authenticated reread must be one rollback unit,
+        # including when a caller catches a failed verification and commits.
+        with self._connection.begin_nested():
+            inserted_id = self._connection.execute(statement).scalar_one_or_none()
             if not self.verify(completion, effects):
                 raise RuntimeError("PAPER_RECONCILIATION_AUDIT_NOT_DURABLE")
-            return True
-        if not self.verify(completion, effects):
-            raise RuntimeError("PAPER_RECONCILIATION_AUDIT_NOT_DURABLE")
-        return False
+            return inserted_id is not None
