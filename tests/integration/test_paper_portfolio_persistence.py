@@ -131,7 +131,7 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
             job_run_id=run.job_run_id,
         ) is False
 
-        restored = repository.load_ledger(portfolio_id)
+        restored = repository._load_materialized_ledger(portfolio_id)
         assert restored is not None
         position = restored.state.positions[instrument_id]
         assert restored.initial_cash == Decimal("1000")
@@ -354,9 +354,8 @@ def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
             job_run_id=run.job_run_id,
         )
 
-        assert repository.load_ledger(portfolio_id) is not None
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
-            repository.verify_accounting_history(portfolio_id)
+            repository.load_ledger(portfolio_id)
 
     engine.dispose()
 

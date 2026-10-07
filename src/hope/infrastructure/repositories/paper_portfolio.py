@@ -214,7 +214,7 @@ class SqlAlchemyPaperPortfolioRepository:
             raise RuntimeError("PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT")
         return ledger
 
-    def load_ledger(
+    def _load_materialized_ledger(
         self,
         portfolio_id: UUID,
         *,
@@ -232,6 +232,18 @@ class SqlAlchemyPaperPortfolioRepository:
             return None
         applications = self._load_application_history(portfolio_id, portfolio["version"])
         return self._restore_verified_ledger(portfolio, applications)
+
+    def load_ledger(
+        self,
+        portfolio_id: UUID,
+        *,
+        lock_for_update: bool = False,
+    ) -> PortfolioLedger | None:
+        """Recover a ledger only from complete, verified accounting history."""
+        return self.verify_accounting_history(
+            portfolio_id,
+            lock_for_update=lock_for_update,
+        )
 
     def load_fill_transition(
         self,
@@ -256,7 +268,10 @@ class SqlAlchemyPaperPortfolioRepository:
         lock_for_update: bool = False,
     ) -> PortfolioLedger | None:
         """Restore a portfolio only when every applied fill has matching durable PNL."""
-        ledger = self.load_ledger(portfolio_id, lock_for_update=lock_for_update)
+        ledger = self._load_materialized_ledger(
+            portfolio_id,
+            lock_for_update=lock_for_update,
+        )
         if ledger is None:
             return None
 
