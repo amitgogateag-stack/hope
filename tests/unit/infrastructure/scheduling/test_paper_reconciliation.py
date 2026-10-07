@@ -1336,3 +1336,38 @@ def test_reconciliation_maps_audit_record_identity_conflict_to_mismatch(
     assert _FakeAuditRepository.calls == [(_FakeRepository.record, ())]
     assert _FakeAuditRepository.verify_calls == []
 
+
+
+def test_reconciliation_rejects_tampered_durable_pnl_economics(monkeypatch) -> None:
+    """Durable PNL economics must authenticate against the committed PNL effect."""
+    from decimal import Decimal
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import PaperPortfolioPnLEvent, paper_portfolio_pnl_payload_hash
+
+    portfolio_id = uuid4()
+    fill_id = uuid4()
+    instrument_id = uuid4()
+    job_run = create_scheduled_job_run("paper:tampered-pnl-economics", datetime(2026, 10, 5, 4, 0, tzinfo=UTC))
+    event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
+    from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
+    pnl_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
+    original = PaperPortfolioPnLEvent(pnl_id, portfolio_id, fill_id, instrument_id, Decimal("12.50"), Decimal("0.75"), event_time)
+    effects = (
+        create_paper_effect(job_run, paper_reconciliation.PaperEffectType.FILL, fill_id, "9" * 64),
+        create_paper_effect(job_run, paper_reconciliation.PaperEffectType.PNL, pnl_id, paper_portfolio_pnl_payload_hash(original)),
+    )
+    durable = {
+        "fill_id": fill_id, "portfolio_id": portfolio_id, "pnl_event_id": pnl_id,
+        "pnl_fill_id": fill_id, "pnl_portfolio_id": portfolio_id,
+        "pnl_instrument_id": instrument_id, "realized_pnl_delta": Decimal("99.99"),
+        "commission_delta": Decimal("0.75"), "event_time": event_time,
+    }
+    class _Rows:
+        def mappings(self): return self
+        def all(self): return [durable]
+    class _Connection:
+        def execute(self, *args, **kwargs): return _Rows()
+    from hope.infrastructure.repositories import paper_portfolio
+    monkeypatch.setattr(paper_portfolio.SqlAlchemyPaperPortfolioRepository, "load_ledger", lambda *args, **kwargs: object())
+    with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_PNL_STATE_MISMATCH"):
+        paper_reconciliation._assert_durable_accounting_truth(_Connection(), effects)
