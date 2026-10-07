@@ -636,14 +636,32 @@ def test_reconciliation_fails_closed_when_materialized_portfolio_state_is_incons
 
 def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
     """Accounting verification must hold the portfolio projection lock."""
+    from decimal import Decimal
+
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_payload_hash,
+    )
+
     portfolio_id = uuid4()
     fill_id = uuid4()
     pnl_id = uuid4()
+    instrument_id = uuid4()
+    event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_id,
+        portfolio_id,
+        fill_id,
+        instrument_id,
+        Decimal("12.50"),
+        Decimal("0.75"),
+        event_time,
+    )
     job_run = create_scheduled_job_run(
         "paper:locked-portfolio-replay",
         datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
     )
-    from hope.application.paper.effects import create_paper_effect
     effects = (
         create_paper_effect(
             job_run,
@@ -655,7 +673,7 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
             job_run,
             paper_reconciliation.PaperEffectType.PNL,
             pnl_id,
-            "a" * 64,
+            paper_portfolio_pnl_payload_hash(pnl_event),
         ),
     )
 
@@ -670,6 +688,10 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
                 "pnl_event_id": pnl_id,
                 "pnl_fill_id": fill_id,
                 "pnl_portfolio_id": portfolio_id,
+                "pnl_instrument_id": instrument_id,
+                "realized_pnl_delta": Decimal("12.50"),
+                "commission_delta": Decimal("0.75"),
+                "event_time": event_time,
             }]
 
     class _AccountingConnection:
@@ -897,14 +919,32 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
     monkeypatch,
 ) -> None:
     """Accounting truth must lock the authoritative fill row before replay."""
+    from decimal import Decimal
+
+    from hope.application.paper.effects import create_paper_effect
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_payload_hash,
+    )
+
     portfolio_id = uuid4()
     fill_id = uuid4()
     pnl_id = uuid4()
+    instrument_id = uuid4()
+    event_time = datetime(2026, 10, 5, 4, 1, tzinfo=UTC)
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_id,
+        portfolio_id,
+        fill_id,
+        instrument_id,
+        Decimal("12.50"),
+        Decimal("0.75"),
+        event_time,
+    )
     job_run = create_scheduled_job_run(
         "paper:locked-fill-accounting",
         datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
     )
-    from hope.application.paper.effects import create_paper_effect
     effects = (
         create_paper_effect(
             job_run,
@@ -916,7 +956,7 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
             job_run,
             paper_reconciliation.PaperEffectType.PNL,
             pnl_id,
-            "2" * 64,
+            paper_portfolio_pnl_payload_hash(pnl_event),
         ),
     )
 
@@ -931,6 +971,10 @@ def test_reconciliation_locks_authoritative_fill_before_portfolio_replay(
                 "pnl_event_id": pnl_id,
                 "pnl_fill_id": fill_id,
                 "pnl_portfolio_id": portfolio_id,
+                "pnl_instrument_id": instrument_id,
+                "realized_pnl_delta": Decimal("12.50"),
+                "commission_delta": Decimal("0.75"),
+                "event_time": event_time,
             }]
 
     class _AccountingConnection:
