@@ -248,23 +248,22 @@ def test_paper_terminal_rejects_source_order_identity_mismatch(mismatch):
 
 
 @pytest.mark.integration
-def test_paper_terminal_rejects_source_order_environment_mismatch():
+def test_paper_order_environment_is_immutable_before_terminalization():
+    """Durable order history prevents PAPER/LIVE environment rewriting at the source."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id = uuid4()
-    run = create_scheduled_job_run("paper-terminal-environment-mismatch", datetime(2026, 9, 9, 20, 5, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-terminal-environment-immutable", datetime(2026, 9, 9, 20, 5, tzinfo=UTC))
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
-        context, signal, order = _setup_order(connection, run, instrument_id)
-        connection.execute(text("UPDATE orders SET environment='LIVE' WHERE order_id=:id"), {"id": order.order_id})
-        outcome = ExecutionRejection(order.order_id, signal.signal_id, instrument_id, Environment.PAPER, "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC))
-        with pytest.raises(ValueError, match="PAPER_TERMINAL_ORDER_IDENTITY_MISMATCH"):
-            PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection)).record(context, outcome)
-        assert connection.execute(text("SELECT count(*) FROM paper_order_terminal_events WHERE order_id=:id"), {"id": order.order_id}).scalar_one() == 0
-        assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE entity_id=:id AND effect_type='REJECTION'"), {"id": order.order_id}).scalar_one() == 0
+        _, _, order = _setup_order(connection, run, instrument_id)
+        with pytest.raises(IntegrityError, match="ORDER_IMMUTABLE"):
+            with connection.begin_nested():
+                connection.execute(text("UPDATE orders SET environment='LIVE' WHERE order_id=:id"), {"id": order.order_id})
+        assert connection.execute(text("SELECT environment FROM orders WHERE order_id=:id"), {"id": order.order_id}).scalar_one() == Environment.PAPER.value
     engine.dispose()
 
 
