@@ -703,6 +703,70 @@ def test_reconciliation_requests_locked_portfolio_replay(monkeypatch) -> None:
 
 
 
+
+def test_reconciliation_fails_closed_on_partial_fill_accounting_effects() -> None:
+    """A FILL effect without its PNL effect must never be treated as recoverable accounting."""
+    fill_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:partial-fill-accounting-effects",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.FILL,
+            fill_id,
+            "7" * 64,
+        ),
+    )
+
+    class _AccountingConnection:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("partial effects must fail before accounting query")
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_ACCOUNTING_EFFECT_MISMATCH",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(
+            _AccountingConnection(),
+            effects,
+        )
+
+
+def test_reconciliation_fails_closed_on_orphan_pnl_accounting_effects() -> None:
+    """A PNL effect without its FILL effect must never be treated as recoverable accounting."""
+    pnl_id = uuid4()
+    job_run = create_scheduled_job_run(
+        "paper:orphan-pnl-accounting-effects",
+        datetime(2026, 10, 5, 4, 0, tzinfo=UTC),
+    )
+    from hope.application.paper.effects import create_paper_effect
+    effects = (
+        create_paper_effect(
+            job_run,
+            paper_reconciliation.PaperEffectType.PNL,
+            pnl_id,
+            "8" * 64,
+        ),
+    )
+
+    class _AccountingConnection:
+        def execute(self, *args, **kwargs):
+            raise AssertionError("orphan PNL must fail before accounting query")
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_RECONCILIATION_ACCOUNTING_EFFECT_MISMATCH",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(
+            _AccountingConnection(),
+            effects,
+        )
+
+
+
 def test_reconciliation_fails_closed_when_accounting_truth_is_missing(
     monkeypatch,
 ) -> None:
