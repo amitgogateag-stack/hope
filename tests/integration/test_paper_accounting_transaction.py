@@ -141,7 +141,12 @@ def test_paper_accounting_atomically_persists_portfolio_and_transition_derived_p
             {"portfolio_id": portfolio_id},
         ).scalar_one() == 2
 
-        restored = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(portfolio_id)
+        restored = SqlAlchemyPaperPortfolioRepository(
+            connection
+        ).verify_accounting_history(
+            portfolio_id,
+            current_job_run_id=context.job_run.job_run_id,
+        )
         assert restored is not None
         position = restored.state.positions[instrument_id]
         assert position.realized_pnl == Decimal("10")
