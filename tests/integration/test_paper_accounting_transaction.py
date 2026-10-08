@@ -271,6 +271,93 @@ def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
 
 
 @pytest.mark.integration
+def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-recovery-position-lock",
+        datetime(2026, 9, 10, 3, 12, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        instrument_id = uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-RECOVERY-POSITION-LOCK', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run) is True
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            side=OrderSide.BUY,
+            price="100",
+            minute=12,
+        )
+        assert PaperAccountingWriter(
+            SqlAlchemyPaperAccountingRepository(connection)
+        ).apply_fill(
+            context,
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+        ) is True
+        assert jobs.complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.SUCCEEDED,
+                run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+
+    with engine.connect() as recovery_connection:
+        recovery_transaction = recovery_connection.begin()
+        recovered = SqlAlchemyPaperPortfolioRepository(
+            recovery_connection
+        ).load_ledger(portfolio_id)
+        assert recovered is not None
+
+        with pytest.raises(OperationalError, match="lock timeout"):
+            with engine.begin() as mutation_connection:
+                mutation_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                mutation_connection.execute(
+                    text(
+                        "UPDATE paper_portfolio_positions "
+                        "SET realized_pnl = realized_pnl + 1 "
+                        "WHERE portfolio_id=:portfolio_id "
+                        "AND instrument_id=:instrument_id"
+                    ),
+                    {
+                        "portfolio_id": portfolio_id,
+                        "instrument_id": instrument_id,
+                    },
+                )
+
+        recovery_transaction.commit()
+
+    with engine.begin() as connection:
+        recovered = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
+            portfolio_id
+        )
+        assert recovered is not None
+        assert recovered.state.positions[instrument_id].realized_pnl == Decimal("0")
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_accounting_rolls_back_portfolio_when_pnl_persistence_conflicts() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
