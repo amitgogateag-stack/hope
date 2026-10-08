@@ -259,3 +259,19 @@ def test_portfolio_recovery_rejects_wrong_execution_effect_entity() -> None:
             PaperEffectType.ORDER, entity_id,
             current_job_run_id=None, expected_payload_hash="a" * 64,
         )
+
+
+def test_portfolio_recovery_rejects_execution_effect_with_forged_effect_id() -> None:
+    run = create_scheduled_job_run("paper-forged-effect-id", datetime(2026, 10, 8, tzinfo=UTC))
+    entity_id = uuid4()
+    valid = create_paper_effect(run, PaperEffectType.ORDER, entity_id, "a" * 64)
+    # Simulate a malformed repository result bypassing the immutable dataclass validator.
+    forged = object.__new__(type(valid))
+    for field in ("job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(valid, field))
+    object.__setattr__(forged, "effect_id", uuid4())
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_EXECUTION_EFFECT_IDENTITY_MISMATCH"):
+        _repository(_Effects(recoverable=forged))._require_recoverable_execution_effect(
+            PaperEffectType.ORDER, entity_id,
+            current_job_run_id=None, expected_payload_hash="a" * 64,
+        )

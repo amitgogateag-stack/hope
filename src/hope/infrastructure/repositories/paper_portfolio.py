@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, String, Table, Uuid, BigInteger, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.effects import PaperEffect, PaperEffectType, _deterministic_effect_id
 from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
@@ -307,7 +307,11 @@ class SqlAlchemyPaperPortfolioRepository:
             ) from exc
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_NOT_RECOVERABLE")
-        if effect.effect_type is not effect_type or effect.entity_id != entity_id:
+        if (
+            effect.effect_type is not effect_type
+            or effect.entity_id != entity_id
+            or effect.effect_id != _deterministic_effect_id(effect_type, entity_id)
+        ):
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_IDENTITY_MISMATCH")
         if effect.payload_hash != expected_payload_hash:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH")
