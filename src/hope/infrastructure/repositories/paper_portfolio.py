@@ -147,7 +147,10 @@ class SqlAlchemyPaperPortfolioRepository:
                 self._applications.join(
                     self._fills,
                     self._applications.c.fill_id == self._fills.c.fill_id,
-                ).join(self._orders, self._fills.c.order_id == self._orders.c.order_id)
+                ).join(
+                    self._orders,
+                    self._fills.c.order_id == self._orders.c.order_id,
+                )
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
             .order_by(self._applications.c.application_sequence)
@@ -263,6 +266,29 @@ class SqlAlchemyPaperPortfolioRepository:
             return None
         return ledger.transition_for_fill(fill_id)
 
+    def _require_recoverable_execution_effect(
+        self,
+        effect_type: PaperEffectType,
+        entity_id: UUID,
+        *,
+        current_job_run_id: UUID | None,
+    ) -> None:
+        try:
+            if current_job_run_id is None:
+                effect = self._effects.get_recoverable(effect_type, entity_id)
+            else:
+                effect = self._effects.get_reusable_for_job(
+                    effect_type,
+                    entity_id,
+                    current_job_run_id,
+                )
+        except ValueError as exc:
+            raise RuntimeError(
+                "PAPER_PORTFOLIO_EXECUTION_OWNER_NOT_RECOVERABLE"
+            ) from exc
+        if effect is None:
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_NOT_RECOVERABLE")
+
     def verify_accounting_history(
         self,
         portfolio_id: UUID,
@@ -270,12 +296,13 @@ class SqlAlchemyPaperPortfolioRepository:
         lock_for_update: bool = False,
         current_job_run_id: UUID | None = None,
     ) -> PortfolioLedger | None:
-        """Restore a portfolio only when every applied fill has matching durable PNL.
+        """Restore a portfolio only from recoverable execution and accounting truth.
 
-        Public recovery requires every PNL effect owner to be SUCCEEDED. A caller
-        executing an authenticated job may additionally verify effects owned by that
-        same in-flight job, which is required to prove its accounting before the
-        lifecycle can atomically transition from CLAIMED to SUCCEEDED.
+        Public recovery requires every source execution and PNL effect owner to be
+        SUCCEEDED. A caller executing an authenticated job may additionally verify
+        effects owned by that same in-flight job, which is required to prove its
+        accounting before the lifecycle can atomically transition from CLAIMED to
+        SUCCEEDED.
         """
         ledger = self._load_materialized_ledger(
             portfolio_id,
@@ -289,12 +316,17 @@ class SqlAlchemyPaperPortfolioRepository:
         )
 
         rows = self._connection.execute(
-            select(self._applications.c.fill_id, self._fills.c.filled_at)
+            select(
+                self._applications.c.fill_id,
+                self._fills.c.filled_at,
+                self._fills.c.order_id,
+                self._orders.c.signal_id,
+            )
             .select_from(
                 self._applications.join(
                     self._fills,
                     self._applications.c.fill_id == self._fills.c.fill_id,
-                )
+                ).join(self._orders, self._fills.c.order_id == self._orders.c.order_id)
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
         ).mappings().all()
@@ -325,6 +357,16 @@ class SqlAlchemyPaperPortfolioRepository:
                 ) from exc
             if recoverable_pnl is None:
                 raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
+            for effect_type, entity_id in (
+                (PaperEffectType.SIGNAL, row["signal_id"]),
+                (PaperEffectType.ORDER, row["order_id"]),
+                (PaperEffectType.FILL, fill_id),
+            ):
+                self._require_recoverable_execution_effect(
+                    effect_type,
+                    entity_id,
+                    current_job_run_id=current_job_run_id,
+                )
             transition = ledger.transition_for_fill(fill_id)
             if transition is None:
                 raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_TRANSITION_MISSING")

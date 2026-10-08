@@ -14,6 +14,7 @@ from hope.application.jobs import (
     create_scheduled_job_run,
 )
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import PaperPortfolioPnLWriter
 from hope.domain.execution import Environment, Fill, Order, OrderSide
@@ -349,7 +350,7 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
 
 
 @pytest.mark.integration
-def test_paper_portfolio_recovery_requires_successful_pnl_owner() -> None:
+def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -425,6 +426,41 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner() -> None:
                 run.scheduled_for + timedelta(seconds=30),
             )
         ) is True
+
+        get_recoverable = portfolio._effects.get_recoverable
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                portfolio._effects,
+                "get_recoverable",
+                lambda effect_type, entity_id: (
+                    None
+                    if effect_type is PaperEffectType.ORDER
+                    else get_recoverable(effect_type, entity_id)
+                ),
+            )
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_PORTFOLIO_EXECUTION_EFFECT_NOT_RECOVERABLE",
+            ):
+                portfolio.load_ledger(portfolio_id)
+
+        def conflicting_signal_owner(effect_type, entity_id):
+            if effect_type is PaperEffectType.SIGNAL:
+                raise ValueError("PAPER_EFFECT_OWNER_NOT_RECOVERABLE")
+            return get_recoverable(effect_type, entity_id)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                portfolio._effects,
+                "get_recoverable",
+                conflicting_signal_owner,
+            )
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_PORTFOLIO_EXECUTION_OWNER_NOT_RECOVERABLE",
+            ):
+                portfolio.load_ledger(portfolio_id)
+
         recovered = portfolio.load_ledger(portfolio_id)
         assert recovered is not None
         assert recovered.applied_fill_ids == frozenset({fill.fill_id})
