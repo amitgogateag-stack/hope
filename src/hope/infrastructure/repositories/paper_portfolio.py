@@ -312,6 +312,16 @@ class SqlAlchemyPaperPortfolioRepository:
         return effect
 
     @staticmethod
+    def _assert_pnl_effect_matches_event(effect: PaperEffect, event) -> None:
+        """Authenticate durable PNL payload, not merely its owner and existence."""
+        from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_payload_hash
+
+        if effect.entity_id != event.pnl_event_id:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH")
+        if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH")
+
+    @staticmethod
     def _require_recovery_lock(lock_for_update: bool) -> None:
         if lock_for_update is not True:
             raise ValueError("PAPER_PORTFOLIO_RECOVERY_LOCK_REQUIRED")
@@ -408,6 +418,7 @@ class SqlAlchemyPaperPortfolioRepository:
                 ) from exc
             if recoverable_pnl is None:
                 raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
+            self._assert_pnl_effect_matches_event(recoverable_pnl, event)
             try:
                 signal = Signal(
                     signal_id=row["signal_id"],

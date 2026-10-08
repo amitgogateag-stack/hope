@@ -153,3 +153,59 @@ def test_portfolio_recovery_rejects_recoverable_effect_with_wrong_payload() -> N
             current_job_run_id=None,
             expected_payload_hash="a" * 64,
         )
+
+def test_portfolio_recovery_rejects_pnl_effect_with_conflicting_payload() -> None:
+    from decimal import Decimal
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    run = create_scheduled_job_run("paper-pnl-payload", datetime(2026, 10, 8, tzinfo=UTC))
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("12.50"),
+        commission_delta=Decimal("1.25"),
+        event_time=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    valid = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    _repository(_Effects())._assert_pnl_effect_matches_event(valid, event)
+    forged = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id, "f" * 64,
+    )
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH"):
+        _repository(_Effects())._assert_pnl_effect_matches_event(forged, event)
+
+
+def test_portfolio_recovery_rejects_pnl_effect_with_conflicting_identity() -> None:
+    from decimal import Decimal
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    run = create_scheduled_job_run("paper-pnl-identity", datetime(2026, 10, 8, tzinfo=UTC))
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=Decimal("0"),
+        event_time=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    wrong_identity = create_paper_effect(
+        run, PaperEffectType.PNL, uuid4(), paper_portfolio_pnl_payload_hash(event),
+    )
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH"):
+        _repository(_Effects())._assert_pnl_effect_matches_event(wrong_identity, event)
