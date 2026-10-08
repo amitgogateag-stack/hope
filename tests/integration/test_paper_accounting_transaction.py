@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import (
     JobRunStatus,
@@ -353,6 +353,109 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
         )
         assert recovered is not None
         assert recovered.state.positions[instrument_id].realized_pnl == Decimal("0")
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
+    """Out-of-band P&L evidence cannot appear while recovery proves history."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-recovery-pnl-lock",
+        datetime(2026, 9, 10, 3, 13, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        instrument_id = uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-RECOVERY-PNL-LOCK', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run) is True
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            side=OrderSide.BUY,
+            price="100",
+            minute=13,
+        )
+        assert PaperAccountingWriter(
+            SqlAlchemyPaperAccountingRepository(connection)
+        ).apply_fill(
+            context,
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+        ) is True
+        assert jobs.complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.SUCCEEDED,
+                run.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+
+    duplicate_event_id = uuid4()
+    insert_duplicate = text(
+        "INSERT INTO paper_portfolio_pnl_events("
+        "pnl_event_id, portfolio_id, fill_id, instrument_id, "
+        "realized_pnl_delta, commission_delta, event_time"
+        ") VALUES ("
+        ":event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time"
+        ")"
+    )
+    params = {
+        "event_id": duplicate_event_id,
+        "portfolio_id": portfolio_id,
+        "fill_id": fill.fill_id,
+        "instrument_id": instrument_id,
+        "event_time": fill.fill_time,
+    }
+
+    with engine.connect() as recovery_connection:
+        recovery_transaction = recovery_connection.begin()
+        recovered = SqlAlchemyPaperPortfolioRepository(
+            recovery_connection
+        ).verify_accounting_history(
+            portfolio_id,
+            current_job_run_id=run.job_run_id,
+        )
+        assert recovered is not None
+
+        with pytest.raises(OperationalError, match="lock timeout"):
+            with engine.begin() as mutation_connection:
+                mutation_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                mutation_connection.execute(insert_duplicate, params)
+
+        recovery_transaction.commit()
+
+    with pytest.raises(IntegrityError):
+        with engine.begin() as mutation_connection:
+            mutation_connection.execute(insert_duplicate, params)
+
+    with engine.begin() as connection:
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
+        ).scalar_one() == 1
 
     engine.dispose()
 
