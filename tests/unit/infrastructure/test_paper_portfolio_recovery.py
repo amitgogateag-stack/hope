@@ -55,6 +55,42 @@ def test_accounting_history_locks_portfolio_by_default(monkeypatch) -> None:
     assert calls == [(portfolio_id, True)]
 
 
+@pytest.mark.parametrize(
+    "operation",
+    (
+        lambda repository, portfolio_id: repository.load_ledger(
+            portfolio_id,
+            lock_for_update=False,
+        ),
+        lambda repository, portfolio_id: repository.load_fill_transition(
+            portfolio_id,
+            uuid4(),
+            lock_for_update=False,
+        ),
+        lambda repository, portfolio_id: repository.verify_accounting_history(
+            portfolio_id,
+            lock_for_update=False,
+        ),
+    ),
+)
+def test_public_portfolio_recovery_rejects_lock_opt_out(
+    monkeypatch,
+    operation,
+) -> None:
+    repository = _repository(_Effects())
+    monkeypatch.setattr(
+        repository,
+        "_load_materialized_ledger",
+        lambda *args, **kwargs: pytest.fail("unlocked recovery must not read state"),
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_PORTFOLIO_RECOVERY_LOCK_REQUIRED",
+    ):
+        operation(repository, uuid4())
+
+
 def test_public_portfolio_recovery_fails_closed_on_missing_execution_effect() -> None:
     entity_id = uuid4()
     effects = _Effects(recoverable=None)

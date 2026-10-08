@@ -259,6 +259,7 @@ class SqlAlchemyPaperPortfolioRepository:
         lock_for_update: bool = True,
     ) -> PortfolioLedger | None:
         """Recover a ledger only from complete, verified accounting history."""
+        self._require_recovery_lock(lock_for_update)
         return self.verify_accounting_history(
             portfolio_id,
             lock_for_update=lock_for_update,
@@ -273,6 +274,7 @@ class SqlAlchemyPaperPortfolioRepository:
         current_job_run_id: UUID | None = None,
     ) -> PortfolioFillTransition | None:
         """Return a transition only from fully verified durable accounting history."""
+        self._require_recovery_lock(lock_for_update)
         ledger = self.verify_accounting_history(
             portfolio_id,
             lock_for_update=lock_for_update,
@@ -309,6 +311,11 @@ class SqlAlchemyPaperPortfolioRepository:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH")
         return effect
 
+    @staticmethod
+    def _require_recovery_lock(lock_for_update: bool) -> None:
+        if lock_for_update is not True:
+            raise ValueError("PAPER_PORTFOLIO_RECOVERY_LOCK_REQUIRED")
+
     def verify_accounting_history(
         self,
         portfolio_id: UUID,
@@ -324,6 +331,7 @@ class SqlAlchemyPaperPortfolioRepository:
         accounting before the lifecycle can atomically transition from CLAIMED to
         SUCCEEDED.
         """
+        self._require_recovery_lock(lock_for_update)
         ledger = self._load_materialized_ledger(
             portfolio_id,
             lock_for_update=lock_for_update,
