@@ -28,7 +28,7 @@ AS $$
                     'YYYY-MM-DD"T"HH24:MI:SS'
                 ) ||
                 CASE
-                    WHEN (extract(microseconds FROM event_time)::INTEGER % 1000000) = 0
+            WHEN (extract(microseconds FROM event_time)::INTEGER %% 1000000) = 0
                     THEN ''
                     ELSE '.' || to_char(event_time AT TIME ZONE 'UTC', 'US')
                 END ||
