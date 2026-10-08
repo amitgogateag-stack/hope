@@ -316,6 +316,8 @@ class SqlAlchemyPaperPortfolioRepository:
         """Authenticate durable PNL payload, not merely its owner and existence."""
         from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_payload_hash
 
+        if effect.effect_type is not PaperEffectType.PNL:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_TYPE_MISMATCH")
         if effect.entity_id != event.pnl_event_id:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):

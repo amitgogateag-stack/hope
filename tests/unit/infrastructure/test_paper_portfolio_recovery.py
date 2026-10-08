@@ -209,3 +209,30 @@ def test_portfolio_recovery_rejects_pnl_effect_with_conflicting_identity() -> No
     )
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH"):
         _repository(_Effects())._assert_pnl_effect_matches_event(wrong_identity, event)
+
+
+def test_portfolio_recovery_rejects_non_pnl_effect_even_with_matching_payload() -> None:
+    from decimal import Decimal
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    run = create_scheduled_job_run("paper-pnl-type", datetime(2026, 10, 8, tzinfo=UTC))
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=Decimal("0"),
+        event_time=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    wrong_type = create_paper_effect(
+        run, PaperEffectType.FILL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_TYPE_MISMATCH"):
+        _repository(_Effects())._assert_pnl_effect_matches_event(wrong_type, event)
