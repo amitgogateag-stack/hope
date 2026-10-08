@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import (
     JobRunStatus,
@@ -310,3 +310,153 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
             ).scalar_one() == 1
         finally:
             transaction.rollback()
+
+
+@pytest.mark.integration
+def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
+    """A late effect cannot appear while recovery holds accounting truth."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    event_time = datetime(2026, 10, 8, 9, 30, tzinfo=timezone.utc)
+    job_run = create_scheduled_job_run(
+        f"paper-portfolio-late-effect-serialization:{uuid4()}",
+        event_time - timedelta(minutes=1),
+    )
+    instrument_id = uuid4()
+    signal_id = uuid4()
+    order_id = uuid4()
+    fill_id = uuid4()
+    portfolio_id = uuid4()
+    event_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=event_id,
+        portfolio_id=portfolio_id,
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=Decimal("0.25"),
+        event_time=event_time,
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:id, 'PNL-LATE-EFFECT-LOCK', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO signals(signal_id, instrument_id, decision_time, state) "
+                "VALUES (:id, :instrument_id, :event_time, 'SIGNAL')"
+            ),
+            {"id": signal_id, "instrument_id": instrument_id, "event_time": event_time},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO orders(order_id, signal_id, instrument_id, environment, side, quantity) "
+                "VALUES (:id, :signal_id, :instrument_id, 'PAPER', 'BUY', 1)"
+            ),
+            {"id": order_id, "signal_id": signal_id, "instrument_id": instrument_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO fills(fill_id, order_id, quantity, fill_price, slippage, "
+                "transaction_cost, filled_at, cost_model_version) "
+                "VALUES (:id, :order_id, 1, 100, 0, 0.25, :event_time, 'test-cost-v1')"
+            ),
+            {"id": fill_id, "order_id": order_id, "event_time": event_time},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash) "
+                "VALUES (:id, 1000, 900)"
+            ),
+            {"id": portfolio_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(job_run) is True
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolio_fill_applications("
+                "portfolio_id, fill_id, application_sequence"
+                ") VALUES (:portfolio_id, :fill_id, 1)"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill_id},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolio_pnl_events("
+                "pnl_event_id, portfolio_id, fill_id, instrument_id, "
+                "realized_pnl_delta, commission_delta, event_time"
+                ") VALUES ("
+                ":event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time"
+                ")"
+            ),
+            {
+                "event_id": event_id,
+                "portfolio_id": portfolio_id,
+                "fill_id": fill_id,
+                "instrument_id": instrument_id,
+                "event_time": event_time,
+            },
+        )
+
+    recovery_connection = engine.connect()
+    effect_connection = engine.connect()
+    recovery_transaction = recovery_connection.begin()
+    try:
+        recovery_connection.execute(
+            text(
+                "SELECT portfolio_id FROM paper_portfolios "
+                "WHERE portfolio_id=:id FOR UPDATE"
+            ),
+            {"id": portfolio_id},
+        ).one()
+
+        effect_transaction = effect_connection.begin()
+        try:
+            effect_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+            with pytest.raises(OperationalError, match="lock timeout"):
+                SqlAlchemyPaperEffectRepository(effect_connection).record(
+                    create_paper_effect(
+                        job_run,
+                        PaperEffectType.PNL,
+                        event_id,
+                        paper_portfolio_pnl_payload_hash(event),
+                    )
+                )
+        finally:
+            effect_transaction.rollback()
+
+        recovery_transaction.commit()
+
+        with effect_connection.begin():
+            effects = SqlAlchemyPaperEffectRepository(effect_connection)
+            assert effects.record(
+                create_paper_effect(
+                    job_run,
+                    PaperEffectType.PNL,
+                    event_id,
+                    paper_portfolio_pnl_payload_hash(event),
+                )
+            ) is True
+            assert effects.record(
+                create_paper_effect(
+                    job_run,
+                    PaperEffectType.FILL,
+                    fill_id,
+                    "a" * 64,
+                )
+            ) is True
+    finally:
+        if recovery_transaction.is_active:
+            recovery_transaction.rollback()
+        recovery_connection.close()
+        effect_connection.close()
+        engine.dispose()
