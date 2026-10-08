@@ -324,7 +324,12 @@ class SqlAlchemyPaperPortfolioRepository:
 
         if effect.effect_type is not PaperEffectType.PNL:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_TYPE_MISMATCH")
-        if effect.entity_id != event.pnl_event_id:
+        if (
+            effect.entity_id != event.pnl_event_id
+            or effect.effect_id != _deterministic_effect_id(
+                PaperEffectType.PNL, event.pnl_event_id
+            )
+        ):
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH")

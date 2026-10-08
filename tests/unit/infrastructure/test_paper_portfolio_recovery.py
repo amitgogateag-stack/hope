@@ -275,3 +275,34 @@ def test_portfolio_recovery_rejects_execution_effect_with_forged_effect_id() -> 
             PaperEffectType.ORDER, entity_id,
             current_job_run_id=None, expected_payload_hash="a" * 64,
         )
+
+
+def test_portfolio_recovery_rejects_pnl_effect_with_forged_effect_id() -> None:
+    from decimal import Decimal
+    from hope.application.paper.portfolio_pnl import (
+        PaperPortfolioPnLEvent,
+        paper_portfolio_pnl_event_id,
+        paper_portfolio_pnl_payload_hash,
+    )
+
+    run = create_scheduled_job_run("paper-pnl-forged-id", datetime(2026, 10, 8, tzinfo=UTC))
+    portfolio_id, fill_id, instrument_id = uuid4(), uuid4(), uuid4()
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=Decimal("0"),
+        event_time=datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    valid = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    forged = object.__new__(type(valid))
+    for field in ("job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(valid, field))
+    object.__setattr__(forged, "effect_id", uuid4())
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH"):
+        _repository(_Effects())._assert_pnl_effect_matches_event(forged, event)
