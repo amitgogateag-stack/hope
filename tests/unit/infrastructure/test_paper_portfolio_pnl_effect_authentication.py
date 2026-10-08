@@ -118,3 +118,38 @@ def test_pnl_read_rejects_wrong_source_fill_entity():
     repository._get_row = lambda event_id: vars(event)
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT"):
         repository.get(event.portfolio_id, event.fill_id)
+
+
+@pytest.mark.parametrize("wrong_type", [PaperEffectType.ORDER, PaperEffectType.PNL])
+def test_pnl_persist_rejects_wrong_source_fill_effect_type(wrong_type):
+    event = _event()
+    run = create_scheduled_job_run("pnl-persist-source-type", datetime(2026, 10, 8, tzinfo=UTC))
+    effect = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    source = create_paper_effect(run, wrong_type, event.fill_id, "a" * 64)
+
+    class _Connection:
+        def begin_nested(self):
+            from contextlib import nullcontext
+            return nullcontext()
+
+        def execute(self, query):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return event.fill_id
+            return _Result()
+
+    class _WithSource:
+        def get_reusable_for_job(self, *args):
+            return source
+
+        def record(self, effect):
+            pytest.fail("invalid source must not persist PNL effect")
+
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._connection = _Connection()
+    repository._effects = _WithSource()
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED"):
+        repository.persist(effect, event)
