@@ -76,6 +76,12 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             return None
         event = self._event_from_row(row)
         self._assert_row_matches(row, event)
+        if (
+            event.pnl_event_id != event_id
+            or event.portfolio_id != portfolio_id
+            or event.fill_id != fill_id
+        ):
+            raise ValueError("PAPER_PORTFOLIO_PNL_REQUEST_IDENTITY_CONFLICT")
         effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_EFFECT")

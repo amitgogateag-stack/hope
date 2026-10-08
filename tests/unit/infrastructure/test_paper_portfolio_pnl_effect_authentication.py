@@ -159,3 +159,25 @@ def test_pnl_persist_rejects_wrong_source_fill_effect_type(wrong_type):
     )
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED"):
         repository.persist(effect, event)
+
+
+@pytest.mark.parametrize("mismatch", ["portfolio", "fill", "event_id"])
+def test_pnl_read_rejects_row_not_matching_requested_identity(mismatch):
+    event = _event()
+    row = vars(event).copy()
+    if mismatch == "portfolio":
+        row["portfolio_id"] = uuid4()
+    elif mismatch == "fill":
+        row["fill_id"] = uuid4()
+    else:
+        row["pnl_event_id"] = uuid4()
+
+    class _NoEffects:
+        def get(self, *args):
+            pytest.fail("mismatched durable row must be rejected before effect lookup")
+
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _NoEffects()
+    repository._get_row = lambda event_id: row
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_REQUEST_IDENTITY_CONFLICT"):
+        repository.get(event.portfolio_id, event.fill_id)
