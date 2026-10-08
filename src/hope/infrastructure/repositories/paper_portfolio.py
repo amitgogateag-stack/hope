@@ -256,7 +256,7 @@ class SqlAlchemyPaperPortfolioRepository:
         self,
         portfolio_id: UUID,
         *,
-        lock_for_update: bool = False,
+        lock_for_update: bool = True,
     ) -> PortfolioLedger | None:
         """Recover a ledger only from complete, verified accounting history."""
         return self.verify_accounting_history(
@@ -269,7 +269,7 @@ class SqlAlchemyPaperPortfolioRepository:
         portfolio_id: UUID,
         fill_id: UUID,
         *,
-        lock_for_update: bool = False,
+        lock_for_update: bool = True,
         current_job_run_id: UUID | None = None,
     ) -> PortfolioFillTransition | None:
         """Return a transition only from fully verified durable accounting history."""
@@ -313,7 +313,7 @@ class SqlAlchemyPaperPortfolioRepository:
         self,
         portfolio_id: UUID,
         *,
-        lock_for_update: bool = False,
+        lock_for_update: bool = True,
         current_job_run_id: UUID | None = None,
     ) -> PortfolioLedger | None:
         """Restore a portfolio only from recoverable execution and accounting truth.

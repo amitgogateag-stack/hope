@@ -36,6 +36,25 @@ def _repository(effects):
     return repository
 
 
+def test_accounting_history_locks_portfolio_by_default(monkeypatch) -> None:
+    repository = _repository(_Effects())
+    portfolio_id = uuid4()
+    calls = []
+
+    def load_materialized(requested_id, *, lock_for_update):
+        calls.append((requested_id, lock_for_update))
+        return None
+
+    monkeypatch.setattr(
+        repository,
+        "_load_materialized_ledger",
+        load_materialized,
+    )
+
+    assert repository.verify_accounting_history(portfolio_id) is None
+    assert calls == [(portfolio_id, True)]
+
+
 def test_public_portfolio_recovery_fails_closed_on_missing_execution_effect() -> None:
     entity_id = uuid4()
     effects = _Effects(recoverable=None)
