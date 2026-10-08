@@ -203,6 +203,23 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                 create_paper_effect(source_run, PaperEffectType.FILL, fill_id, "a" * 64)
             ) is True
 
+            # With the source FILL present but its owner still CLAIMED,
+            # a foreign PNL effect must not authorize accounting lineage.
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_OWNER_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    effects.record(
+                        create_paper_effect(
+                            pnl_run,
+                            PaperEffectType.PNL,
+                            event_id,
+                            paper_portfolio_pnl_payload_hash(event),
+                        )
+                    )
+                    connection.execute(insert_event, event_params)
+
             with pytest.raises(
                 IntegrityError,
                 match="PAPER_PORTFOLIO_PNL_EFFECT_UNTRACKED",
@@ -242,23 +259,6 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                             "entity_id": event_id,
                             "payload_hash": paper_portfolio_pnl_payload_hash(event),
                         },
-                    )
-
-            # Late PNL-effect insertion must not borrow a FILL whose owner
-            # is still CLAIMED, even when the accounting row already exists.
-            with pytest.raises(
-                IntegrityError,
-                match="PAPER_PORTFOLIO_PNL_EFFECT_OWNER_CONFLICT",
-            ):
-                with connection.begin_nested():
-                    connection.execute(insert_event, event_params)
-                    effects.record(
-                        create_paper_effect(
-                            pnl_run,
-                            PaperEffectType.PNL,
-                            event_id,
-                            paper_portfolio_pnl_payload_hash(event),
-                        )
                     )
 
             assert effects.record(
