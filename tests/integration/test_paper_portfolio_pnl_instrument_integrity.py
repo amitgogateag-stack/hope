@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
@@ -28,6 +29,7 @@ def test_paper_portfolio_pnl_instrument_must_match_applied_fill_order() -> None:
             order_id = uuid4()
             fill_id = uuid4()
             portfolio_id = uuid4()
+            event_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
             event_time = datetime(2026, 9, 12, 19, 45, tzinfo=timezone.utc)
 
             connection.execute(
@@ -59,12 +61,12 @@ def test_paper_portfolio_pnl_instrument_must_match_applied_fill_order() -> None:
                 with connection.begin_nested():
                     connection.execute(
                         text("INSERT INTO paper_portfolio_pnl_events(pnl_event_id, portfolio_id, fill_id, instrument_id, realized_pnl_delta, commission_delta, event_time) VALUES (:event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time)"),
-                        {"event_id": uuid4(), "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": wrong_instrument_id, "event_time": event_time},
+                        {"event_id": event_id, "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": wrong_instrument_id, "event_time": event_time},
                     )
 
             connection.execute(
                 text("INSERT INTO paper_portfolio_pnl_events(pnl_event_id, portfolio_id, fill_id, instrument_id, realized_pnl_delta, commission_delta, event_time) VALUES (:event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time)"),
-                {"event_id": uuid4(), "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": instrument_id, "event_time": event_time},
+                {"event_id": event_id, "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": instrument_id, "event_time": event_time},
             )
         finally:
             transaction.rollback()

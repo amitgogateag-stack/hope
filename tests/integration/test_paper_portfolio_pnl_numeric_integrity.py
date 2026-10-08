@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
@@ -84,7 +85,7 @@ def test_paper_portfolio_realized_pnl_delta_must_be_finite(invalid_value: str) -
                             ")"
                         ),
                         {
-                            "pnl_event_id": uuid4(),
+                            "pnl_event_id": paper_portfolio_pnl_event_id(portfolio_id, fill_id),
                             "portfolio_id": portfolio_id,
                             "fill_id": fill_id,
                             "instrument_id": instrument_id,

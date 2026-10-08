@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
+from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.infrastructure.postgres.migrations import apply_migrations
 
 
@@ -28,6 +29,7 @@ def test_paper_portfolio_pnl_event_time_must_match_fill_time() -> None:
             order_id = uuid4()
             fill_id = uuid4()
             portfolio_id = uuid4()
+            event_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
             fill_time = datetime(2026, 9, 12, 20, 30, tzinfo=timezone.utc)
 
             connection.execute(text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id, 'PNL-TIME-INTEGRITY', 'TEST', 'ACTIVE')"), {"id": instrument_id})
@@ -39,9 +41,8 @@ def test_paper_portfolio_pnl_event_time_must_match_fill_time() -> None:
 
             with pytest.raises(IntegrityError, match="PAPER_PORTFOLIO_PNL_EVENT_TIME_MISMATCH"):
                 with connection.begin_nested():
-                    connection.execute(text("INSERT INTO paper_portfolio_pnl_events(pnl_event_id, portfolio_id, fill_id, instrument_id, realized_pnl_delta, commission_delta, event_time) VALUES (:event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time)"), {"event_id": uuid4(), "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": instrument_id, "event_time": fill_time + timedelta(seconds=1)})
+                    connection.execute(text("INSERT INTO paper_portfolio_pnl_events(pnl_event_id, portfolio_id, fill_id, instrument_id, realized_pnl_delta, commission_delta, event_time) VALUES (:event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time)"), {"event_id": event_id, "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": instrument_id, "event_time": fill_time + timedelta(seconds=1)})
 
-            event_id = uuid4()
             connection.execute(text("INSERT INTO paper_portfolio_pnl_events(pnl_event_id, portfolio_id, fill_id, instrument_id, realized_pnl_delta, commission_delta, event_time) VALUES (:event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time)"), {"event_id": event_id, "portfolio_id": portfolio_id, "fill_id": fill_id, "instrument_id": instrument_id, "event_time": fill_time})
             stored_time = connection.execute(text("SELECT event_time FROM paper_portfolio_pnl_events WHERE pnl_event_id=:event_id"), {"event_id": event_id}).scalar_one()
             assert stored_time == fill_time

@@ -17,7 +17,10 @@ from hope.application.jobs import (
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import PaperFillWriter
-from hope.application.paper.portfolio_pnl import PaperPortfolioPnLWriter
+from hope.application.paper.portfolio_pnl import (
+    PaperPortfolioPnLWriter,
+    paper_portfolio_pnl_event_id,
+)
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -140,7 +143,10 @@ def test_paper_portfolio_pnl_created_at_is_database_authenticated() -> None:
                         ")"
                     ),
                     {
-                        "pnl_event_id": uuid4(),
+                        "pnl_event_id": paper_portfolio_pnl_event_id(
+                            portfolio_id,
+                            fill.fill_id,
+                        ),
                         "portfolio_id": portfolio_id,
                         "fill_id": fill.fill_id,
                         "instrument_id": fill.instrument_id,

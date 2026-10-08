@@ -484,7 +484,7 @@ def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
             )
         ) is True
 
-    duplicate_event_id = uuid4()
+    duplicate_event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
     insert_duplicate = text(
         "INSERT INTO paper_portfolio_pnl_events("
         "pnl_event_id, portfolio_id, fill_id, instrument_id, "
