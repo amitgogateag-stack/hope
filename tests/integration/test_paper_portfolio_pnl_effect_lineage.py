@@ -128,6 +128,64 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
 
             with pytest.raises(
                 IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_UNTRACKED",
+            ):
+                with connection.begin_nested():
+                    connection.execute(insert_event, event_params)
+                    effects.record(
+                        create_paper_effect(
+                            source_run,
+                            PaperEffectType.FILL,
+                            fill_id,
+                            "9" * 64,
+                        )
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_OWNER_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    connection.execute(insert_event, event_params)
+                    effects.record(
+                        create_paper_effect(
+                            pnl_run,
+                            PaperEffectType.PNL,
+                            event_id,
+                            paper_portfolio_pnl_payload_hash(event),
+                        )
+                    )
+                    effects.record(
+                        create_paper_effect(
+                            source_run,
+                            PaperEffectType.FILL,
+                            fill_id,
+                            "8" * 64,
+                        )
+                    )
+
+            savepoint = connection.begin_nested()
+            connection.execute(insert_event, event_params)
+            assert effects.record(
+                create_paper_effect(
+                    source_run,
+                    PaperEffectType.PNL,
+                    event_id,
+                    paper_portfolio_pnl_payload_hash(event),
+                )
+            ) is True
+            assert effects.record(
+                create_paper_effect(
+                    source_run,
+                    PaperEffectType.FILL,
+                    fill_id,
+                    "7" * 64,
+                )
+            ) is True
+            savepoint.rollback()
+
+            with pytest.raises(
+                IntegrityError,
                 match="PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH",
             ):
                 with connection.begin_nested():
