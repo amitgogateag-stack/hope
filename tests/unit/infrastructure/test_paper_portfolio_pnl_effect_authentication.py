@@ -179,5 +179,5 @@ def test_pnl_read_rejects_row_not_matching_requested_identity(mismatch):
     repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
     repository._effects = _NoEffects()
     repository._get_row = lambda event_id: row
-    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_REQUEST_IDENTITY_CONFLICT"):
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_IDENTITY_MISMATCH"):
         repository.get(event.portfolio_id, event.fill_id)
