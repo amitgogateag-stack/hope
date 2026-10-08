@@ -151,5 +151,11 @@ def test_pnl_persist_rejects_wrong_source_fill_effect_type(wrong_type):
     repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
     repository._connection = _Connection()
     repository._effects = _WithSource()
+    from sqlalchemy import Column, MetaData, Table, Uuid
+
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", MetaData(),
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED"):
         repository.persist(effect, event)
