@@ -220,6 +220,23 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                     )
                     connection.execute(insert_event, event_params)
 
+            # A foreign PNL effect inserted before its accounting row must
+            # still be rejected when the row later links it to a CLAIMED fill.
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_OWNER_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    assert effects.record(
+                        create_paper_effect(
+                            pnl_run,
+                            PaperEffectType.PNL,
+                            event_id,
+                            paper_portfolio_pnl_payload_hash(event),
+                        )
+                    ) is True
+                    connection.execute(insert_event, event_params)
+
             with pytest.raises(
                 IntegrityError,
                 match="PAPER_PORTFOLIO_PNL_EFFECT_UNTRACKED",
