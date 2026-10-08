@@ -91,7 +91,11 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             )
         except ValueError as exc:
             raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT") from exc
-        if reusable_fill is None:
+        if (
+            reusable_fill is None
+            or reusable_fill.effect_type is not PaperEffectType.FILL
+            or reusable_fill.entity_id != event.fill_id
+        ):
             raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT")
         return event
 
