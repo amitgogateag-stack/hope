@@ -271,6 +271,80 @@ def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
 
 
 @pytest.mark.integration
+def test_paper_accounting_takes_job_lock_before_portfolio_mutation() -> None:
+    """Accounting and reconciliation share job-then-portfolio lock ordering."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-accounting-job-lock-order",
+        datetime(2026, 9, 10, 3, 11, 30, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        instrument_id = uuid4()
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-ACCOUNTING-JOB-LOCK', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run) is True
+        fill = persist_fill(
+            connection,
+            context,
+            instrument_id,
+            side=OrderSide.BUY,
+            price="100",
+            minute=14,
+        )
+
+    with engine.connect() as reconciliation_connection:
+        reconciliation_transaction = reconciliation_connection.begin()
+        assert SqlAlchemyJobRunRepository(
+            reconciliation_connection
+        ).lock_claimed_for_reconciliation(run) is True
+
+        with pytest.raises(OperationalError, match="lock timeout"):
+            with engine.begin() as accounting_connection:
+                accounting_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                PaperAccountingWriter(
+                    SqlAlchemyPaperAccountingRepository(accounting_connection)
+                ).apply_fill(
+                    context,
+                    portfolio_id,
+                    Decimal("1000"),
+                    fill,
+                )
+
+        reconciliation_transaction.commit()
+
+    with engine.begin() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert PaperAccountingWriter(
+            SqlAlchemyPaperAccountingRepository(connection)
+        ).apply_fill(
+            context,
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+        ) is True
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:

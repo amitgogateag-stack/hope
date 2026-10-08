@@ -57,6 +57,7 @@ def _repository(event, replayed, *, pnl_recorded: bool = False):
 
     repository = object.__new__(SqlAlchemyPaperAccountingRepository)
     repository._connection = SimpleNamespace(begin_nested=nullcontext)
+    repository._jobs = SimpleNamespace(lock_claimed=lambda job_run: True)
     repository._effects = SimpleNamespace(
         get_reusable_for_job=lambda *args: SimpleNamespace()
     )
@@ -64,6 +65,23 @@ def _repository(event, replayed, *, pnl_recorded: bool = False):
     repository._pnl = SimpleNamespace(get=lambda *args: event)
     repository._pnl_writer = SimpleNamespace(record=record)
     return repository, portfolio, pnl_calls
+
+
+def test_accounting_requires_claimed_job_before_reading_effects_or_portfolio() -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    repository._jobs = SimpleNamespace(lock_claimed=lambda job_run: False)
+    repository._effects = SimpleNamespace(
+        get_reusable_for_job=lambda *args: pytest.fail(
+            "effects must not be read before the claimed job is locked"
+        )
+    )
+    portfolio.apply_fill_with_transition = lambda *args, **kwargs: pytest.fail(
+        "portfolio must not be mutated before the claimed job is locked"
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_ACCOUNTING_JOB_NOT_CLAIMED"):
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
 
 
 def test_idempotent_retry_authenticates_replayed_transition() -> None:

@@ -9,6 +9,7 @@ from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.portfolio_pnl import PaperPortfolioPnLWriter
 from hope.domain.execution.simulator import Fill
+from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_portfolio import SqlAlchemyPaperPortfolioRepository
 from hope.infrastructure.repositories.paper_portfolio_pnl import SqlAlchemyPaperPortfolioPnLRepository
@@ -19,6 +20,7 @@ class SqlAlchemyPaperAccountingRepository:
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
+        self._jobs = SqlAlchemyJobRunRepository(connection)
         self._effects = SqlAlchemyPaperEffectRepository(connection)
         self._portfolio = SqlAlchemyPaperPortfolioRepository(connection)
         self._pnl = SqlAlchemyPaperPortfolioPnLRepository(connection)
@@ -32,6 +34,11 @@ class SqlAlchemyPaperAccountingRepository:
         fill: Fill,
     ) -> bool:
         with self._connection.begin_nested():
+            # Reconciliation takes the job lock before proving the portfolio.
+            # Match that order so accounting cannot hold the portfolio while
+            # waiting for reconciliation's job lock.
+            if not self._jobs.lock_claimed(context.job_run):
+                raise RuntimeError("PAPER_ACCOUNTING_JOB_NOT_CLAIMED")
             if (
                 self._effects.get_reusable_for_job(
                     PaperEffectType.FILL,
