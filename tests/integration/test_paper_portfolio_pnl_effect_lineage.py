@@ -117,9 +117,6 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
             assert jobs.claim(source_run) is True
             assert jobs.claim(pnl_run) is True
             effects = SqlAlchemyPaperEffectRepository(connection)
-            assert effects.record(
-                create_paper_effect(source_run, PaperEffectType.FILL, fill_id, "a" * 64)
-            ) is True
             connection.execute(
                 text(
                     "INSERT INTO paper_portfolio_fill_applications("
@@ -128,6 +125,25 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                 ),
                 {"portfolio_id": portfolio_id, "fill_id": fill_id},
             )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    connection.execute(insert_event, event_params)
+                    effects.record(
+                        create_paper_effect(
+                            source_run,
+                            PaperEffectType.PNL,
+                            event_id,
+                            "0" * 64,
+                        )
+                    )
+
+            assert effects.record(
+                create_paper_effect(source_run, PaperEffectType.FILL, fill_id, "a" * 64)
+            ) is True
 
             with pytest.raises(
                 IntegrityError,
