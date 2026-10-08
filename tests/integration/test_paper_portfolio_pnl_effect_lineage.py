@@ -138,6 +138,21 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
 
             with pytest.raises(
                 IntegrityError,
+                match="PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    assert effects.record(
+                        create_paper_effect(
+                            source_run,
+                            PaperEffectType.PNL,
+                            event_id,
+                            "0" * 64,
+                        )
+                    ) is True
+                    connection.execute(insert_event, event_params)
+
+            with pytest.raises(
+                IntegrityError,
                 match="PAPER_PNL_EFFECT_IDENTITY_MISMATCH",
             ):
                 with connection.begin_nested():
