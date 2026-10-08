@@ -79,6 +79,8 @@ class SqlAlchemyPaperPortfolioPnLRepository:
         effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_EFFECT")
+        if effect.effect_type is not PaperEffectType.PNL or effect.entity_id != event.pnl_event_id:
+            raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_CONFLICT")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_CONFLICT")
         try:
