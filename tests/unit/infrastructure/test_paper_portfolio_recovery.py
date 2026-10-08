@@ -236,3 +236,26 @@ def test_portfolio_recovery_rejects_non_pnl_effect_even_with_matching_payload() 
     )
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_TYPE_MISMATCH"):
         _repository(_Effects())._assert_pnl_effect_matches_event(wrong_type, event)
+
+
+@pytest.mark.parametrize("wrong_type", [PaperEffectType.SIGNAL, PaperEffectType.FILL])
+def test_portfolio_recovery_rejects_wrong_execution_effect_type(wrong_type) -> None:
+    run = create_scheduled_job_run("paper-execution-type", datetime(2026, 10, 8, tzinfo=UTC))
+    entity_id = uuid4()
+    effect = create_paper_effect(run, wrong_type, entity_id, "a" * 64)
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_EXECUTION_EFFECT_IDENTITY_MISMATCH"):
+        _repository(_Effects(recoverable=effect))._require_recoverable_execution_effect(
+            PaperEffectType.ORDER, entity_id,
+            current_job_run_id=None, expected_payload_hash="a" * 64,
+        )
+
+
+def test_portfolio_recovery_rejects_wrong_execution_effect_entity() -> None:
+    run = create_scheduled_job_run("paper-execution-entity", datetime(2026, 10, 8, tzinfo=UTC))
+    entity_id = uuid4()
+    effect = create_paper_effect(run, PaperEffectType.ORDER, uuid4(), "a" * 64)
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_EXECUTION_EFFECT_IDENTITY_MISMATCH"):
+        _repository(_Effects(recoverable=effect))._require_recoverable_execution_effect(
+            PaperEffectType.ORDER, entity_id,
+            current_job_run_id=None, expected_payload_hash="a" * 64,
+        )

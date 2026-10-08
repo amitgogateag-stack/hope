@@ -307,6 +307,8 @@ class SqlAlchemyPaperPortfolioRepository:
             ) from exc
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_NOT_RECOVERABLE")
+        if effect.effect_type is not effect_type or effect.entity_id != entity_id:
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_IDENTITY_MISMATCH")
         if effect.payload_hash != expected_payload_hash:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH")
         return effect
