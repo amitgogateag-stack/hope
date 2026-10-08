@@ -6,12 +6,15 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, String, Table, Uuid, BigInteger, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from hope.application.paper.effects import PaperEffectType
+from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
+from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
-from hope.domain.execution.models import Environment, OrderSide
+from hope.application.paper.signals import paper_signal_payload_hash
+from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioFillTransition, PortfolioLedger, PortfolioState, PositionState
+from hope.domain.signal.models import Signal
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
 
@@ -64,6 +67,19 @@ class SqlAlchemyPaperPortfolioRepository:
             Column("instrument_id", Uuid, nullable=False),
             Column("environment", String, nullable=False),
             Column("side", String, nullable=False),
+            Column("quantity", Numeric, nullable=False),
+            Column("signal_type", String, nullable=True),
+        )
+        self._signals = Table(
+            "signals", metadata,
+            Column("signal_id", Uuid, primary_key=True),
+            Column("instrument_id", Uuid, nullable=False),
+            Column("decision_time", DateTime(timezone=True), nullable=False),
+            Column("state", String, nullable=False),
+            Column("strategy_version", String, nullable=True),
+            Column("signal_type", String, nullable=True),
+            Column("conviction", Numeric, nullable=True),
+            Column("inputs_hash", String, nullable=True),
         )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
@@ -272,7 +288,8 @@ class SqlAlchemyPaperPortfolioRepository:
         entity_id: UUID,
         *,
         current_job_run_id: UUID | None,
-    ) -> None:
+        expected_payload_hash: str,
+    ) -> PaperEffect:
         try:
             if current_job_run_id is None:
                 effect = self._effects.get_recoverable(effect_type, entity_id)
@@ -288,6 +305,9 @@ class SqlAlchemyPaperPortfolioRepository:
             ) from exc
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_EFFECT_NOT_RECOVERABLE")
+        if effect.payload_hash != expected_payload_hash:
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH")
+        return effect
 
     def verify_accounting_history(
         self,
@@ -320,13 +340,36 @@ class SqlAlchemyPaperPortfolioRepository:
                 self._applications.c.fill_id,
                 self._fills.c.filled_at,
                 self._fills.c.order_id,
+                self._fills.c.quantity.label("fill_quantity"),
+                self._fills.c.fill_price,
+                self._fills.c.slippage,
+                self._fills.c.transaction_cost,
+                self._fills.c.cost_model_version,
                 self._orders.c.signal_id,
+                self._orders.c.instrument_id.label("order_instrument_id"),
+                self._orders.c.environment,
+                self._orders.c.side,
+                self._orders.c.quantity.label("order_quantity"),
+                self._orders.c.signal_type.label("order_signal_type"),
+                self._signals.c.instrument_id.label("signal_instrument_id"),
+                self._signals.c.decision_time,
+                self._signals.c.state.label("signal_state"),
+                self._signals.c.strategy_version,
+                self._signals.c.signal_type.label("signal_signal_type"),
+                self._signals.c.conviction,
+                self._signals.c.inputs_hash,
             )
             .select_from(
                 self._applications.join(
                     self._fills,
                     self._applications.c.fill_id == self._fills.c.fill_id,
-                ).join(self._orders, self._fills.c.order_id == self._orders.c.order_id)
+                ).join(
+                    self._orders,
+                    self._fills.c.order_id == self._orders.c.order_id,
+                ).join(
+                    self._signals,
+                    self._orders.c.signal_id == self._signals.c.signal_id,
+                )
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
         ).mappings().all()
@@ -357,15 +400,71 @@ class SqlAlchemyPaperPortfolioRepository:
                 ) from exc
             if recoverable_pnl is None:
                 raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
-            for effect_type, entity_id in (
-                (PaperEffectType.SIGNAL, row["signal_id"]),
-                (PaperEffectType.ORDER, row["order_id"]),
-                (PaperEffectType.FILL, fill_id),
+            try:
+                signal = Signal(
+                    signal_id=row["signal_id"],
+                    instrument_id=row["signal_instrument_id"],
+                    strategy_version=row["strategy_version"],
+                    decision_time=row["decision_time"],
+                    signal_type=row["signal_signal_type"],
+                    conviction=row["conviction"],
+                    inputs_hash=row["inputs_hash"],
+                )
+                order = Order(
+                    order_id=row["order_id"],
+                    signal_id=row["signal_id"],
+                    instrument_id=row["order_instrument_id"],
+                    environment=row["environment"],
+                    side=row["side"],
+                    quantity=row["order_quantity"],
+                    signal_type=row["order_signal_type"],
+                )
+                fill = Fill(
+                    fill_id=fill_id,
+                    order_id=row["order_id"],
+                    signal_id=row["signal_id"],
+                    instrument_id=row["order_instrument_id"],
+                    side=OrderSide(row["side"]),
+                    quantity=row["fill_quantity"],
+                    price=row["fill_price"],
+                    commission=row["transaction_cost"],
+                    slippage=row["slippage"],
+                    cost_model_version=row["cost_model_version"],
+                    fill_time=row["filled_at"],
+                )
+            except (TypeError, ValueError) as exc:
+                raise RuntimeError(
+                    "PAPER_PORTFOLIO_EXECUTION_MATERIAL_INVALID"
+                ) from exc
+            if (
+                row["signal_state"] != "SIGNAL"
+                or signal.instrument_id != order.instrument_id
+                or signal.signal_type is not order.signal_type
             ):
+                raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH")
+            expected_effects = (
+                (
+                    PaperEffectType.SIGNAL,
+                    signal.signal_id,
+                    paper_signal_payload_hash(signal),
+                ),
+                (
+                    PaperEffectType.ORDER,
+                    order.order_id,
+                    paper_order_payload_hash(order),
+                ),
+                (
+                    PaperEffectType.FILL,
+                    fill.fill_id,
+                    paper_fill_payload_hash(fill),
+                ),
+            )
+            for effect_type, entity_id, expected_payload_hash in expected_effects:
                 self._require_recoverable_execution_effect(
                     effect_type,
                     entity_id,
                     current_job_run_id=current_job_run_id,
+                    expected_payload_hash=expected_payload_hash,
                 )
             transition = ledger.transition_for_fill(fill_id)
             if transition is None:

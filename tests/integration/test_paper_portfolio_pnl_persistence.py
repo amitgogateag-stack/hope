@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -458,6 +459,25 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
             with pytest.raises(
                 RuntimeError,
                 match="PAPER_PORTFOLIO_EXECUTION_OWNER_NOT_RECOVERABLE",
+            ):
+                portfolio.load_ledger(portfolio_id)
+
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                portfolio._effects,
+                "get_recoverable",
+                lambda effect_type, entity_id: (
+                    replace(
+                        get_recoverable(effect_type, entity_id),
+                        payload_hash="0" * 64,
+                    )
+                    if effect_type is PaperEffectType.SIGNAL
+                    else get_recoverable(effect_type, entity_id)
+                ),
+            )
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH",
             ):
                 portfolio.load_ledger(portfolio_id)
 
