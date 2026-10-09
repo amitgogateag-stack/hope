@@ -72,7 +72,11 @@ class SqlAlchemyPaperEffectRepository:
                 self._paper_effects.c.effect_type == effect.effect_type.value,
                 self._paper_effects.c.entity_id == effect.entity_id,
             )
-        ).mappings().one()
+        ).mappings().one_or_none()
+        if existing is None:
+            # A conflicting primary-key identity may have prevented insertion
+            # even though no matching logical (type, entity) effect exists.
+            raise ValueError("PAPER_EFFECT_IDENTITY_CONFLICT")
         if (
             existing["effect_id"] != effect.effect_id
             or existing["payload_hash"] != effect.payload_hash

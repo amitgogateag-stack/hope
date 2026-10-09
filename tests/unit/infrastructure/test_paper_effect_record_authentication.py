@@ -85,3 +85,38 @@ def test_list_for_job_run_rejects_corrupt_effect_history(corruption):
     repository = SqlAlchemyPaperEffectRepository(_Connection())
     with pytest.raises(ValueError, match=error):
         repository.list_for_job_run(run.job_run_id)
+
+
+def test_record_rejects_insert_conflict_without_matching_logical_effect():
+    from datetime import UTC, datetime
+    from hope.application.jobs import create_scheduled_job_run
+    from hope.application.paper.effects import create_paper_effect
+
+    run = create_scheduled_job_run(
+        "paper:missing-conflict-row", datetime(2026, 10, 9, tzinfo=UTC),
+    )
+    effect = create_paper_effect(run, PaperEffectType.FILL, uuid4(), "a" * 64)
+
+    class _InsertResult:
+        def scalar_one_or_none(self):
+            return None
+
+    class _MissingResult:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return None
+
+    class _Connection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            return _InsertResult() if self.calls == 1 else _MissingResult()
+
+    connection = _Connection()
+    with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+        SqlAlchemyPaperEffectRepository(connection).record(effect)
+    assert connection.calls == 2
