@@ -182,3 +182,44 @@ def test_pnl_read_rejects_row_not_matching_requested_identity(mismatch):
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_IDENTITY_MISMATCH"):
         repository.get(event.portfolio_id, event.fill_id)
 
+
+
+def test_pnl_read_rejects_event_without_applied_fill():
+    event = _event()
+    run = create_scheduled_job_run(
+        "pnl-read-orphan", datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    pnl_effect = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    fill_effect = create_paper_effect(
+        run, PaperEffectType.FILL, event.fill_id, "a" * 64,
+    )
+
+    class _ValidEffects:
+        def get(self, effect_type, entity_id):
+            return pnl_effect
+
+        def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
+            return fill_effect
+
+    class _MissingApplication:
+        def execute(self, statement):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return None
+            return _Result()
+
+    from sqlalchemy import Column, MetaData, Table, Uuid
+
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _ValidEffects()
+    repository._connection = _MissingApplication()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", MetaData(),
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
+    repository._get_row = lambda event_id: vars(event)
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION"):
+        repository.get(event.portfolio_id, event.fill_id)

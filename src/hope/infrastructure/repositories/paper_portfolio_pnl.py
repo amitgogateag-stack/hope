@@ -103,6 +103,14 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             or reusable_fill.entity_id != event.fill_id
         ):
             raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT")
+        application = self._connection.execute(
+            select(self._applications.c.fill_id).where(
+                self._applications.c.portfolio_id == event.portfolio_id,
+                self._applications.c.fill_id == event.fill_id,
+            )
+        ).scalar_one_or_none()
+        if application is None:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION")
         return event
 
     def persist(self, effect: PaperEffect, event: PaperPortfolioPnLEvent) -> bool:
