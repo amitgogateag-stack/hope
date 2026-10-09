@@ -116,4 +116,18 @@ def test_unproven_reconciliation_rolls_back_even_when_caller_commits() -> None:
                  "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
             {"id": str(run.job_run_id)},
         ).scalar_one() == 0
+
+    # Never leave a stranded CLAIMED run in the shared CI database: the
+    # global PAPER resume guard correctly refuses to bypass such a claim.
+    from hope.application.jobs import JobRunStatus, create_job_run_completion
+
+    with engine.begin() as connection:
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.FAILED,
+                scheduled_for + timedelta(minutes=2),
+                failure_code="EXPECTED_INCOMPLETE_RECONCILIATION_TEST",
+            )
+        )
     engine.dispose()
