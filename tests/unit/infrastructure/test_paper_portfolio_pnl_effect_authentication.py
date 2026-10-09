@@ -312,3 +312,22 @@ def test_pnl_read_rejects_applied_fill_without_event_or_effect():
     repository._get_row = lambda event_id: None
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
         repository.get(event.portfolio_id, event.fill_id)
+
+
+def test_pnl_read_rejects_forged_effect_id_before_fill_lineage_lookup():
+    event = _event()
+    run = create_scheduled_job_run("pnl-forged-effect", datetime(2026, 10, 8, tzinfo=UTC))
+    valid = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    forged = object.__new__(type(valid))
+    for field in ("job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(valid, field))
+    object.__setattr__(forged, "effect_id", uuid4())
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _Effects(forged)
+    repository._get_row = lambda event_id: vars(event)
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_CONFLICT"):
+        repository.get(event.portfolio_id, event.fill_id)
+    assert repository._effects.fill_checked is False

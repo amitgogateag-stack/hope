@@ -5,7 +5,7 @@ from uuid import UUID
 from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, Table, Uuid, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from hope.application.paper.effects import PaperEffect, PaperEffectType
+from hope.application.paper.effects import PaperEffect, PaperEffectType, _deterministic_effect_id
 from hope.application.paper.portfolio_pnl import (
     PaperPortfolioPnLEvent,
     paper_portfolio_pnl_event_id,
@@ -95,7 +95,11 @@ class SqlAlchemyPaperPortfolioPnLRepository:
         effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
         if effect is None:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_EFFECT")
-        if effect.effect_type is not PaperEffectType.PNL or effect.entity_id != event.pnl_event_id:
+        if (
+            effect.effect_type is not PaperEffectType.PNL
+            or effect.entity_id != event.pnl_event_id
+            or effect.effect_id != _deterministic_effect_id(PaperEffectType.PNL, event.pnl_event_id)
+        ):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_CONFLICT")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_CONFLICT")
