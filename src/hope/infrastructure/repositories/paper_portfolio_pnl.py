@@ -115,6 +115,9 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             reusable_fill is None
             or reusable_fill.effect_type is not PaperEffectType.FILL
             or reusable_fill.entity_id != event.fill_id
+            or reusable_fill.effect_id != _deterministic_effect_id(
+                PaperEffectType.FILL, event.fill_id
+            )
         ):
             raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT")
         application = self._connection.execute(
@@ -159,6 +162,9 @@ class SqlAlchemyPaperPortfolioPnLRepository:
                 source_fill is None
                 or source_fill.effect_type is not PaperEffectType.FILL
                 or source_fill.entity_id != event.fill_id
+                or source_fill.effect_id != _deterministic_effect_id(
+                    PaperEffectType.FILL, event.fill_id
+                )
             ):
                 raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED")
 
