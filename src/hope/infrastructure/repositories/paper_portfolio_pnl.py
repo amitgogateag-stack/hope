@@ -130,7 +130,11 @@ class SqlAlchemyPaperPortfolioPnLRepository:
     def persist(self, effect: PaperEffect, event: PaperPortfolioPnLEvent) -> bool:
         if event.pnl_event_id != paper_portfolio_pnl_event_id(event.portfolio_id, event.fill_id):
             raise ValueError("PAPER_PORTFOLIO_PNL_NONCANONICAL_EVENT_ID")
-        if effect.effect_type is not PaperEffectType.PNL or effect.entity_id != event.pnl_event_id:
+        if (
+            effect.effect_type is not PaperEffectType.PNL
+            or effect.entity_id != event.pnl_event_id
+            or effect.effect_id != _deterministic_effect_id(PaperEffectType.PNL, event.pnl_event_id)
+        ):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_MISMATCH")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_MISMATCH")

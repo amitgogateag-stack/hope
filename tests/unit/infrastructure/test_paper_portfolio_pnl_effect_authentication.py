@@ -331,3 +331,19 @@ def test_pnl_read_rejects_forged_effect_id_before_fill_lineage_lookup():
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_CONFLICT"):
         repository.get(event.portfolio_id, event.fill_id)
     assert repository._effects.fill_checked is False
+
+
+def test_pnl_persist_rejects_forged_effect_id_before_database_access():
+    event = _event()
+    run = create_scheduled_job_run("pnl-persist-forged-id", datetime(2026, 10, 8, tzinfo=UTC))
+    valid = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    forged = object.__new__(type(valid))
+    for field in ("job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(valid, field))
+    object.__setattr__(forged, "effect_id", uuid4())
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EFFECT_MISMATCH"):
+        repository.persist(forged, event)
