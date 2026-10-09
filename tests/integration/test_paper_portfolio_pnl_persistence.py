@@ -492,3 +492,59 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
         assert recovered.applied_fill_ids == frozenset({fill.fill_id})
 
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_pnl_recovery_rejects_orphaned_application_after_corruption() -> None:
+    """A durable PNL row and effect cannot authenticate a missing fill application."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-pnl-orphaned-application",
+        datetime(2026, 9, 10, 0, 8, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:id, 'PAPER-PNL-ORPHAN-APPLICATION', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+        fill = persist_fill(
+            connection, context, instrument_id, OrderSide.BUY, "100", 9,
+        )
+        transition = SqlAlchemyPaperPortfolioRepository(
+            connection
+        ).apply_fill_with_transition(
+            portfolio_id, Decimal("1000"), fill, job_run_id=run.job_run_id,
+        )
+        assert transition is not None
+        repository = SqlAlchemyPaperPortfolioPnLRepository(connection)
+        assert PaperPortfolioPnLWriter(repository).record(
+            context, portfolio_id, fill, transition,
+        ) is True
+        assert repository.get(portfolio_id, fill.fill_id) is not None
+
+        connection.execute(
+            text(
+                "DELETE FROM paper_portfolio_fill_applications "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
+        )
+        with pytest.raises(
+            RuntimeError, match="PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION",
+        ):
+            repository.get(portfolio_id, fill.fill_id)
+
+    engine.dispose()
