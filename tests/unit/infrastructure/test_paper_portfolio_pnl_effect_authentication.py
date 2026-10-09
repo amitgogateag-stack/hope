@@ -250,3 +250,28 @@ def test_pnl_read_missing_event_authenticates_durable_effect(effect_exists):
             repository.get(event.portfolio_id, event.fill_id)
     else:
         assert repository.get(event.portfolio_id, event.fill_id) is None
+
+
+@pytest.mark.parametrize("mismatch", ["event_id", "effect_id"])
+def test_pnl_persist_rejects_noncanonical_event_identity_before_db_access(mismatch):
+    canonical = _event()
+    run = create_scheduled_job_run("pnl-canonical", datetime(2026, 10, 8, tzinfo=UTC))
+    event = PaperPortfolioPnLEvent(
+        pnl_event_id=uuid4(), portfolio_id=canonical.portfolio_id,
+        fill_id=canonical.fill_id, instrument_id=canonical.instrument_id,
+        realized_pnl_delta=canonical.realized_pnl_delta,
+        commission_delta=canonical.commission_delta,
+        event_time=canonical.event_time,
+    )
+    effect = create_paper_effect(
+        run, PaperEffectType.PNL,
+        event.pnl_event_id if mismatch == "event_id" else canonical.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    if mismatch == "event_id":
+        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_NONCANONICAL_EVENT_ID"):
+            repository.persist(effect, event)
+    else:
+        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_NONCANONICAL_EVENT_ID"):
+            repository.persist(effect, event)
