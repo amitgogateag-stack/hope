@@ -34,6 +34,11 @@ class SqlAlchemyPaperEffectRepository:
 
     def record(self, effect: PaperEffect) -> bool:
         """Record one logical effect; return False for a safely reusable prior effect."""
+        if not isinstance(effect, PaperEffect):
+            raise ValueError("PAPER_EFFECT_RECORD_REQUIRES_EFFECT")
+        # Defend the persistence boundary even against an object reconstructed
+        # without invoking the frozen dataclass constructor.
+        effect.__post_init__()
         statement = (
             pg_insert(self._paper_effects)
             .values(
