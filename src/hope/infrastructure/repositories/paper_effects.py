@@ -169,7 +169,14 @@ class SqlAlchemyPaperEffectRepository:
             .where(self._paper_effects.c.job_run_id == job_run_id)
             .order_by(self._paper_effects.c.created_at, self._paper_effects.c.effect_id)
         ).mappings().all()
-        return tuple(self._from_row(row) for row in rows)
+        effects = tuple(self._from_row(row) for row in rows)
+        if any(effect.job_run_id != job_run_id for effect in effects):
+            raise ValueError("PAPER_EFFECT_JOB_HISTORY_OWNER_MISMATCH")
+        if len({effect.effect_id for effect in effects}) != len(effects):
+            raise ValueError("PAPER_EFFECT_JOB_HISTORY_DUPLICATE")
+        if len({(effect.effect_type, effect.entity_id) for effect in effects}) != len(effects):
+            raise ValueError("PAPER_EFFECT_JOB_HISTORY_DUPLICATE")
+        return effects
 
     @staticmethod
     def _from_row(row) -> PaperEffect:
