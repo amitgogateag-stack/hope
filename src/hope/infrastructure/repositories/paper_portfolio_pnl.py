@@ -75,6 +75,14 @@ class SqlAlchemyPaperPortfolioPnLRepository:
         if row is None:
             if self._effects.get(PaperEffectType.PNL, event_id) is not None:
                 raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_WITHOUT_EVENT")
+            application = self._connection.execute(
+                select(self._applications.c.fill_id).where(
+                    self._applications.c.portfolio_id == portfolio_id,
+                    self._applications.c.fill_id == fill_id,
+                )
+            ).scalar_one_or_none()
+            if application is not None:
+                raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
             return None
         event = self._event_from_row(row)
         self._assert_row_matches(row, event)

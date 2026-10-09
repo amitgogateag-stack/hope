@@ -245,6 +245,18 @@ def test_pnl_read_missing_event_authenticates_durable_effect(effect_exists):
     repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
     repository._effects = _EffectsForMissingRow()
     repository._get_row = lambda event_id: None
+    class _NoApplication:
+        def execute(self, query):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return None
+            return _Result()
+    from sqlalchemy import Column, MetaData, Table, Uuid
+    repository._connection = _NoApplication()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", MetaData(),
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
     if effect_exists:
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_WITHOUT_EVENT"):
             repository.get(event.portfolio_id, event.fill_id)
@@ -273,3 +285,30 @@ def test_pnl_persist_rejects_effect_with_wrong_event_identity_before_db_access()
     repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EFFECT_MISMATCH"):
         repository.persist(effect, event)
+
+
+def test_pnl_read_rejects_applied_fill_without_event_or_effect():
+    event = _event()
+    class _NoPnLEffect:
+        def get(self, effect_type, entity_id):
+            assert (effect_type, entity_id) == (PaperEffectType.PNL, event.pnl_event_id)
+            return None
+
+    class _AppliedFill:
+        def execute(self, statement):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return event.fill_id
+            return _Result()
+
+    from sqlalchemy import Column, MetaData, Table, Uuid
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _NoPnLEffect()
+    repository._connection = _AppliedFill()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", MetaData(),
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
+    repository._get_row = lambda event_id: None
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
+        repository.get(event.portfolio_id, event.fill_id)
