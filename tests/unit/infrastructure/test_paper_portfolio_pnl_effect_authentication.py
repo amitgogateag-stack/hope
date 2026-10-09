@@ -223,3 +223,30 @@ def test_pnl_read_rejects_event_without_applied_fill():
     repository._get_row = lambda event_id: vars(event)
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION"):
         repository.get(event.portfolio_id, event.fill_id)
+
+
+@pytest.mark.parametrize("effect_exists", [False, True])
+def test_pnl_read_missing_event_authenticates_durable_effect(effect_exists):
+    event = _event()
+    run = create_scheduled_job_run(
+        "pnl-missing-row", datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    effect = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+
+    class _EffectsForMissingRow:
+        def get(self, effect_type, entity_id):
+            assert effect_type is PaperEffectType.PNL
+            assert entity_id == event.pnl_event_id
+            return effect if effect_exists else None
+
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _EffectsForMissingRow()
+    repository._get_row = lambda event_id: None
+    if effect_exists:
+        with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_WITHOUT_EVENT"):
+            repository.get(event.portfolio_id, event.fill_id)
+    else:
+        assert repository.get(event.portfolio_id, event.fill_id) is None
