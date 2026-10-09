@@ -1789,3 +1789,33 @@ def test_reconciliation_rejects_pnl_without_matching_replayed_transition(
             _Connection(),
             effects,
         )
+
+
+@pytest.mark.parametrize("forged_type", ["FILL", "PNL"])
+def test_reconciliation_rejects_forged_economic_effect_before_database_query(forged_type):
+    from hope.application.paper.effects import create_paper_effect
+    run = create_scheduled_job_run(
+        "paper:forged-accounting-effect",
+        datetime(2026, 10, 9, 12, 0, tzinfo=UTC),
+    )
+    fill = create_paper_effect(
+        run, paper_reconciliation.PaperEffectType.FILL, uuid4(), "a" * 64,
+    )
+    pnl = create_paper_effect(
+        run, paper_reconciliation.PaperEffectType.PNL, uuid4(), "b" * 64,
+    )
+    target = fill if forged_type == "FILL" else pnl
+    forged = object.__new__(type(target))
+    for field in ("effect_id", "job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(target, field))
+    object.__setattr__(forged, "effect_id", uuid4())
+
+    class _NoQuery:
+        def execute(self, *args, **kwargs):
+            pytest.fail("forged economic effect must fail before querying durable accounting")
+
+    effects = (forged, pnl) if forged_type == "FILL" else (fill, forged)
+    with pytest.raises(
+        RuntimeError, match="PAPER_JOB_RECONCILIATION_EFFECT_IDENTITY_MISMATCH",
+    ):
+        paper_reconciliation._assert_durable_accounting_truth(_NoQuery(), effects)

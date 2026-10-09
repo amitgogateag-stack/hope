@@ -92,6 +92,18 @@ def _assert_durable_accounting_truth(
     if fill_effect is None or pnl_effect is None:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_ACCOUNTING_EFFECT_MISMATCH")
 
+    from hope.application.paper.effects import _deterministic_effect_id
+
+    if (
+        fill_effect.effect_id != _deterministic_effect_id(
+            PaperEffectType.FILL, fill_effect.entity_id
+        )
+        or pnl_effect.effect_id != _deterministic_effect_id(
+            PaperEffectType.PNL, pnl_effect.entity_id
+        )
+    ):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECT_IDENTITY_MISMATCH")
+
     row = connection.execute(
         text(
             "SELECT f.fill_id, f.transaction_cost AS fill_transaction_cost, "
