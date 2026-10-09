@@ -295,3 +295,29 @@ def test_verify_rejects_receipt_without_exact_recoverable_effect_lineage(
         match="PAPER_RECONCILIATION_AUDIT_EFFECT_NOT_RECOVERABLE",
     ):
         repository.verify(completion, effects)
+
+
+@pytest.mark.parametrize("tamper", ["effect_id", "payload_hash"])
+def test_reconciliation_receipt_rejects_forged_effect_before_database_access(tamper):
+    completion, effects = _completion_and_effects((
+        PaperEffectType.SIGNAL, PaperEffectType.RISK, PaperEffectType.ORDER,
+        PaperEffectType.FILL, PaperEffectType.PNL,
+    ))
+    original = effects[0]
+    forged = object.__new__(type(original))
+    for field in ("effect_id", "job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged, field, getattr(original, field))
+    if tamper == "effect_id":
+        object.__setattr__(forged, "effect_id", uuid4())
+        expected = "PAPER_RECONCILIATION_AUDIT_EFFECT_IDENTITY_INVALID"
+    else:
+        object.__setattr__(forged, "payload_hash", "not-a-sha256")
+        expected = "PAPER_RECONCILIATION_AUDIT_EFFECT_PAYLOAD_INVALID"
+    class _NoDatabase:
+        def execute(self, statement):
+            pytest.fail("invalid reconciliation evidence must not query database")
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_NoDatabase())
+    with pytest.raises(ValueError, match=expected):
+        repository.verify(completion, (forged, *effects[1:]))
+    with pytest.raises(ValueError, match=expected):
+        repository.record(completion, (forged, *effects[1:]))

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from uuid import NAMESPACE_URL, UUID, uuid5
+from re import fullmatch
 
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, and_, or_, select
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 
 from hope.application.jobs import JobRunRecord, JobRunStatus
 from hope.application.paper.effect_topology import require_complete_paper_effects
-from hope.application.paper.effects import PaperEffect
+from hope.application.paper.effects import PaperEffect, _deterministic_effect_id
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
 
@@ -46,6 +47,21 @@ class SqlAlchemyPaperReconciliationAuditRepository:
             raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_COMPLETION_TIME")
         if any(effect.job_run_id != completion.run.job_run_id for effect in effects):
             raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_RUN_MISMATCH")
+        for effect in effects:
+            if (
+                not isinstance(effect, PaperEffect)
+                or not isinstance(effect.entity_id, UUID)
+                or not isinstance(effect.effect_id, UUID)
+                or effect.effect_id != _deterministic_effect_id(
+                    effect.effect_type, effect.entity_id
+                )
+            ):
+                raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_IDENTITY_INVALID")
+            if (
+                not isinstance(effect.payload_hash, str)
+                or fullmatch(r"[0-9a-f]{64}", effect.payload_hash) is None
+            ):
+                raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_PAYLOAD_INVALID")
         try:
             require_complete_paper_effects(effects)
         except ValueError as exc:
