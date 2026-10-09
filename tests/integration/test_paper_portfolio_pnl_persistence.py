@@ -495,8 +495,8 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
 
 
 @pytest.mark.integration
-def test_paper_pnl_recovery_rejects_orphaned_application_after_corruption() -> None:
-    """A durable PNL row and effect cannot authenticate a missing fill application."""
+def test_paper_pnl_application_cannot_be_deleted_to_orphan_event() -> None:
+    """Database immutability prevents deletion from orphaning a durable PNL event."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -535,16 +535,22 @@ def test_paper_pnl_recovery_rejects_orphaned_application_after_corruption() -> N
         ) is True
         assert repository.get(portfolio_id, fill.fill_id) is not None
 
-        connection.execute(
-            text(
-                "DELETE FROM paper_portfolio_fill_applications "
-                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
-            ),
-            {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
-        )
+        # Database immutability is the first defense: even a direct SQL
+        # deletion cannot create the orphaned state under normal credentials.
         with pytest.raises(
-            RuntimeError, match="PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION",
+            IntegrityError,
+            match="PAPER_PORTFOLIO_FILL_APPLICATION_IMMUTABLE",
         ):
-            repository.get(portfolio_id, fill.fill_id)
+            with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "DELETE FROM paper_portfolio_fill_applications "
+                        "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+                    ),
+                    {"portfolio_id": portfolio_id, "fill_id": fill.fill_id},
+                )
+
+        # The rejected mutation must leave the authenticated PNL readable.
+        assert repository.get(portfolio_id, fill.fill_id) is not None
 
     engine.dispose()
