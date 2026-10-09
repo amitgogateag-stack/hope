@@ -314,3 +314,70 @@ def test_claimed_owner_effect_cannot_be_reused_by_concurrent_job() -> None:
                 )
             )
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_successful_owner_effect_reuse_across_restart_is_idempotent() -> None:
+    """Completed evidence is reusable without a duplicate durable effect."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    scheduled_for = datetime(2026, 10, 9, 16, 0, tzinfo=UTC)
+    strategy_id, version_id = uuid4(), uuid4()
+    first = create_scheduled_job_run(
+        f"paper:USA:{version_id}:successful-owner-first", scheduled_for,
+    )
+    second = create_scheduled_job_run(
+        f"paper:USA:{version_id}:successful-owner-second",
+        scheduled_for + timedelta(minutes=1),
+    )
+    effect = create_paper_effect(
+        first, PaperEffectType.SIGNAL, uuid4(), "a" * 64,
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) "
+                 "VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"SUCCESS_OWNER_{strategy_id}"},
+        )
+        connection.execute(
+            text("INSERT INTO strategy_versions("
+                 "strategy_version_id, strategy_id, version, code_commit"
+                 ") VALUES (:id, :strategy_id, 'v1', 'successful-owner-recovery')"),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(first)
+        assert SqlAlchemyPaperEffectRepository(connection).record(effect)
+        assert jobs.complete(
+            create_job_run_completion(
+                first, JobRunStatus.SUCCEEDED,
+                scheduled_for + timedelta(seconds=30),
+            )
+        )
+        assert jobs.claim(second)
+
+    with engine.begin() as connection:
+        effects = SqlAlchemyPaperEffectRepository(connection)
+        assert effects.get_recoverable(effect.effect_type, effect.entity_id) == effect
+        assert effects.get_reusable_for_job(
+            effect.effect_type, effect.entity_id, second.job_run_id,
+        ) == effect
+        assert effects.record(effect) is False
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE effect_id=:id"),
+            {"id": effect.effect_id},
+        ).scalar_one() == 1
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                second, JobRunStatus.FAILED,
+                scheduled_for + timedelta(minutes=2),
+                failure_code="EXPECTED_SUCCESS_OWNER_REUSE_TEST",
+            )
+        )
+    engine.dispose()
