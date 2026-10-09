@@ -125,3 +125,62 @@ def test_paper_effect_cannot_cross_reconciliation_terminalization() -> None:
         reconciliation_connection.close()
         effect_connection.close()
         engine.dispose()
+
+
+@pytest.mark.integration
+def test_restarted_effect_writer_cannot_append_after_terminal_run() -> None:
+    """A fresh connection after restart cannot resume effects on a completed job."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    scheduled_for = datetime(2026, 10, 9, 14, 0, tzinfo=UTC)
+    strategy_id, version_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper:USA:{version_id}:restart-terminal-guard", scheduled_for,
+    )
+    first = create_paper_effect(run, PaperEffectType.SIGNAL, uuid4(), "a" * 64)
+    late = create_paper_effect(run, PaperEffectType.RISK, uuid4(), "b" * 64)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO strategies(strategy_id, name, family) "
+                "VALUES (:id, :name, 'TEST')"
+            ),
+            {"id": strategy_id, "name": f"RESTART_GUARD_{strategy_id}"},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO strategy_versions("
+                "strategy_version_id, strategy_id, version, code_commit"
+                ") VALUES (:id, :strategy_id, 'v1', 'restart-terminal-guard')"
+            ),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run)
+        assert SqlAlchemyPaperEffectRepository(connection).record(first)
+        assert jobs.complete(
+            create_job_run_completion(
+                run, JobRunStatus.SUCCEEDED,
+                scheduled_for + timedelta(minutes=1),
+            )
+        )
+
+    # Reopen after the previous transaction and connection have closed.
+    with engine.begin() as connection:
+        effects = SqlAlchemyPaperEffectRepository(connection)
+        assert effects.get_recoverable(PaperEffectType.SIGNAL, first.entity_id) == first
+        with pytest.raises(IntegrityError, match="PAPER_EFFECT_REQUIRES_CLAIMED_JOB"):
+            with connection.begin_nested():
+                effects.record(late)
+        assert effects.list_for_job_run(run.job_run_id) == (first,)
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": run.job_run_id},
+        ).scalar_one() == 1
+    engine.dispose()
