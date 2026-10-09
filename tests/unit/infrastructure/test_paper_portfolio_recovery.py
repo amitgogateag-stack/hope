@@ -306,3 +306,38 @@ def test_portfolio_recovery_rejects_pnl_effect_with_forged_effect_id() -> None:
     object.__setattr__(forged, "effect_id", uuid4())
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_MISMATCH"):
         _repository(_Effects())._assert_pnl_effect_matches_event(forged, event)
+
+
+@pytest.mark.parametrize("returned_fill_ids", [
+    lambda a, b: [a, a, b],
+    lambda a, b: [a],
+    lambda a, b: [a, uuid4()],
+])
+def test_portfolio_recovery_rejects_duplicate_missing_or_substituted_joined_rows(
+    monkeypatch, returned_fill_ids,
+) -> None:
+    from types import SimpleNamespace
+
+    portfolio_id, first, second = uuid4(), uuid4(), uuid4()
+    repository = _repository(_Effects())
+    monkeypatch.setattr(
+        repository, "_load_materialized_ledger",
+        lambda *args, **kwargs: SimpleNamespace(applied_fill_ids=[first, second]),
+    )
+
+    class _Rows:
+        def mappings(self):
+            return self
+
+        def all(self):
+            return [{"fill_id": fill_id} for fill_id in returned_fill_ids(first, second)]
+
+    class _Connection:
+        def execute(self, statement):
+            return _Rows()
+
+    repository._connection = _Connection()
+    with pytest.raises(
+        RuntimeError, match="PAPER_PORTFOLIO_ACCOUNTING_HISTORY_INCONSISTENT",
+    ):
+        repository.verify_accounting_history(portfolio_id)
