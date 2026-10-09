@@ -404,7 +404,10 @@ class SqlAlchemyPaperPortfolioRepository:
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
         ).mappings().all()
-        if {row["fill_id"] for row in rows} != set(ledger.applied_fill_ids):
+        if (
+            len(rows) != len(ledger.applied_fill_ids)
+            or {row["fill_id"] for row in rows} != set(ledger.applied_fill_ids)
+        ):
             raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_HISTORY_INCONSISTENT")
 
         pnl_repository = SqlAlchemyPaperPortfolioPnLRepository(self._connection)
