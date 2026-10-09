@@ -347,3 +347,63 @@ def test_pnl_persist_rejects_forged_effect_id_before_database_access():
     repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_EFFECT_MISMATCH"):
         repository.persist(forged, event)
+
+
+@pytest.mark.parametrize("operation", ["read", "persist"])
+def test_pnl_rejects_forged_source_fill_effect_id(operation):
+    event = _event()
+    run = create_scheduled_job_run(
+        "pnl-source-fill-forged-id", datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    pnl_effect = create_paper_effect(
+        run, PaperEffectType.PNL, event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    valid_fill = create_paper_effect(
+        run, PaperEffectType.FILL, event.fill_id, "a" * 64,
+    )
+    forged_fill = object.__new__(type(valid_fill))
+    for field in ("job_run_id", "effect_type", "entity_id", "payload_hash"):
+        object.__setattr__(forged_fill, field, getattr(valid_fill, field))
+    object.__setattr__(forged_fill, "effect_id", uuid4())
+
+    class _EffectsWithForgedFill:
+        def get(self, effect_type, entity_id):
+            assert effect_type is PaperEffectType.PNL
+            return pnl_effect
+
+        def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
+            assert (effect_type, entity_id, job_run_id) == (
+                PaperEffectType.FILL, event.fill_id, run.job_run_id,
+            )
+            return forged_fill
+
+        def record(self, effect):
+            pytest.fail("forged source fill must fail before effect persistence")
+
+    class _AppliedFillConnection:
+        def begin_nested(self):
+            from contextlib import nullcontext
+            return nullcontext()
+
+        def execute(self, statement):
+            class _Result:
+                def scalar_one_or_none(self):
+                    return event.fill_id
+            return _Result()
+
+    from sqlalchemy import Column, MetaData, Table, Uuid
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._effects = _EffectsWithForgedFill()
+    repository._connection = _AppliedFillConnection()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", MetaData(),
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
+    repository._get_row = lambda event_id: vars(event)
+    if operation == "read":
+        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT"):
+            repository.get(event.portfolio_id, event.fill_id)
+    else:
+        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED"):
+            repository.persist(pnl_effect, event)
