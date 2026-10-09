@@ -184,3 +184,69 @@ def test_restarted_effect_writer_cannot_append_after_terminal_run() -> None:
             {"id": run.job_run_id},
         ).scalar_one() == 1
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_failed_job_effect_cannot_be_recovered_or_reused_by_another_run() -> None:
+    """An immutable effect from FAILED work is never valid restart evidence."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    scheduled_for = datetime(2026, 10, 9, 15, 0, tzinfo=UTC)
+    strategy_id, version_id = uuid4(), uuid4()
+    first = create_scheduled_job_run(
+        f"paper:USA:{version_id}:failed-owner-first", scheduled_for,
+    )
+    second = create_scheduled_job_run(
+        f"paper:USA:{version_id}:failed-owner-second",
+        scheduled_for + timedelta(minutes=1),
+    )
+    effect = create_paper_effect(
+        first, PaperEffectType.SIGNAL, uuid4(), "e" * 64,
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) "
+                 "VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"FAILED_OWNER_{strategy_id}"},
+        )
+        connection.execute(
+            text("INSERT INTO strategy_versions("
+                 "strategy_version_id, strategy_id, version, code_commit"
+                 ") VALUES (:id, :strategy_id, 'v1', 'failed-owner-recovery')"),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(first)
+        assert SqlAlchemyPaperEffectRepository(connection).record(effect)
+        assert jobs.complete(
+            create_job_run_completion(
+                first, JobRunStatus.FAILED,
+                scheduled_for + timedelta(seconds=30),
+                failure_code="EXPECTED_FAILED_OWNER",
+            )
+        )
+        assert jobs.claim(second)
+
+    with engine.begin() as connection:
+        effects = SqlAlchemyPaperEffectRepository(connection)
+        with pytest.raises(ValueError, match="PAPER_EFFECT_OWNER_NOT_RECOVERABLE"):
+            effects.get_recoverable(effect.effect_type, effect.entity_id)
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            effects.get_reusable_for_job(
+                effect.effect_type, effect.entity_id, second.job_run_id,
+            )
+        assert effects.get(effect.effect_type, effect.entity_id) == effect
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                second, JobRunStatus.FAILED,
+                scheduled_for + timedelta(minutes=2),
+                failure_code="EXPECTED_FAILED_OWNER_REUSE_TEST",
+            )
+        )
+    engine.dispose()
