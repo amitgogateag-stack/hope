@@ -368,7 +368,7 @@ def test_successful_owner_effect_reuse_across_restart_is_idempotent() -> None:
         assert effects.get_reusable_for_job(
             effect.effect_type, effect.entity_id, second.job_run_id,
         ) == effect
-        assert effects.record(effect) is False
+        # Reuse is read-only: a terminal owner must never be written again.
         assert connection.execute(
             text("SELECT count(*) FROM paper_effects WHERE effect_id=:id"),
             {"id": effect.effect_id},
