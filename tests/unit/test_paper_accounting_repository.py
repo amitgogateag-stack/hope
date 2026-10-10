@@ -159,3 +159,52 @@ def test_idempotent_retry_never_recreates_missing_pnl() -> None:
         match="PAPER_ACCOUNTING_RETRY_RECREATED_PNL",
     ):
         repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
+
+
+def test_accounting_verifies_history_before_appending_a_new_fill() -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    calls = []
+
+    def verify(*args, **kwargs):
+        calls.append(("verify", args, kwargs))
+        return replayed
+
+    def apply(*args, **kwargs):
+        calls.append(("apply", args, kwargs))
+        return replayed
+
+    portfolio.verify_accounting_history = verify
+    portfolio.apply_fill_with_transition = apply
+    repository._pnl_writer = SimpleNamespace(record=lambda *args: True)
+    context = _context()
+    assert repository.apply_fill(context, portfolio_id, Decimal("1000"), fill) is True
+    assert [call[0] for call in calls] == ["verify", "apply"]
+    assert calls[0][1] == (portfolio_id,)
+    assert calls[0][2] == {"current_job_run_id": context.job_run.job_run_id}
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        ("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL", "PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL"),
+        ("PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT", "PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT"),
+        ("PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH", "PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH"),
+    ],
+)
+def test_accounting_rejects_unverified_history_before_any_append(
+    reason: str, expected: str,
+) -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    portfolio.verify_accounting_history = lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError(reason)
+    )
+    portfolio.apply_fill_with_transition = lambda *args, **kwargs: pytest.fail(
+        "unverified history must never be extended"
+    )
+    repository._pnl_writer = SimpleNamespace(
+        record=lambda *args: pytest.fail("no PnL may be written")
+    )
+    with pytest.raises(RuntimeError, match=expected):
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
