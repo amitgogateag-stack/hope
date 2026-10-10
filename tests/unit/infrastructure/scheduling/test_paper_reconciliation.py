@@ -1819,3 +1819,53 @@ def test_reconciliation_rejects_forged_economic_effect_before_database_query(for
         RuntimeError, match="PAPER_JOB_RECONCILIATION_EFFECT_IDENTITY_MISMATCH",
     ):
         paper_reconciliation._assert_durable_accounting_truth(_NoQuery(), effects)
+
+
+@pytest.mark.parametrize(
+    ("failure_mode", "message"),
+    [
+        ("record_false", "PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED"),
+        ("verify_false", "PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE"),
+    ],
+)
+def test_reconciliation_receipt_failure_aborts_terminalization_savepoint(
+    monkeypatch, failure_mode, message,
+) -> None:
+    """A success transition and its audit receipt are one atomic operation."""
+    current = datetime(2026, 10, 9, 14, 30, tzinfo=UTC)
+    run = create_scheduled_job_run(
+        "paper:receipt-atomicity",
+        datetime(2026, 10, 9, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeRepository.completion = None
+    if failure_mode == "record_false":
+        _FakeAuditRepository.result = False
+    else:
+        _FakeAuditRepository.verify_result = False
+    monkeypatch.setattr(
+        paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation, "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS, run.job_run_id,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=message):
+        reconcile_completed_paper_run(_FakeConnection(), run, current=current)
+
+    assert _FakeRepository.completion.status is JobRunStatus.SUCCEEDED
+    assert _FakeConnection.exits == [RuntimeError]
+    assert _FakeEffectRepository.calls == 2
+    assert len(_FakeAuditRepository.calls) == 1
+    assert len(_FakeAuditRepository.verify_calls) == (
+        0 if failure_mode == "record_false" else 1
+    )
