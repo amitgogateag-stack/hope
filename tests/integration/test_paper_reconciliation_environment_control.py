@@ -195,7 +195,7 @@ def test_partial_durable_effects_cannot_be_reconciled_after_restart() -> None:
 
     engine = _engine()
     migrations_dir = Path(__file__).parents[2] / "migrations"
-    scheduled_for = datetime(2026, 10, 10, 12, 0, tzinfo=UTC)
+    scheduled_for = datetime(2026, 10, 9, 12, 0, tzinfo=UTC)
     strategy_id, version_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         f"paper:USA:{version_id}:partial-durable-recovery", scheduled_for,
