@@ -245,8 +245,9 @@ def test_partial_durable_effects_cannot_be_reconciled_after_restart() -> None:
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("audit_failure", ["record", "verify"])
 def test_reconciliation_audit_failure_rolls_back_terminal_job_across_restart(
-    monkeypatch,
+    monkeypatch, audit_failure,
 ) -> None:
     """A caught audit failure cannot commit a SUCCEEDED transition."""
     from sqlalchemy import text
@@ -288,11 +289,15 @@ def test_reconciliation_audit_failure_rolls_back_terminal_job_across_restart(
     )
     monkeypatch.setattr(
         paper_reconciliation.SqlAlchemyPaperReconciliationAuditRepository,
-        "record", lambda *args: False,
+        audit_failure, lambda *args: False,
     )
     with engine.begin() as connection:
         with pytest.raises(
-            RuntimeError, match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED",
+            RuntimeError, match=(
+                "PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED"
+                if audit_failure == "record"
+                else "PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE"
+            ),
         ):
             reconcile_completed_paper_run(
                 connection, run, current=scheduled_for + timedelta(minutes=1),
