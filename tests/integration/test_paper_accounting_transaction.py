@@ -155,6 +155,57 @@ def test_paper_accounting_atomically_persists_portfolio_and_transition_derived_p
 
 
 @pytest.mark.integration
+def test_atomic_accounting_rejects_incomplete_prior_pnl_without_appending() -> None:
+    """A valid new fill cannot extend a prior unproven accounting transition."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, run, context = setup(
+                connection, migrations_dir, job_key="paper-accounting-prior-pnl-gap",
+            )
+            first = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.BUY, price="100", minute=40,
+            )
+            second = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.BUY, price="101", minute=41,
+            )
+            portfolio = SqlAlchemyPaperPortfolioRepository(connection)
+            assert portfolio.apply_fill(
+                portfolio_id, Decimal("1000"), first, job_run_id=run.job_run_id,
+            )
+            before = connection.execute(
+                text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).one()
+            accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
+            for _ in range(2):
+                with pytest.raises(
+                    RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL",
+                ):
+                    accounting.apply_fill(context, portfolio_id, Decimal("1000"), second)
+                assert connection.execute(
+                    text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).one() == before
+                assert connection.execute(
+                    text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalar_one() == 1
+                assert connection.execute(
+                    text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
