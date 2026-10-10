@@ -291,30 +291,44 @@ def test_reconciliation_audit_failure_rolls_back_terminal_job_across_restart(
         paper_reconciliation.SqlAlchemyPaperReconciliationAuditRepository,
         audit_failure, lambda *args: False,
     )
-    with engine.begin() as connection:
-        with pytest.raises(
-            RuntimeError, match=(
-                "PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED"
-                if audit_failure == "record"
-                else "PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE"
-            ),
-        ):
-            reconcile_completed_paper_run(
-                connection, run, current=scheduled_for + timedelta(minutes=1),
-            )
-        # Deliberately commit the outer transaction despite caught failure.
-
-    with engine.begin() as connection:
-        jobs = SqlAlchemyJobRunRepository(connection)
-        record = jobs.get_record_for_run(run)
-        assert record is not None and record.status is JobRunStatus.CLAIMED
-        assert connection.execute(
-            text("SELECT count(*) FROM audit_events "
-                 "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
-            {"id": str(run.job_run_id)},
-        ).scalar_one() == 0
-        assert jobs.complete(create_job_run_completion(
-            run, JobRunStatus.FAILED, scheduled_for + timedelta(minutes=2),
-            failure_code="EXPECTED_AUDIT_SAVEPOINT_ROLLBACK",
-        ))
-    engine.dispose()
+    try:
+        with engine.begin() as connection:
+            with pytest.raises(
+                RuntimeError, match=(
+                    "PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED"
+                    if audit_failure == "record"
+                    else "PAPER_JOB_RECONCILIATION_AUDIT_MISMATCH"
+                ),
+            ):
+                reconcile_completed_paper_run(
+                    connection, run, current=scheduled_for + timedelta(minutes=1),
+                )
+            # Deliberately commit the outer transaction despite caught failure.
+    
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            record = jobs.get_record_for_run(run)
+            assert record is not None and record.status is JobRunStatus.CLAIMED
+            assert connection.execute(
+                text("SELECT count(*) FROM audit_events "
+                     "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+                {"id": str(run.job_run_id)},
+            ).scalar_one() == 0
+            assert jobs.complete(create_job_run_completion(
+                run, JobRunStatus.FAILED, scheduled_for + timedelta(minutes=2),
+                failure_code="EXPECTED_AUDIT_SAVEPOINT_ROLLBACK",
+            ))
+        engine.dispose()
+    finally:
+        # Cleanup must run even when a test assertion fails: an orphan CLAIMED
+        # run would correctly block all later PAPER scheduler integration tests.
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            durable = jobs.get_record_for_run(run)
+            if durable is not None and durable.status is JobRunStatus.CLAIMED:
+                jobs.complete(create_job_run_completion(
+                    run, JobRunStatus.FAILED,
+                    scheduled_for + timedelta(minutes=3),
+                    failure_code="EXPECTED_AUDIT_SAVEPOINT_CLEANUP",
+                ))
+        engine.dispose()
