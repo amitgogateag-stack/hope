@@ -186,7 +186,7 @@ def test_atomic_accounting_rejects_incomplete_prior_pnl_without_appending() -> N
             accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
             for _ in range(2):
                 with pytest.raises(
-                    RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL",
+                    RuntimeError, match="PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL",
                 ):
                     accounting.apply_fill(context, portfolio_id, Decimal("1000"), second)
                 assert connection.execute(
