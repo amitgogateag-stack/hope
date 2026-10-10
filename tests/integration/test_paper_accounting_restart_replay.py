@@ -543,6 +543,78 @@ def test_failed_accounting_recovery_can_reconcile_after_durable_state_repair():
 
 
 @pytest.mark.integration
+def test_recovery_rejects_durable_portfolio_position_divergence():
+    """An altered position is not rescued by correct cash and effect receipts."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection, migrations_dir,
+            "paper-accounting-position-divergence",
+            authenticated_job=True,
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context, RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        effects_before = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+
+    try:
+        with engine.begin() as connection:
+            assert connection.execute(
+                text("UPDATE paper_portfolio_positions SET quantity=quantity+1 "
+                     "WHERE portfolio_id=:portfolio_id AND instrument_id=:instrument_id"),
+                {"portfolio_id": portfolio_id, "instrument_id": fill.instrument_id},
+            ).rowcount == 1
+        with engine.begin() as connection:
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
+                      "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
+                      "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
+            ):
+                reconcile_completed_paper_run(
+                    connection, run,
+                    current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+                )
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            durable = jobs.get_record_for_run(run)
+            assert durable is not None and durable.status is JobRunStatus.CLAIMED
+            assert SqlAlchemyPaperEffectRepository(
+                connection
+            ).list_for_job_run(run.job_run_id) == effects_before
+            assert connection.execute(
+                text("SELECT count(*) FROM audit_events "
+                     "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+                {"id": str(run.job_run_id)},
+            ).scalar_one() == 0
+    finally:
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            durable = jobs.get_record_for_run(run)
+            if durable is not None and durable.status is JobRunStatus.CLAIMED:
+                assert jobs.complete(create_job_run_completion(
+                    run, JobRunStatus.FAILED,
+                    datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                    failure_code="EXPECTED_POSITION_DIVERGENCE_CLEANUP",
+                ))
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_scheduler_reconciles_committed_effects_without_runtime_replay() -> None:
     """Restart preflight terminalizes durable effects before ordinary PAPER work."""
     url = os.getenv("HOPE_DATABASE_URL")
