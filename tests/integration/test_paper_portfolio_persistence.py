@@ -361,6 +361,61 @@ def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
 
 
 @pytest.mark.integration
+def test_missing_pnl_recovery_is_read_only_across_repeated_attempts():
+    """Recovery must not silently manufacture accounting or advance the portfolio."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-missing-pnl-read-only",
+        datetime(2026, 9, 9, 23, 30, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                     "VALUES (:id,'PAPER-MISSING-PNL-READONLY','TEST','ACTIVE')"),
+                {"id": instrument_id},
+            )
+            assert SqlAlchemyJobRunRepository(connection).claim(run)
+            fill = persist_fill(
+                connection, context, instrument_id, side=OrderSide.BUY,
+                quantity=Decimal("1"), price=Decimal("100"),
+                sequence=0, decision_minute=31,
+            )
+            repository = SqlAlchemyPaperPortfolioRepository(connection)
+            assert repository.apply_fill(
+                portfolio_id, Decimal("1000"), fill, job_run_id=run.job_run_id,
+            )
+            before = connection.execute(
+                text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).one()
+            for _ in range(2):
+                with pytest.raises(
+                    RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL",
+                ):
+                    repository.verify_accounting_history(
+                        portfolio_id, current_job_run_id=run.job_run_id,
+                    )
+                assert connection.execute(
+                    text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).one() == before
+                assert connection.execute(
+                    text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_fill_transition_recovery_requires_complete_accounting_history():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
