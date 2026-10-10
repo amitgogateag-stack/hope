@@ -238,3 +238,35 @@ def test_accounting_failed_history_verification_never_records_pnl() -> None:
     )
     with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE"):
         repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT",
+        "PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH",
+        "PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE",
+    ],
+)
+def test_accounting_verification_failure_never_attempts_replay(
+    reason: str,
+) -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    portfolio.verify_accounting_history = lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError(reason)
+    )
+    portfolio.apply_fill_with_transition = lambda *args, **kwargs: pytest.fail(
+        "verification failure must prevent both new and replayed accounting"
+    )
+    portfolio.load_fill_transition = lambda *args, **kwargs: pytest.fail(
+        "verification failure must not recover a replayed transition"
+    )
+    repository._pnl = SimpleNamespace(
+        get=lambda *args: pytest.fail("verification failure must not read replay PnL")
+    )
+    repository._pnl_writer = SimpleNamespace(
+        record=lambda *args: pytest.fail("verification failure must not rewrite PnL")
+    )
+    with pytest.raises(RuntimeError, match=reason):
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
