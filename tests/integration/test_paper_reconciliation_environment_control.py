@@ -242,3 +242,74 @@ def test_partial_durable_effects_cannot_be_reconciled_after_restart() -> None:
             failure_code="EXPECTED_PARTIAL_RECONCILIATION_TEST",
         ))
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_reconciliation_audit_failure_rolls_back_terminal_job_across_restart(
+    monkeypatch,
+) -> None:
+    """A caught audit failure cannot commit a SUCCEEDED transition."""
+    from sqlalchemy import text
+    from hope.application.jobs import JobRunStatus, create_job_run_completion
+    from hope.infrastructure.scheduling import paper_reconciliation
+    from hope.infrastructure.scheduling.recovery import PaperRecoveryDecision
+
+    engine = _engine()
+    scheduled_for = datetime(2026, 10, 9, 10, 0, tzinfo=UTC)
+    strategy_id, version_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper:USA:{version_id}:audit-transition-rollback", scheduled_for,
+    )
+    with engine.begin() as connection:
+        apply_migrations(connection, Path(__file__).parents[2] / "migrations")
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) "
+                 "VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"AUDIT_ROLLBACK_{strategy_id}"},
+        )
+        connection.execute(
+            text("INSERT INTO strategy_versions("
+                 "strategy_version_id, strategy_id, version, code_commit"
+                 ") VALUES (:id, :strategy_id, 'v1', 'audit-rollback')"),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+
+    # Isolate the post-transition audit failure, not lineage validation:
+    # the real PostgreSQL job transition and savepoint remain in use.
+    monkeypatch.setattr(
+        paper_reconciliation, "assess_due_paper_recovery",
+        lambda *args, **kwargs: type("Report", (), {
+            "assessments": (type("Assessment", (), {
+                "job_run_id": run.job_run_id,
+                "decision": PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS,
+            })(),),
+        })(),
+    )
+    monkeypatch.setattr(
+        paper_reconciliation.SqlAlchemyPaperReconciliationAuditRepository,
+        "record", lambda *args: False,
+    )
+    with engine.begin() as connection:
+        with pytest.raises(
+            RuntimeError, match="PAPER_JOB_RECONCILIATION_AUDIT_NOT_RECORDED",
+        ):
+            reconcile_completed_paper_run(
+                connection, run, current=scheduled_for + timedelta(minutes=1),
+            )
+        # Deliberately commit the outer transaction despite caught failure.
+
+    with engine.begin() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
+        record = jobs.get_record_for_run(run)
+        assert record is not None and record.status is JobRunStatus.CLAIMED
+        assert connection.execute(
+            text("SELECT count(*) FROM audit_events "
+                 "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 0
+        assert jobs.complete(create_job_run_completion(
+            run, JobRunStatus.FAILED, scheduled_for + timedelta(minutes=2),
+            failure_code="EXPECTED_AUDIT_SAVEPOINT_ROLLBACK",
+        ))
+    engine.dispose()
