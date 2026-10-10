@@ -136,3 +136,37 @@ def test_recovery_noncomplete_shape_is_receipt_inadmissible(effect_types) -> Non
         match="PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID",
     ):
         repository._expected(_completion(job_run), effects)
+
+
+@pytest.mark.parametrize(
+    "effect_types",
+    [
+        (PaperEffectType.SIGNAL, PaperEffectType.RISK, PaperEffectType.ORDER,
+         PaperEffectType.FILL, PaperEffectType.PNL, PaperEffectType.PNL),
+        (PaperEffectType.SIGNAL, PaperEffectType.SIGNAL, PaperEffectType.RISK,
+         PaperEffectType.ORDER, PaperEffectType.REJECTION),
+        (PaperEffectType.SIGNAL, PaperEffectType.RISK, PaperEffectType.ORDER,
+         PaperEffectType.CANCELLATION, PaperEffectType.CANCELLATION),
+    ],
+)
+def test_duplicate_terminal_or_signal_evidence_cannot_create_recovery_receipt(
+    effect_types,
+) -> None:
+    """A complete set of effect kinds cannot hide duplicate durable effects."""
+    from hope.application.paper.effect_topology import (
+        PaperEffectTopology, classify_paper_effect_topology,
+    )
+
+    run = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000001:duplicate-proof",
+        datetime(2026, 10, 6, 11, 0, tzinfo=UTC),
+    )
+    effects = _effects(run, effect_types)
+    assert classify_paper_effect_topology(
+        effect.effect_type for effect in effects
+    ) is PaperEffectTopology.CONTRADICTORY
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_Connection())
+    with pytest.raises(
+        ValueError, match="PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID",
+    ):
+        repository._expected(_completion(run), effects)
