@@ -208,3 +208,33 @@ def test_accounting_rejects_unverified_history_before_any_append(
     )
     with pytest.raises(RuntimeError, match=expected):
         repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
+
+
+def test_accounting_rejects_untracked_source_fill_before_history_verification() -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    repository._effects = SimpleNamespace(get_reusable_for_job=lambda *args: None)
+    portfolio.verify_accounting_history = lambda *args, **kwargs: pytest.fail(
+        "untracked source must not trigger portfolio recovery"
+    )
+    portfolio.apply_fill_with_transition = lambda *args, **kwargs: pytest.fail(
+        "untracked source must not mutate portfolio"
+    )
+    with pytest.raises(ValueError, match="PAPER_ACCOUNTING_SOURCE_FILL_UNTRACKED"):
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
+
+
+def test_accounting_failed_history_verification_never_records_pnl() -> None:
+    portfolio_id, fill, event, replayed = _retry_boundary()
+    repository, portfolio, _ = _repository(event, replayed)
+    portfolio.verify_accounting_history = lambda *args, **kwargs: (_ for _ in ()).throw(
+        RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
+    )
+    portfolio.apply_fill_with_transition = lambda *args, **kwargs: pytest.fail(
+        "unrecoverable PnL effect must prevent portfolio mutation"
+    )
+    repository._pnl_writer = SimpleNamespace(
+        record=lambda *args: pytest.fail("unrecoverable PnL effect must not be rewritten")
+    )
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE"):
+        repository.apply_fill(_context(), portfolio_id, Decimal("1000"), fill)
