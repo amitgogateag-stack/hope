@@ -131,3 +131,55 @@ def test_unproven_reconciliation_rolls_back_even_when_caller_commits() -> None:
             )
         )
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_reconciliation_rejects_failed_terminal_run_without_creating_audit_receipt() -> None:
+    """FAILED runs are not retroactively promoted to successful recovery."""
+    from sqlalchemy import text
+    from hope.application.jobs import JobRunStatus, create_job_run_completion
+
+    engine = _engine()
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    scheduled_for = datetime(2026, 10, 10, 11, 0, tzinfo=UTC)
+    strategy_id, version_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper:USA:{version_id}:failed-terminal-recovery", scheduled_for,
+    )
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) "
+                 "VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"FAILED_TERMINAL_{strategy_id}"},
+        )
+        connection.execute(
+            text("INSERT INTO strategy_versions("
+                 "strategy_version_id, strategy_id, version, code_commit"
+                 ") VALUES (:id, :strategy_id, 'v1', 'failed-terminal-recovery')"),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(run)
+        assert jobs.complete(create_job_run_completion(
+            run, JobRunStatus.FAILED, scheduled_for + timedelta(seconds=30),
+            failure_code="EXPECTED_FAILED_TERMINAL_RECOVERY",
+        ))
+
+    with engine.begin() as connection:
+        with pytest.raises(RuntimeError, match="PAPER_JOB_RECONCILIATION_NOT_CLAIMED"):
+            reconcile_completed_paper_run(
+                connection, run, current=scheduled_for + timedelta(minutes=1),
+            )
+
+    with engine.connect() as connection:
+        durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(run)
+        assert durable is not None
+        assert durable.status is JobRunStatus.FAILED
+        assert durable.failure_code == "EXPECTED_FAILED_TERMINAL_RECOVERY"
+        assert connection.execute(
+            text("SELECT count(*) FROM audit_events "
+                 "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 0
+    engine.dispose()
