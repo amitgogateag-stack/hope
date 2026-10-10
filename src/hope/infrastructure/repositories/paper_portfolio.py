@@ -410,7 +410,20 @@ class SqlAlchemyPaperPortfolioRepository:
         ):
             raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_HISTORY_INCONSISTENT")
 
+        # Verify the *complete* P&L projection, not only the events reachable
+        # from each application. A stray event must never be silently ignored
+        # during authoritative recovery or reconciliation.
         pnl_repository = SqlAlchemyPaperPortfolioPnLRepository(self._connection)
+        pnl_fill_ids = self._connection.execute(
+            select(pnl_repository._events.c.fill_id).where(
+                pnl_repository._events.c.portfolio_id == portfolio_id
+            )
+        ).scalars().all()
+        if (
+            len(pnl_fill_ids) != len(rows)
+            or set(pnl_fill_ids) != {row["fill_id"] for row in rows}
+        ):
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT")
         for row in rows:
             fill_id = row["fill_id"]
             event = pnl_repository.get(portfolio_id, fill_id)
