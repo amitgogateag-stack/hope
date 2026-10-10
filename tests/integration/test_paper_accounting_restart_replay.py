@@ -208,6 +208,40 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay(
             "PNL",
         }
 
+    # A fresh connection independently authenticates portfolio replay and the
+    # committed reconciliation receipt, without executing PAPER work again.
+    from hope.infrastructure.repositories.paper_portfolio import (
+        SqlAlchemyPaperPortfolioRepository,
+    )
+    from hope.infrastructure.repositories.paper_reconciliation_audit import (
+        SqlAlchemyPaperReconciliationAuditRepository,
+    )
+
+    with engine.begin() as connection:
+        verified = SqlAlchemyPaperPortfolioRepository(
+            connection
+        ).verify_accounting_history(portfolio_id)
+        assert verified is not None
+        durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(run)
+        assert durable is not None and durable.status is JobRunStatus.SUCCEEDED
+        effects = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert len(effects) == 5
+        assert SqlAlchemyPaperReconciliationAuditRepository(
+            connection
+        ).verify(durable, effects)
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolio_fill_applications "
+                 "WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 1
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolio_pnl_events "
+                 "WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 1
+
     with monkeypatch.context() as patch, engine.begin() as connection:
         patch.setattr(
             paper_reconciliation,
