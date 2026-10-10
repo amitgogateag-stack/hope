@@ -368,6 +368,95 @@ def test_filled_recovery_rejects_accounting_replay_failure_without_terminalizing
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("mismatch", ["cash", "version"])
+def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
+    mismatch,
+) -> None:
+    """A real, committed accounting mismatch must block successful recovery."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection, migrations_dir,
+            f"paper-accounting-divergence-{mismatch}",
+            authenticated_job=True,
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context, RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        original_effects = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert len(original_effects) == 5
+
+    try:
+        # These are actual committed SQL mutations, not monkeypatched validators.
+        # Only the portfolio materialization is corrupted; effects stay immutable.
+        with engine.begin() as connection:
+            if mismatch == "cash":
+                connection.execute(
+                    text("UPDATE paper_portfolios SET cash=cash+1 "
+                         "WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                )
+            else:
+                connection.execute(
+                    text("UPDATE paper_portfolios SET version=version+1 "
+                         "WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                )
+        with engine.begin() as connection:
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
+                      "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
+                      "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
+            ):
+                reconcile_completed_paper_run(
+                    connection, run,
+                    current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+                )
+            # The outer transaction deliberately commits after the failure.
+
+        with engine.begin() as connection:
+            durable = SqlAlchemyJobRunRepository(
+                connection
+            ).get_record_for_run(run)
+            assert durable is not None and durable.status is JobRunStatus.CLAIMED
+            assert SqlAlchemyPaperEffectRepository(
+                connection
+            ).list_for_job_run(run.job_run_id) == original_effects
+            assert connection.execute(
+                text("SELECT count(*) FROM audit_events "
+                     "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+                {"id": str(run.job_run_id)},
+            ).scalar_one() == 0
+    finally:
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            durable = jobs.get_record_for_run(run)
+            if durable is not None and durable.status is JobRunStatus.CLAIMED:
+                assert jobs.complete(create_job_run_completion(
+                    run, JobRunStatus.FAILED,
+                    datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                    failure_code="EXPECTED_PORTFOLIO_DIVERGENCE_CLEANUP",
+                ))
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_scheduler_reconciles_committed_effects_without_runtime_replay() -> None:
     """Restart preflight terminalizes durable effects before ordinary PAPER work."""
     url = os.getenv("HOPE_DATABASE_URL")
