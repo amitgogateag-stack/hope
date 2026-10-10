@@ -375,6 +375,95 @@ def test_complete_non_fill_lineage_reconciles_without_replaying_effects(kind):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("kind", ["CANCELLED", "REJECTED"])
+def test_complete_terminal_recovery_survives_restart_and_is_idempotent(kind):
+    """Committed effects are reconciled from a fresh connection, without replay."""
+    from hope.infrastructure.repositories.paper_reconciliation_audit import (
+        SqlAlchemyPaperReconciliationAuditRepository,
+    )
+
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, strategy_id, version_id = uuid4(), uuid4(), uuid4()
+    scheduled_for = datetime(2026, 9, 9, 20, 5, tzinfo=UTC)
+    run = create_scheduled_job_run(
+        f"paper:USA:{version_id}:restart-terminal-{kind.lower()}",
+        scheduled_for,
+    )
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text("INSERT INTO strategies(strategy_id, name, family) "
+                 "VALUES (:id, :name, 'TEST')"),
+            {"id": strategy_id, "name": f"RESTART_TERMINAL_{strategy_id}"},
+        )
+        connection.execute(
+            text("INSERT INTO strategy_versions("
+                 "strategy_version_id, strategy_id, version, code_commit"
+                 ") VALUES (:id, :strategy_id, 'v1', 'terminal-restart')"),
+            {"id": version_id, "strategy_id": strategy_id},
+        )
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context, RiskAssessment(
+                signal_id=signal.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=Decimal("2"),
+            ),
+        )
+        if kind == "CANCELLED":
+            outcome = ExecutionCancellation(
+                order.order_id, signal.signal_id, instrument_id,
+                Environment.PAPER, "TEST_CANCEL",
+                datetime(2026, 9, 9, 20, 1, tzinfo=UTC), Decimal("2"),
+            )
+        else:
+            outcome = ExecutionRejection(
+                order.order_id, signal.signal_id, instrument_id,
+                Environment.PAPER, "TEST_REJECT",
+                datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
+            )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        ).record(context, outcome)
+        effects_before = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert len(effects_before) == 4
+
+    # First process ended after committing execution evidence, before completion.
+    with engine.begin() as connection:
+        assert reconcile_completed_paper_run(
+            connection, run, current=scheduled_for + timedelta(minutes=1),
+        ) is True
+
+    # A second restart must only authenticate the existing terminal receipt.
+    with engine.begin() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
+        durable = jobs.get_record_for_run(run)
+        assert durable is not None and durable.status is JobRunStatus.SUCCEEDED
+        effects_after = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert effects_after == effects_before
+        audit = SqlAlchemyPaperReconciliationAuditRepository(connection)
+        assert audit.verify(durable, effects_after)
+        assert reconcile_completed_paper_run(
+            connection, run, current=scheduled_for + timedelta(minutes=2),
+        ) is False
+        assert connection.execute(
+            text("SELECT count(*) FROM audit_events "
+                 "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+            {"id": str(run.job_run_id)},
+        ).scalar_one() == 1
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_terminal_restart_read_requires_matching_effect_lineage():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
