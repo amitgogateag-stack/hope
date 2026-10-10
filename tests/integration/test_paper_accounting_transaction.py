@@ -206,6 +206,52 @@ def test_atomic_accounting_rejects_incomplete_prior_pnl_without_appending() -> N
 
 
 @pytest.mark.integration
+def test_atomic_accounting_replay_rejects_missing_prior_pnl_without_repair() -> None:
+    """A retry must not silently repair a previously applied fill missing P&L."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, run, context = setup(
+                connection, migrations_dir, job_key="paper-accounting-replay-pnl-gap",
+            )
+            fill = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.BUY, price="100", minute=43,
+            )
+            assert SqlAlchemyPaperPortfolioRepository(connection).apply_fill(
+                portfolio_id, Decimal("1000"), fill, job_run_id=run.job_run_id,
+            )
+            before = connection.execute(
+                text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).one()
+            accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
+            for _ in range(2):
+                with pytest.raises(
+                    RuntimeError, match="PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL",
+                ):
+                    accounting.apply_fill(context, portfolio_id, Decimal("1000"), fill)
+                assert connection.execute(
+                    text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).one() == before
+                assert connection.execute(
+                    text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalar_one() == 1
+                assert connection.execute(
+                    text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
