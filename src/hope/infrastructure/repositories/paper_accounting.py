@@ -51,10 +51,17 @@ class SqlAlchemyPaperAccountingRepository:
             # Authenticate every previously committed accounting transition
             # before extending the ledger. The portfolio lock serializes this
             # proof with competing PAPER accounting and reconciliation.
-            self._portfolio.verify_accounting_history(
-                portfolio_id,
-                current_job_run_id=context.job_run.job_run_id,
-            )
+            try:
+                self._portfolio.verify_accounting_history(
+                    portfolio_id,
+                    current_job_run_id=context.job_run.job_run_id,
+                )
+            except RuntimeError as exc:
+                if str(exc) != "PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL":
+                    raise
+                raise RuntimeError(
+                    "PAPER_ACCOUNTING_APPLIED_FILL_WITHOUT_PNL"
+                ) from exc
             transition = self._portfolio.apply_fill_with_transition(
                 portfolio_id,
                 initial_cash,
