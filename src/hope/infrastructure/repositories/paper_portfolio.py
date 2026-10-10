@@ -419,10 +419,10 @@ class SqlAlchemyPaperPortfolioRepository:
                 pnl_repository._events.c.portfolio_id == portfolio_id
             )
         ).scalars().all()
-        if (
-            len(pnl_fill_ids) != len(rows)
-            or set(pnl_fill_ids) != {row["fill_id"] for row in rows}
-        ):
+        applied_fill_ids = {row["fill_id"] for row in rows}
+        if not applied_fill_ids.issubset(set(pnl_fill_ids)):
+            raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
+        if len(pnl_fill_ids) != len(rows) or set(pnl_fill_ids) != applied_fill_ids:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT")
         for row in rows:
             fill_id = row["fill_id"]
