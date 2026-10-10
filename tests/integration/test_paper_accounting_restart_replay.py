@@ -249,6 +249,91 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay(
 
 
 @pytest.mark.integration
+def test_filled_recovery_rejects_accounting_replay_failure_without_terminalizing(
+    monkeypatch,
+) -> None:
+    """Even complete FILL/PNL evidence cannot bypass portfolio replay proof."""
+    from hope.infrastructure.repositories.paper_portfolio import (
+        SqlAlchemyPaperPortfolioRepository,
+    )
+
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection, migrations_dir, "paper-accounting-replay-rejected",
+            authenticated_job=True,
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context, RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        effects_before = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert len(effects_before) == 5
+
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(
+                SqlAlchemyPaperPortfolioRepository, "verify_accounting_history",
+                lambda *args, **kwargs: (_ for _ in ()).throw(
+                    RuntimeError("EXPECTED_ACCOUNTING_REPLAY_FAILURE")
+                ),
+            )
+            with engine.begin() as connection:
+                with pytest.raises(
+                    RuntimeError,
+                    match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
+                          "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
+                          "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
+                ):
+                    reconcile_completed_paper_run(
+                        connection, run,
+                        current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+                    )
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            record = jobs.get_record_for_run(run)
+            assert record is not None and record.status is JobRunStatus.CLAIMED
+            assert SqlAlchemyPaperEffectRepository(
+                connection
+            ).list_for_job_run(run.job_run_id) == effects_before
+            assert connection.execute(
+                text("SELECT count(*) FROM audit_events "
+                     "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
+                {"id": str(run.job_run_id)},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).one() == (Decimal("799.50"), 1)
+    finally:
+        # The shared CI database must never retain an incomplete CLAIMED job.
+        with engine.begin() as connection:
+            jobs = SqlAlchemyJobRunRepository(connection)
+            record = jobs.get_record_for_run(run)
+            if record is not None and record.status is JobRunStatus.CLAIMED:
+                assert jobs.complete(create_job_run_completion(
+                    run, JobRunStatus.FAILED,
+                    datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                    failure_code="EXPECTED_ACCOUNTING_REPLAY_TEST_CLEANUP",
+                ))
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_scheduler_reconciles_committed_effects_without_runtime_replay() -> None:
     """Restart preflight terminalizes durable effects before ordinary PAPER work."""
     url = os.getenv("HOPE_DATABASE_URL")
