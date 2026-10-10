@@ -669,6 +669,48 @@ def test_paper_accounting_rolls_back_portfolio_when_pnl_persistence_conflicts() 
 
 
 @pytest.mark.integration
+def test_atomic_accounting_conflicting_pnl_effect_retries_remain_read_only() -> None:
+    """Repeated failed writes must not leave a portfolio or application behind."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, run, context = setup(
+                connection, migrations_dir,
+                job_key="paper-atomic-accounting-conflict-retries",
+            )
+            fill = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.BUY, price="100", minute=56,
+            )
+            event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
+            conflict = create_paper_effect(
+                run, PaperEffectType.PNL, event_id, "0" * 64,
+            )
+            assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
+            accounting = PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            )
+            for _ in range(3):
+                with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                    accounting.apply_fill(context, portfolio_id, Decimal("500"), fill)
+                for table in (
+                    "paper_portfolios",
+                    "paper_portfolio_fill_applications",
+                    "paper_portfolio_pnl_events",
+                ):
+                    assert connection.execute(
+                        text(f"SELECT count(*) FROM {table} WHERE portfolio_id=:id"),
+                        {"id": portfolio_id},
+                    ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
