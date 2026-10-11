@@ -316,7 +316,6 @@ def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
                 first_run.scheduled_for + timedelta(seconds=30),
             )
         ) is True
-
     with engine.connect() as recovery_connection:
         recovery_transaction = recovery_connection.begin()
         recovered = SqlAlchemyPaperPortfolioRepository(
@@ -533,6 +532,7 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     portfolio_id = uuid4()
+    other_portfolio_id = uuid4()
     run = create_scheduled_job_run(
         "paper-portfolio-recovery-position-lock",
         datetime(2026, 9, 10, 3, 12, tzinfo=UTC),
@@ -575,6 +575,13 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
                 run.scheduled_for + timedelta(seconds=30),
             )
         ) is True
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash) "
+                "VALUES (:id, 1000, 1000)"
+            ),
+            {"id": other_portfolio_id},
+        )
 
     with engine.connect() as recovery_connection:
         recovery_transaction = recovery_connection.begin()
@@ -582,6 +589,26 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
             recovery_connection
         ).load_ledger(portfolio_id)
         assert recovered is not None
+
+        # An invalid identity rewrite must wait on the durable source owner
+        # before the later immutability trigger rejects it.  Locking NEW here
+        # would let the malformed write bypass recovery's critical section.
+        with pytest.raises(OperationalError, match="lock timeout"):
+            with engine.begin() as mutation_connection:
+                mutation_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                mutation_connection.execute(
+                    text(
+                        "UPDATE paper_portfolio_positions "
+                        "SET portfolio_id=:other_portfolio_id "
+                        "WHERE portfolio_id=:portfolio_id "
+                        "AND instrument_id=:instrument_id"
+                    ),
+                    {
+                        "other_portfolio_id": other_portfolio_id,
+                        "portfolio_id": portfolio_id,
+                        "instrument_id": instrument_id,
+                    },
+                )
 
         with pytest.raises(OperationalError, match="lock timeout"):
             with engine.begin() as mutation_connection:
@@ -600,6 +627,24 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
                 )
 
         recovery_transaction.commit()
+
+    with pytest.raises(
+        IntegrityError, match="PAPER_PORTFOLIO_POSITION_IDENTITY_IMMUTABLE",
+    ):
+        with engine.begin() as mutation_connection:
+            mutation_connection.execute(
+                text(
+                    "UPDATE paper_portfolio_positions "
+                    "SET portfolio_id=:other_portfolio_id "
+                    "WHERE portfolio_id=:portfolio_id "
+                    "AND instrument_id=:instrument_id"
+                ),
+                {
+                    "other_portfolio_id": other_portfolio_id,
+                    "portfolio_id": portfolio_id,
+                    "instrument_id": instrument_id,
+                },
+            )
 
     with engine.begin() as connection:
         recovered = SqlAlchemyPaperPortfolioRepository(connection).load_ledger(
