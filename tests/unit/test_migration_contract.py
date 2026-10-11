@@ -14,6 +14,15 @@ def test_legacy_pnl_event_requires_effect_lineage_at_commit() -> None:
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
 
 
+def test_legacy_pnl_event_and_effect_authenticate_each_others_payload() -> None:
+    sql = (ROOT / "migrations/196_paper_pnl_event_payload.sql").read_text()
+    assert "hope_paper_pnl_payload_hash" in sql
+    assert "PAPER_PNL_EFFECT_PAYLOAD_MISMATCH" in sql
+    assert "BEFORE INSERT ON pnl_events" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+    assert "trim_scale(amount)" in sql
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql

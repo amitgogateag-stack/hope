@@ -155,3 +155,75 @@ def test_legacy_pnl_event_and_effect_may_commit_event_first_atomically() -> None
             ).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("event_first", [True, False])
+def test_legacy_pnl_event_effect_payload_mismatch_rolls_back_both_orders(
+    event_first: bool,
+) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    event_time = datetime(2026, 10, 11, 0, 2, tzinfo=UTC)
+    position_id, instrument_id, signal_id = uuid4(), uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"legacy-pnl-payload-conflict:{event_first}:{uuid4()}",
+        event_time,
+    )
+    event = PaperPnLEvent(uuid4(), position_id, Decimal("3.75"), event_time)
+    insert_event = text(
+        "INSERT INTO pnl_events(pnl_event_id, position_id, amount, event_time) "
+        "VALUES (:event_id, :position_id, :amount, :event_time)"
+    )
+    event_params = {
+        "event_id": event.pnl_event_id,
+        "position_id": event.position_id,
+        "amount": event.amount,
+        "event_time": event.event_time,
+    }
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, Path(__file__).parents[2] / "migrations")
+            _insert_position(
+                connection,
+                position_id=position_id,
+                instrument_id=instrument_id,
+                signal_id=signal_id,
+                event_time=event_time,
+            )
+            assert SqlAlchemyJobRunRepository(connection).claim(run) is True
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PNL_EFFECT_PAYLOAD_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    if event_first:
+                        connection.execute(insert_event, event_params)
+                    SqlAlchemyPaperEffectRepository(connection).record(
+                        create_paper_effect(
+                            run,
+                            PaperEffectType.PNL,
+                            event.pnl_event_id,
+                            "f" * 64,
+                        )
+                    )
+                    if not event_first:
+                        connection.execute(insert_event, event_params)
+
+            assert connection.execute(
+                text("SELECT count(*) FROM pnl_events WHERE pnl_event_id=:event_id"),
+                {"event_id": event.pnl_event_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='PNL' AND entity_id=:event_id"
+                ),
+                {"event_id": event.pnl_event_id},
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
