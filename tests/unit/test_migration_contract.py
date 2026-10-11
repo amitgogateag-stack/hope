@@ -23,6 +23,16 @@ def test_legacy_pnl_event_and_effect_authenticate_each_others_payload() -> None:
     assert "trim_scale(amount)" in sql
 
 
+def test_paper_fill_and_effect_authenticate_each_others_payload() -> None:
+    sql = (ROOT / "migrations/200_paper_fill_effect_payload.sql").read_text()
+    assert "hope_paper_fill_payload_hash" in sql
+    assert "PAPER_FILL_EFFECT_PAYLOAD_MISMATCH" in sql
+    assert "BEFORE INSERT ON fills" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+    assert "hope_lock_paper_fill_payload_identity" in sql
+    assert "trim_scale(transaction_cost)" in sql
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql

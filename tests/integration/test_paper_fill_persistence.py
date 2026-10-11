@@ -16,6 +16,7 @@ from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
@@ -36,6 +37,100 @@ def make_chain(context, instrument_id):
         Decimal("2"), Decimal("101.5"), Decimal("0.25"), Decimal("0.5"), "cost-v1",
         datetime(2026, 9, 9, 23, 41, tzinfo=UTC))
     return signal, order, fill
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("effect_first", [True, False])
+def test_paper_fill_and_effect_payload_mismatch_rolls_back_both_orders(
+    effect_first: bool,
+) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        f"paper-fill-payload-conflict:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 11, 21, 15, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+    signal, order, fill = make_chain(context, instrument_id)
+    insert_fill = text(
+        "INSERT INTO fills("
+        "fill_id, order_id, quantity, fill_price, slippage, "
+        "transaction_cost, filled_at, cost_model_version"
+        ") VALUES ("
+        ":fill_id, :order_id, :quantity, :fill_price, :slippage, "
+        ":transaction_cost, :filled_at, :cost_model_version"
+        ")"
+    )
+    fill_params = {
+        "fill_id": fill.fill_id,
+        "order_id": fill.order_id,
+        "quantity": fill.quantity,
+        "fill_price": fill.price,
+        "slippage": fill.slippage,
+        "transaction_cost": fill.commission,
+        "filled_at": fill.fill_time,
+        "cost_model_version": fill.cost_model_version,
+    }
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-FILL-PAYLOAD', 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(run)
+            PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(context, signal)
+            PaperOrderWriter(
+                SqlAlchemyPaperOrderRepository(connection)
+            ).record(context, order)
+            bad_effect = create_paper_effect(
+                run,
+                PaperEffectType.FILL,
+                fill.fill_id,
+                "f" * 64,
+            )
+            effects = SqlAlchemyPaperEffectRepository(connection)
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_FILL_EFFECT_PAYLOAD_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    if effect_first:
+                        assert effects.record(bad_effect)
+                    connection.execute(insert_fill, fill_params)
+                    if not effect_first:
+                        assert effects.record(bad_effect)
+
+            assert connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='FILL' AND entity_id=:fill_id"
+                ),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+
+            assert PaperFillWriter(
+                SqlAlchemyPaperFillRepository(connection)
+            ).record(context, fill, sequence=0)
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.integration

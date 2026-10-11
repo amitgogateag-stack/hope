@@ -14,14 +14,40 @@ from hope.application.jobs import (
     create_scheduled_job_run,
 )
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
+from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.portfolio_pnl import (
     PaperPortfolioPnLEvent,
     paper_portfolio_pnl_event_id,
     paper_portfolio_pnl_payload_hash,
 )
+from hope.domain.execution import Fill, OrderSide
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
+
+
+def _source_fill_payload_hash(
+    fill_id,
+    order_id,
+    signal_id,
+    instrument_id,
+    event_time,
+) -> str:
+    return paper_fill_payload_hash(
+        Fill(
+            fill_id,
+            order_id,
+            signal_id,
+            instrument_id,
+            OrderSide.BUY,
+            Decimal("1"),
+            Decimal("100"),
+            Decimal("0.25"),
+            Decimal("0"),
+            "test-cost-v1",
+            event_time,
+        )
+    )
 
 
 @pytest.mark.integration
@@ -71,6 +97,9 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
         "instrument_id": instrument_id,
         "event_time": event_time,
     }
+    fill_payload_hash = _source_fill_payload_hash(
+        fill_id, order_id, signal_id, instrument_id, event_time
+    )
 
     with engine.connect() as connection:
         transaction = connection.begin()
@@ -137,7 +166,7 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                             source_run,
                             PaperEffectType.FILL,
                             fill_id,
-                            "9" * 64,
+                            fill_payload_hash,
                         )
                     )
 
@@ -160,7 +189,7 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                             source_run,
                             PaperEffectType.FILL,
                             fill_id,
-                            "8" * 64,
+                            fill_payload_hash,
                         )
                     )
 
@@ -179,7 +208,7 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                     source_run,
                     PaperEffectType.FILL,
                     fill_id,
-                    "7" * 64,
+                    fill_payload_hash,
                 )
             ) is True
             savepoint.rollback()
@@ -200,7 +229,9 @@ def test_paper_portfolio_pnl_requires_canonical_compatible_effect_lineage() -> N
                     )
 
             assert effects.record(
-                create_paper_effect(source_run, PaperEffectType.FILL, fill_id, "a" * 64)
+                create_paper_effect(
+                    source_run, PaperEffectType.FILL, fill_id, fill_payload_hash
+                )
             ) is True
 
             # With the source FILL present but its owner still CLAIMED,
@@ -341,6 +372,9 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
         commission_delta=Decimal("0.25"),
         event_time=event_time,
     )
+    fill_payload_hash = _source_fill_payload_hash(
+        fill_id, order_id, signal_id, instrument_id, event_time
+    )
 
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
@@ -443,7 +477,9 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
             )
         ) is True
         assert effects.record(
-            create_paper_effect(job_run, PaperEffectType.FILL, fill_id, "a" * 64)
+            create_paper_effect(
+                job_run, PaperEffectType.FILL, fill_id, fill_payload_hash
+            )
         ) is True
 
     recovery_connection = engine.connect()
@@ -490,7 +526,7 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
                     job_run,
                     PaperEffectType.FILL,
                     fill_id,
-                    "a" * 64,
+                    fill_payload_hash,
                 )
             ) is False
     finally:
