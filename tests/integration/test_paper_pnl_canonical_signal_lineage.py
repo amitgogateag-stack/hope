@@ -85,3 +85,88 @@ def test_canonical_position_pnl_rejects_untracked_source_and_accepts_atomic_line
             ), {"id": event.pnl_event_id}).scalar_one() == 1
     finally:
         engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("source_succeeded", [False, True])
+def test_canonical_pnl_cross_job_source_owner_requires_success(
+    source_succeeded: bool,
+) -> None:
+    """A foreign CLAIMED signal owner cannot authorize a new PNL writer."""
+    from datetime import timedelta
+    from hope.application.jobs import JobRunStatus, create_job_run_completion
+
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    when = datetime(2026, 10, 11, 14, 0, tzinfo=timezone.utc)
+    signal_id, instrument_id, position_id = uuid4(), uuid4(), uuid4()
+    source = create_scheduled_job_run(f"pnl-source:{uuid4()}", when)
+    consumer = create_scheduled_job_run(
+        f"pnl-consumer:{uuid4()}", when + timedelta(minutes=1)
+    )
+    event = PaperPnLEvent(uuid4(), position_id, Decimal("2.25"), when)
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, Path(__file__).parents[2] / "migrations")
+            connection.execute(text(
+                "INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                "VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ), {"id": instrument_id, "symbol": f"PNL-OWNER-{instrument_id}"})
+            connection.execute(text(
+                "INSERT INTO signals(signal_id, instrument_id, decision_time, state, "
+                "strategy_version, signal_type, conviction, inputs_hash) "
+                "VALUES (:id, :instrument_id, :when, 'SIGNAL', 'canonical-v1', "
+                "'ENTRY', 0.5, :hash)"
+            ), {"id": signal_id, "instrument_id": instrument_id,
+                "when": when, "hash": "d" * 64})
+            connection.execute(text(
+                "INSERT INTO positions(position_id, instrument_id, opened_from_signal_id, "
+                "quantity, opened_at) VALUES (:id, :instrument_id, :signal_id, 1, :when)"
+            ), {"id": position_id, "instrument_id": instrument_id,
+                "signal_id": signal_id, "when": when})
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(source) is True
+            assert jobs.claim(consumer) is True
+            assert SqlAlchemyPaperEffectRepository(connection).record(
+                create_paper_effect(source, PaperEffectType.SIGNAL, signal_id, "c" * 64)
+            ) is True
+            if source_succeeded:
+                assert jobs.complete(
+                    create_job_run_completion(
+                        source, JobRunStatus.SUCCEEDED,
+                        when + timedelta(seconds=30),
+                    )
+                ) is True
+
+        def write_pnl():
+            with engine.begin() as connection:
+                assert SqlAlchemyPaperEffectRepository(connection).record(
+                    create_paper_effect(
+                        consumer, PaperEffectType.PNL,
+                        event.pnl_event_id, paper_pnl_payload_hash(event),
+                    )
+                ) is True
+                connection.execute(text(
+                    "INSERT INTO pnl_events(pnl_event_id, position_id, amount, event_time) "
+                    "VALUES (:id, :position_id, :amount, :when)"
+                ), {"id": event.pnl_event_id, "position_id": position_id,
+                    "amount": event.amount, "when": when})
+
+        if source_succeeded:
+            write_pnl()
+        else:
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_PNL_CANONICAL_SOURCE_SIGNAL_OWNER_CONFLICT",
+            ):
+                write_pnl()
+
+        with engine.begin() as connection:
+            count = connection.execute(text(
+                "SELECT count(*) FROM pnl_events WHERE pnl_event_id=:id"
+            ), {"id": event.pnl_event_id}).scalar_one()
+            assert count == int(source_succeeded)
+    finally:
+        engine.dispose()
