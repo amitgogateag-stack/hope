@@ -1869,3 +1869,55 @@ def test_reconciliation_receipt_failure_aborts_terminalization_savepoint(
     assert len(_FakeAuditRepository.verify_calls) == (
         0 if failure_mode == "record_false" else 1
     )
+
+
+@pytest.mark.parametrize("reject_on_call", [1, 2])
+def test_reconciliation_requires_execution_lineage_at_terminal_boundary(
+    monkeypatch, reject_on_call,
+) -> None:
+    """A recovery classification cannot replace the final execution proof."""
+    current = datetime(2026, 10, 10, 14, 30, tzinfo=UTC)
+    run = create_scheduled_job_run(
+        "paper:lineage-terminal-boundary",
+        datetime(2026, 10, 10, 14, 0, tzinfo=UTC),
+    )
+    _FakeRepository.lock_result = True
+    _FakeRepository.transition_result = True
+    _FakeRepository.record = SimpleNamespace(
+        status=JobRunStatus.SUCCEEDED,
+        completed_at=current,
+        failure_code=None,
+    )
+    _FakeRepository.completion = None
+    calls = []
+
+    def verify_lineage(connection, effects):
+        calls.append(effects)
+        return len(calls) != reject_on_call
+
+    monkeypatch.setattr(
+        paper_reconciliation, "verify_paper_recovery_lineage", verify_lineage,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation, "SqlAlchemyJobRunRepository", _FakeRepository,
+    )
+    monkeypatch.setattr(
+        paper_reconciliation, "assess_due_paper_recovery",
+        lambda *args, **kwargs: _report(
+            PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS, run.job_run_id,
+        ),
+    )
+
+    with pytest.raises(
+        RuntimeError, match="PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH",
+    ):
+        reconcile_completed_paper_run(_FakeConnection(), run, current=current)
+
+    assert len(calls) == reject_on_call
+    assert _FakeConnection.exits == [RuntimeError]
+    assert _FakeAuditRepository.calls == []
+    assert _FakeAuditRepository.verify_calls == []
+    if reject_on_call == 1:
+        assert _FakeRepository.completion is None
+    else:
+        assert _FakeRepository.completion.status is JobRunStatus.SUCCEEDED

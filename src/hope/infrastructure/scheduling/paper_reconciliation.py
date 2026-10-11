@@ -315,6 +315,9 @@ def _reconcile_completed_paper_run(
     if assessment.decision is not PaperRecoveryDecision.ACKNOWLEDGE_COMPLETE_EFFECTS:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_PROVEN")
 
+    # The recovery classifier proves topology, but the final lifecycle boundary
+    # must independently authenticate execution lineage before terminalization.
+    _assert_durable_execution_lineage(connection, effects_before)
     _assert_durable_accounting_truth(connection, effects_before)
 
     completion = create_job_run_completion(
@@ -344,6 +347,9 @@ def _reconcile_completed_paper_run(
     )
     if effects_after != effects_before:
         raise RuntimeError("PAPER_JOB_RECONCILIATION_EFFECTS_CHANGED")
+    # Recheck execution proof after the durable lifecycle transition, inside
+    # the same savepoint, before accepting or writing a success receipt.
+    _assert_durable_execution_lineage(connection, effects_after)
     _assert_durable_accounting_truth(connection, effects_after)
     try:
         audit_recorded = audit_repository.record(durable, effects_after)
