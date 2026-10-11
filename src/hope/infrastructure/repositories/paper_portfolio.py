@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, String, Table, Uuid, BigInteger, select, update
+from sqlalchemy import Column, Connection, DateTime, ForeignKey, MetaData, Numeric, String, Table, Uuid, BigInteger, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType, _deterministic_effect_id
@@ -112,6 +112,7 @@ class SqlAlchemyPaperPortfolioRepository:
     def _ensure_and_lock_portfolio(self, portfolio_id: UUID, initial_cash: Decimal):
         if not initial_cash.is_finite() or initial_cash < 0:
             raise ValueError("PAPER_PORTFOLIO_INITIAL_CASH_INVALID")
+        self._lock_portfolio_identity(portfolio_id)
         self._connection.execute(
             pg_insert(self._portfolios)
             .values(portfolio_id=portfolio_id, initial_cash=initial_cash, cash=initial_cash, version=0)
@@ -125,6 +126,16 @@ class SqlAlchemyPaperPortfolioRepository:
         if row["initial_cash"] != initial_cash:
             raise ValueError("PAPER_PORTFOLIO_INITIAL_CASH_CONFLICT")
         return row
+
+    def _lock_portfolio_identity(self, portfolio_id: UUID) -> None:
+        """Serialize recovery with first creation when no row exists to lock."""
+        self._connection.execute(
+            text(
+                "SELECT pg_advisory_xact_lock("
+                "hashtextextended(:lock_name, 0))"
+            ),
+            {"lock_name": f"hope:paper:portfolio:{portfolio_id}"},
+        )
 
     def _load_positions(self, portfolio_id: UUID) -> dict[UUID, PositionState]:
         rows = self._connection.execute(
@@ -239,6 +250,8 @@ class SqlAlchemyPaperPortfolioRepository:
         *,
         lock_for_update: bool = False,
     ) -> PortfolioLedger | None:
+        if lock_for_update:
+            self._lock_portfolio_identity(portfolio_id)
         statement = select(self._portfolios).where(
             self._portfolios.c.portfolio_id == portfolio_id
         )

@@ -657,6 +657,63 @@ def test_public_portfolio_recovery_blocks_direct_position_mutation() -> None:
 
 
 @pytest.mark.integration
+def test_missing_portfolio_recovery_blocks_first_creation() -> None:
+    """An absent recovery result stays authoritative until its transaction ends."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id = uuid4()
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+
+        with engine.connect() as recovery_connection:
+            recovery_transaction = recovery_connection.begin()
+            assert SqlAlchemyPaperPortfolioRepository(
+                recovery_connection
+            ).load_ledger(portfolio_id) is None
+
+            with pytest.raises(OperationalError, match="lock timeout"):
+                with engine.begin() as creation_connection:
+                    creation_connection.execute(
+                        text("SET LOCAL lock_timeout = '100ms'")
+                    )
+                    creation_connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolios("
+                            "portfolio_id, initial_cash, cash"
+                            ") VALUES (:id, 1000, 1000)"
+                        ),
+                        {"id": portfolio_id},
+                    )
+
+            recovery_transaction.commit()
+
+        with engine.begin() as creation_connection:
+            creation_connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios("
+                    "portfolio_id, initial_cash, cash"
+                    ") VALUES (:id, 1000, 1000)"
+                ),
+                {"id": portfolio_id},
+            )
+            assert creation_connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolios "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
     """Out-of-band P&L evidence cannot appear while recovery proves history."""
     url = os.getenv("HOPE_DATABASE_URL")
