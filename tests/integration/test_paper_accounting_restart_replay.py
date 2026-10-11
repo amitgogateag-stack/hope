@@ -368,9 +368,7 @@ def test_filled_recovery_rejects_accounting_replay_failure_without_terminalizing
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("mismatch", ["cash", "version"])
 def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
-    mismatch,
 ) -> None:
     """A real, committed accounting mismatch must block successful recovery."""
     url = os.getenv("HOPE_DATABASE_URL")
@@ -382,7 +380,7 @@ def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
     with engine.begin() as connection:
         portfolio_id, run, context, fill = _setup(
             connection, migrations_dir,
-            f"paper-accounting-divergence-{mismatch}",
+            "paper-accounting-divergence-cash",
             authenticated_job=True,
         )
         assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
@@ -405,18 +403,11 @@ def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
         # These are actual committed SQL mutations, not monkeypatched validators.
         # Only the portfolio materialization is corrupted; effects stay immutable.
         with engine.begin() as connection:
-            if mismatch == "cash":
-                connection.execute(
-                    text("UPDATE paper_portfolios SET cash=cash+1 "
-                         "WHERE portfolio_id=:id"),
-                    {"id": portfolio_id},
-                )
-            else:
-                connection.execute(
-                    text("UPDATE paper_portfolios SET version=version+1 "
-                         "WHERE portfolio_id=:id"),
-                    {"id": portfolio_id},
-                )
+            connection.execute(
+                text("UPDATE paper_portfolios SET cash=cash+1 "
+                     "WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            )
         with engine.begin() as connection:
             with pytest.raises(
                 RuntimeError,

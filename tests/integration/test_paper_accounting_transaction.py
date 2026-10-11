@@ -155,6 +155,96 @@ def test_paper_accounting_atomically_persists_portfolio_and_transition_derived_p
 
 
 @pytest.mark.integration
+def test_portfolio_version_cannot_commit_without_matching_application_history() -> None:
+    """Reject a partial materialization even when no recovery reader is active."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection,
+                migrations_dir,
+                job_key=f"paper-portfolio-version-cardinality:{uuid4()}",
+            )
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="100",
+                minute=49,
+            )
+            unapplied_fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="101",
+                minute=50,
+            )
+            assert PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            ).apply_fill(
+                context,
+                portfolio_id,
+                Decimal("1000"),
+                fill,
+            ) is True
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_APPLICATION_CARDINALITY_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE paper_portfolios SET version = version + 1 "
+                        "WHERE portfolio_id=:id"
+                    ),
+                    {"id": portfolio_id},
+                )
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_APPLICATION_CARDINALITY_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_portfolio_fill_applications("
+                        "portfolio_id, fill_id, application_sequence"
+                        ") VALUES (:portfolio_id, :fill_id, 2)"
+                    ),
+                    {
+                        "portfolio_id": portfolio_id,
+                        "fill_id": unapplied_fill.fill_id,
+                    },
+                )
+
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT version FROM paper_portfolios "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 1
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolio_fill_applications "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_atomic_accounting_rejects_incomplete_prior_pnl_without_appending() -> None:
     """A valid new fill cannot extend a prior unproven accounting transition."""
     url = os.getenv("HOPE_DATABASE_URL")

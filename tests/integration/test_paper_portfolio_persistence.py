@@ -490,6 +490,11 @@ def test_paper_portfolio_restore_rejects_incomplete_application_history():
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLICATION_HISTORY_INCONSISTENT"):
             repository.load_ledger(portfolio_id)
 
+        # This test exercises the reader against in-transaction corruption.
+        # The deferred database invariant must prevent that corruption from
+        # becoming durable when this transaction ends.
+        connection.rollback()
+
 
 @pytest.mark.integration
 def test_paper_portfolio_restore_rejects_corrupt_materialized_state():
