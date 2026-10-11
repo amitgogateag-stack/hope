@@ -187,26 +187,30 @@ def test_paper_fill_accounting_rolls_back_new_fill_when_accounting_fails() -> No
         )
         fill = build_fill(connection, context, instrument_id)
         event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
-        conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
-        assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
+        conflict_savepoint = connection.begin_nested()
+        try:
+            conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
+            assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
 
-        writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
-        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-            writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+            writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
+            with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
 
-        assert connection.execute(
-            text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
-            {"fill_id": fill.fill_id},
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_effects WHERE effect_type='FILL' AND entity_id=:fill_id"),
-            {"fill_id": fill.fill_id},
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
-            {"id": portfolio_id},
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
-            {"id": portfolio_id},
-        ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_effects WHERE effect_type='FILL' AND entity_id=:fill_id"),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+        finally:
+            conflict_savepoint.rollback()

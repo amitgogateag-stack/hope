@@ -32,10 +32,10 @@ def test_orphan_pnl_effect_cannot_commit_and_rolls_back() -> None:
             assert SqlAlchemyJobRunRepository(connection).claim(run) is True
 
         # A canonical, claimed-job PNL effect previously committed with no
-        # portfolio event, leaving a false-positive durable accounting receipt.
+        # durable event, leaving a false-positive accounting receipt.
         with pytest.raises(
             IntegrityError,
-            match="PAPER_PNL_EFFECT_WITHOUT_PORTFOLIO_EVENT",
+            match="PAPER_PNL_EFFECT_WITHOUT_DURABLE_EVENT",
         ):
             with engine.begin() as connection:
                 effect = create_paper_effect(

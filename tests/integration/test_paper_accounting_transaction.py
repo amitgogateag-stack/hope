@@ -1005,25 +1005,29 @@ def test_paper_accounting_rolls_back_portfolio_when_pnl_persistence_conflicts() 
         )
         fill = persist_fill(connection, context, instrument_id, side=OrderSide.BUY, price="100", minute=55)
         event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
-        conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
-        assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
+        conflict_savepoint = connection.begin_nested()
+        try:
+            conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
+            assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
 
-        accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
-        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-            accounting.apply_fill(context, portfolio_id, Decimal("500"), fill)
+            accounting = PaperAccountingWriter(SqlAlchemyPaperAccountingRepository(connection))
+            with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                accounting.apply_fill(context, portfolio_id, Decimal("500"), fill)
 
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
-            {"id": portfolio_id},
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
-            {"id": portfolio_id},
-        ).scalar_one() == 0
-        assert connection.execute(
-            text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
-            {"id": portfolio_id},
-        ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+        finally:
+            conflict_savepoint.rollback()
 
 
 @pytest.mark.integration
@@ -1045,25 +1049,29 @@ def test_atomic_accounting_conflicting_pnl_effect_retries_remain_read_only() -> 
                 side=OrderSide.BUY, price="100", minute=56,
             )
             event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
-            conflict = create_paper_effect(
-                run, PaperEffectType.PNL, event_id, "0" * 64,
-            )
-            assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
-            accounting = PaperAccountingWriter(
-                SqlAlchemyPaperAccountingRepository(connection)
-            )
-            for _ in range(3):
-                with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-                    accounting.apply_fill(context, portfolio_id, Decimal("500"), fill)
-                for table in (
-                    "paper_portfolios",
-                    "paper_portfolio_fill_applications",
-                    "paper_portfolio_pnl_events",
-                ):
-                    assert connection.execute(
-                        text(f"SELECT count(*) FROM {table} WHERE portfolio_id=:id"),
-                        {"id": portfolio_id},
-                    ).scalar_one() == 0
+            conflict_savepoint = connection.begin_nested()
+            try:
+                conflict = create_paper_effect(
+                    run, PaperEffectType.PNL, event_id, "0" * 64,
+                )
+                assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
+                accounting = PaperAccountingWriter(
+                    SqlAlchemyPaperAccountingRepository(connection)
+                )
+                for _ in range(3):
+                    with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                        accounting.apply_fill(context, portfolio_id, Decimal("500"), fill)
+                    for table in (
+                        "paper_portfolios",
+                        "paper_portfolio_fill_applications",
+                        "paper_portfolio_pnl_events",
+                    ):
+                        assert connection.execute(
+                            text(f"SELECT count(*) FROM {table} WHERE portfolio_id=:id"),
+                            {"id": portfolio_id},
+                        ).scalar_one() == 0
+            finally:
+                conflict_savepoint.rollback()
     finally:
         engine.dispose()
 
@@ -1098,29 +1106,33 @@ def test_atomic_accounting_conflicting_second_fill_preserves_prior_valid_history
                 text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
                 {"id": portfolio_id},
             ).one()
-            conflict = create_paper_effect(
-                run, PaperEffectType.PNL,
-                paper_portfolio_pnl_event_id(portfolio_id, second.fill_id),
-                "0" * 64,
-            )
-            assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
-            for _ in range(2):
-                with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-                    accounting.apply_fill(context, portfolio_id, Decimal("1000"), second)
-                assert connection.execute(
-                    text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
-                    {"id": portfolio_id},
-                ).one() == before
-                applied = connection.execute(
-                    text("SELECT fill_id FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
-                    {"id": portfolio_id},
-                ).scalars().all()
-                pnl = connection.execute(
-                    text("SELECT fill_id FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
-                    {"id": portfolio_id},
-                ).scalars().all()
-                assert applied == [first.fill_id]
-                assert pnl == [first.fill_id]
+            conflict_savepoint = connection.begin_nested()
+            try:
+                conflict = create_paper_effect(
+                    run, PaperEffectType.PNL,
+                    paper_portfolio_pnl_event_id(portfolio_id, second.fill_id),
+                    "0" * 64,
+                )
+                assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
+                for _ in range(2):
+                    with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                        accounting.apply_fill(context, portfolio_id, Decimal("1000"), second)
+                    assert connection.execute(
+                        text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                        {"id": portfolio_id},
+                    ).one() == before
+                    applied = connection.execute(
+                        text("SELECT fill_id FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+                        {"id": portfolio_id},
+                    ).scalars().all()
+                    pnl = connection.execute(
+                        text("SELECT fill_id FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                        {"id": portfolio_id},
+                    ).scalars().all()
+                    assert applied == [first.fill_id]
+                    assert pnl == [first.fill_id]
+            finally:
+                conflict_savepoint.rollback()
             restored = SqlAlchemyPaperPortfolioRepository(
                 connection
             ).verify_accounting_history(

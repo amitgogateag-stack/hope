@@ -751,11 +751,17 @@ def test_paper_fill_accounting_failed_transaction_leaves_no_restart_visible_part
     with engine.begin() as connection:
         portfolio_id, run, context, fill = _setup(connection, migrations_dir, "paper-accounting-restart-rollback")
         event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
-        conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
-        assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
-        writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
-        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-            writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        conflict_savepoint = connection.begin_nested()
+        try:
+            conflict = create_paper_effect(run, PaperEffectType.PNL, event_id, "0" * 64)
+            assert SqlAlchemyPaperEffectRepository(connection).record(conflict) is True
+            writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
+            with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        finally:
+            # Migration 194 forbids this adversarial orphan from becoming
+            # durable; it exists only long enough to exercise atomic rollback.
+            conflict_savepoint.rollback()
 
     # A new connection models restart after the failed transaction was committed by its caller.
     with engine.begin() as connection:

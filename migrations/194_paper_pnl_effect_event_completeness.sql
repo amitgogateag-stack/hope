@@ -1,18 +1,22 @@
--- A PNL effect is a claim that a durable portfolio accounting event exists.
--- The previous event-side constraint enforced event -> effects, but did not
--- prevent a PNL effect with no corresponding event from committing. Keep the
--- legitimate effect-first/event-first order inside one atomic transaction.
+-- A PNL effect is a claim that a durable accounting event exists. The PNL
+-- effect type is shared by portfolio accounting and the established position
+-- P&L ledger, so either authenticated event family satisfies the reverse
+-- lineage invariant. Keep legitimate effect-first/event-first order inside
+-- one atomic transaction.
 DO $$
 BEGIN
     IF EXISTS (
         SELECT 1
           FROM paper_effects effect
-          LEFT JOIN paper_portfolio_pnl_events event
-            ON event.pnl_event_id = effect.entity_id
+          LEFT JOIN paper_portfolio_pnl_events portfolio_event
+            ON portfolio_event.pnl_event_id = effect.entity_id
+          LEFT JOIN pnl_events position_event
+            ON position_event.pnl_event_id = effect.entity_id
          WHERE effect.effect_type = 'PNL'
-           AND event.pnl_event_id IS NULL
+           AND portfolio_event.pnl_event_id IS NULL
+           AND position_event.pnl_event_id IS NULL
     ) THEN
-        RAISE EXCEPTION 'PAPER_PNL_EFFECT_WITHOUT_PORTFOLIO_EVENT'
+        RAISE EXCEPTION 'PAPER_PNL_EFFECT_WITHOUT_DURABLE_EVENT'
             USING ERRCODE = '23514';
     END IF;
 END;
@@ -28,8 +32,12 @@ BEGIN
         SELECT 1
           FROM paper_portfolio_pnl_events
          WHERE pnl_event_id = NEW.entity_id
+    ) AND NOT EXISTS (
+        SELECT 1
+          FROM pnl_events
+         WHERE pnl_event_id = NEW.entity_id
     ) THEN
-        RAISE EXCEPTION 'PAPER_PNL_EFFECT_WITHOUT_PORTFOLIO_EVENT'
+        RAISE EXCEPTION 'PAPER_PNL_EFFECT_WITHOUT_DURABLE_EVENT'
             USING ERRCODE = '23514';
     END IF;
     RETURN NULL;
