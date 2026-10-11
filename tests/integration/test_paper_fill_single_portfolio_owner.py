@@ -69,4 +69,5 @@ def test_paper_fill_single_portfolio_ownership_survives_replay() -> None:
             text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
             {"id": second},
         ).scalar_one() == 0
+        connection.rollback()
     engine.dispose()

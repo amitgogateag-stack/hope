@@ -155,6 +155,7 @@ def test_paper_portfolio_pnl_created_at_is_database_authenticated() -> None:
                         "event_time": fill.fill_time,
                     },
                 )
+        connection.rollback()
 
 
 @pytest.mark.integration
@@ -242,6 +243,7 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
         ).mappings().one()
         assert durable["realized_pnl_delta"] == Decimal("10")
         assert durable["commission_delta"] == Decimal("0.25")
+        connection.rollback()
 
 
 @pytest.mark.integration

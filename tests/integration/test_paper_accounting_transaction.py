@@ -210,7 +210,7 @@ def test_portfolio_version_cannot_commit_without_matching_application_history() 
 
         with pytest.raises(
             IntegrityError,
-            match="PAPER_PORTFOLIO_APPLICATION_CARDINALITY_MISMATCH",
+            match="fk_paper_portfolio_application_pnl",
         ):
             with engine.begin() as connection:
                 connection.execute(
@@ -240,6 +240,71 @@ def test_portfolio_version_cannot_commit_without_matching_application_history() 
                 ),
                 {"id": portfolio_id},
             ).scalar_one() == 1
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_portfolio_application_cannot_commit_without_pnl_event() -> None:
+    """Reject a complete portfolio/application write missing derived P&L."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection,
+                migrations_dir,
+                job_key=f"paper-portfolio-pnl-completeness:{uuid4()}",
+            )
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="100",
+                minute=51,
+            )
+
+        with pytest.raises(
+            IntegrityError,
+            match="fk_paper_portfolio_application_pnl",
+        ):
+            with engine.begin() as connection:
+                assert SqlAlchemyPaperPortfolioRepository(
+                    connection
+                ).apply_fill_with_transition(
+                    portfolio_id,
+                    Decimal("1000"),
+                    fill,
+                    job_run_id=context.job_run.job_run_id,
+                ) is not None
+
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolios "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolio_fill_applications "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolio_pnl_events "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
     finally:
         engine.dispose()
 
@@ -291,6 +356,7 @@ def test_atomic_accounting_rejects_incomplete_prior_pnl_without_appending() -> N
                     text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
                     {"id": portfolio_id},
                 ).scalar_one() == 0
+            connection.rollback()
     finally:
         engine.dispose()
 
@@ -337,6 +403,7 @@ def test_atomic_accounting_replay_rejects_missing_prior_pnl_without_repair() -> 
                     text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
                     {"id": portfolio_id},
                 ).scalar_one() == 0
+            connection.rollback()
     finally:
         engine.dispose()
 
@@ -1102,6 +1169,7 @@ def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> N
             text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).scalar_one() == 0
+        connection.rollback()
 
 
 @pytest.mark.integration

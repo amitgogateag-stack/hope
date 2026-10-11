@@ -144,6 +144,7 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
         assert connection.execute(
             text("SELECT version FROM paper_portfolios WHERE portfolio_id=:id"), {"id": portfolio_id}
         ).scalar_one() == 2
+        connection.rollback()
 
 
 @pytest.mark.integration
@@ -253,6 +254,7 @@ def test_paper_portfolio_requires_reusable_source_fill_ownership() -> None:
             fill,
             job_run_id=consumer_run.job_run_id,
         ) is True
+        connection.rollback()
 
     engine.dispose()
 
@@ -319,6 +321,7 @@ def test_paper_portfolio_restore_rejects_applied_fill_without_effect():
 
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_EFFECT"):
             SqlAlchemyPaperPortfolioRepository(connection).load_ledger(portfolio_id)
+        connection.rollback()
 
 
 @pytest.mark.integration
@@ -356,6 +359,7 @@ def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
 
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
             repository.load_ledger(portfolio_id)
+        connection.rollback()
 
     engine.dispose()
 
@@ -411,6 +415,7 @@ def test_missing_pnl_recovery_is_read_only_across_repeated_attempts():
                     text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
                     {"id": portfolio_id},
                 ).scalar_one() == 0
+            connection.rollback()
     finally:
         engine.dispose()
 
@@ -439,6 +444,7 @@ def test_paper_fill_transition_recovery_requires_complete_accounting_history():
         ) is not None
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL"):
             repository.load_fill_transition(portfolio_id, fill.fill_id)
+        connection.rollback()
     engine.dispose()
 
 
@@ -533,6 +539,7 @@ def test_paper_portfolio_restore_rejects_corrupt_materialized_state():
 
         with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_MATERIALIZED_STATE_INCONSISTENT"):
             repository.load_ledger(portfolio_id)
+        connection.rollback()
 
 
 @pytest.mark.integration
@@ -590,6 +597,7 @@ def test_paper_portfolio_rejects_fill_time_regression_without_state_mutation():
             text("SELECT count(*) FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
             {"id": portfolio_id},
         ).scalar_one() == 1
+        connection.rollback()
 
 @pytest.mark.integration
 def test_paper_portfolio_application_timestamp_is_database_authenticated() -> None:
