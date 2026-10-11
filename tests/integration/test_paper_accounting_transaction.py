@@ -711,6 +711,71 @@ def test_atomic_accounting_conflicting_pnl_effect_retries_remain_read_only() -> 
 
 
 @pytest.mark.integration
+def test_atomic_accounting_conflicting_second_fill_preserves_prior_valid_history() -> None:
+    """A failed second fill must not damage an earlier complete transition."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, run, context = setup(
+                connection, migrations_dir,
+                job_key="paper-accounting-second-fill-conflict",
+            )
+            first = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.BUY, price="100", minute=45,
+            )
+            second = persist_fill(
+                connection, context, instrument_id,
+                side=OrderSide.SELL, price="110", minute=46,
+            )
+            accounting = PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            )
+            assert accounting.apply_fill(context, portfolio_id, Decimal("1000"), first)
+            before = connection.execute(
+                text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).one()
+            conflict = create_paper_effect(
+                run, PaperEffectType.PNL,
+                paper_portfolio_pnl_event_id(portfolio_id, second.fill_id),
+                "0" * 64,
+            )
+            assert SqlAlchemyPaperEffectRepository(connection).record(conflict)
+            for _ in range(2):
+                with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                    accounting.apply_fill(context, portfolio_id, Decimal("1000"), second)
+                assert connection.execute(
+                    text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).one() == before
+                applied = connection.execute(
+                    text("SELECT fill_id FROM paper_portfolio_fill_applications WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalars().all()
+                pnl = connection.execute(
+                    text("SELECT fill_id FROM paper_portfolio_pnl_events WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
+                ).scalars().all()
+                assert applied == [first.fill_id]
+                assert pnl == [first.fill_id]
+            restored = SqlAlchemyPaperPortfolioRepository(
+                connection
+            ).verify_accounting_history(
+                portfolio_id,
+                current_job_run_id=run.job_run_id,
+            )
+            assert restored is not None
+            assert set(restored.applied_fill_ids) == {first.fill_id}
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_accounting_rejects_applied_fill_without_matching_pnl_event() -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
