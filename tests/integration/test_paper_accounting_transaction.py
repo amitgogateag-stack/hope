@@ -368,6 +368,89 @@ def test_public_portfolio_recovery_blocks_concurrent_accounting() -> None:
 
 
 @pytest.mark.integration
+def test_recovery_locks_application_before_timestamp_validation() -> None:
+    """Even an invalid application must wait at the recovery boundary first."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    job_key = f"paper-application-validation-lock-{uuid4()}"
+
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection, migrations_dir, job_key=job_key,
+            )
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="100",
+                minute=12,
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash) "
+                    "VALUES (:id, 1000, 1000)"
+                ),
+                {"id": portfolio_id},
+            )
+
+        insert_application = text(
+            "INSERT INTO paper_portfolio_fill_applications("
+            "portfolio_id, fill_id, application_sequence, applied_at"
+            ") VALUES (:portfolio_id, :fill_id, 1, :applied_at)"
+        )
+        params = {
+            "portfolio_id": portfolio_id,
+            "fill_id": fill.fill_id,
+            # A durable FILL effect makes the timestamp guard reject this value.
+            # Recovery serialization must happen before that validation.
+            "applied_at": fill.fill_time,
+        }
+
+        with engine.connect() as recovery_connection:
+            recovery_transaction = recovery_connection.begin()
+            recovery_connection.execute(
+                text(
+                    "SELECT 1 FROM paper_portfolios "
+                    "WHERE portfolio_id=:id FOR UPDATE"
+                ),
+                {"id": portfolio_id},
+            )
+
+            with pytest.raises(OperationalError, match="lock timeout"):
+                with engine.begin() as mutation_connection:
+                    mutation_connection.execute(
+                        text("SET LOCAL lock_timeout = '100ms'")
+                    )
+                    mutation_connection.execute(insert_application, params)
+
+            recovery_transaction.commit()
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_APPLICATION_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
+        ):
+            with engine.begin() as mutation_connection:
+                mutation_connection.execute(insert_application, params)
+
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolio_fill_applications "
+                    "WHERE portfolio_id=:portfolio_id"
+                ),
+                {"portfolio_id": portfolio_id},
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_accounting_takes_job_lock_before_portfolio_mutation() -> None:
     """Accounting and reconciliation share job-then-portfolio lock ordering."""
     url = os.getenv("HOPE_DATABASE_URL")
