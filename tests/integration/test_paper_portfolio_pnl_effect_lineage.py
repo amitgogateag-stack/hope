@@ -381,31 +381,70 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
             {"id": portfolio_id},
         )
         assert SqlAlchemyJobRunRepository(connection).claim(job_run) is True
-        connection.execute(
-            text(
-                "INSERT INTO paper_portfolio_fill_applications("
-                "portfolio_id, fill_id, application_sequence"
-                ") VALUES (:portfolio_id, :fill_id, 1)"
-            ),
-            {"portfolio_id": portfolio_id, "fill_id": fill_id},
+        insert_application = text(
+            "INSERT INTO paper_portfolio_fill_applications("
+            "portfolio_id, fill_id, application_sequence"
+            ") VALUES (:portfolio_id, :fill_id, 1)"
         )
-        connection.execute(
-            text(
-                "INSERT INTO paper_portfolio_pnl_events("
-                "pnl_event_id, portfolio_id, fill_id, instrument_id, "
-                "realized_pnl_delta, commission_delta, event_time"
-                ") VALUES ("
-                ":event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time"
-                ")"
-            ),
-            {
-                "event_id": event_id,
-                "portfolio_id": portfolio_id,
-                "fill_id": fill_id,
-                "instrument_id": instrument_id,
-                "event_time": event_time,
-            },
+        application_params = {"portfolio_id": portfolio_id, "fill_id": fill_id}
+        insert_accounting_event = text(
+            "INSERT INTO paper_portfolio_pnl_events("
+            "pnl_event_id, portfolio_id, fill_id, instrument_id, "
+            "realized_pnl_delta, commission_delta, event_time"
+            ") VALUES ("
+            ":event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time"
+            ")"
         )
+        accounting_event_params = {
+            "event_id": event_id,
+            "portfolio_id": portfolio_id,
+            "fill_id": fill_id,
+            "instrument_id": instrument_id,
+            "event_time": event_time,
+        }
+
+        # Before migration 193, this complete row pair could commit without any
+        # effect lineage because the immediate guard deliberately tolerated an
+        # absent FILL effect. Force the deferred boundary and prove the entire
+        # incomplete transition rolls back.
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_SOURCE_FILL_EFFECT_MISSING",
+        ):
+            with connection.begin_nested():
+                connection.execute(insert_application, application_params)
+                connection.execute(insert_accounting_event, accounting_event_params)
+                connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_fill_applications "
+                "WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"
+            ),
+            application_params,
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE pnl_event_id=:event_id"
+            ),
+            {"event_id": event_id},
+        ).scalar_one() == 0
+
+        connection.execute(insert_application, application_params)
+        connection.execute(insert_accounting_event, accounting_event_params)
+        effects = SqlAlchemyPaperEffectRepository(connection)
+        assert effects.record(
+            create_paper_effect(
+                job_run,
+                PaperEffectType.PNL,
+                event_id,
+                paper_portfolio_pnl_payload_hash(event),
+            )
+        ) is True
+        assert effects.record(
+            create_paper_effect(job_run, PaperEffectType.FILL, fill_id, "a" * 64)
+        ) is True
 
     recovery_connection = engine.connect()
     effect_connection = engine.connect()
@@ -445,7 +484,7 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
                     event_id,
                     paper_portfolio_pnl_payload_hash(event),
                 )
-            ) is True
+            ) is False
             assert effects.record(
                 create_paper_effect(
                     job_run,
@@ -453,7 +492,7 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
                     fill_id,
                     "a" * 64,
                 )
-            ) is True
+            ) is False
     finally:
         if recovery_transaction.is_active:
             recovery_transaction.rollback()
