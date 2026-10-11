@@ -670,7 +670,8 @@ def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
         "pnl_event_id, portfolio_id, fill_id, instrument_id, "
         "realized_pnl_delta, commission_delta, event_time"
         ") VALUES ("
-        ":event_id, :portfolio_id, :fill_id, :instrument_id, 0, 0.25, :event_time"
+        ":event_id, :portfolio_id, :fill_id, :instrument_id, "
+        "0, :commission_delta, :event_time"
         ")"
     )
     params = {
@@ -678,8 +679,10 @@ def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
         "portfolio_id": portfolio_id,
         "fill_id": fill.fill_id,
         "instrument_id": instrument_id,
+        "commission_delta": Decimal("0.25"),
         "event_time": fill.fill_time,
     }
+    invalid_params = {**params, "commission_delta": Decimal("999")}
 
     with engine.connect() as recovery_connection:
         recovery_transaction = recovery_connection.begin()
@@ -691,12 +694,25 @@ def test_public_portfolio_recovery_blocks_direct_pnl_insertion() -> None:
         )
         assert recovered is not None
 
+        # Invalid writes must enter the recovery lock before a validation
+        # trigger can inspect and reject their durable source evidence.
+        with pytest.raises(OperationalError, match="lock timeout"):
+            with engine.begin() as mutation_connection:
+                mutation_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                mutation_connection.execute(insert_duplicate, invalid_params)
+
         with pytest.raises(OperationalError, match="lock timeout"):
             with engine.begin() as mutation_connection:
                 mutation_connection.execute(text("SET LOCAL lock_timeout = '100ms'"))
                 mutation_connection.execute(insert_duplicate, params)
 
         recovery_transaction.commit()
+
+    with pytest.raises(
+        IntegrityError, match="PAPER_PORTFOLIO_PNL_COMMISSION_MISMATCH",
+    ):
+        with engine.begin() as mutation_connection:
+            mutation_connection.execute(insert_duplicate, invalid_params)
 
     with pytest.raises(IntegrityError):
         with engine.begin() as mutation_connection:
