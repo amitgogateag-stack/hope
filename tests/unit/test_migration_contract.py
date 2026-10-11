@@ -3,6 +3,17 @@ from pathlib import Path
 ROOT = Path(__file__).parents[2]
 
 
+def test_legacy_pnl_event_requires_effect_lineage_at_commit() -> None:
+    sql = (
+        ROOT / "migrations/195_paper_pnl_event_effect_completeness.sql"
+    ).read_text()
+    assert "PAPER_PNL_EVENT_WITHOUT_EFFECT" in sql
+    assert "LEFT JOIN paper_effects" in sql
+    assert "effect.effect_type = 'PNL'" in sql
+    assert "AFTER INSERT ON pnl_events" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
