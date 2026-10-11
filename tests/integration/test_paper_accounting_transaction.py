@@ -245,6 +245,64 @@ def test_portfolio_version_cannot_commit_without_matching_application_history() 
 
 
 @pytest.mark.integration
+def test_portfolio_cash_cannot_commit_outside_immutable_fill_projection() -> None:
+    """Reject cash drift even when no recovery reader observes the transaction."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection,
+                migrations_dir,
+                job_key=f"paper-portfolio-cash-projection:{uuid4()}",
+            )
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="100",
+                minute=48,
+            )
+            assert PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            ).apply_fill(
+                context,
+                portfolio_id,
+                Decimal("1000"),
+                fill,
+            ) is True
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_CASH_PROJECTION_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE paper_portfolios SET cash = cash + 1 "
+                        "WHERE portfolio_id=:id"
+                    ),
+                    {"id": portfolio_id},
+                )
+
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT cash FROM paper_portfolios "
+                    "WHERE portfolio_id=:id"
+                ),
+                {"id": portfolio_id},
+            ).scalar_one() == Decimal("899.75")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_portfolio_application_cannot_commit_without_pnl_event() -> None:
     """Reject a complete portfolio/application write missing derived P&L."""
     url = os.getenv("HOPE_DATABASE_URL")

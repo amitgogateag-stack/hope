@@ -33,6 +33,17 @@ def test_paper_fill_and_effect_authenticate_each_others_payload() -> None:
     assert "trim_scale(transaction_cost)" in sql
 
 
+def test_paper_portfolio_cash_is_a_deferred_fill_projection() -> None:
+    sql = (ROOT / "migrations/201_paper_portfolio_cash_projection.sql").read_text()
+    assert "PAPER_PORTFOLIO_CASH_PROJECTION_MISMATCH" in sql
+    assert "portfolio.initial_cash + history.cash_delta" in sql
+    assert "fill.fill_price * fill.quantity" in sql
+    assert "fill.transaction_cost" in sql
+    assert "AFTER INSERT OR UPDATE ON paper_portfolios" in sql
+    assert "AFTER INSERT ON paper_portfolio_fill_applications" in sql
+    assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
