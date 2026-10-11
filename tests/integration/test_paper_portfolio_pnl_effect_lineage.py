@@ -410,7 +410,7 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
         connection.execute(
             text(
                 "INSERT INTO paper_portfolios(portfolio_id, initial_cash, cash, version) "
-                "VALUES (:id, 1000, 900, 1)"
+                "VALUES (:id, 1000, 899.75, 1)"
             ),
             {"id": portfolio_id},
         )

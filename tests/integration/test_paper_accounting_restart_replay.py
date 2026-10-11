@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import (
     JobRunStatus,
@@ -370,7 +371,7 @@ def test_filled_recovery_rejects_accounting_replay_failure_without_terminalizing
 @pytest.mark.integration
 def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
 ) -> None:
-    """A real, committed accounting mismatch must block successful recovery."""
+    """A cash mismatch must be rejected before recovery can observe it."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -400,26 +401,16 @@ def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
         assert len(original_effects) == 5
 
     try:
-        # These are actual committed SQL mutations, not monkeypatched validators.
-        # Only the portfolio materialization is corrupted; effects stay immutable.
-        with engine.begin() as connection:
-            connection.execute(
-                text("UPDATE paper_portfolios SET cash=cash+1 "
-                     "WHERE portfolio_id=:id"),
-                {"id": portfolio_id},
-            )
-        with engine.begin() as connection:
-            with pytest.raises(
-                RuntimeError,
-                match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
-                      "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
-                      "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
-            ):
-                reconcile_completed_paper_run(
-                    connection, run,
-                    current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_CASH_PROJECTION_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE paper_portfolios SET cash=cash+1 "
+                         "WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
                 )
-            # The outer transaction deliberately commits after the failure.
 
         with engine.begin() as connection:
             durable = SqlAlchemyJobRunRepository(
@@ -434,6 +425,10 @@ def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
                      "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
                 {"id": str(run.job_run_id)},
             ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT cash FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == Decimal("799.50")
     finally:
         with engine.begin() as connection:
             jobs = SqlAlchemyJobRunRepository(connection)
@@ -449,7 +444,7 @@ def test_reconciliation_rejects_actual_durable_portfolio_state_divergence(
 
 @pytest.mark.integration
 def test_failed_accounting_recovery_can_reconcile_after_durable_state_repair():
-    """Failed proof is read-only; repairing materialization permits safe retry."""
+    """A rejected cash mutation leaves durable accounting safely recoverable."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -477,29 +472,17 @@ def test_failed_accounting_recovery_can_reconcile_after_durable_state_repair():
         ).list_for_job_run(run.job_run_id)
 
     try:
-        with engine.begin() as connection:
-            connection.execute(
-                text("UPDATE paper_portfolios SET cash=cash+1 "
-                     "WHERE portfolio_id=:id"),
-                {"id": portfolio_id},
-            )
-        with engine.begin() as connection:
-            with pytest.raises(
-                RuntimeError,
-                match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
-                      "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
-                      "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
-            ):
-                reconcile_completed_paper_run(
-                    connection, run,
-                    current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_CASH_PROJECTION_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text("UPDATE paper_portfolios SET cash=cash+1 "
+                         "WHERE portfolio_id=:id"),
+                    {"id": portfolio_id},
                 )
-        with engine.begin() as connection:
-            connection.execute(
-                text("UPDATE paper_portfolios SET cash=cash-1 "
-                     "WHERE portfolio_id=:id"),
-                {"id": portfolio_id},
-            )
+
         with engine.begin() as connection:
             assert reconcile_completed_paper_run(
                 connection, run,
