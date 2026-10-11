@@ -287,6 +287,14 @@ def test_reconciliation_audit_failure_rolls_back_terminal_job_across_restart(
             })(),),
         })(),
     )
+    # This test intentionally isolates the audit savepoint. The recovery
+    # classifier is stubbed above, so authenticate its lineage separately in
+    # the dedicated reconciliation lineage tests rather than letting an empty
+    # synthetic effect ledger fail before the audit boundary.
+    monkeypatch.setattr(
+        paper_reconciliation, "verify_paper_recovery_lineage",
+        lambda connection, effects: True,
+    )
     monkeypatch.setattr(
         paper_reconciliation.SqlAlchemyPaperReconciliationAuditRepository,
         audit_failure, lambda *args: False,
