@@ -26,7 +26,7 @@ def test_paper_fill_single_portfolio_ownership_survives_replay() -> None:
     first, second, instrument_id = uuid4(), uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-single-portfolio-owner",
-        datetime(2026, 9, 9, 23, 20, tzinfo=timezone.utc),
+        datetime(2026, 9, 9, 23, 22, tzinfo=timezone.utc),
     )
     with engine.begin() as connection:
         apply_migrations(connection, Path(__file__).parents[2] / "migrations")
