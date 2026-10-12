@@ -16,6 +16,11 @@ _BASE = frozenset({
 })
 _ALLOWED = frozenset({
     _BASE | {PaperEffectType.FILL, PaperEffectType.PNL},
+    _BASE | {
+        PaperEffectType.FILL,
+        PaperEffectType.PNL,
+        PaperEffectType.CANCELLATION,
+    },
     _BASE | {PaperEffectType.CANCELLATION},
     _BASE | {PaperEffectType.REJECTION},
 })
@@ -44,6 +49,8 @@ def test_complete_effect_shapes_are_order_independent(shape):
 @pytest.mark.parametrize("effect_type", _TYPES)
 def test_repeated_effect_type_is_never_a_complete_lifecycle(effect_type):
     for allowed in _ALLOWED:
+        if effect_type not in allowed:
+            continue
         repeated = tuple(allowed) + (effect_type,)
         assert classify_paper_effect_topology(repeated) is not PaperEffectTopology.COMPLETE
 
@@ -51,7 +58,6 @@ def test_repeated_effect_type_is_never_a_complete_lifecycle(effect_type):
 @pytest.mark.parametrize(
     "terminal",
     [
-        (PaperEffectType.FILL, PaperEffectType.CANCELLATION),
         (PaperEffectType.FILL, PaperEffectType.REJECTION),
         (PaperEffectType.CANCELLATION, PaperEffectType.REJECTION),
     ],

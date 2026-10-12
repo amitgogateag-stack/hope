@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -22,7 +23,14 @@ from hope.application.paper import (
 )
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
-from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.application.paper.terminals import PaperTerminalWriter
+from hope.domain.execution import (
+    Environment,
+    ExecutionCancellation,
+    Fill,
+    Order,
+    OrderSide,
+)
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
@@ -33,8 +41,12 @@ from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPap
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
+from hope.infrastructure.repositories.paper_terminals import (
+    SqlAlchemyPaperTerminalRepository,
+)
 from hope.infrastructure.scheduling import paper_reconciliation
 from hope.infrastructure.scheduling.paper import run_due_operational_paper_jobs
+from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
 from hope.infrastructure.scheduling.paper_reconciliation import reconcile_completed_paper_run
 
 UTC = timezone.utc
@@ -279,6 +291,118 @@ def test_completed_authoritative_accounting_reconciles_without_runtime_replay(
             ),
             {"id": str(run.job_run_id)},
         ).scalar_one() == 1
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_partial_fill_cancellation_reconciles_without_replaying_economic_effects() -> None:
+    """A crash after partial accounting and cancellation must not strand the run."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, full_fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-partial-cancel-reconcile",
+            authenticated_job=True,
+        )
+        partial_fill = replace(full_fill, quantity=Decimal("1"))
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=partial_fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=Decimal("2"),
+            ),
+        )
+        assert PaperFillAccountingWriter(
+            SqlAlchemyPaperFillAccountingRepository(connection)
+        ).record(
+            context,
+            portfolio_id,
+            Decimal("1000"),
+            partial_fill,
+            sequence=0,
+        )
+        cancellation = ExecutionCancellation(
+            partial_fill.order_id,
+            partial_fill.signal_id,
+            partial_fill.instrument_id,
+            Environment.PAPER,
+            "PARTIAL_CANCEL",
+            partial_fill.fill_time + timedelta(seconds=30),
+            Decimal("1"),
+        )
+        assert PaperTerminalWriter(
+            SqlAlchemyPaperTerminalRepository(connection)
+        ).record(context, cancellation)
+        effects_before = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert {effect.effect_type for effect in effects_before} == {
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+            PaperEffectType.CANCELLATION,
+        }
+        assert verify_paper_recovery_lineage(connection, effects_before)
+
+    with engine.begin() as connection:
+        assert reconcile_completed_paper_run(
+            connection,
+            run,
+            current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
+        ) is True
+        durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(run)
+        assert durable is not None and durable.status is JobRunStatus.SUCCEEDED
+        effects_after = SqlAlchemyPaperEffectRepository(
+            connection
+        ).list_for_job_run(run.job_run_id)
+        assert effects_after == effects_before
+        assert connection.execute(
+            text(
+                "SELECT cash, version FROM paper_portfolios "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).one() == (Decimal("899.50"), 1)
+        assert connection.execute(
+            text(
+                "SELECT quantity FROM paper_portfolio_positions "
+                "WHERE portfolio_id=:portfolio_id "
+                "AND instrument_id=:instrument_id"
+            ),
+            {
+                "portfolio_id": portfolio_id,
+                "instrument_id": partial_fill.instrument_id,
+            },
+        ).scalar_one() == Decimal("1")
+        receipt_types = connection.execute(
+            text(
+                "SELECT ARRAY(SELECT value->>'effect_type' "
+                "FROM audit_events, "
+                "jsonb_array_elements(payload->'effects') value "
+                "WHERE event_type='PAPER_RUN_RECONCILED' "
+                "AND entity_id=:job_run_id)"
+            ),
+            {"job_run_id": str(run.job_run_id)},
+        ).scalar_one()
+        assert set(receipt_types) == {
+            "SIGNAL",
+            "RISK",
+            "ORDER",
+            "FILL",
+            "PNL",
+            "CANCELLATION",
+        }
 
     engine.dispose()
 

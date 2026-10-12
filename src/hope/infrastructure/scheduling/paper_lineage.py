@@ -61,9 +61,15 @@ def verify_paper_recovery_lineage(
         PaperEffectType.CANCELLATION,
         PaperEffectType.REJECTION,
     }
+    partial_fill_cancellation = set(by_type) == set(filled_required) | {
+        PaperEffectType.CANCELLATION,
+    }
     if set(by_type) == set(filled_required):
         required = filled_required
         terminal_type = None
+    elif partial_fill_cancellation:
+        required = filled_required + (PaperEffectType.CANCELLATION,)
+        terminal_type = PaperEffectType.CANCELLATION
     elif len(non_fill_terminal_types) == 1:
         terminal_type = next(iter(non_fill_terminal_types))
         required = (
@@ -274,7 +280,7 @@ def verify_paper_recovery_lineage(
     ):
         return False
 
-    if terminal_type is not None:
+    if terminal_type is not None and not partial_fill_cancellation:
         terminal_effect = by_type[terminal_type][0]
         if terminal_effect.entity_id != order_id:
             return False
@@ -360,7 +366,10 @@ def verify_paper_recovery_lineage(
         expected_fill_hash = paper_fill_payload_hash(durable_fill)
     except (TypeError, ValueError):
         return False
-    if durable_fill.quantity != order_object.quantity:
+    if partial_fill_cancellation:
+        if durable_fill.quantity >= order_object.quantity:
+            return False
+    elif durable_fill.quantity != order_object.quantity:
         return False
     if by_type[PaperEffectType.FILL][0].payload_hash != expected_fill_hash:
         return False
@@ -486,4 +495,42 @@ def verify_paper_recovery_lineage(
         )
     except (RuntimeError, ValueError):
         return False
-    return verified_ledger is not None
+    if verified_ledger is None:
+        return False
+    if not partial_fill_cancellation:
+        return True
+
+    cancellation_effect = by_type[PaperEffectType.CANCELLATION][0]
+    if cancellation_effect.entity_id != order_id:
+        return False
+    terminal = connection.execute(
+        select(
+            terminal_events.c.outcome,
+            terminal_events.c.reason_code,
+            terminal_events.c.event_time,
+            terminal_events.c.cancelled_quantity,
+        ).where(terminal_events.c.order_id == order_id)
+    ).mappings().one_or_none()
+    if (
+        terminal is None
+        or terminal["outcome"] != "CANCELLED"
+        or terminal["event_time"] < durable_fill.fill_time
+        or terminal["cancelled_quantity"]
+        != order_object.quantity - durable_fill.quantity
+    ):
+        return False
+    try:
+        cancellation = ExecutionCancellation(
+            order_id,
+            signal_id,
+            order_object.instrument_id,
+            Environment.PAPER,
+            terminal["reason_code"],
+            terminal["event_time"],
+            terminal["cancelled_quantity"],
+        )
+    except (TypeError, ValueError):
+        return False
+    return cancellation_effect.payload_hash == paper_terminal_payload_hash(
+        cancellation
+    )

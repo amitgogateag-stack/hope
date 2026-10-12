@@ -50,6 +50,14 @@ def _completion(job_run):
             PaperEffectType.SIGNAL,
             PaperEffectType.RISK,
             PaperEffectType.ORDER,
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+            PaperEffectType.CANCELLATION,
+        ),
+        (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
             PaperEffectType.CANCELLATION,
         ),
         (

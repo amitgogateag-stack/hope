@@ -20,6 +20,12 @@ _BASE_EFFECT_TYPES = frozenset(
 _COMPLETE_EFFECT_SHAPES = frozenset(
     {
         _BASE_EFFECT_TYPES | {PaperEffectType.FILL, PaperEffectType.PNL},
+        _BASE_EFFECT_TYPES
+        | {
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+            PaperEffectType.CANCELLATION,
+        },
         _BASE_EFFECT_TYPES | {PaperEffectType.CANCELLATION},
         _BASE_EFFECT_TYPES | {PaperEffectType.REJECTION},
     }

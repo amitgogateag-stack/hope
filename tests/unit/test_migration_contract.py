@@ -69,6 +69,19 @@ def test_paper_portfolio_pnl_delta_is_a_deferred_transition_projection() -> None
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
 
 
+def test_partial_fill_cancellation_is_an_authenticated_reconciliation_shape() -> None:
+    sql = (
+        ROOT
+        / "migrations/204_paper_partial_fill_cancellation_reconciliation.sql"
+    ).read_text()
+    assert "paper_reconciliation_audit_payload_matches_job" in sql
+    assert (
+        "ARRAY['CANCELLATION', 'FILL', 'ORDER', 'PNL', 'RISK', 'SIGNAL']"
+        in sql
+    )
+    assert "ORDER BY created_at, effect_id" in sql
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
