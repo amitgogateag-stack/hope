@@ -359,6 +359,95 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
 
 
 @pytest.mark.integration
+def test_matching_effect_cannot_authenticate_false_realized_pnl_transition() -> None:
+    """Reject an event/effect pair that agrees with itself but not fill replay."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper-pnl-false-transition:{uuid4()}",
+        datetime(2026, 9, 10, 0, 20, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-FALSE-TRANSITION', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+        buy = persist_fill(
+            connection, context, instrument_id, OrderSide.BUY, "100", 21,
+        )
+        sell = persist_fill(
+            connection, context, instrument_id, OrderSide.SELL, "110", 22,
+        )
+
+    with pytest.raises(
+        IntegrityError,
+        match="PAPER_PORTFOLIO_PNL_TRANSITION_PROJECTION_MISMATCH",
+    ):
+        with engine.begin() as connection:
+            portfolio = SqlAlchemyPaperPortfolioRepository(connection)
+            writer = PaperPortfolioPnLWriter(
+                SqlAlchemyPaperPortfolioPnLRepository(connection)
+            )
+            buy_transition = portfolio.apply_fill_with_transition(
+                portfolio_id,
+                Decimal("1000"),
+                buy,
+                job_run_id=run.job_run_id,
+            )
+            assert buy_transition is not None
+            assert writer.record(
+                context, portfolio_id, buy, buy_transition,
+            ) is True
+
+            sell_transition = portfolio.apply_fill_with_transition(
+                portfolio_id,
+                Decimal("1000"),
+                sell,
+                job_run_id=run.job_run_id,
+            )
+            assert sell_transition is not None
+            assert sell_transition.realized_pnl_delta == Decimal("10")
+            false_transition = replace(
+                sell_transition,
+                realized_pnl_delta=Decimal("999"),
+            )
+            assert writer.record(
+                context, portfolio_id, sell, false_transition,
+            ) is True
+
+    with engine.begin() as connection:
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolios "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE portfolio_id=:portfolio_id"
+            ),
+            {"portfolio_id": portfolio_id},
+        ).scalar_one() == 0
+
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> None:
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
