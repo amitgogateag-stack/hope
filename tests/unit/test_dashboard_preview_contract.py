@@ -51,3 +51,16 @@ def test_preview_uses_no_external_scripts_or_third_party_assets():
     assert parser.external_scripts == []
     assert "http://" not in PREVIEW.read_text(encoding="utf-8")
     assert "https://" not in PREVIEW.read_text(encoding="utf-8")
+
+
+def test_preview_imports_local_aggregate_snapshot_without_network_calls():
+    html = PREVIEW.read_text(encoding="utf-8")
+    assert 'id="snapshot-file"' in html
+    assert 'id="snapshot-status"' in html
+    assert 'id="research-runs"' in html
+    assert 'id="paper-jobs"' in html
+    assert 'id="paper-state"' in html
+    assert "await file.text()" in html
+    assert "Snapshot rejected" in html
+    assert "STALE" in html
+    assert "fetch(" not in html

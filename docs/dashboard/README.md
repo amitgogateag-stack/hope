@@ -14,3 +14,18 @@ The four screens are Overview, Research Lab, PAPER Operations, and Safety & Engi
 6. Add tests for read-only behavior, missing/stale data, provenance mismatches, and unauthorized access before integrating production data.
 
 This visual slice does not certify end-to-end trading readiness.
+
+## Verified local data bridge (v0.2)
+
+The Python module `hope.api.dashboard_snapshot` exports a **read-only, repeatable-read** PostgreSQL snapshot with only aggregate research-run counts, PAPER job-run counts, and PAPER environment state. It does not expose orders, account IDs, credentials, positions, strategy decisions, or P&L.
+
+On a trusted HOPE host, with a **dedicated database role granted SELECT only**, run:
+
+```bash
+HOPE_DATABASE_URL='postgresql+psycopg://READ_ONLY_ROLE:...@HOST/hope' \\
+  python -m hope.api.dashboard_snapshot --output /private/hope/dashboard.json
+```
+
+Then open `preview.html` and select the exported JSON file. It is read in the browser; no upload or API call occurs. If the snapshot is older than one hour, the dashboard explicitly marks it **STALE**. If the snapshot is invalid or incomplete, it is rejected. Missing data stays **Not connected**.
+
+**Not yet automatic:** Serving this through a private authenticated dashboard, scheduling snapshot exports, and integrating detailed PAPER / research evidence require infrastructure deployment and authorization. Do not publish private snapshots on GitHub Pages or in this public repository.
