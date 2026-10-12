@@ -266,28 +266,39 @@ def test_accounting_rejects_risk_effect_payload_conflicting_with_assessment() ->
             migrations_dir,
             "paper-accounting-risk-payload-conflict",
         )
-        forged = create_paper_effect(
-            context.job_run,
-            PaperEffectType.RISK,
-            fill.signal_id,
-            "0" * 64,
-        )
-        assert SqlAlchemyPaperEffectRepository(connection).record(forged)
-        connection.execute(
-            text(
-                "INSERT INTO paper_risk_assessments("
-                "signal_id, decision, reason_code, approved_quantity"
-                ") VALUES (:signal_id, 'APPROVE', 'TEST_APPROVED', :quantity)"
-            ),
-            {"signal_id": fill.signal_id, "quantity": fill.quantity},
-        )
         with pytest.raises(
-            RuntimeError,
-            match="PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH",
+            IntegrityError,
+            match="PAPER_RISK_EFFECT_PAYLOAD_MISMATCH",
         ):
-            PaperFillAccountingWriter(
-                SqlAlchemyPaperFillAccountingRepository(connection)
-            ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+            with connection.begin_nested():
+                forged = create_paper_effect(
+                    context.job_run,
+                    PaperEffectType.RISK,
+                    fill.signal_id,
+                    "0" * 64,
+                )
+                assert SqlAlchemyPaperEffectRepository(connection).record(forged)
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_risk_assessments("
+                        "signal_id, decision, reason_code, approved_quantity"
+                        ") VALUES (:signal_id, 'APPROVE', 'TEST_APPROVED', :quantity)"
+                    ),
+                    {"signal_id": fill.signal_id, "quantity": fill.quantity},
+                )
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='RISK' AND entity_id=:id"
+            ),
+            {"id": fill.signal_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_risk_assessments WHERE signal_id=:id"
+            ),
+            {"id": fill.signal_id},
+        ).scalar_one() == 0
         assert connection.execute(
             text("SELECT count(*) FROM fills WHERE fill_id=:id"),
             {"id": fill.fill_id},

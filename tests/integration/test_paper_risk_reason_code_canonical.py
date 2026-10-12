@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
+from hope.application.paper.risk import paper_risk_payload_hash
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -48,7 +50,15 @@ def test_paper_risk_reason_code_must_be_canonical() -> None:
         )
         jobs = SqlAlchemyJobRunRepository(connection)
         assert jobs.claim(job_run) is True
-        for effect_type, payload_hash in (("SIGNAL", "a" * 64), ("RISK", "b" * 64)):
+        risk_hash = paper_risk_payload_hash(
+            RiskAssessment(
+                signal_id=signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="APPROVED",
+                approved_quantity=Decimal("1"),
+            )
+        )
+        for effect_type, payload_hash in (("SIGNAL", "a" * 64), ("RISK", risk_hash)):
             connection.execute(
                 text(
                     "INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) "

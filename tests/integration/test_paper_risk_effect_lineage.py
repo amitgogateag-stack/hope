@@ -52,20 +52,20 @@ def test_paper_risk_assessment_requires_signal_and_risk_effect_lineage() -> None
         jobs = SqlAlchemyJobRunRepository(connection)
         assert jobs.claim(job_run) is True
 
-        connection.execute(
-            text(
-                "INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) "
-                "VALUES (:effect_id, :job_run_id, 'RISK', :signal_id, :payload_hash)"
-            ),
-            {
-                "effect_id": uuid4(),
-                "job_run_id": job_run.job_run_id,
-                "signal_id": signal_without_source_effect,
-                "payload_hash": "a" * 64,
-            },
-        )
         with pytest.raises(IntegrityError, match="PAPER_RISK_SOURCE_SIGNAL_UNTRACKED"):
             with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) "
+                        "VALUES (:effect_id, :job_run_id, 'RISK', :signal_id, :payload_hash)"
+                    ),
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": job_run.job_run_id,
+                        "signal_id": signal_without_source_effect,
+                        "payload_hash": "a" * 64,
+                    },
+                )
                 connection.execute(
                     text(
                         "INSERT INTO paper_risk_assessments"

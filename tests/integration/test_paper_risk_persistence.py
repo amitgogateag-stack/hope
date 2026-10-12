@@ -10,7 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
-from hope.application.paper.risk import PaperRiskWriter
+from hope.application.paper.risk import PaperRiskWriter, paper_risk_payload_hash
 from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
@@ -56,27 +56,26 @@ def test_paper_risk_created_at_is_database_authenticated() -> None:
             SqlAlchemyPaperSignalRepository(connection)
         )
         assert signal_writer.record(context, signal) is True
-        connection.execute(
-            text(
-                "INSERT INTO paper_effects("
-                "effect_id, job_run_id, effect_type, entity_id, payload_hash"
-                ") VALUES ("
-                ":effect_id, :job_run_id, 'RISK', :signal_id, :payload_hash"
-                ")"
-            ),
-            {
-                "effect_id": uuid4(),
-                "job_run_id": job_run.job_run_id,
-                "signal_id": signal.signal_id,
-                "payload_hash": "f" * 64,
-            },
-        )
-
         with pytest.raises(
             IntegrityError,
             match="PAPER_RISK_TIMESTAMP_NOT_DATABASE_AUTHENTICATED",
         ):
             with connection.begin_nested():
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_effects("
+                        "effect_id, job_run_id, effect_type, entity_id, payload_hash"
+                        ") VALUES ("
+                        ":effect_id, :job_run_id, 'RISK', :signal_id, :payload_hash"
+                        ")"
+                    ),
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": job_run.job_run_id,
+                        "signal_id": signal.signal_id,
+                        "payload_hash": paper_risk_payload_hash(_assessment(signal)),
+                    },
+                )
                 connection.execute(
                     text(
                         "INSERT INTO paper_risk_assessments("

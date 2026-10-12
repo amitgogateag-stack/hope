@@ -96,6 +96,19 @@ def test_paper_terminal_event_and_effect_are_complete_and_payload_bound() -> Non
     assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
 
 
+def test_paper_risk_assessment_and_effect_are_complete_and_payload_bound() -> None:
+    sql = (ROOT / "migrations/206_paper_risk_effect_payload.sql").read_text()
+    assert "hope_paper_risk_payload_hash" in sql
+    assert "trim_scale(approved_quantity)" in sql
+    assert "hope_lock_paper_risk_payload_identity" in sql
+    assert "PAPER_RISK_EFFECT_PAYLOAD_MISMATCH" in sql
+    assert "PAPER_RISK_ASSESSMENT_WITHOUT_EFFECT" in sql
+    assert "PAPER_RISK_EFFECT_WITHOUT_ASSESSMENT" in sql
+    assert "BEFORE INSERT ON paper_risk_assessments" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+    assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql

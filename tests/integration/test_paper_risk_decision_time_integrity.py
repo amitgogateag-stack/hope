@@ -9,6 +9,8 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
+from hope.application.paper.risk import paper_risk_payload_hash
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 
@@ -50,7 +52,15 @@ def test_paper_risk_decision_cannot_follow_job_schedule() -> None:
                     "decision_time": decision_time,
                 },
             )
-            for effect_type, payload_hash in (("SIGNAL", "a" * 64), ("RISK", "b" * 64)):
+            risk_hash = paper_risk_payload_hash(
+                RiskAssessment(
+                    signal_id=signal_id,
+                    decision=RiskDecision.APPROVE,
+                    reason_code="PORTFOLIO_RISK_APPROVED",
+                    approved_quantity=Decimal("1"),
+                )
+            )
+            for effect_type, payload_hash in (("SIGNAL", "a" * 64), ("RISK", risk_hash)):
                 connection.execute(
                     text(
                         "INSERT INTO paper_effects"
@@ -67,9 +77,11 @@ def test_paper_risk_decision_cannot_follow_job_schedule() -> None:
                 )
             return signal_id
 
-        future_signal_id = insert_lineage(scheduled_for + timedelta(microseconds=1))
         with pytest.raises(IntegrityError, match="PAPER_RISK_DECISION_AFTER_JOB_SCHEDULE"):
             with connection.begin_nested():
+                future_signal_id = insert_lineage(
+                    scheduled_for + timedelta(microseconds=1)
+                )
                 connection.execute(
                     text(
                         "INSERT INTO paper_risk_assessments"
