@@ -341,3 +341,60 @@ def test_portfolio_recovery_rejects_duplicate_missing_or_substituted_joined_rows
         RuntimeError, match="PAPER_PORTFOLIO_ACCOUNTING_HISTORY_INCONSISTENT",
     ):
         repository.verify_accounting_history(portfolio_id)
+
+
+@pytest.mark.parametrize("durable_status", [None, "FAILED", "SUCCEEDED"])
+def test_inflight_portfolio_recovery_rejects_unclaimed_job_before_portfolio_read(
+    monkeypatch, durable_status,
+) -> None:
+    repository = _repository(_Effects())
+    job_run_id, portfolio_id = uuid4(), uuid4()
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return durable_status
+
+    class _Connection:
+        def execute(self, statement, parameters):
+            assert "FOR UPDATE" in str(statement)
+            assert parameters == {"job_run_id": job_run_id}
+            return _Result()
+
+    repository._connection = _Connection()
+    monkeypatch.setattr(
+        repository, "_load_materialized_ledger",
+        lambda *args, **kwargs: pytest.fail("unclaimed job must not read portfolio"),
+    )
+    with pytest.raises(
+        RuntimeError, match="PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED",
+    ):
+        repository.verify_accounting_history(
+            portfolio_id, current_job_run_id=job_run_id,
+        )
+
+
+def test_inflight_portfolio_recovery_accepts_claimed_job_before_portfolio_read(
+    monkeypatch,
+) -> None:
+    repository = _repository(_Effects())
+    job_run_id, portfolio_id = uuid4(), uuid4()
+    calls = []
+
+    class _Result:
+        def scalar_one_or_none(self):
+            return "CLAIMED"
+
+    class _Connection:
+        def execute(self, statement, parameters):
+            calls.append(("job", parameters["job_run_id"]))
+            return _Result()
+
+    repository._connection = _Connection()
+    def load_portfolio(requested_id, *, lock_for_update):
+        calls.append(("portfolio", requested_id, lock_for_update))
+        return None
+    monkeypatch.setattr(repository, "_load_materialized_ledger", load_portfolio)
+    assert repository.verify_accounting_history(
+        portfolio_id, current_job_run_id=job_run_id,
+    ) is None
+    assert calls == [("job", job_run_id), ("portfolio", portfolio_id, True)]

@@ -480,6 +480,21 @@ class SqlAlchemyPaperPortfolioRepository:
         SUCCEEDED.
         """
         self._require_recovery_lock(lock_for_update)
+        if current_job_run_id is not None:
+            # In-flight recovery is privileged: a matching effect owner alone
+            # does not prove the caller is still running.  Lock the job before
+            # the portfolio, matching accounting/reconciliation lock order.
+            # A FAILED or SUCCEEDED owner must use ordinary recovery, which
+            # requires every effect to belong to a SUCCEEDED job.
+            status = self._connection.execute(
+                text(
+                    "SELECT status FROM job_runs "
+                    "WHERE job_run_id = :job_run_id FOR UPDATE"
+                ),
+                {"job_run_id": current_job_run_id},
+            ).scalar_one_or_none()
+            if status != "CLAIMED":
+                raise RuntimeError("PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED")
         ledger = self._load_materialized_ledger(
             portfolio_id,
             lock_for_update=lock_for_update,
