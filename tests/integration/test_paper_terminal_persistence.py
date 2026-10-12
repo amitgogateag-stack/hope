@@ -22,7 +22,7 @@ from hope.application.paper import (
     create_paper_effect,
 )
 from hope.application.paper.fills import PaperFillWriter
-from hope.application.paper.terminals import PaperTerminalWriter
+from hope.application.paper.terminals import PaperTerminalWriter, paper_terminal_payload_hash
 from hope.domain.execution.models import Environment, ExecutionCancellation, ExecutionRejection, Order, OrderSide
 from hope.domain.execution import Fill
 from hope.domain.signal.models import Signal, SignalType
@@ -118,6 +118,7 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
             {"id": order.order_id},
         ).scalar_one() == 1
         repository = SqlAlchemyPaperTerminalRepository(connection)
+        connection.execute(text("SET LOCAL TIME ZONE 'America/Denver'"))
         with pytest.raises(
             RuntimeError,
             match="PAPER_TERMINAL_OWNER_NOT_RECOVERABLE",
@@ -146,6 +147,7 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
 
     # A fresh transaction/repository must reconstruct the same terminal truth.
     with engine.begin() as connection:
+        connection.execute(text("SET LOCAL TIME ZONE 'America/Denver'"))
         restored = SqlAlchemyPaperTerminalRepository(connection).get(order.order_id)
         assert restored == outcome
         effect_type = connection.execute(
@@ -487,32 +489,100 @@ def test_paper_terminal_restart_read_requires_matching_effect_lineage():
             "TEST_REJECT",
             datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
         )
-        connection.execute(
-            text(
-                "INSERT INTO paper_order_terminal_events("
-                "order_id, outcome, reason_code, event_time"
-                ") VALUES (:order_id, 'REJECTED', :reason_code, :event_time)"
-            ),
-            {
-                "order_id": outcome.order_id,
-                "reason_code": outcome.reason_code,
-                "event_time": outcome.rejection_time,
-            },
+        corruption = connection.begin_nested()
+        try:
+            connection.execute(
+                text(
+                    "INSERT INTO paper_order_terminal_events("
+                    "order_id, outcome, reason_code, event_time"
+                    ") VALUES (:order_id, 'REJECTED', :reason_code, :event_time)"
+                ),
+                {
+                    "order_id": outcome.order_id,
+                    "reason_code": outcome.reason_code,
+                    "event_time": outcome.rejection_time,
+                },
+            )
+            repository = SqlAlchemyPaperTerminalRepository(connection)
+
+            with pytest.raises(
+                RuntimeError,
+                match="PAPER_TERMINAL_EVENT_WITHOUT_EFFECT",
+            ):
+                repository.get(order.order_id)
+
+            mismatched_effect = create_paper_effect(
+                context.job_run,
+                PaperEffectType.REJECTION,
+                order.order_id,
+                "0" * 64,
+            )
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_TERMINAL_EFFECT_PAYLOAD_MISMATCH",
+            ):
+                with connection.begin_nested():
+                    SqlAlchemyPaperEffectRepository(connection).record(
+                        mismatched_effect
+                    )
+
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_TERMINAL_EVENT_WITHOUT_EFFECT",
+            ):
+                with connection.begin_nested():
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        finally:
+            corruption.rollback()
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_paper_terminal_effect_cannot_commit_without_terminal_event():
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    run = create_scheduled_job_run(
+        "paper-terminal-effect-completeness",
+        datetime(2026, 9, 9, 20, 5, tzinfo=UTC),
+    )
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        context, signal, order = _setup_order(connection, run, instrument_id)
+        outcome = ExecutionRejection(
+            order.order_id,
+            signal.signal_id,
+            instrument_id,
+            Environment.PAPER,
+            "TEST_REJECT",
+            datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
         )
-        repository = SqlAlchemyPaperTerminalRepository(connection)
-
-        with pytest.raises(RuntimeError, match="PAPER_TERMINAL_EVENT_WITHOUT_EFFECT"):
-            repository.get(order.order_id)
-
-        mismatched_effect = create_paper_effect(
+        effect = create_paper_effect(
             context.job_run,
             PaperEffectType.REJECTION,
             order.order_id,
-            "0" * 64,
+            paper_terminal_payload_hash(outcome),
         )
-        assert SqlAlchemyPaperEffectRepository(connection).record(mismatched_effect)
-        with pytest.raises(ValueError, match="PAPER_TERMINAL_EFFECT_PAYLOAD_CONFLICT"):
-            repository.get(order.order_id)
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_TERMINAL_EFFECT_WITHOUT_EVENT",
+        ):
+            with connection.begin_nested():
+                assert SqlAlchemyPaperEffectRepository(connection).record(effect)
+                connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE entity_id=:id AND effect_type='REJECTION'"
+            ),
+            {"id": order.order_id},
+        ).scalar_one() == 0
     engine.dispose()
 
 

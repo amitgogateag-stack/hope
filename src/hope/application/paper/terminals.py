@@ -1,4 +1,5 @@
 from __future__ import annotations
+from datetime import timezone
 from hashlib import sha256
 from typing import Protocol
 from hope.application.paper.context import PaperCycleContext
@@ -8,8 +9,8 @@ PaperTerminalOutcome = ExecutionCancellation | ExecutionRejection
 def paper_terminal_payload_hash(outcome: PaperTerminalOutcome) -> str:
     if outcome.environment is not Environment.PAPER: raise ValueError("PAPER_TERMINAL_REQUIRES_PAPER_ENVIRONMENT")
     if isinstance(outcome, ExecutionCancellation):
-        values=(str(outcome.order_id),str(outcome.signal_id),str(outcome.instrument_id),"CANCELLED",outcome.reason_code,outcome.cancellation_time.isoformat(),format(outcome.cancelled_quantity.normalize(),"f"))
-    else: values=(str(outcome.order_id),str(outcome.signal_id),str(outcome.instrument_id),"REJECTED",outcome.reason_code,outcome.rejection_time.isoformat())
+        values=(str(outcome.order_id),str(outcome.signal_id),str(outcome.instrument_id),"CANCELLED",outcome.reason_code,outcome.cancellation_time.astimezone(timezone.utc).isoformat(),format(outcome.cancelled_quantity.normalize(),"f"))
+    else: values=(str(outcome.order_id),str(outcome.signal_id),str(outcome.instrument_id),"REJECTED",outcome.reason_code,outcome.rejection_time.astimezone(timezone.utc).isoformat())
     return sha256("|".join(values).encode()).hexdigest()
 class PaperTerminalPersistence(Protocol):
     def persist(self,effect:PaperEffect,outcome:PaperTerminalOutcome)->bool: ...

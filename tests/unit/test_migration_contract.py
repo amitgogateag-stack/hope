@@ -82,6 +82,20 @@ def test_partial_fill_cancellation_is_an_authenticated_reconciliation_shape() ->
     assert "ORDER BY created_at, effect_id" in sql
 
 
+def test_paper_terminal_event_and_effect_are_complete_and_payload_bound() -> None:
+    sql = (
+        ROOT / "migrations/205_paper_terminal_effect_payload.sql"
+    ).read_text()
+    assert "hope_paper_terminal_payload_hash" in sql
+    assert "event_time AT TIME ZONE 'UTC'" in sql
+    assert "PAPER_TERMINAL_EFFECT_PAYLOAD_MISMATCH" in sql
+    assert "PAPER_TERMINAL_EVENT_WITHOUT_EFFECT" in sql
+    assert "PAPER_TERMINAL_EFFECT_WITHOUT_EVENT" in sql
+    assert "BEFORE INSERT ON paper_order_terminal_events" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+    assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
