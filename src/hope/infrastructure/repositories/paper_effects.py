@@ -80,6 +80,10 @@ class SqlAlchemyPaperEffectRepository:
         if (
             existing["effect_id"] != effect.effect_id
             or existing["payload_hash"] != effect.payload_hash
+            or existing["owner_status"] not in (
+                JobRunStatus.CLAIMED.value,
+                JobRunStatus.SUCCEEDED.value,
+            )
             or (
                 existing["job_run_id"] != effect.job_run_id
                 and existing["owner_status"] != JobRunStatus.SUCCEEDED.value
@@ -130,9 +134,17 @@ class SqlAlchemyPaperEffectRepository:
         ).mappings().one_or_none()
         if row is None:
             return None
+        # A matching job ID is not sufficient authorization: a FAILED owner
+        # cannot supply evidence even to its own restarted caller.
         if (
-            row["job_run_id"] != job_run_id
-            and row["owner_status"] != JobRunStatus.SUCCEEDED.value
+            row["owner_status"] not in (
+                JobRunStatus.CLAIMED.value,
+                JobRunStatus.SUCCEEDED.value,
+            )
+            or (
+                row["job_run_id"] != job_run_id
+                and row["owner_status"] != JobRunStatus.SUCCEEDED.value
+            )
         ):
             raise ValueError("PAPER_EFFECT_IDENTITY_CONFLICT")
         return self._from_row(row)

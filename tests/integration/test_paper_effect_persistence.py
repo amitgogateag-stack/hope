@@ -229,3 +229,45 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
             with connection.begin_nested():
                 effects.record(terminal_effect)
         assert "PAPER_EFFECT_REQUIRES_CLAIMED_JOB" in str(exc_info.value)
+
+
+@pytest.mark.integration
+def test_failed_owner_cannot_reuse_its_own_durable_effect_after_restart() -> None:
+    """Same-run identity must not bypass terminal FAILED owner verification."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    run = create_scheduled_job_run(
+        f"paper-effect-failed-self-reuse-{uuid4()}",
+        datetime(2026, 10, 12, 14, 0, tzinfo=UTC),
+    )
+    effect = create_paper_effect(run, PaperEffectType.SIGNAL, uuid4(), PAYLOAD)
+    try:
+        # A committed FAILED job is the restart boundary under test.
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(run) is True
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            assert effects.record(effect) is True
+            assert effects.get_reusable_for_job(
+                effect.effect_type, effect.entity_id, run.job_run_id,
+            ) == effect
+            assert jobs.complete(create_job_run_completion(
+                run, JobRunStatus.FAILED,
+                run.scheduled_for + timedelta(minutes=1),
+                failure_code="EXPECTED_FAILED_SELF_REUSE",
+            )) is True
+
+        with engine.begin() as connection:
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+                effects.get_reusable_for_job(
+                    effect.effect_type, effect.entity_id, run.job_run_id,
+                )
+            with pytest.raises(ValueError, match="PAPER_EFFECT_OWNER_NOT_RECOVERABLE"):
+                effects.get_recoverable(effect.effect_type, effect.entity_id)
+    finally:
+        engine.dispose()

@@ -120,3 +120,59 @@ def test_record_rejects_insert_conflict_without_matching_logical_effect():
     with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
         SqlAlchemyPaperEffectRepository(connection).record(effect)
     assert connection.calls == 2
+
+
+@pytest.mark.parametrize(
+    ("owner_status", "same_job", "allowed"),
+    [
+        ("CLAIMED", True, True),
+        ("CLAIMED", False, False),
+        ("SUCCEEDED", True, True),
+        ("SUCCEEDED", False, True),
+        ("FAILED", True, False),
+        ("FAILED", False, False),
+        ("CORRUPT", True, False),
+    ],
+)
+def test_reusable_effect_requires_nonfailed_durable_owner(
+    owner_status, same_job, allowed,
+):
+    from datetime import UTC, datetime
+    from hope.application.jobs import create_scheduled_job_run
+    from hope.application.paper.effects import create_paper_effect
+
+    run = create_scheduled_job_run(
+        "paper:effect-owner-status", datetime(2026, 10, 12, tzinfo=UTC),
+    )
+    effect = create_paper_effect(run, PaperEffectType.SIGNAL, uuid4(), "a" * 64)
+    caller = run.job_run_id if same_job else uuid4()
+    row = {
+        "effect_id": effect.effect_id,
+        "job_run_id": effect.job_run_id,
+        "effect_type": effect.effect_type.value,
+        "entity_id": effect.entity_id,
+        "payload_hash": effect.payload_hash,
+        "owner_status": owner_status,
+    }
+
+    class _Result:
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return row
+
+    class _Connection:
+        def execute(self, statement):
+            return _Result()
+
+    repository = SqlAlchemyPaperEffectRepository(_Connection())
+    if allowed:
+        assert repository.get_reusable_for_job(
+            effect.effect_type, effect.entity_id, caller,
+        ) == effect
+    else:
+        with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
+            repository.get_reusable_for_job(
+                effect.effect_type, effect.entity_id, caller,
+            )
