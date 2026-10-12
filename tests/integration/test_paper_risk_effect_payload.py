@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperRiskWriter
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.risk import paper_risk_payload_hash
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.infrastructure.postgres.migrations import apply_migrations
@@ -44,13 +45,19 @@ def _setup_lineage(connection, migrations_dir):
         },
     )
     assert SqlAlchemyJobRunRepository(connection).claim(run) is True
+    signal_effect = create_paper_effect(
+        run,
+        PaperEffectType.SIGNAL,
+        signal_id,
+        "a" * 64,
+    )
     connection.execute(
         text(
             "INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) "
             "VALUES (:effect_id, :job_run_id, 'SIGNAL', :signal_id, :payload_hash)"
         ),
         {
-            "effect_id": uuid4(),
+            "effect_id": signal_effect.effect_id,
             "job_run_id": run.job_run_id,
             "signal_id": signal_id,
             "payload_hash": "a" * 64,
