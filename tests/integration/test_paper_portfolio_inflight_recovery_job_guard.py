@@ -26,7 +26,8 @@ def test_inflight_recovery_requires_durable_claim_even_for_empty_portfolio() -> 
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     try:
-        with engine.begin() as connection:
+        with engine.connect() as connection:
+            transaction = connection.begin()
             apply_migrations(connection, migrations_dir)
             run = create_scheduled_job_run(
                 f"paper-inflight-recovery-{uuid4()}",
@@ -38,7 +39,7 @@ def test_inflight_recovery_requires_durable_claim_even_for_empty_portfolio() -> 
 
             # A non-existent job ID must not bypass the authenticated-job path.
             with pytest.raises(
-                RuntimeError, match="PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED",
+                RuntimeError, match="PAPER_PORTFOLIO_JOB_NOT_RECOVERABLE",
             ):
                 portfolio.verify_accounting_history(
                     portfolio_id, current_job_run_id=uuid4(),
@@ -56,10 +57,12 @@ def test_inflight_recovery_requires_durable_claim_even_for_empty_portfolio() -> 
                 failure_code="EXPECTED_INFLIGHT_RECOVERY_GUARD",
             )) is True
             with pytest.raises(
-                RuntimeError, match="PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED",
+                RuntimeError, match="PAPER_PORTFOLIO_JOB_NOT_RECOVERABLE",
             ):
                 portfolio.verify_accounting_history(
                     portfolio_id, current_job_run_id=run.job_run_id,
                 )
+            # Do not leak a terminal test job into the shared CI database.
+            transaction.rollback()
     finally:
         engine.dispose()

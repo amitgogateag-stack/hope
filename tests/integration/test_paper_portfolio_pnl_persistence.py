@@ -519,7 +519,7 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
 
         with pytest.raises(
             RuntimeError,
-            match="PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE",
+            match="PAPER_PORTFOLIO_JOB_NOT_RECOVERABLE",
         ):
             portfolio.verify_accounting_history(
                 portfolio_id,

@@ -343,7 +343,7 @@ def test_portfolio_recovery_rejects_duplicate_missing_or_substituted_joined_rows
         repository.verify_accounting_history(portfolio_id)
 
 
-@pytest.mark.parametrize("durable_status", [None, "FAILED", "SUCCEEDED"])
+@pytest.mark.parametrize("durable_status", [None, "FAILED"])
 def test_inflight_portfolio_recovery_rejects_unclaimed_job_before_portfolio_read(
     monkeypatch, durable_status,
 ) -> None:
@@ -366,15 +366,16 @@ def test_inflight_portfolio_recovery_rejects_unclaimed_job_before_portfolio_read
         lambda *args, **kwargs: pytest.fail("unclaimed job must not read portfolio"),
     )
     with pytest.raises(
-        RuntimeError, match="PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED",
+        RuntimeError, match="PAPER_PORTFOLIO_JOB_NOT_RECOVERABLE",
     ):
         repository.verify_accounting_history(
             portfolio_id, current_job_run_id=job_run_id,
         )
 
 
+@pytest.mark.parametrize("durable_status", ["CLAIMED", "SUCCEEDED"])
 def test_inflight_portfolio_recovery_accepts_claimed_job_before_portfolio_read(
-    monkeypatch,
+    monkeypatch, durable_status,
 ) -> None:
     repository = _repository(_Effects())
     job_run_id, portfolio_id = uuid4(), uuid4()
@@ -382,7 +383,7 @@ def test_inflight_portfolio_recovery_accepts_claimed_job_before_portfolio_read(
 
     class _Result:
         def scalar_one_or_none(self):
-            return "CLAIMED"
+            return durable_status
 
     class _Connection:
         def execute(self, statement, parameters):

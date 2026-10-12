@@ -484,8 +484,9 @@ class SqlAlchemyPaperPortfolioRepository:
             # In-flight recovery is privileged: a matching effect owner alone
             # does not prove the caller is still running.  Lock the job before
             # the portfolio, matching accounting/reconciliation lock order.
-            # A FAILED or SUCCEEDED owner must use ordinary recovery, which
-            # requires every effect to belong to a SUCCEEDED job.
+            # A FAILED or missing owner cannot supply privileged recovery.
+            # A SUCCEEDED owner may be reverified by reconciliation; its
+            # effects are independently authenticated against durable payloads.
             status = self._connection.execute(
                 text(
                     "SELECT status FROM job_runs "
@@ -493,8 +494,8 @@ class SqlAlchemyPaperPortfolioRepository:
                 ),
                 {"job_run_id": current_job_run_id},
             ).scalar_one_or_none()
-            if status != "CLAIMED":
-                raise RuntimeError("PAPER_PORTFOLIO_INFLIGHT_JOB_NOT_CLAIMED")
+            if status not in ("CLAIMED", "SUCCEEDED"):
+                raise RuntimeError("PAPER_PORTFOLIO_JOB_NOT_RECOVERABLE")
         ledger = self._load_materialized_ledger(
             portfolio_id,
             lock_for_update=lock_for_update,
