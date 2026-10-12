@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import (
     JobRunStatus,
@@ -180,7 +180,7 @@ def test_paper_portfolio_rejects_untracked_or_conflicting_fill_without_state_mut
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         repository = SqlAlchemyPaperPortfolioRepository(connection)
-        with pytest.raises(ValueError, match="PAPER_PORTFOLIO_FILL_UNTRACKED"):
+        with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_FILL_JOB_NOT_CLAIMED"):
             repository.apply_fill(
                 portfolio_id,
                 Decimal("500"),
@@ -1024,3 +1024,110 @@ def test_paper_portfolio_projection_identities_are_immutable() -> None:
             transaction.rollback()
             engine.dispose()
 
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("terminal_status", [JobRunStatus.SUCCEEDED, JobRunStatus.FAILED])
+def test_direct_portfolio_fill_rejects_terminal_job_before_materialization(terminal_status):
+    """A reusable fill effect does not authorize a terminal caller to write."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id, instrument_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper-portfolio-direct-terminal-{terminal_status.value}-{uuid4()}",
+        datetime(2026, 9, 9, 23, 25, tzinfo=UTC),
+    )
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                     "VALUES (:id, :symbol, 'TEST', 'ACTIVE')"),
+                {"id": instrument_id, "symbol": f"PORT-DIRECT-{instrument_id}"},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(run) is True
+            fill = persist_fill(
+                connection, PaperCycleContext(run), instrument_id,
+                side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"),
+                sequence=0, decision_minute=20,
+            )
+            assert jobs.complete(create_job_run_completion(
+                run, terminal_status, run.scheduled_for + timedelta(minutes=1),
+                **({"failure_code": "EXPECTED_DIRECT_TERMINAL_TEST"}
+                   if terminal_status is JobRunStatus.FAILED else {}),
+            )) is True
+            repository = SqlAlchemyPaperPortfolioRepository(connection)
+            with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_FILL_JOB_NOT_CLAIMED"):
+                repository.apply_fill(
+                    portfolio_id, Decimal("1000"), fill, job_run_id=run.job_run_id,
+                )
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT count(*) FROM paper_portfolio_fill_applications "
+                     "WHERE portfolio_id=:id"),
+                {"id": portfolio_id},
+            ).scalar_one() == 0
+            connection.rollback()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_direct_portfolio_fill_serializes_with_job_terminalization_lock():
+    """A direct writer cannot skip the reconciliation job-row lock."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    portfolio_id, instrument_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        f"paper-portfolio-direct-lock-{uuid4()}",
+        datetime(2026, 9, 9, 23, 25, tzinfo=UTC),
+    )
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) "
+                     "VALUES (:id, :symbol, 'TEST', 'ACTIVE')"),
+                {"id": instrument_id, "symbol": f"PORT-LOCK-{instrument_id}"},
+            )
+            assert SqlAlchemyJobRunRepository(connection).claim(run) is True
+            fill = persist_fill(
+                connection, PaperCycleContext(run), instrument_id,
+                side=OrderSide.BUY, quantity=Decimal("1"), price=Decimal("100"),
+                sequence=0, decision_minute=20,
+            )
+        with engine.connect() as terminalizer:
+            terminalizer_tx = terminalizer.begin()
+            try:
+                assert terminalizer.execute(
+                    text("SELECT status FROM job_runs "
+                         "WHERE job_run_id=:id FOR UPDATE"),
+                    {"id": run.job_run_id},
+                ).scalar_one() == "CLAIMED"
+                with pytest.raises(OperationalError, match="lock timeout"):
+                    with engine.begin() as writer:
+                        writer.execute(text("SET LOCAL lock_timeout = '100ms'"))
+                        SqlAlchemyPaperPortfolioRepository(writer).apply_fill(
+                            portfolio_id, Decimal("1000"), fill,
+                            job_run_id=run.job_run_id,
+                        )
+            finally:
+                terminalizer_tx.rollback()
+        # Once the job lock is free, the same valid fill remains applicable.
+        with engine.begin() as connection:
+            assert SqlAlchemyPaperPortfolioRepository(connection).apply_fill(
+                portfolio_id, Decimal("1000"), fill, job_run_id=run.job_run_id,
+            ) is True
+            connection.rollback()
+    finally:
+        engine.dispose()

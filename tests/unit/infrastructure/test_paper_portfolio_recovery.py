@@ -399,3 +399,47 @@ def test_inflight_portfolio_recovery_accepts_claimed_job_before_portfolio_read(
         portfolio_id, current_job_run_id=job_run_id,
     ) is None
     assert calls == [("job", job_run_id), ("portfolio", portfolio_id, True)]
+
+
+@pytest.mark.parametrize("status", [None, "FAILED", "SUCCEEDED"])
+def test_direct_portfolio_fill_rejects_unclaimed_job_before_effect_read(
+    monkeypatch, status,
+):
+    repository = _repository(_Effects())
+    job_run_id = uuid4()
+    class _Result:
+        def scalar_one_or_none(self):
+            return status
+    from contextlib import nullcontext
+    from decimal import Decimal
+    class _Connection:
+        def begin_nested(self):
+            return nullcontext()
+        def execute(self, statement, params):
+            assert "FOR UPDATE" in str(statement)
+            assert params == {"job_run_id": job_run_id}
+            return _Result()
+    repository._connection = _Connection()
+    monkeypatch.setattr(
+        repository, "_assert_tracked_fill",
+        lambda *args: pytest.fail("terminal caller must not read fill effects"),
+    )
+    with pytest.raises(RuntimeError, match="PAPER_PORTFOLIO_FILL_JOB_NOT_CLAIMED"):
+        repository.apply_fill_with_transition(
+            uuid4(), Decimal("100"), object(), job_run_id=job_run_id,
+        )
+
+
+def test_direct_portfolio_fill_locks_claimed_job_before_effect_read() -> None:
+    repository = _repository(_Effects())
+    job_run_id = uuid4()
+    class _Result:
+        def scalar_one_or_none(self):
+            return "CLAIMED"
+    class _Connection:
+        def execute(self, statement, params):
+            assert "FOR UPDATE" in str(statement)
+            assert params == {"job_run_id": job_run_id}
+            return _Result()
+    repository._connection = _Connection()
+    assert repository._lock_claimed_job_for_fill(job_run_id) is None

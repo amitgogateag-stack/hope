@@ -630,6 +630,18 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_HISTORY_MISMATCH")
         return ledger
 
+    def _lock_claimed_job_for_fill(self, job_run_id: UUID) -> None:
+        """Serialize direct portfolio writes with job terminalization first."""
+        status = self._connection.execute(
+            text(
+                "SELECT status FROM job_runs "
+                "WHERE job_run_id = :job_run_id FOR UPDATE"
+            ),
+            {"job_run_id": job_run_id},
+        ).scalar_one_or_none()
+        if status != "CLAIMED":
+            raise RuntimeError("PAPER_PORTFOLIO_FILL_JOB_NOT_CLAIMED")
+
     def apply_fill_with_transition(
         self,
         portfolio_id: UUID,
@@ -640,6 +652,10 @@ class SqlAlchemyPaperPortfolioRepository:
     ) -> PortfolioFillTransition | None:
         """Atomically apply one durable PAPER fill and return its accounting transition."""
         with self._connection.begin_nested():
+            # The lower-level API is callable without PaperAccountingRepository.
+            # Lock the job before effect and portfolio reads so a terminalized
+            # job cannot create a new application or race reconciliation.
+            self._lock_claimed_job_for_fill(job_run_id)
             self._assert_tracked_fill(fill, job_run_id)
             portfolio = self._ensure_and_lock_portfolio(portfolio_id, initial_cash)
             applications = self._load_application_history(portfolio_id, portfolio["version"])
