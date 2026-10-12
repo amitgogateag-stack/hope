@@ -14,14 +14,14 @@
 <div class="shell">
 <aside><div class="section">WORKSPACE</div><nav aria-label="Dashboard sections"><button type="button" class="active" data-view="overview" aria-current="page">◫ &nbsp; Overview</button><button type="button" data-view="research">◇ &nbsp; Research Lab</button><button type="button" data-view="paper">▤ &nbsp; PAPER Operations</button><button type="button" data-view="safety">◈ &nbsp; Safety &amp; Engineering</button></nav><div class="aside-note">HOPE is independent of ATC.<br>India + USA target scope.<br><br>Read-only interface concept.<br>No broker actions available.</div></aside>
 <main>
-<div class="notice"><strong>Local dashboard preview — not a deployed trading service.</strong> Verified aggregate database metrics can be loaded from a private JSON snapshot. All other figures remain “Not connected”. Engineering CI is a dated snapshot, not a live feed.</div><div class="panel" style="margin-bottom:20px"><h2>Connect a verified read-only snapshot</h2><p>Export a snapshot from your HOPE database using the documented read-only exporter, then select the JSON file below. Nothing is uploaded to ChatGPT or a server.</p><p style="margin-top:12px"><label for="snapshot-file" class="pill" style="display:inline-block;cursor:pointer">Choose local snapshot JSON</label> <input id="snapshot-file" type="file" accept=".json,application/json" aria-label="Select HOPE read-only snapshot JSON" style="max-width:250px"> <span id="snapshot-status" role="status" style="font-size:12px;color:#a3b5ce">No snapshot loaded</span></p></div>
+<div class="notice"><strong>Local dashboard preview — not a deployed trading service.</strong> Verified aggregate database metrics can be loaded from a private JSON snapshot. All other figures remain “Not connected”. Engineering CI is a dated snapshot, not a live feed.</div><div class="panel" style="margin-bottom:20px"><h2>Connect a verified read-only snapshot</h2><p>When hosted privately on EC2, verified aggregate snapshots refresh automatically every minute. Offline preview: select a JSON file below. No data is uploaded to ChatGPT.</p><p style="margin-top:12px"><label for="snapshot-file" class="pill" style="display:inline-block;cursor:pointer">Choose local snapshot JSON</label> <input id="snapshot-file" type="file" accept=".json,application/json" aria-label="Select HOPE read-only snapshot JSON" style="max-width:250px"> <span id="snapshot-status" role="status" style="font-size:12px;color:#a3b5ce">No snapshot loaded</span></p></div>
 <section id="overview" class="view active"><div class="heading"><div><div class="eyebrow">Command center</div><h1>HOPE Overview</h1><p>One place to see evidence, PAPER operations, risk and system health.</p></div><span class="pill">India + USA · target markets</span></div>
 <div class="metrics"><div class="card"><div class="kicker">Recorded research runs</div><div id="research-runs" class="value unknown">Not connected</div><div class="detail">No verified research count loaded</div></div><div class="card"><div class="kicker">Validated strategies</div><div class="value unknown">Not connected</div><div class="detail">No proven edge asserted</div></div><div class="card"><div class="kicker">PAPER P&amp;L</div><div class="value unknown">Not connected</div><div class="detail">No invented performance metrics</div></div><div class="card"><div class="kicker">Latest verified CI</div><div class="value">#1162 <span style="color:#74dbad">PASS</span></div><div class="detail">Snapshot: 12 Oct 2026 · not live</div></div></div>
 <div class="layout"><div class="panel"><h2>Engineering roadmap</h2><div class="steps"><div class="step"><i class="dot done"></i><div><b>Foundation &amp; data integrity</b><span>Schema, provenance and migration safeguards</span></div></div><div class="step"><i class="dot done"></i><div><b>Research and backtest foundations</b><span>Evidence, reproducibility and validation components</span></div></div><div class="step"><i class="dot done"></i><div><b>PAPER lifecycle safety</b><span>Durable records, idempotency and recovery guards</span></div></div><div class="step"><i class="dot pending"></i><div><b>Dashboard read models</b><span>Connect authenticated, read-only operational data</span></div></div><div class="step"><i class="dot"></i><div><b>End-to-end operational acceptance</b><span>Requires deployment, observability and validation</span></div></div></div></div><div class="panel"><h2>Operating posture</h2><div class="status-row"><span>PAPER-only safety boundary</span><span class="tag">ENFORCED IN CODE</span></div><div class="status-row"><span>LIVE broker submission</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Research performance</span><span class="tag neutral">NOT LOADED</span></div><div class="status-row"><span>Operational runtime health</span><span class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Latest CI snapshot</span><span class="tag">PASS #1162</span></div></div></div></section>
 <section id="research" class="view"><div class="heading"><div><div class="eyebrow">Scientific evidence</div><h1>Research Lab</h1><p>Strategy families, reproducible experiments and out-of-sample evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">Hypotheses evaluated</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">OOS evidence</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Cost stress</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Promotion eligibility</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Research evidence table</h2><div class="empty"><strong>No authenticated experiment feed</strong><p>Once connected, each row will show strategy family, dataset/version, sample size, out-of-sample result, friction, uncertainty and evidence verdict. No strategy will be marked “proven” without supporting records.</p></div></div></section>
 <section id="paper" class="view"><div class="heading"><div><div class="eyebrow">Simulated execution</div><h1>PAPER Operations</h1><p>Trade lifecycle, job recovery, fills and reconciliation evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">PAPER orders</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Open PAPER positions</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER job runs</div><div id="paper-jobs" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER realized P&amp;L</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Execution ledger</h2><div class="empty"><strong>No runtime records loaded</strong><p>Future read-only table: decision → risk verdict → order → fill / cancellation → portfolio effect → reconciliation. Missing data will remain visibly unknown rather than appearing as zero.</p></div></div></section>
 <section id="safety" class="view"><div class="heading"><div><div class="eyebrow">Control plane</div><h1>Safety &amp; Engineering</h1><p>Fail-closed policies and traceable software changes.</p></div></div><div class="layout"><div class="panel"><h2>Safety contracts</h2><div class="status-row"><span>LIVE broker adapter</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Durable job identity</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Recovery / reconciliation guards</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Current deployment health</span><span class="tag neutral">UNKNOWN</span></div><div class="status-row"><span>PAPER environment (snapshot)</span><span id="paper-state" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Risk limits in runtime</span><span class="tag neutral">NOT CONNECTED</span></div></div><div class="panel"><h2>Verified engineering snapshot</h2><div class="status-row"><span>Workflow</span><span class="tag">HOPE CI #1162 PASS</span></div><div class="status-row"><span>Branch</span><span class="mono">p0-pit-context</span></div><div class="status-row"><span>Commit</span><span class="mono">6f25849f928e</span></div><div class="status-row"><span>Snapshot date</span><span>12 Oct 2026</span></div><p class="footer">This is a fixed snapshot, not a GitHub API connection.</p></div></div></section>
-<p class="footer">HOPE dashboard v0.2 · Local read-only JSON import · No trading buttons · No network requests · No invented market or account data</p>
+<p class="footer">HOPE dashboard v0.3 · Automatic loopback refresh or local JSON import · No trading buttons · No external network requests · No invented market or account data</p>
 </main></div>
 <script>
 document.querySelectorAll('nav button[data-view]').forEach(button=>{
@@ -33,51 +33,73 @@ document.querySelectorAll('nav button[data-view]').forEach(button=>{
 });
 const fileInput = document.getElementById('snapshot-file');
 const snapshotStatus = document.getElementById('snapshot-status');
+const clearSnapshot = (message) => {
+ for (const id of ['research-runs', 'paper-jobs']) {
+  const metric = document.getElementById(id);
+  metric.textContent = 'Not connected';
+  metric.classList.add('unknown');
+ }
+ const state = document.getElementById('paper-state');
+ state.textContent = 'NOT CONNECTED';
+ state.className = 'tag neutral';
+ snapshotStatus.textContent = message;
+ snapshotStatus.style.color = '#f2a2a2';
+};
+const applySnapshot = (data, source) => {
+ const counts = data?.paper?.job_runs;
+ const integer = x => Number.isSafeInteger(x) && x >= 0;
+ if (data.schema_version !== 1 || data.source !== 'hope_postgresql' ||
+     !integer(data?.research?.run_count) ||
+     !['RUNNING','HALTED'].includes(data?.paper?.environment_state) ||
+     !counts || !['total','claimed','succeeded','failed'].every(k=>integer(counts[k])) ||
+     counts.total !== counts.claimed + counts.succeeded + counts.failed ||
+     typeof data.generated_at !== 'string' ||
+     !/[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(data.generated_at)) {
+  throw Error('Invalid or incomplete HOPE snapshot');
+ }
+ const timestamp = Date.parse(data.generated_at);
+ const age = Date.now() - timestamp;
+ if (!Number.isFinite(timestamp) || age < -300000) throw Error('Invalid snapshot timestamp');
+ const stale = age > 3600000;
+ const research = document.getElementById('research-runs');
+ const paper = document.getElementById('paper-jobs');
+ const state = document.getElementById('paper-state');
+ research.textContent = data.research.run_count.toLocaleString();
+ paper.textContent = counts.total.toLocaleString();
+ research.classList.remove('unknown');
+ paper.classList.remove('unknown');
+ state.textContent = data.paper.environment_state + (stale ? ' · STALE' : '');
+ state.className = 'tag ' + (stale || data.paper.environment_state === 'HALTED' ? 'off' : '');
+ snapshotStatus.textContent = (stale ? 'STALE · ' : 'Loaded · ') + data.generated_at +
+     ' · ' + source + ' · PAPER claimed ' + counts.claimed +
+     ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
+ snapshotStatus.style.color = stale ? '#e8c07c' : '#84dfbb';
+};
 fileInput.addEventListener('change', async () => {
  const file = fileInput.files && fileInput.files[0];
  if (!file) return;
  try {
   if (file.size > 32768) throw Error('Snapshot too large');
-  const data = JSON.parse(await file.text());
-  const counts = data?.paper?.job_runs;
-  const integer = x => Number.isSafeInteger(x) && x >= 0;
-  if (data.schema_version !== 1 || data.source !== 'hope_postgresql' ||
-      !integer(data?.research?.run_count) ||
-      !['RUNNING','HALTED'].includes(data?.paper?.environment_state) ||
-      !counts || !['total','claimed','succeeded','failed'].every(k=>integer(counts[k])) ||
-      counts.total !== counts.claimed + counts.succeeded + counts.failed ||
-      typeof data.generated_at !== 'string' ||
-      !/[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(data.generated_at)) {
-   throw Error('Invalid or incomplete HOPE snapshot');
-  }
-  const timestamp = Date.parse(data.generated_at);
-  const age = Date.now() - timestamp;
-  if (!Number.isFinite(timestamp) || age < -300000) throw Error('Invalid snapshot timestamp');
-  const stale = age > 3600000;
-  const research = document.getElementById('research-runs');
-  const paper = document.getElementById('paper-jobs');
-  const state = document.getElementById('paper-state');
-  research.textContent = data.research.run_count.toLocaleString();
-  paper.textContent = counts.total.toLocaleString();
-  research.classList.remove('unknown');
-  paper.classList.remove('unknown');
-  state.textContent = data.paper.environment_state + (stale ? ' · STALE' : '');
-  state.className = 'tag ' + (stale || data.paper.environment_state === 'HALTED' ? 'off' : '');
-  snapshotStatus.textContent = (stale ? 'STALE · ' : 'Loaded · ') + data.generated_at +
-      ' · PAPER claimed ' + counts.claimed + ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
-  snapshotStatus.style.color = stale ? '#e8c07c' : '#84dfbb';
+  applySnapshot(JSON.parse(await file.text()), 'local file');
  } catch (error) {
-  for (const id of ['research-runs', 'paper-jobs']) {
-   const metric = document.getElementById(id);
-   metric.textContent = 'Not connected';
-   metric.classList.add('unknown');
-  }
-  const state = document.getElementById('paper-state');
-  state.textContent = 'NOT CONNECTED';
-  state.className = 'tag neutral';
-  snapshotStatus.textContent = 'Snapshot rejected: ' + error.message;
-  snapshotStatus.style.color = '#f2a2a2';
+  clearSnapshot('Snapshot rejected: ' + error.message);
  }
 });
+if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(location.hostname)) {
+ const refresh = async () => {
+  try {
+   const response = await fetch('/snapshot.json', {cache:'no-store'});
+   if (!response.ok) throw Error('Snapshot unavailable (' + response.status + ')');
+   if (Number(response.headers.get('Content-Length')) > 32768) throw Error('Snapshot too large');
+   const body = await response.text();
+   if (body.length > 32768) throw Error('Snapshot too large');
+   applySnapshot(JSON.parse(body), 'automatic refresh');
+  } catch (error) {
+   clearSnapshot('Dashboard data unavailable: ' + error.message);
+  }
+ };
+ refresh();
+ setInterval(refresh, 60000);
+}
 </script>
 </body></html>

@@ -1,0 +1,26 @@
+[Unit]
+Description=HOPE private read-only dashboard on loopback
+After=network.target
+
+[Service]
+Type=simple
+User=hope-dashboard
+Group=hope-dashboard
+WorkingDirectory=/opt/hope
+Environment=PYTHONPATH=/opt/hope/src
+ExecStart=/opt/hope/.venv/bin/python -m hope.api.dashboard_server --port 8787 --preview /opt/hope/docs/dashboard/preview.html --snapshot /var/lib/hope-dashboard/snapshot.json
+Restart=on-failure
+RestartSec=5s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

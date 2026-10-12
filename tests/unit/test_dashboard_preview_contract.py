@@ -40,7 +40,8 @@ def test_preview_never_fabricates_runtime_metrics_or_exposes_execution_actions()
     assert "PROTOTYPE · NO LIVE DATA" in html
     assert "LIVE broker submission" in html
     assert "NOT ENABLED" in html
-    assert "fetch(" not in html
+    assert "fetch(" in html
+    assert "setInterval(refresh, 60000)" in html
     assert "XMLHttpRequest" not in html
     assert "<form" not in html.lower()
 
@@ -63,4 +64,5 @@ def test_preview_imports_local_aggregate_snapshot_without_network_calls():
     assert "await file.text()" in html
     assert "Snapshot rejected" in html
     assert "STALE" in html
-    assert "fetch(" not in html
+    assert "fetch(" in html
+    assert "setInterval(refresh, 60000)" in html

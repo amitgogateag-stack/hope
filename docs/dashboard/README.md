@@ -29,3 +29,11 @@ HOPE_DATABASE_URL='postgresql+psycopg://READ_ONLY_ROLE:...@HOST/hope' \\
 Then open `preview.html` and select the exported JSON file. It is read in the browser; no upload or API call occurs. If the snapshot is older than one hour, the dashboard explicitly marks it **STALE**. If the snapshot is invalid or incomplete, it is rejected. Missing data stays **Not connected**.
 
 **Not yet automatic:** Serving this through a private authenticated dashboard, scheduling snapshot exports, and integrating detailed PAPER / research evidence require infrastructure deployment and authorization. Do not publish private snapshots on GitHub Pages or in this public repository.
+
+## Private EC2 dashboard (v0.3)
+
+The deployment bundle under deploy/dashboard/ provides a loopback-only HTTP server and systemd units. The exporter runs every five minutes using a dedicated PostgreSQL SELECT-only role. The browser refreshes the snapshot every minute and shows STALE when the database snapshot is over one hour old. Missing or invalid data resets the metrics to Not connected.
+
+Access the UI through an authenticated SSH tunnel, never an open security-group port. Example: ssh -N -L 8787:127.0.0.1:8787 EC2_USER@EC2_HOST. Then visit http://127.0.0.1:8787/ on your computer. See deploy/dashboard/README.md for installation and rollback instructions. The dashboard does not submit broker orders, operate the scheduler or modify risk policy.
+
+The repository contains deployment instructions and service definitions, not a deployed instance or database credentials. An operator must install these on EC2 after verifying the environment.
