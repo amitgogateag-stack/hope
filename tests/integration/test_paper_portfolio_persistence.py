@@ -99,7 +99,7 @@ def test_paper_portfolio_materializes_full_state_and_restores_applied_fill_histo
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-portfolio", datetime(2026, 9, 9, 23, 20, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-portfolio", datetime(2026, 9, 9, 23, 24, tzinfo=UTC))
     context = PaperCycleContext(run)
 
     with engine.begin() as connection:
@@ -201,7 +201,7 @@ def test_paper_portfolio_requires_reusable_source_fill_ownership() -> None:
     instrument_id, portfolio_id = uuid4(), uuid4()
     source_run = create_scheduled_job_run(
         "paper-portfolio-source-fill-owner",
-        datetime(2026, 9, 9, 23, 25, tzinfo=UTC),
+        datetime(2026, 9, 9, 23, 27, tzinfo=UTC),
     )
     consumer_run = create_scheduled_job_run(
         "paper-portfolio-foreign-fill-consumer",
@@ -350,7 +350,7 @@ def test_paper_portfolio_accounting_recovery_rejects_applied_fill_without_pnl():
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-portfolio-accounting-recovery",
-        datetime(2026, 9, 9, 23, 32, tzinfo=UTC),
+        datetime(2026, 9, 9, 23, 34, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 
@@ -391,7 +391,7 @@ def test_missing_pnl_recovery_is_read_only_across_repeated_attempts():
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-missing-pnl-read-only",
-        datetime(2026, 9, 9, 23, 30, tzinfo=UTC),
+        datetime(2026, 9, 9, 23, 32, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
     try:
@@ -444,7 +444,7 @@ def test_paper_fill_transition_recovery_requires_complete_accounting_history():
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-fill-transition-accounting-recovery", datetime(2026, 9, 9, 23, 35, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-fill-transition-accounting-recovery", datetime(2026, 9, 9, 23, 37, tzinfo=UTC))
     context = PaperCycleContext(run)
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
@@ -472,7 +472,7 @@ def test_paper_portfolio_restore_rejects_incomplete_application_history():
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-portfolio-history", datetime(2026, 9, 9, 23, 40, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-portfolio-history", datetime(2026, 9, 9, 23, 44, tzinfo=UTC))
     context = PaperCycleContext(run)
 
     with engine.begin() as connection:
@@ -526,7 +526,7 @@ def test_paper_portfolio_restore_rejects_corrupt_materialized_state():
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-portfolio-corrupt-state", datetime(2026, 9, 9, 23, 42, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-portfolio-corrupt-state", datetime(2026, 9, 9, 23, 44, tzinfo=UTC))
     context = PaperCycleContext(run)
 
     with engine.begin() as connection:
@@ -566,7 +566,7 @@ def test_paper_portfolio_rejects_fill_time_regression_without_state_mutation():
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-portfolio-chronology", datetime(2026, 9, 9, 23, 45, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-portfolio-chronology", datetime(2026, 9, 9, 23, 49, tzinfo=UTC))
     context = PaperCycleContext(run)
 
     with engine.begin() as connection:
@@ -626,7 +626,7 @@ def test_paper_portfolio_application_timestamp_is_database_authenticated() -> No
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-portfolio-applied-at-auth",
-        datetime(2026, 9, 9, 23, 50, tzinfo=UTC),
+        datetime(2026, 9, 9, 23, 52, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 

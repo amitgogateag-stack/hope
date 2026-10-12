@@ -38,7 +38,7 @@ def setup(connection, migrations_dir, *, job_key):
     apply_migrations(connection, migrations_dir)
     instrument_id = uuid4()
     portfolio_id = uuid4()
-    run = create_scheduled_job_run(job_key, datetime(2026, 9, 10, 5, 0, tzinfo=UTC))
+    run = create_scheduled_job_run(job_key, datetime(2026, 9, 10, 5, 1, tzinfo=UTC))
     context = PaperCycleContext(run)
     connection.execute(
         text(

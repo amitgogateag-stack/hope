@@ -109,7 +109,7 @@ def test_paper_portfolio_pnl_created_at_is_database_authenticated() -> None:
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-portfolio-pnl-created-at-auth",
-        datetime(2026, 9, 10, 0, 0, tzinfo=UTC),
+        datetime(2026, 9, 10, 0, 1, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 
@@ -183,7 +183,7 @@ def test_paper_portfolio_pnl_persists_only_transition_derived_accounting() -> No
     engine = create_engine(url)
     migrations_dir = Path(__file__).parents[2] / "migrations"
     instrument_id, portfolio_id = uuid4(), uuid4()
-    run = create_scheduled_job_run("paper-portfolio-pnl", datetime(2026, 9, 10, 0, 0, tzinfo=UTC))
+    run = create_scheduled_job_run("paper-portfolio-pnl", datetime(2026, 9, 10, 0, 2, tzinfo=UTC))
     context = PaperCycleContext(run)
 
     with engine.begin() as connection:
@@ -386,7 +386,7 @@ def test_matching_effect_cannot_authenticate_false_realized_pnl_transition() -> 
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         f"paper-pnl-false-transition:{uuid4()}",
-        datetime(2026, 9, 10, 0, 20, tzinfo=UTC),
+        datetime(2026, 9, 10, 0, 22, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 
@@ -474,7 +474,7 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-portfolio-recovery-pnl-owner",
-        datetime(2026, 9, 10, 0, 6, tzinfo=UTC),
+        datetime(2026, 9, 10, 0, 7, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 
@@ -613,7 +613,7 @@ def test_paper_pnl_application_cannot_be_deleted_to_orphan_event() -> None:
     instrument_id, portfolio_id = uuid4(), uuid4()
     run = create_scheduled_job_run(
         "paper-pnl-orphaned-application",
-        datetime(2026, 9, 10, 0, 8, tzinfo=UTC),
+        datetime(2026, 9, 10, 0, 9, tzinfo=UTC),
     )
     context = PaperCycleContext(run)
 
