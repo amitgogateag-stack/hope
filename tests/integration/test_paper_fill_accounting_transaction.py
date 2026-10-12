@@ -12,12 +12,14 @@ from hope.application.paper import (
     PaperCycleContext,
     PaperFillAccountingWriter,
     PaperOrderWriter,
+    PaperRiskWriter,
     PaperSignalWriter,
 )
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
 from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -25,6 +27,7 @@ from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffect
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
 UTC = timezone.utc
@@ -92,6 +95,15 @@ def build_fill(connection, context, instrument_id, *, minute=1):
     )
     PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
     PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+    PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+        context,
+        RiskAssessment(
+            signal_id=signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=fill.quantity,
+        ),
+    )
     return fill
 
 

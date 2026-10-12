@@ -14,7 +14,12 @@ from hope.application.jobs import (
     create_job_run_completion,
     create_scheduled_job_run,
 )
-from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper import (
+    PaperCycleContext,
+    PaperOrderWriter,
+    PaperRiskWriter,
+    PaperSignalWriter,
+)
 from hope.application.paper.effects import PaperEffectType
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import (
@@ -22,6 +27,7 @@ from hope.application.paper.portfolio_pnl import (
     paper_portfolio_pnl_event_id,
 )
 from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -29,6 +35,7 @@ from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepo
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_portfolio import SqlAlchemyPaperPortfolioRepository
 from hope.infrastructure.repositories.paper_portfolio_pnl import SqlAlchemyPaperPortfolioPnLRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
 UTC = timezone.utc
@@ -78,6 +85,15 @@ def persist_fill(connection, context, instrument_id, side, price, decision_minut
     )
     PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
     PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+    PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+        context,
+        RiskAssessment(
+            signal_id=signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=fill.quantity,
+        ),
+    )
     PaperFillWriter(SqlAlchemyPaperFillRepository(connection)).record(context, fill, sequence=0)
     return fill
 
