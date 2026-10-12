@@ -303,6 +303,152 @@ def test_portfolio_cash_cannot_commit_outside_immutable_fill_projection() -> Non
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "quantity = quantity + 1",
+        "average_price = average_price + 1",
+        "realized_pnl = realized_pnl + 1",
+        "total_commission = total_commission + 1",
+    ],
+)
+def test_portfolio_position_cannot_commit_outside_immutable_fill_projection(
+    mutation: str,
+) -> None:
+    """Reject every materialized position component that disagrees with fills."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection,
+                migrations_dir,
+                job_key=f"paper-portfolio-position-projection:{uuid4()}",
+            )
+            fill = persist_fill(
+                connection,
+                context,
+                instrument_id,
+                side=OrderSide.BUY,
+                price="100",
+                minute=47,
+            )
+            assert PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            ).apply_fill(
+                context,
+                portfolio_id,
+                Decimal("1000"),
+                fill,
+            ) is True
+
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_POSITION_PROJECTION_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE paper_portfolio_positions SET " + mutation
+                        + " WHERE portfolio_id=:portfolio_id "
+                          "AND instrument_id=:instrument_id"
+                    ),
+                    {
+                        "portfolio_id": portfolio_id,
+                        "instrument_id": instrument_id,
+                    },
+                )
+
+        with engine.begin() as connection:
+            assert connection.execute(
+                text(
+                    "SELECT quantity, average_price, realized_pnl, "
+                    "total_commission FROM paper_portfolio_positions "
+                    "WHERE portfolio_id=:portfolio_id "
+                    "AND instrument_id=:instrument_id"
+                ),
+                {
+                    "portfolio_id": portfolio_id,
+                    "instrument_id": instrument_id,
+                },
+            ).one() == (
+                Decimal("1"),
+                Decimal("100"),
+                Decimal("0"),
+                Decimal("0.25"),
+            )
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
+def test_position_projection_matches_weighted_average_close_and_reversal() -> None:
+    """Replay weighted entries, closes, and a short reversal at commit."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    try:
+        with engine.begin() as connection:
+            instrument_id, portfolio_id, _, context = setup(
+                connection,
+                migrations_dir,
+                job_key=f"paper-position-projection-reversal:{uuid4()}",
+            )
+            fills = [
+                persist_fill(
+                    connection,
+                    context,
+                    instrument_id,
+                    side=side,
+                    price=price,
+                    minute=minute,
+                )
+                for side, price, minute in [
+                    (OrderSide.BUY, "100", 40),
+                    (OrderSide.BUY, "120", 41),
+                    (OrderSide.SELL, "130", 42),
+                    (OrderSide.SELL, "90", 43),
+                    (OrderSide.SELL, "80", 44),
+                    (OrderSide.BUY, "70", 45),
+                ]
+            ]
+            accounting = PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            )
+            for fill in fills:
+                assert accounting.apply_fill(
+                    context,
+                    portfolio_id,
+                    Decimal("1000"),
+                    fill,
+                ) is True
+
+        with engine.begin() as connection:
+            restored = SqlAlchemyPaperPortfolioRepository(
+                connection
+            ).verify_accounting_history(
+                portfolio_id,
+                current_job_run_id=context.job_run.job_run_id,
+            )
+            assert restored is not None
+            position = restored.state.positions[instrument_id]
+            assert position.quantity == Decimal("0")
+            assert position.average_price == Decimal("0")
+            assert position.realized_pnl == Decimal("10")
+            assert position.total_commission == Decimal("1.50")
+            assert restored.state.cash == Decimal("1008.50")
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_portfolio_application_cannot_commit_without_pnl_event() -> None:
     """Reject a complete portfolio/application write missing derived P&L."""
     url = os.getenv("HOPE_DATABASE_URL")

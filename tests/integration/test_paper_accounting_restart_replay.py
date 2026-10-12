@@ -546,23 +546,16 @@ def test_recovery_rejects_durable_portfolio_position_divergence():
         ).list_for_job_run(run.job_run_id)
 
     try:
-        with engine.begin() as connection:
-            assert connection.execute(
-                text("UPDATE paper_portfolio_positions SET quantity=quantity+1 "
-                     "WHERE portfolio_id=:portfolio_id AND instrument_id=:instrument_id"),
-                {"portfolio_id": portfolio_id, "instrument_id": fill.instrument_id},
-            ).rowcount == 1
-        with engine.begin() as connection:
-            with pytest.raises(
-                RuntimeError,
-                match="PAPER_JOB_RECONCILIATION_NOT_PROVEN|"
-                      "PAPER_JOB_RECONCILIATION_LINEAGE_MISMATCH|"
-                      "PAPER_JOB_RECONCILIATION_PORTFOLIO_STATE_MISMATCH",
-            ):
-                reconcile_completed_paper_run(
-                    connection, run,
-                    current=datetime(2026, 9, 30, 12, 2, tzinfo=UTC),
-                )
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_PORTFOLIO_POSITION_PROJECTION_MISMATCH",
+        ):
+            with engine.begin() as connection:
+                assert connection.execute(
+                    text("UPDATE paper_portfolio_positions SET quantity=quantity+1 "
+                         "WHERE portfolio_id=:portfolio_id AND instrument_id=:instrument_id"),
+                    {"portfolio_id": portfolio_id, "instrument_id": fill.instrument_id},
+                ).rowcount == 1
         with engine.begin() as connection:
             jobs = SqlAlchemyJobRunRepository(connection)
             durable = jobs.get_record_for_run(run)
@@ -575,6 +568,11 @@ def test_recovery_rejects_durable_portfolio_position_divergence():
                      "WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),
                 {"id": str(run.job_run_id)},
             ).scalar_one() == 0
+            assert connection.execute(
+                text("SELECT quantity FROM paper_portfolio_positions "
+                     "WHERE portfolio_id=:portfolio_id AND instrument_id=:instrument_id"),
+                {"portfolio_id": portfolio_id, "instrument_id": fill.instrument_id},
+            ).scalar_one() == fill.quantity
     finally:
         with engine.begin() as connection:
             jobs = SqlAlchemyJobRunRepository(connection)

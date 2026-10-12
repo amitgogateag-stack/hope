@@ -414,6 +414,18 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
             ),
             {"id": portfolio_id},
         )
+        connection.execute(
+            text(
+                "INSERT INTO paper_portfolio_positions("
+                "portfolio_id, instrument_id, quantity, average_price, "
+                "realized_pnl, total_commission"
+                ") VALUES (:portfolio_id, :instrument_id, 1, 100, 0, 0.25)"
+            ),
+            {
+                "portfolio_id": portfolio_id,
+                "instrument_id": instrument_id,
+            },
+        )
         assert SqlAlchemyJobRunRepository(connection).claim(job_run) is True
         insert_application = text(
             "INSERT INTO paper_portfolio_fill_applications("

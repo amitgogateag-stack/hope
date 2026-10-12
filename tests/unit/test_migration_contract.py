@@ -44,6 +44,19 @@ def test_paper_portfolio_cash_is_a_deferred_fill_projection() -> None:
     assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
 
 
+def test_paper_portfolio_positions_are_a_deferred_fill_projection() -> None:
+    sql = (
+        ROOT / "migrations/202_paper_portfolio_position_projection.sql"
+    ).read_text()
+    assert "PAPER_PORTFOLIO_POSITION_PROJECTION_MISMATCH" in sql
+    assert "ORDER BY application.application_sequence" in sql
+    assert "expected_realized_pnl" in sql
+    assert "expected_total_commission" in sql
+    assert "AFTER INSERT OR UPDATE ON paper_portfolio_positions" in sql
+    assert "AFTER INSERT ON paper_portfolio_fill_applications" in sql
+    assert sql.count("DEFERRABLE INITIALLY DEFERRED") == 2
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
