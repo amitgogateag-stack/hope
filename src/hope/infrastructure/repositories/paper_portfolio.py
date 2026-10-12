@@ -10,10 +10,12 @@ from hope.application.paper.effects import PaperEffect, PaperEffectType, _determ
 from hope.application.paper.fills import paper_fill_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
+from hope.application.paper.risk import paper_risk_payload_hash
 from hope.application.paper.signals import paper_signal_payload_hash
 from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.portfolio.ledger import PortfolioFillTransition, PortfolioLedger, PortfolioState, PositionState
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
@@ -81,6 +83,13 @@ class SqlAlchemyPaperPortfolioRepository:
             Column("conviction", Numeric, nullable=True),
             Column("inputs_hash", String, nullable=True),
         )
+        self._risk_assessments = Table(
+            "paper_risk_assessments", metadata,
+            Column("signal_id", Uuid, primary_key=True),
+            Column("decision", String, nullable=False),
+            Column("reason_code", String, nullable=False),
+            Column("approved_quantity", Numeric, nullable=False),
+        )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
     def _assert_tracked_fill(self, fill: Fill, job_run_id: UUID) -> None:
@@ -108,6 +117,109 @@ class SqlAlchemyPaperPortfolioRepository:
             or row["cost_model_version"] != fill.cost_model_version
         ):
             raise ValueError("PAPER_PORTFOLIO_FILL_DURABLE_STATE_CONFLICT")
+
+        execution = self._connection.execute(
+            select(
+                self._orders.c.order_id,
+                self._orders.c.signal_id,
+                self._orders.c.instrument_id.label("order_instrument_id"),
+                self._orders.c.environment,
+                self._orders.c.side,
+                self._orders.c.quantity.label("order_quantity"),
+                self._orders.c.signal_type.label("order_signal_type"),
+                self._signals.c.instrument_id.label("signal_instrument_id"),
+                self._signals.c.decision_time,
+                self._signals.c.state.label("signal_state"),
+                self._signals.c.strategy_version,
+                self._signals.c.signal_type.label("signal_signal_type"),
+                self._signals.c.conviction,
+                self._signals.c.inputs_hash,
+                self._risk_assessments.c.decision.label("risk_decision"),
+                self._risk_assessments.c.reason_code.label("risk_reason_code"),
+                self._risk_assessments.c.approved_quantity,
+            )
+            .select_from(
+                self._orders.join(
+                    self._signals,
+                    self._orders.c.signal_id == self._signals.c.signal_id,
+                ).outerjoin(
+                    self._risk_assessments,
+                    self._signals.c.signal_id == self._risk_assessments.c.signal_id,
+                )
+            )
+            .where(self._orders.c.order_id == fill.order_id)
+        ).mappings().one_or_none()
+        if execution is None:
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISSING")
+        self._assert_execution_authorization(
+            execution,
+            fill,
+            current_job_run_id=job_run_id,
+        )
+
+    def _assert_execution_authorization(
+        self,
+        row,
+        fill: Fill,
+        *,
+        current_job_run_id: UUID | None,
+    ) -> None:
+        if row["risk_decision"] is None:
+            raise RuntimeError("PAPER_PORTFOLIO_RISK_ASSESSMENT_MISSING")
+        try:
+            signal = Signal(
+                signal_id=row["signal_id"],
+                instrument_id=row["signal_instrument_id"],
+                strategy_version=row["strategy_version"],
+                decision_time=row["decision_time"],
+                signal_type=row["signal_signal_type"],
+                conviction=row["conviction"],
+                inputs_hash=row["inputs_hash"],
+            )
+            order = Order(
+                order_id=row["order_id"],
+                signal_id=row["signal_id"],
+                instrument_id=row["order_instrument_id"],
+                environment=row["environment"],
+                side=row["side"],
+                quantity=row["order_quantity"],
+                signal_type=row["order_signal_type"],
+            )
+            risk = RiskAssessment(
+                signal_id=row["signal_id"],
+                decision=row["risk_decision"],
+                reason_code=row["risk_reason_code"],
+                approved_quantity=row["approved_quantity"],
+            )
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_MATERIAL_INVALID") from exc
+        if (
+            row["signal_state"] != "SIGNAL"
+            or signal.instrument_id != order.instrument_id
+            or signal.signal_type is not order.signal_type
+            or fill.signal_id != signal.signal_id
+            or fill.instrument_id != order.instrument_id
+            or fill.side is not order.side
+        ):
+            raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH")
+        if (
+            risk.decision is not RiskDecision.APPROVE
+            or risk.approved_quantity != order.quantity
+        ):
+            raise RuntimeError("PAPER_PORTFOLIO_RISK_AUTHORIZATION_MISMATCH")
+        expected_effects = (
+            (PaperEffectType.SIGNAL, signal.signal_id, paper_signal_payload_hash(signal)),
+            (PaperEffectType.RISK, risk.signal_id, paper_risk_payload_hash(risk)),
+            (PaperEffectType.ORDER, order.order_id, paper_order_payload_hash(order)),
+            (PaperEffectType.FILL, fill.fill_id, paper_fill_payload_hash(fill)),
+        )
+        for effect_type, entity_id, expected_payload_hash in expected_effects:
+            self._require_recoverable_execution_effect(
+                effect_type,
+                entity_id,
+                current_job_run_id=current_job_run_id,
+                expected_payload_hash=expected_payload_hash,
+            )
 
     def _ensure_and_lock_portfolio(self, portfolio_id: UUID, initial_cash: Decimal):
         if not initial_cash.is_finite() or initial_cash < 0:
@@ -402,6 +514,9 @@ class SqlAlchemyPaperPortfolioRepository:
                 self._signals.c.signal_type.label("signal_signal_type"),
                 self._signals.c.conviction,
                 self._signals.c.inputs_hash,
+                self._risk_assessments.c.decision.label("risk_decision"),
+                self._risk_assessments.c.reason_code.label("risk_reason_code"),
+                self._risk_assessments.c.approved_quantity,
             )
             .select_from(
                 self._applications.join(
@@ -413,6 +528,9 @@ class SqlAlchemyPaperPortfolioRepository:
                 ).join(
                     self._signals,
                     self._orders.c.signal_id == self._signals.c.signal_id,
+                ).outerjoin(
+                    self._risk_assessments,
+                    self._signals.c.signal_id == self._risk_assessments.c.signal_id,
                 )
             )
             .where(self._applications.c.portfolio_id == portfolio_id)
@@ -462,24 +580,6 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise RuntimeError("PAPER_PORTFOLIO_PNL_EFFECT_NOT_RECOVERABLE")
             self._assert_pnl_effect_matches_event(recoverable_pnl, event)
             try:
-                signal = Signal(
-                    signal_id=row["signal_id"],
-                    instrument_id=row["signal_instrument_id"],
-                    strategy_version=row["strategy_version"],
-                    decision_time=row["decision_time"],
-                    signal_type=row["signal_signal_type"],
-                    conviction=row["conviction"],
-                    inputs_hash=row["inputs_hash"],
-                )
-                order = Order(
-                    order_id=row["order_id"],
-                    signal_id=row["signal_id"],
-                    instrument_id=row["order_instrument_id"],
-                    environment=row["environment"],
-                    side=row["side"],
-                    quantity=row["order_quantity"],
-                    signal_type=row["order_signal_type"],
-                )
                 fill = Fill(
                     fill_id=fill_id,
                     order_id=row["order_id"],
@@ -497,36 +597,11 @@ class SqlAlchemyPaperPortfolioRepository:
                 raise RuntimeError(
                     "PAPER_PORTFOLIO_EXECUTION_MATERIAL_INVALID"
                 ) from exc
-            if (
-                row["signal_state"] != "SIGNAL"
-                or signal.instrument_id != order.instrument_id
-                or signal.signal_type is not order.signal_type
-            ):
-                raise RuntimeError("PAPER_PORTFOLIO_EXECUTION_LINEAGE_MISMATCH")
-            expected_effects = (
-                (
-                    PaperEffectType.SIGNAL,
-                    signal.signal_id,
-                    paper_signal_payload_hash(signal),
-                ),
-                (
-                    PaperEffectType.ORDER,
-                    order.order_id,
-                    paper_order_payload_hash(order),
-                ),
-                (
-                    PaperEffectType.FILL,
-                    fill.fill_id,
-                    paper_fill_payload_hash(fill),
-                ),
+            self._assert_execution_authorization(
+                row,
+                fill,
+                current_job_run_id=current_job_run_id,
             )
-            for effect_type, entity_id, expected_payload_hash in expected_effects:
-                self._require_recoverable_execution_effect(
-                    effect_type,
-                    entity_id,
-                    current_job_run_id=current_job_run_id,
-                    expected_payload_hash=expected_payload_hash,
-                )
             transition = ledger.transition_for_fill(fill_id)
             if transition is None:
                 raise RuntimeError("PAPER_PORTFOLIO_ACCOUNTING_TRANSITION_MISSING")

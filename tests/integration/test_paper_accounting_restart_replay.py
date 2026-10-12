@@ -136,6 +136,15 @@ def test_paper_fill_accounting_restart_replay_is_idempotent_across_committed_con
 
     with engine.begin() as connection:
         portfolio_id, _, context, fill = _setup(connection, migrations_dir, "paper-accounting-restart-replay")
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
         writer = PaperFillAccountingWriter(SqlAlchemyPaperFillAccountingRepository(connection))
         assert writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=0) is True
 
@@ -147,6 +156,156 @@ def test_paper_fill_accounting_restart_replay_is_idempotent_across_committed_con
         assert connection.execute(text("SELECT count(*) FROM paper_portfolio_pnl_events WHERE portfolio_id=:portfolio_id AND fill_id=:fill_id"), {"portfolio_id": portfolio_id, "fill_id": fill.fill_id}).scalar_one() == 1
         assert connection.execute(text("SELECT cash, version FROM paper_portfolios WHERE portfolio_id=:id"), {"id": portfolio_id}).one() == (Decimal("799.50"), 1)
         assert connection.execute(text("SELECT quantity, average_price, realized_pnl, total_commission FROM paper_portfolio_positions WHERE portfolio_id=:portfolio_id AND instrument_id=:instrument_id"), {"portfolio_id": portfolio_id, "instrument_id": fill.instrument_id}).one() == (Decimal("2"), Decimal("100"), Decimal("0"), Decimal("0.50"))
+
+
+@pytest.mark.integration
+def test_accounting_rejects_fill_without_durable_risk_authorization() -> None:
+    """No economic state may commit when a fill lacks risk truth."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-risk-missing",
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_PORTFOLIO_RISK_ASSESSMENT_MISSING",
+        ):
+            PaperFillAccountingWriter(
+                SqlAlchemyPaperFillAccountingRepository(connection)
+            ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        assert connection.execute(
+            text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.FAILED,
+                datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                failure_code="EXPECTED_MISSING_RISK_AUTHORIZATION",
+            )
+        )
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_accounting_rejects_risk_approval_below_order_quantity() -> None:
+    """A valid risk record cannot authorize more quantity than it approved."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-risk-quantity-conflict",
+        )
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED_PARTIAL",
+                approved_quantity=fill.quantity - Decimal("1"),
+            ),
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_PORTFOLIO_RISK_AUTHORIZATION_MISMATCH",
+        ):
+            PaperFillAccountingWriter(
+                SqlAlchemyPaperFillAccountingRepository(connection)
+            ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        assert connection.execute(
+            text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.FAILED,
+                datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                failure_code="EXPECTED_RISK_QUANTITY_CONFLICT",
+            )
+        )
+
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_accounting_rejects_risk_effect_payload_conflicting_with_assessment() -> None:
+    """Matching risk identity is insufficient when its authorization payload is false."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        portfolio_id, run, context, fill = _setup(
+            connection,
+            migrations_dir,
+            "paper-accounting-risk-payload-conflict",
+        )
+        forged = create_paper_effect(
+            context.job_run,
+            PaperEffectType.RISK,
+            fill.signal_id,
+            "0" * 64,
+        )
+        assert SqlAlchemyPaperEffectRepository(connection).record(forged)
+        connection.execute(
+            text(
+                "INSERT INTO paper_risk_assessments("
+                "signal_id, decision, reason_code, approved_quantity"
+                ") VALUES (:signal_id, 'APPROVE', 'TEST_APPROVED', :quantity)"
+            ),
+            {"signal_id": fill.signal_id, "quantity": fill.quantity},
+        )
+        with pytest.raises(
+            RuntimeError,
+            match="PAPER_PORTFOLIO_EXECUTION_PAYLOAD_MISMATCH",
+        ):
+            PaperFillAccountingWriter(
+                SqlAlchemyPaperFillAccountingRepository(connection)
+            ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+        assert connection.execute(
+            text("SELECT count(*) FROM fills WHERE fill_id=:id"),
+            {"id": fill.fill_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id"),
+            {"id": portfolio_id},
+        ).scalar_one() == 0
+        assert SqlAlchemyJobRunRepository(connection).complete(
+            create_job_run_completion(
+                run,
+                JobRunStatus.FAILED,
+                datetime(2026, 9, 30, 12, 5, tzinfo=UTC),
+                failure_code="EXPECTED_RISK_PAYLOAD_CONFLICT",
+            )
+        )
+
+    engine.dispose()
 
 
 @pytest.mark.integration
@@ -855,6 +1014,15 @@ def test_paper_fill_accounting_failed_transaction_leaves_no_restart_visible_part
 
     with engine.begin() as connection:
         portfolio_id, run, context, fill = _setup(connection, migrations_dir, "paper-accounting-restart-rollback")
+        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+            context,
+            RiskAssessment(
+                signal_id=fill.signal_id,
+                decision=RiskDecision.APPROVE,
+                reason_code="TEST_APPROVED",
+                approved_quantity=fill.quantity,
+            ),
+        )
         event_id = paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id)
         conflict_savepoint = connection.begin_nested()
         try:
