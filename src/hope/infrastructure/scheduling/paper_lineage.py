@@ -36,6 +36,49 @@ from hope.infrastructure.repositories.paper_portfolio import (
 )
 
 
+
+def _verify_partial_fill_cancellation(
+    connection: Connection,
+    terminal_events: Table,
+    cancellation_effect: PaperEffect,
+    order_id: UUID,
+    signal_id: UUID,
+    order: Order,
+    fill: Fill,
+) -> bool:
+    """Authenticate the remaining quantity and terminal payload for either PNL path."""
+    if cancellation_effect.entity_id != order_id:
+        return False
+    terminal = connection.execute(
+        select(
+            terminal_events.c.outcome,
+            terminal_events.c.reason_code,
+            terminal_events.c.event_time,
+            terminal_events.c.cancelled_quantity,
+        ).where(terminal_events.c.order_id == order_id)
+    ).mappings().one_or_none()
+    if (
+        terminal is None
+        or terminal["outcome"] != "CANCELLED"
+        or terminal["event_time"] < fill.fill_time
+        or terminal["cancelled_quantity"] != order.quantity - fill.quantity
+    ):
+        return False
+    try:
+        cancellation = ExecutionCancellation(
+            order_id,
+            signal_id,
+            order.instrument_id,
+            Environment.PAPER,
+            terminal["reason_code"],
+            terminal["event_time"],
+            terminal["cancelled_quantity"],
+        )
+    except (TypeError, ValueError):
+        return False
+    return cancellation_effect.payload_hash == paper_terminal_payload_hash(cancellation)
+
+
 def verify_paper_recovery_lineage(
     connection: Connection,
     effects: tuple[PaperEffect, ...],
@@ -406,12 +449,22 @@ def verify_paper_recovery_lineage(
                 positions.c.position_id == pnl["position_id"]
             )
         ).mappings().one_or_none()
-        return (
+        if not (
             position is not None
             and position["opened_from_signal_id"] == signal_id
             and position["instrument_id"] == durable_fill.instrument_id
             and position["opened_at"] <= durable_fill.fill_time
-        )
+        ):
+            return False
+        # Legacy PNL is valid evidence only for its own position lineage.
+        # A partially filled order also requires a separately authenticated
+        # cancellation of the exact remaining quantity, not just valid PNL.
+        if partial_fill_cancellation:
+            return _verify_partial_fill_cancellation(
+                connection, terminal_events, by_type[PaperEffectType.CANCELLATION][0],
+                order_id, signal_id, order_object, durable_fill,
+            )
+        return True
 
     portfolio_pnl = connection.execute(
         select(
@@ -499,38 +552,7 @@ def verify_paper_recovery_lineage(
         return False
     if not partial_fill_cancellation:
         return True
-
-    cancellation_effect = by_type[PaperEffectType.CANCELLATION][0]
-    if cancellation_effect.entity_id != order_id:
-        return False
-    terminal = connection.execute(
-        select(
-            terminal_events.c.outcome,
-            terminal_events.c.reason_code,
-            terminal_events.c.event_time,
-            terminal_events.c.cancelled_quantity,
-        ).where(terminal_events.c.order_id == order_id)
-    ).mappings().one_or_none()
-    if (
-        terminal is None
-        or terminal["outcome"] != "CANCELLED"
-        or terminal["event_time"] < durable_fill.fill_time
-        or terminal["cancelled_quantity"]
-        != order_object.quantity - durable_fill.quantity
-    ):
-        return False
-    try:
-        cancellation = ExecutionCancellation(
-            order_id,
-            signal_id,
-            order_object.instrument_id,
-            Environment.PAPER,
-            terminal["reason_code"],
-            terminal["event_time"],
-            terminal["cancelled_quantity"],
-        )
-    except (TypeError, ValueError):
-        return False
-    return cancellation_effect.payload_hash == paper_terminal_payload_hash(
-        cancellation
+    return _verify_partial_fill_cancellation(
+        connection, terminal_events, by_type[PaperEffectType.CANCELLATION][0],
+        order_id, signal_id, order_object, durable_fill,
     )

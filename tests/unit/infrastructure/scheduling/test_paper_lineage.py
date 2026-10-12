@@ -1072,3 +1072,84 @@ def test_verifier_rejects_non_approved_durable_risk_assessment() -> None:
     assert verify_paper_recovery_lineage(
         _LineageConnection((_signal_row(signal), _risk_row(rejected))), effects
     ) is False
+
+
+@pytest.mark.parametrize(
+    ("tamper", "expected"),
+    [
+        (None, True),
+        ("missing", False),
+        ("under_cancelled", False),
+        ("over_cancelled", False),
+        ("before_fill", False),
+        ("wrong_outcome", False),
+        ("wrong_hash", False),
+        ("wrong_order", False),
+    ],
+)
+def test_legacy_partial_fill_cancellation_requires_exact_terminal_evidence(
+    tamper, expected,
+) -> None:
+    """Legacy position PNL must not bypass partial-fill cancellation proof."""
+    effects, signal, order, risk, full_fill, pnl_event = _filled_fixture()
+    fill = Fill(
+        fill_id=full_fill.fill_id,
+        order_id=full_fill.order_id,
+        signal_id=full_fill.signal_id,
+        instrument_id=full_fill.instrument_id,
+        side=full_fill.side,
+        quantity=Decimal("4"),
+        price=full_fill.price,
+        commission=full_fill.commission,
+        slippage=full_fill.slippage,
+        cost_model_version=full_fill.cost_model_version,
+        fill_time=full_fill.fill_time,
+    )
+    cancellation = ExecutionCancellation(
+        order.order_id, signal.signal_id, signal.instrument_id,
+        Environment.PAPER, "TEST_PARTIAL_CANCEL",
+        fill.fill_time + timedelta(seconds=2), Decimal("6"),
+    )
+    cancellation_effect = _effect(
+        effects[0].job_run_id, PaperEffectType.CANCELLATION,
+        uuid4() if tamper == "wrong_order" else order.order_id,
+        "f" * 64 if tamper == "wrong_hash" else paper_terminal_payload_hash(cancellation),
+    )
+    effects = effects[:3] + (
+        _effect(
+            effects[0].job_run_id, PaperEffectType.FILL,
+            fill.fill_id, paper_fill_payload_hash(fill),
+        ),
+        effects[4],
+        cancellation_effect,
+    )
+    terminal = {
+        "outcome": "REJECTED" if tamper == "wrong_outcome" else "CANCELLED",
+        "reason_code": cancellation.reason_code,
+        "event_time": (
+            fill.fill_time - timedelta(seconds=1)
+            if tamper == "before_fill" else cancellation.cancellation_time
+        ),
+        "cancelled_quantity": (
+            Decimal("5") if tamper == "under_cancelled"
+            else Decimal("7") if tamper == "over_cancelled"
+            else cancellation.cancelled_quantity
+        ),
+    }
+    if tamper == "missing":
+        terminal = None
+    connection = _LineageConnection((
+        _signal_row(signal),
+        _risk_row(risk),
+        _order_row(order),
+        _fill_row(fill),
+        _pnl_row(pnl_event),
+        {
+            "instrument_id": signal.instrument_id,
+            "opened_from_signal_id": signal.signal_id,
+            "opened_at": signal.decision_time,
+        },
+        terminal,
+    ))
+    assert verify_paper_recovery_lineage(connection, effects) is expected
+    assert _FakePortfolioRepository.loaded_portfolios == []
