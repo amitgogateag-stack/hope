@@ -10,10 +10,13 @@ from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
+from hope.application.paper.orders import paper_order_payload_hash
 from hope.domain.execution.models import Environment, Order, OrderSide
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
@@ -381,3 +384,111 @@ def test_paper_order_requires_tracked_signal_and_rolls_back_failed_order_effect(
             text("SELECT count(*) FROM orders WHERE order_id = :order_id"),
             {"order_id": untracked_order.order_id},
         ).scalar_one() == 0
+
+@pytest.mark.integration
+@pytest.mark.parametrize("effect_first", [True, False])
+def test_paper_order_direct_write_requires_reusable_source_signal_ownership(
+    effect_first: bool,
+) -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    source_run = create_scheduled_job_run(
+        f"paper-order-lineage-source:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 14, 0, tzinfo=UTC),
+    )
+    order_run = create_scheduled_job_run(
+        f"paper-order-lineage-writer:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 14, 1, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    order_context = PaperCycleContext(order_run)
+    signal = make_signal(
+        source_context,
+        instrument_id,
+        datetime(2026, 10, 13, 13, 59, tzinfo=UTC),
+    )
+    order = make_order(order_context, signal)
+    insert_order = text(
+        "INSERT INTO orders("
+        "order_id, signal_id, instrument_id, environment, side, quantity, "
+        "signal_type"
+        ") VALUES ("
+        ":order_id, :signal_id, :instrument_id, 'PAPER', :side, :quantity, "
+        ":signal_type"
+        ")"
+    )
+    order_params = {
+        "order_id": order.order_id,
+        "signal_id": order.signal_id,
+        "instrument_id": order.instrument_id,
+        "side": order.side.value,
+        "quantity": order.quantity,
+        "signal_type": order.signal_type.value,
+    }
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-ORDER-LINEAGE', 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(source_run)
+            assert PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(source_context, signal)
+            assert jobs.claim(order_run)
+
+            order_effect = create_paper_effect(
+                order_run,
+                PaperEffectType.ORDER,
+                order.order_id,
+                paper_order_payload_hash(order),
+            )
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_ORDER_SOURCE_SIGNAL_LINEAGE_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    if effect_first:
+                        assert effects.record(order_effect)
+                    connection.execute(insert_order, order_params)
+                    if not effect_first:
+                        assert effects.record(order_effect)
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+            assert connection.execute(
+                text("SELECT count(*) FROM orders WHERE order_id=:order_id"),
+                {"order_id": order.order_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='ORDER' AND entity_id=:order_id"
+                ),
+                {"order_id": order.order_id},
+            ).scalar_one() == 0
+
+            assert jobs.complete(
+                create_job_run_completion(
+                    source_run,
+                    JobRunStatus.SUCCEEDED,
+                    source_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+            assert PaperOrderWriter(
+                SqlAlchemyPaperOrderRepository(connection)
+            ).record(order_context, order)
+    finally:
+        engine.dispose()
