@@ -84,6 +84,10 @@ def test_pnl_read_rejects_wrong_source_fill_effect_type(wrong_type):
         def get(self, effect_type, entity_id):
             return effect
 
+        def get_recoverable(self, effect_type, entity_id):
+            assert (effect_type, entity_id) == (PaperEffectType.PNL, event.pnl_event_id)
+            return effect
+
         def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
             assert (effect_type, entity_id, job_run_id) == (
                 PaperEffectType.FILL, event.fill_id, run.job_run_id,
@@ -108,6 +112,10 @@ def test_pnl_read_rejects_wrong_source_fill_entity():
 
     class _WithSource:
         def get(self, effect_type, entity_id):
+            return effect
+
+        def get_recoverable(self, effect_type, entity_id):
+            assert (effect_type, entity_id) == (PaperEffectType.PNL, event.pnl_event_id)
             return effect
 
         def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
@@ -199,6 +207,10 @@ def test_pnl_read_rejects_event_without_applied_fill():
 
     class _ValidEffects:
         def get(self, effect_type, entity_id):
+            return pnl_effect
+
+        def get_recoverable(self, effect_type, entity_id):
+            assert (effect_type, entity_id) == (PaperEffectType.PNL, event.pnl_event_id)
             return pnl_effect
 
         def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
@@ -370,6 +382,10 @@ def test_pnl_rejects_forged_source_fill_effect_id(operation):
     class _EffectsWithForgedFill:
         def get(self, effect_type, entity_id):
             assert effect_type is PaperEffectType.PNL
+            return pnl_effect
+
+        def get_recoverable(self, effect_type, entity_id):
+            assert (effect_type, entity_id) == (PaperEffectType.PNL, event.pnl_event_id)
             return pnl_effect
 
         def get_reusable_for_job(self, effect_type, entity_id, job_run_id):

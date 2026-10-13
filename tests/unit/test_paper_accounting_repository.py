@@ -63,7 +63,7 @@ def _repository(event, replayed, *, pnl_recorded: bool = False):
         get_reusable_for_job=lambda *args: SimpleNamespace()
     )
     repository._portfolio = portfolio
-    repository._pnl = SimpleNamespace(get=lambda *args: event)
+    repository._pnl = SimpleNamespace(get=lambda *args, **kwargs: event)
     repository._pnl_writer = SimpleNamespace(record=record)
     return repository, portfolio, pnl_calls
 

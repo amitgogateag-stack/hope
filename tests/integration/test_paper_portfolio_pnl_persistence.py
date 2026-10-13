@@ -359,7 +359,9 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
         }
 
         repository = SqlAlchemyPaperPortfolioPnLRepository(connection)
-        assert repository.get(portfolio_id, fill.fill_id) is not None
+        assert repository.get(
+            portfolio_id, fill.fill_id, current_job_run_id=pnl_run.job_run_id,
+        ) is not None
         monkeypatch.setattr(
             repository._effects,
             "get_reusable_for_job",
@@ -369,7 +371,9 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
             ValueError,
             match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_LINEAGE_CONFLICT",
         ):
-            repository.get(portfolio_id, fill.fill_id)
+            repository.get(
+                portfolio_id, fill.fill_id, current_job_run_id=pnl_run.job_run_id,
+            )
 
     engine.dispose()
 
@@ -716,7 +720,9 @@ def test_paper_pnl_application_cannot_be_deleted_to_orphan_event() -> None:
         assert PaperPortfolioPnLWriter(repository).record(
             context, portfolio_id, fill, transition,
         ) is True
-        assert repository.get(portfolio_id, fill.fill_id) is not None
+        assert repository.get(
+            portfolio_id, fill.fill_id, current_job_run_id=run.job_run_id,
+        ) is not None
 
         # Database immutability is the first defense: even a direct SQL
         # deletion cannot create the orphaned state under normal credentials.
@@ -734,6 +740,8 @@ def test_paper_pnl_application_cannot_be_deleted_to_orphan_event() -> None:
                 )
 
         # The rejected mutation must leave the authenticated PNL readable.
-        assert repository.get(portfolio_id, fill.fill_id) is not None
+        assert repository.get(
+            portfolio_id, fill.fill_id, current_job_run_id=run.job_run_id,
+        ) is not None
 
     engine.dispose()
