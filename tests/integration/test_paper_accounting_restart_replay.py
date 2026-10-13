@@ -201,8 +201,8 @@ def test_accounting_rejects_fill_without_durable_risk_authorization() -> None:
 
 
 @pytest.mark.integration
-def test_accounting_rejects_risk_approval_below_order_quantity() -> None:
-    """A valid risk record cannot authorize more quantity than it approved."""
+def test_order_rejects_risk_approval_below_order_quantity() -> None:
+    """Contradictory risk authorization is rejected before accounting."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -215,22 +215,33 @@ def test_accounting_rejects_risk_approval_below_order_quantity() -> None:
             migrations_dir,
             "paper-accounting-risk-quantity-conflict",
         )
-        assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
-            context,
-            RiskAssessment(
-                signal_id=fill.signal_id,
-                decision=RiskDecision.APPROVE,
-                reason_code="TEST_APPROVED_PARTIAL",
-                approved_quantity=fill.quantity - Decimal("1"),
-            ),
-        )
         with pytest.raises(
-            RuntimeError,
-            match="PAPER_PORTFOLIO_RISK_AUTHORIZATION_MISMATCH",
+            IntegrityError,
+            match="PAPER_ORDER_RISK_QUANTITY_MISMATCH",
         ):
-            PaperFillAccountingWriter(
-                SqlAlchemyPaperFillAccountingRepository(connection)
-            ).record(context, portfolio_id, Decimal("1000"), fill, sequence=0)
+            PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+                context,
+                RiskAssessment(
+                    signal_id=fill.signal_id,
+                    decision=RiskDecision.APPROVE,
+                    reason_code="TEST_APPROVED_PARTIAL",
+                    approved_quantity=fill.quantity - Decimal("1"),
+                ),
+            )
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_risk_assessments "
+                "WHERE signal_id=:signal_id"
+            ),
+            {"signal_id": fill.signal_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='RISK' AND entity_id=:signal_id"
+            ),
+            {"signal_id": fill.signal_id},
+        ).scalar_one() == 0
         assert connection.execute(
             text("SELECT count(*) FROM fills WHERE fill_id=:id"),
             {"id": fill.fill_id},
