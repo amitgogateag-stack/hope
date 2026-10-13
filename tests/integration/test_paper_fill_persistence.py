@@ -530,3 +530,160 @@ def test_paper_fill_direct_write_requires_reusable_source_order_ownership(
             ).record(fill_context, fill, sequence=0)
     finally:
         engine.dispose()
+
+@pytest.mark.integration
+@pytest.mark.parametrize("effect_first", [True, False])
+def test_paper_fill_direct_write_requires_reusable_risk_effect_ownership(
+    effect_first: bool,
+) -> None:
+    """A fill cannot borrow risk truth from another unfinished job."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    signal_run = create_scheduled_job_run(
+        f"paper-fill-risk-lineage-signal:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 17, 0, tzinfo=UTC),
+    )
+    risk_run = create_scheduled_job_run(
+        f"paper-fill-risk-lineage-risk:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 17, 1, tzinfo=UTC),
+    )
+    fill_run = create_scheduled_job_run(
+        f"paper-fill-risk-lineage-fill:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 17, 2, tzinfo=UTC),
+    )
+    signal_context = PaperCycleContext(signal_run)
+    risk_context = PaperCycleContext(risk_run)
+    fill_context = PaperCycleContext(fill_run)
+    signal, _, _ = make_chain(signal_context, instrument_id)
+    order = Order(
+        order_id=fill_context.order_id(signal.signal_id),
+        signal_id=signal.signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+    fill = Fill(
+        fill_context.fill_id(signal.signal_id, 0),
+        order.order_id,
+        signal.signal_id,
+        instrument_id,
+        OrderSide.BUY,
+        Decimal("2"),
+        Decimal("101.5"),
+        Decimal("0.25"),
+        Decimal("0.5"),
+        "cost-v1",
+        datetime(2026, 10, 13, 17, 3, tzinfo=UTC),
+    )
+    insert_fill = text(
+        "INSERT INTO fills("
+        "fill_id, order_id, quantity, fill_price, slippage, "
+        "transaction_cost, filled_at, cost_model_version"
+        ") VALUES ("
+        ":fill_id, :order_id, :quantity, :fill_price, :slippage, "
+        ":transaction_cost, :filled_at, :cost_model_version"
+        ")"
+    )
+    fill_params = {
+        "fill_id": fill.fill_id,
+        "order_id": fill.order_id,
+        "quantity": fill.quantity,
+        "fill_price": fill.price,
+        "slippage": fill.slippage,
+        "transaction_cost": fill.commission,
+        "filled_at": fill.fill_time,
+        "cost_model_version": fill.cost_model_version,
+    }
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-FILL-RISK-LINEAGE', 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(signal_run)
+            assert PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(signal_context, signal)
+            assert jobs.complete(
+                create_job_run_completion(
+                    signal_run,
+                    JobRunStatus.SUCCEEDED,
+                    signal_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+
+            assert jobs.claim(risk_run)
+            assert PaperRiskWriter(
+                SqlAlchemyPaperRiskRepository(connection)
+            ).record(
+                risk_context,
+                RiskAssessment(
+                    signal_id=signal.signal_id,
+                    decision=RiskDecision.APPROVE,
+                    reason_code="TEST_APPROVED",
+                    approved_quantity=order.quantity,
+                ),
+            )
+
+            assert jobs.claim(fill_run)
+            assert PaperOrderWriter(
+                SqlAlchemyPaperOrderRepository(connection)
+            ).record(fill_context, order)
+
+            fill_effect = create_paper_effect(
+                fill_run,
+                PaperEffectType.FILL,
+                fill.fill_id,
+                paper_fill_payload_hash(fill),
+            )
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_FILL_SOURCE_RISK_LINEAGE_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    if effect_first:
+                        assert effects.record(fill_effect)
+                    connection.execute(insert_fill, fill_params)
+                    if not effect_first:
+                        assert effects.record(fill_effect)
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+            assert connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='FILL' AND entity_id=:fill_id"
+                ),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+
+            assert jobs.complete(
+                create_job_run_completion(
+                    risk_run,
+                    JobRunStatus.SUCCEEDED,
+                    risk_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+            assert PaperFillWriter(
+                SqlAlchemyPaperFillRepository(connection)
+            ).record(fill_context, fill, sequence=0)
+    finally:
+        engine.dispose()

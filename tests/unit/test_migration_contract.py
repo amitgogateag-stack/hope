@@ -491,3 +491,14 @@ def test_paper_portfolio_application_timestamp_is_reciprocal_and_deferred():
     assert "AFTER INSERT ON paper_portfolio_fill_applications" in sql
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
     assert "transaction_timestamp()" in sql
+
+def test_paper_fill_requires_recoverable_source_risk_effect_owner():
+    sql = (
+        ROOT / "migrations/218_paper_fill_risk_effect_lineage.sql"
+    ).read_text()
+    assert "PAPER_FILL_SOURCE_RISK_LINEAGE_CONFLICT" in sql
+    assert "risk_effect.job_run_id <> fill_effect.job_run_id" in sql
+    assert "risk_owner.status IS DISTINCT FROM 'SUCCEEDED'" in sql
+    assert "FOR UPDATE" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+    assert "AFTER INSERT ON fills" in sql
