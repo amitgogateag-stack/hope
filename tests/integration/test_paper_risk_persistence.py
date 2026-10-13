@@ -1,5 +1,5 @@
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
@@ -8,14 +8,20 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
-from hope.application.jobs import create_scheduled_job_run
+from hope.application.jobs import (
+    JobRunStatus,
+    create_job_run_completion,
+    create_scheduled_job_run,
+)
 from hope.application.paper.context import PaperCycleContext
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.risk import PaperRiskWriter, paper_risk_payload_hash
 from hope.application.paper.signals import PaperSignalWriter
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
@@ -249,3 +255,102 @@ def test_paper_risk_requires_tracked_signal_and_is_idempotent() -> None:
             ),
             {"signal_id": tracked_signal.signal_id},
         ).scalar_one() == 1
+
+@pytest.mark.integration
+def test_paper_risk_direct_write_requires_reusable_source_signal_ownership() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    source_run = create_scheduled_job_run(
+        f"paper-risk-lineage-source:{uuid4()}",
+        datetime(2026, 10, 13, 15, 0, tzinfo=UTC),
+    )
+    risk_run = create_scheduled_job_run(
+        f"paper-risk-lineage-writer:{uuid4()}",
+        datetime(2026, 10, 13, 15, 1, tzinfo=UTC),
+    )
+    source_context = PaperCycleContext(source_run)
+    risk_context = PaperCycleContext(risk_run)
+    signal = _signal(source_context, instrument_id, "paper-risk-lineage-v1")
+    assessment = _assessment(signal)
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-RISK-LINEAGE', 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(source_run)
+            assert PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(source_context, signal)
+            assert jobs.claim(risk_run)
+
+            risk_effect = create_paper_effect(
+                risk_run,
+                PaperEffectType.RISK,
+                signal.signal_id,
+                paper_risk_payload_hash(assessment),
+            )
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_RISK_SOURCE_SIGNAL_LINEAGE_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    assert effects.record(risk_effect)
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_risk_assessments("
+                            "signal_id, decision, reason_code, approved_quantity"
+                            ") VALUES ("
+                            ":signal_id, :decision, :reason_code, "
+                            ":approved_quantity"
+                            ")"
+                        ),
+                        {
+                            "signal_id": assessment.signal_id,
+                            "decision": assessment.decision.value,
+                            "reason_code": assessment.reason_code,
+                            "approved_quantity": assessment.approved_quantity,
+                        },
+                    )
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_risk_assessments "
+                    "WHERE signal_id=:signal_id"
+                ),
+                {"signal_id": signal.signal_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='RISK' AND entity_id=:signal_id"
+                ),
+                {"signal_id": signal.signal_id},
+            ).scalar_one() == 0
+
+            assert jobs.complete(
+                create_job_run_completion(
+                    source_run,
+                    JobRunStatus.SUCCEEDED,
+                    source_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+            assert PaperRiskWriter(
+                SqlAlchemyPaperRiskRepository(connection)
+            ).record(risk_context, assessment)
+    finally:
+        engine.dispose()
