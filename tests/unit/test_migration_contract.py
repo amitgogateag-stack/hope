@@ -121,6 +121,19 @@ def test_paper_order_and_effect_authenticate_each_others_payload() -> None:
     assert "BEFORE INSERT ON paper_effects" in sql
 
 
+
+def test_canonical_paper_signal_and_effect_authenticate_each_other() -> None:
+    sql = (ROOT / "migrations/208_paper_signal_effect_payload.sql").read_text()
+    assert "hope_paper_signal_payload_hash" in sql
+    assert "decision_time AT TIME ZONE 'UTC'" in sql
+    assert "trim_scale(conviction)" in sql
+    assert "hope_lock_paper_signal_payload_identity" in sql
+    assert "PAPER_SIGNAL_EFFECT_PAYLOAD_MISMATCH" in sql
+    assert "PAPER_SIGNAL_RECOVERY_MATERIAL_PARTIAL" in sql
+    assert "BEFORE INSERT ON signals" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+
+
 def test_integrity_migration_enforces_duplicate_identity_guardrail():
     sql = (ROOT / "migrations/002_integrity_constraints.sql").read_text()
     assert "uq_identity_active_broker_instrument" in sql
