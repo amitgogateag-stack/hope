@@ -80,7 +80,13 @@ def _setup_order(connection, run, instrument_id):
     assert SqlAlchemyJobRunRepository(connection).claim(run)
     assert PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
     assert PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
-    assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+    return context, signal, order
+
+
+def _approve_order(connection, context, order):
+    assert PaperRiskWriter(
+        SqlAlchemyPaperRiskRepository(connection)
+    ).record(
         context,
         RiskAssessment(
             signal_id=order.signal_id,
@@ -89,7 +95,6 @@ def _setup_order(connection, run, instrument_id):
             approved_quantity=order.quantity,
         ),
     )
-    return context, signal, order
 
 
 @pytest.mark.integration
@@ -641,6 +646,7 @@ def test_paper_rejection_after_fill_fails_closed_without_terminal_effect():
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         fill = Fill(
             context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
             instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),
@@ -681,6 +687,7 @@ def test_paper_terminal_event_cannot_precede_decision_or_latest_fill():
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         writer = PaperTerminalWriter(SqlAlchemyPaperTerminalRepository(connection))
 
         before_decision = ExecutionCancellation(
@@ -737,6 +744,7 @@ def test_paper_fill_after_terminal_fails_closed_without_fill_effect():
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         terminal = ExecutionRejection(
             order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
             "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
@@ -788,6 +796,7 @@ def test_paper_fill_and_terminal_writes_serialize_on_source_order():
         context, signal, order = _setup_order(
             setup_connection, run, instrument_id
         )
+        _approve_order(setup_connection, context, order)
 
     terminal_connection = engine.connect()
     fill_connection = engine.connect()
@@ -862,6 +871,7 @@ def test_paper_cancellation_after_partial_fill_requires_exact_remaining_quantity
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         fill = Fill(
             context.fill_id(signal.signal_id, 0), order.order_id, signal.signal_id,
             instrument_id, OrderSide.BUY, Decimal("1"), Decimal("100"),

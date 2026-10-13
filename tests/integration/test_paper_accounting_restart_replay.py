@@ -174,8 +174,8 @@ def test_accounting_rejects_fill_without_durable_risk_authorization() -> None:
             "paper-accounting-risk-missing",
         )
         with pytest.raises(
-            RuntimeError,
-            match="PAPER_PORTFOLIO_RISK_ASSESSMENT_MISSING",
+            IntegrityError,
+            match="PAPER_FILL_RISK_AUTHORIZATION_MISSING",
         ):
             PaperFillAccountingWriter(
                 SqlAlchemyPaperFillAccountingRepository(connection)
