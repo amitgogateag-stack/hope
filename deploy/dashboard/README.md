@@ -72,3 +72,7 @@ Open `http://127.0.0.1:8787/` in Chrome/Edge. SSH tunnel authentication is the a
 - Stop only the dashboard components: `sudo systemctl disable --now hope-dashboard-web.service hope-dashboard-export.timer`. Do not stop HOPE's PAPER jobs, database or existing trading-related services.
 - Preserve snapshot and logs for incident investigation; do not silently fabricate new data or loosen role privileges.
 - Deployment is not proof of LIVE readiness, a validated strategy edge, or an autonomous PAPER operation.
+
+## Runtime verification after v0.4 upgrade
+
+With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.json` should return `service: RUNNING`. `data_feed: UNAVAILABLE` is expected on EC2 until the three required newer tables exist and the read-only exporter is configured; do **not** manufacture database records or apply migrations just to turn this indicator green. The health endpoint does not report PAPER engine or broker readiness.

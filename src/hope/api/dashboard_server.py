@@ -6,8 +6,47 @@ from __future__ import annotations
 
 import argparse
 import json
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+
+def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
+    """Reject malformed, partial, future-dated or oversized snapshot files."""
+    if path.stat().st_size > 32768:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
+    payload = path.read_bytes()
+    if len(payload) > 32768:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
+    data = json.loads(payload)
+    if not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("source") != "hope_postgresql":
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
+    research = data.get("research")
+    paper = data.get("paper")
+    if not isinstance(research, dict) or not isinstance(paper, dict):
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
+    counts = paper.get("job_runs")
+    valid_count = lambda n: type(n) is int and n >= 0
+    if not valid_count(research.get("run_count")) or paper.get("environment_state") not in {"RUNNING", "HALTED"}:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
+    if not isinstance(counts, dict) or not all(
+        valid_count(counts.get(key)) for key in ("total", "claimed", "succeeded", "failed")
+    ):
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
+    if counts["total"] != counts["claimed"] + counts["succeeded"] + counts["failed"]:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCONSISTENT")
+    stamp = data.get("generated_at")
+    if not isinstance(stamp, str):
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
+    try:
+        generated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID") from exc
+    if generated.tzinfo is None:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
+    if (generated - datetime.now(timezone.utc)).total_seconds() > 300:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_FROM_FUTURE")
+    return payload, generated
 
 
 class DashboardHTTPServer(ThreadingHTTPServer):
@@ -67,15 +106,32 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             self._respond(200, payload, "text/html; charset=utf-8")
             return
+        if self.path == "/status.json":
+            # Server liveness is independent of the availability of the database.
+            # Do not reveal database errors, credentials, host paths or SQL.
+            state = "UNAVAILABLE"
+            generated_at = None
+            try:
+                _, generated = _verified_snapshot(self.server.snapshot)
+                generated_at = generated.isoformat()
+                state = (
+                    "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > 3600
+                    else "CURRENT"
+                )
+            except (OSError, ValueError, TypeError, UnicodeError):
+                pass
+            payload = json.dumps({
+                "schema_version": 1,
+                "service": "RUNNING",
+                "data_feed": state,
+                "snapshot_generated_at": generated_at,
+            }, separators=(",", ":")).encode("utf-8")
+            self._respond(200, payload, "application/json; charset=utf-8")
+            return
         if self.path == "/snapshot.json":
             try:
-                payload = self.server.snapshot.read_bytes()
-                if len(payload) > 32768:
-                    raise ValueError("Snapshot exceeds size limit")
-                data = json.loads(payload)
-                if not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("source") != "hope_postgresql":
-                    raise ValueError("Unrecognized snapshot")
-            except (OSError, ValueError, UnicodeError):
+                payload, _ = _verified_snapshot(self.server.snapshot)
+            except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified snapshot unavailable")
                 return
             self._respond(200, payload, "application/json; charset=utf-8")

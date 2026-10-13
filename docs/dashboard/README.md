@@ -37,3 +37,9 @@ The deployment bundle under deploy/dashboard/ provides a loopback-only HTTP serv
 Access the UI through an authenticated SSH tunnel, never an open security-group port. Example: ssh -N -L 8787:127.0.0.1:8787 EC2_USER@EC2_HOST. Then visit http://127.0.0.1:8787/ on your computer. See deploy/dashboard/README.md for installation and rollback instructions. The dashboard does not submit broker orders, operate the scheduler or modify risk policy.
 
 The repository contains deployment instructions and service definitions, not a deployed instance or database credentials. An operator must install these on EC2 after verifying the environment.
+
+## Runtime visibility (v0.4)
+
+The private web service now serves `GET /status.json` with separate `service: RUNNING` and `data_feed: CURRENT|STALE|UNAVAILABLE` indicators. This endpoint reports **only** the web service liveness and the availability/freshness of a structurally verified local snapshot; it is not proof that the trading engine is running. The UI checks it every minute through the existing loopback-only connection. It never reports missing tables as zero activity. If the database schema is older than required, `UNAVAILABLE` is expected until a separately approved migration or compatible read model exists.
+
+The dashboard no longer displays a hard-coded old CI success as if it were current. GitHub Actions remains authoritative for release CI.

@@ -1,5 +1,6 @@
 """Private dashboard HTTP surface: loopback, read-only and no path traversal."""
 import json
+from datetime import datetime, timedelta, timezone
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -70,11 +71,26 @@ def test_server_rejects_dns_rebinding_host(tmp_path):
         assert status == 403
 
 
+def valid_snapshot(*, generated_at=None):
+    if generated_at is None:
+        generated_at = datetime.now(timezone.utc).isoformat()
+    return json.dumps({
+        "schema_version": 1, "source": "hope_postgresql",
+        "generated_at": generated_at,
+        "research": {"run_count": 0},
+        "paper": {
+            "environment_state": "HALTED",
+            "job_runs": {"total": 2, "claimed": 0, "succeeded": 1, "failed": 1},
+        },
+    }).encode("utf-8")
+
+
 @pytest.mark.parametrize("snapshot,expected", [
     (b"not json", 503),
     (b'{"schema_version":1,"source":"unknown"}', 503),
     (b"x" * 32769, 503),
-    (json.dumps({"schema_version": 1, "source": "hope_postgresql", "generated_at": "2026-10-12T00:00:00Z"}).encode(), 200),
+    (b'{"schema_version":1,"source":"hope_postgresql"}', 503),
+    (valid_snapshot(), 200),
 ])
 def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
     with dashboard(tmp_path, snapshot) as server:
@@ -83,3 +99,61 @@ def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
         if status == 200:
             assert headers["Content-Type"].startswith("application/json")
             assert body == snapshot
+
+
+def test_server_reports_liveness_separately_from_missing_data(tmp_path):
+    with dashboard(tmp_path) as server:
+        status, headers, body = request(server, "/status.json")
+        assert status == 200
+        assert headers["Cache-Control"].startswith("no-store")
+        assert json.loads(body) == {
+            "schema_version": 1, "service": "RUNNING",
+            "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+        }
+
+
+def test_server_reports_current_snapshot_and_never_exposes_db_details(tmp_path):
+    with dashboard(tmp_path, valid_snapshot()) as server:
+        status, _, body = request(server, "/status.json")
+        assert status == 200
+        state = json.loads(body)
+        assert state["service"] == "RUNNING"
+        assert state["data_feed"] == "CURRENT"
+        assert state["snapshot_generated_at"]
+        assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at"}
+
+
+def test_server_marks_old_snapshot_stale(tmp_path):
+    timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+    with dashboard(tmp_path, valid_snapshot(generated_at=timestamp)) as server:
+        status, _, body = request(server, "/status.json")
+        assert status == 200
+        assert json.loads(body)["data_feed"] == "STALE"
+
+
+@pytest.mark.parametrize("invalid", [
+    lambda d: d.update(research={"run_count": -1}),
+    lambda d: d["paper"].update(environment_state="UNKNOWN"),
+    lambda d: d["paper"]["job_runs"].update(total=999),
+    lambda d: d["paper"]["job_runs"].update(claimed=True),
+    lambda d: d.update(generated_at="not-a-date"),
+    lambda d: d.update(generated_at="2026-10-12T00:00:00"),
+    lambda d: d.update(generated_at=(datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()),
+])
+def test_invalid_snapshots_fail_closed_for_both_endpoints(tmp_path, invalid):
+    data = json.loads(valid_snapshot())
+    invalid(data)
+    with dashboard(tmp_path, json.dumps(data).encode("utf-8")) as server:
+        status, _, _ = request(server, "/snapshot.json")
+        assert status == 503
+        status, _, body = request(server, "/status.json")
+        assert status == 200
+        assert json.loads(body)["data_feed"] == "UNAVAILABLE"
+
+
+def test_health_endpoint_is_read_only_and_rejects_wrong_host(tmp_path):
+    with dashboard(tmp_path, valid_snapshot()) as server:
+        status, _, _ = request(server, "/status.json", method="POST")
+        assert status == 405
+        status, _, _ = request(server, "/status.json", host="evil.example")
+        assert status == 403

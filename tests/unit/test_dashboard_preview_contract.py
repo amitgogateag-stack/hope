@@ -37,7 +37,7 @@ def test_preview_never_fabricates_runtime_metrics_or_exposes_execution_actions()
     assert "Not connected" in html
     assert "No invented performance metrics" in html
     assert "No trading buttons" in html
-    assert "PROTOTYPE · NO LIVE DATA" in html
+    assert "PRIVATE DASHBOARD · VERIFIED DATA ONLY" in html
     assert "LIVE broker submission" in html
     assert "NOT ENABLED" in html
     assert "fetch(" in html
@@ -66,3 +66,13 @@ def test_preview_imports_local_aggregate_snapshot_without_network_calls():
     assert "STALE" in html
     assert "fetch(" in html
     assert "setInterval(refresh, 60000)" in html
+
+
+def test_preview_displays_independent_server_and_database_health():
+    html = PREVIEW.read_text(encoding="utf-8")
+    for marker in ('id="web-service"', 'id="feed-health"', 'id="feed-time"'):
+        assert marker in html
+    assert "fetch('/status.json'" in html
+    assert "fetch('/snapshot.json'" in html
+    assert "CHECK GITHUB ACTIONS" in html
+    assert "HOPE CI #1162 PASS" not in html

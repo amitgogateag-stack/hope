@@ -10,7 +10,7 @@
 </style>
 </head>
 <body>
-<header><div class="brand"><div class="mark">H</div><div><strong>HOPE</strong><small>HYPOTHESIS-DRIVEN RESEARCH OS</small></div></div><div><span class="pill amber">PROTOTYPE · NO LIVE DATA</span> <span class="pill green">PAPER-ONLY DESIGN</span></div></header>
+<header><div class="brand"><div class="mark">H</div><div><strong>HOPE</strong><small>HYPOTHESIS-DRIVEN RESEARCH OS</small></div></div><div><span class="pill amber">PRIVATE DASHBOARD · VERIFIED DATA ONLY</span> <span class="pill green">PAPER-ONLY DESIGN</span></div></header>
 <div class="shell">
 <aside><div class="section">WORKSPACE</div><nav aria-label="Dashboard sections"><button type="button" class="active" data-view="overview" aria-current="page">◫ &nbsp; Overview</button><button type="button" data-view="research">◇ &nbsp; Research Lab</button><button type="button" data-view="paper">▤ &nbsp; PAPER Operations</button><button type="button" data-view="safety">◈ &nbsp; Safety &amp; Engineering</button></nav><div class="aside-note">HOPE is independent of ATC.<br>India + USA target scope.<br><br>Read-only interface concept.<br>No broker actions available.</div></aside>
 <main>
@@ -20,8 +20,8 @@
 <div class="layout"><div class="panel"><h2>Engineering roadmap</h2><div class="steps"><div class="step"><i class="dot done"></i><div><b>Foundation &amp; data integrity</b><span>Schema, provenance and migration safeguards</span></div></div><div class="step"><i class="dot done"></i><div><b>Research and backtest foundations</b><span>Evidence, reproducibility and validation components</span></div></div><div class="step"><i class="dot done"></i><div><b>PAPER lifecycle safety</b><span>Durable records, idempotency and recovery guards</span></div></div><div class="step"><i class="dot pending"></i><div><b>Dashboard read models</b><span>Connect authenticated, read-only operational data</span></div></div><div class="step"><i class="dot"></i><div><b>End-to-end operational acceptance</b><span>Requires deployment, observability and validation</span></div></div></div></div><div class="panel"><h2>Operating posture</h2><div class="status-row"><span>PAPER-only safety boundary</span><span class="tag">ENFORCED IN CODE</span></div><div class="status-row"><span>LIVE broker submission</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Research performance</span><span class="tag neutral">NOT LOADED</span></div><div class="status-row"><span>Operational runtime health</span><span class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Latest CI snapshot</span><span class="tag">PASS #1162</span></div></div></div></section>
 <section id="research" class="view"><div class="heading"><div><div class="eyebrow">Scientific evidence</div><h1>Research Lab</h1><p>Strategy families, reproducible experiments and out-of-sample evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">Hypotheses evaluated</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">OOS evidence</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Cost stress</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Promotion eligibility</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Research evidence table</h2><div class="empty"><strong>No authenticated experiment feed</strong><p>Once connected, each row will show strategy family, dataset/version, sample size, out-of-sample result, friction, uncertainty and evidence verdict. No strategy will be marked “proven” without supporting records.</p></div></div></section>
 <section id="paper" class="view"><div class="heading"><div><div class="eyebrow">Simulated execution</div><h1>PAPER Operations</h1><p>Trade lifecycle, job recovery, fills and reconciliation evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">PAPER orders</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Open PAPER positions</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER job runs</div><div id="paper-jobs" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER realized P&amp;L</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Execution ledger</h2><div class="empty"><strong>No runtime records loaded</strong><p>Future read-only table: decision → risk verdict → order → fill / cancellation → portfolio effect → reconciliation. Missing data will remain visibly unknown rather than appearing as zero.</p></div></div></section>
-<section id="safety" class="view"><div class="heading"><div><div class="eyebrow">Control plane</div><h1>Safety &amp; Engineering</h1><p>Fail-closed policies and traceable software changes.</p></div></div><div class="layout"><div class="panel"><h2>Safety contracts</h2><div class="status-row"><span>LIVE broker adapter</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Durable job identity</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Recovery / reconciliation guards</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Current deployment health</span><span class="tag neutral">UNKNOWN</span></div><div class="status-row"><span>PAPER environment (snapshot)</span><span id="paper-state" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Risk limits in runtime</span><span class="tag neutral">NOT CONNECTED</span></div></div><div class="panel"><h2>Verified engineering snapshot</h2><div class="status-row"><span>Workflow</span><span class="tag">HOPE CI #1162 PASS</span></div><div class="status-row"><span>Branch</span><span class="mono">p0-pit-context</span></div><div class="status-row"><span>Commit</span><span class="mono">6f25849f928e</span></div><div class="status-row"><span>Snapshot date</span><span>12 Oct 2026</span></div><p class="footer">This is a fixed snapshot, not a GitHub API connection.</p></div></div></section>
-<p class="footer">HOPE dashboard v0.3 · Automatic loopback refresh or local JSON import · No trading buttons · No external network requests · No invented market or account data</p>
+<section id="safety" class="view"><div class="heading"><div><div class="eyebrow">Control plane</div><h1>Safety &amp; Engineering</h1><p>Fail-closed policies and traceable software changes.</p></div></div><div class="layout"><div class="panel"><h2>Safety contracts</h2><div class="status-row"><span>LIVE broker adapter</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Durable job identity</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Recovery / reconciliation guards</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Web service (loopback)</span><span id="web-service" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Database feed health</span><span id="feed-health" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Last verified snapshot</span><span id="feed-time" class="mono">Not connected</span></div><div class="status-row"><span>PAPER environment (snapshot)</span><span id="paper-state" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Risk limits in runtime</span><span class="tag neutral">NOT CONNECTED</span></div></div><div class="panel"><h2>Verified engineering snapshot</h2><div class="status-row"><span>Workflow</span><span class="tag neutral">CHECK GITHUB ACTIONS</span></div><div class="status-row"><span>Branch</span><span class="mono">p0-pit-context</span></div><div class="status-row"><span>Commit</span><span class="mono">Not connected</span></div><div class="status-row"><span>Snapshot date</span><span>Not connected</span></div><p class="footer">CI and commit are not fetched by the dashboard; check GitHub Actions for authoritative results.</p></div></div></section>
+<p class="footer">HOPE dashboard v0.4 · Verified server health and data freshness · No trading buttons · No external network requests · No invented market or account data</p>
 </main></div>
 <script>
 document.querySelectorAll('nav button[data-view]').forEach(button=>{
@@ -86,6 +86,34 @@ fileInput.addEventListener('change', async () => {
  }
 });
 if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(location.hostname)) {
+ const refreshHealth = async () => {
+  const service = document.getElementById('web-service');
+  const feed = document.getElementById('feed-health');
+  const feedTime = document.getElementById('feed-time');
+  try {
+   const response = await fetch('/status.json', {cache:'no-store'});
+   if (!response.ok) throw Error('Service status unavailable');
+   const status = await response.json();
+   if (status.schema_version !== 1 || status.service !== 'RUNNING' ||
+       !['CURRENT', 'STALE', 'UNAVAILABLE'].includes(status.data_feed)) {
+    throw Error('Invalid service status');
+   }
+   service.textContent = 'RUNNING';
+   service.className = 'tag';
+   feed.textContent = status.data_feed;
+   feed.className = status.data_feed === 'CURRENT' ? 'tag' : 'tag off';
+   feedTime.textContent = typeof status.snapshot_generated_at === 'string' ?
+      status.snapshot_generated_at : 'Not connected';
+  } catch (_) {
+   service.textContent = 'UNKNOWN';
+   service.className = 'tag neutral';
+   feed.textContent = 'NOT CONNECTED';
+   feed.className = 'tag neutral';
+   feedTime.textContent = 'Not connected';
+  }
+ };
+ refreshHealth();
+ setInterval(refreshHealth, 60000);
  const refresh = async () => {
   try {
    const response = await fetch('/snapshot.json', {cache:'no-store'});
