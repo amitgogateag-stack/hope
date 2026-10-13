@@ -76,3 +76,17 @@ def test_preview_displays_independent_server_and_database_health():
     assert "fetch('/snapshot.json'" in html
     assert "CHECK GITHUB ACTIONS" in html
     assert "HOPE CI #1162 PASS" not in html
+
+
+
+def test_preview_legacy_counts_are_separate_from_paper_and_performance():
+    html = PREVIEW.read_text(encoding="utf-8")
+    for marker in ('id="legacy-experiments"', 'id="legacy-strategies"',
+                   'id="legacy-datasets"', 'id="legacy-status"'):
+        assert marker in html
+    assert "fetch('/legacy-research.json'" in html
+    assert "registrations only · no PAPER or performance claims" in html
+    assert "data.paper !== null" in html
+    assert "No proven edge asserted" in html
+    assert "HOPE CI #1162" not in html
+    assert "PASS #1162" not in html

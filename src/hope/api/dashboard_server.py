@@ -49,6 +49,44 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     return payload, generated
 
 
+def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
+    """Return only a sanitized legacy registration inventory, never PAPER data."""
+    if path.stat().st_size > 8192:
+        raise ValueError("HOPE_LEGACY_INVENTORY_TOO_LARGE")
+    raw = path.read_bytes()
+    if len(raw) > 8192:
+        raise ValueError("HOPE_LEGACY_INVENTORY_TOO_LARGE")
+    data = json.loads(raw)
+    if not isinstance(data, dict) or data.get("schema_version") != 1:
+        raise ValueError("HOPE_LEGACY_INVENTORY_INVALID")
+    if data.get("source") != "hope_legacy_research_inventory" or data.get("schema_compatible") is not True:
+        raise ValueError("HOPE_LEGACY_INVENTORY_INCOMPATIBLE")
+    if data.get("paper") is not None or data.get("missing_columns") != {}:
+        raise ValueError("HOPE_LEGACY_INVENTORY_INCONSISTENT")
+    counts = data.get("research")
+    fields = ("registered_experiments", "registered_strategy_versions", "registered_datasets")
+    if not isinstance(counts, dict) or set(counts) != set(fields):
+        raise ValueError("HOPE_LEGACY_INVENTORY_INVALID_COUNTS")
+    if not all(type(counts[k]) is int and 0 <= counts[k] <= 9007199254740991 for k in fields):
+        raise ValueError("HOPE_LEGACY_INVENTORY_INVALID_COUNTS")
+    stamp = data.get("generated_at")
+    if not isinstance(stamp, str):
+        raise ValueError("HOPE_LEGACY_INVENTORY_TIMESTAMP_INVALID")
+    try:
+        generated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError("HOPE_LEGACY_INVENTORY_TIMESTAMP_INVALID") from exc
+    if generated.tzinfo is None or (generated - datetime.now(timezone.utc)).total_seconds() > 300:
+        raise ValueError("HOPE_LEGACY_INVENTORY_TIMESTAMP_INVALID")
+    # Whitelist exact aggregate fields so an unexpected file cannot leak metadata.
+    safe = {
+        "schema_version": 1, "source": "hope_legacy_research_inventory",
+        "generated_at": generated.isoformat(), "schema_compatible": True,
+        "research": {k: counts[k] for k in fields}, "paper": None,
+    }
+    return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
+
+
 class DashboardHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
@@ -58,6 +96,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
+        self.legacy = self.snapshot.parent / 'legacy-research.json'
         super().__init__(("127.0.0.1", port), DashboardHandler)
 
 
@@ -126,6 +165,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "data_feed": state,
                 "snapshot_generated_at": generated_at,
             }, separators=(",", ":")).encode("utf-8")
+            self._respond(200, payload, "application/json; charset=utf-8")
+            return
+        if self.path == "/legacy-research.json":
+            try:
+                payload, _ = _verified_legacy_inventory(self.server.legacy)
+            except (OSError, ValueError, TypeError, UnicodeError):
+                self._respond(503, b"Verified legacy research inventory unavailable")
+                return
             self._respond(200, payload, "application/json; charset=utf-8")
             return
         if self.path == "/snapshot.json":

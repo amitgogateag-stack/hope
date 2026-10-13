@@ -157,3 +157,73 @@ def test_health_endpoint_is_read_only_and_rejects_wrong_host(tmp_path):
         assert status == 405
         status, _, _ = request(server, "/status.json", host="evil.example")
         assert status == 403
+
+
+def valid_legacy_inventory(*, timestamp=None):
+    if timestamp is None:
+        timestamp = datetime.now(timezone.utc).isoformat()
+    return {
+        "schema_version": 1,
+        "source": "hope_legacy_research_inventory",
+        "schema_compatible": True,
+        "generated_at": timestamp,
+        "missing_columns": {},
+        "research": {
+            "registered_experiments": 7,
+            "registered_strategy_versions": 3,
+            "registered_datasets": 2,
+        },
+        "paper": None,
+    }
+
+
+def test_legacy_inventory_is_independent_of_missing_paper_snapshot(tmp_path):
+    with dashboard(tmp_path) as server:
+        server.legacy.write_text(json.dumps(valid_legacy_inventory()))
+        code, headers, body = request(server, "/legacy-research.json")
+        assert code == 200
+        assert headers["Content-Type"].startswith("application/json")
+        result = json.loads(body)
+        assert result["research"]["registered_experiments"] == 7
+        assert result["paper"] is None
+        assert result["source"] != "hope_postgresql"
+        assert request(server, "/snapshot.json")[0] == 503
+
+
+@pytest.mark.parametrize("change", [
+    lambda d: d.update(source="hope_postgresql"),
+    lambda d: d.update(schema_compatible=False),
+    lambda d: d.update(paper={"environment_state": "RUNNING"}),
+    lambda d: d["research"].update(registered_experiments=-1),
+    lambda d: d["research"].update(registered_datasets=True),
+    lambda d: d["research"].update(secret="not-for-display"),
+    lambda d: d.update(missing_columns={"experiments": ["id"]}),
+    lambda d: d.update(generated_at="2026-10-12T00:00:00"),
+    lambda d: d.update(generated_at=(datetime.now(timezone.utc) + timedelta(hours=2)).isoformat()),
+])
+def test_legacy_inventory_rejects_invalid_or_sensitive_data(tmp_path, change):
+    payload = valid_legacy_inventory()
+    change(payload)
+    with dashboard(tmp_path) as server:
+        server.legacy.write_text(json.dumps(payload))
+        assert request(server, "/legacy-research.json")[0] == 503
+
+
+def test_legacy_inventory_rejects_oversized_data_and_write_methods(tmp_path):
+    with dashboard(tmp_path) as server:
+        assert request(server, "/legacy-research.json")[0] == 503
+        server.legacy.write_bytes(b"x" * 8193)
+        assert request(server, "/legacy-research.json")[0] == 503
+        assert request(server, "/legacy-research.json", method="POST")[0] == 405
+        assert request(server, "/legacy-research.json", host="evil.example")[0] == 403
+
+
+def test_legacy_inventory_whitelists_fields(tmp_path):
+    payload = valid_legacy_inventory()
+    payload["unexpected_private_field"] = "must never be served"
+    with dashboard(tmp_path) as server:
+        server.legacy.write_text(json.dumps(payload))
+        code, _, body = request(server, "/legacy-research.json")
+        assert code == 200
+        assert b"unexpected_private_field" not in body
+        assert b"must never be served" not in body

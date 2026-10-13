@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from hope.api.legacy_research_inventory import inspect_legacy_research
+from hope.api.legacy_research_inventory import inspect_legacy_research, export_legacy_research_inventory
 
 
 class Result:
@@ -23,6 +23,9 @@ class FakeConnection:
         self.statements = []
         self.missing = missing or set()
         self.counts = counts or {"experiments": 7, "strategy_versions": 3, "datasets": 2}
+
+    def rollback(self):
+        pass
 
     def execute(self, query):
         sql = str(query)
@@ -99,3 +102,54 @@ def test_inventory_does_not_mutate_data_or_return_sensitive_records():
     assert "credentials" not in str(result).lower()
     assert "experiment_id" not in result["research"]
     assert "performance" not in result["research"]
+
+
+def test_export_writes_only_complete_verified_inventory(tmp_path, monkeypatch):
+    import json
+    import hope.api.legacy_research_inventory as module
+
+    class Engine:
+        def connect(self):
+            class Context:
+                def __enter__(self):
+                    return FakeConnection()
+                def __exit__(self, *args):
+                    pass
+            return Context()
+        def dispose(self):
+            pass
+
+    monkeypatch.setattr(module, "create_engine", lambda url: Engine())
+    output = tmp_path / "legacy-research.json"
+    assert export_legacy_research_inventory(output, "postgresql://read-only") == output
+    data = json.loads(output.read_text())
+    assert data["source"] == "hope_legacy_research_inventory"
+    assert data["research"]["registered_experiments"] == 7
+    assert data["paper"] is None
+
+
+def test_export_refuses_missing_url_without_creating_file(tmp_path):
+    output = tmp_path / "legacy.json"
+    with pytest.raises(ValueError, match="HOPE_LEGACY_READONLY_DATABASE_URL_REQUIRED"):
+        export_legacy_research_inventory(output, "")
+    assert not output.exists()
+
+
+def test_export_incompatible_schema_never_overwrites_previous_file(tmp_path, monkeypatch):
+    import hope.api.legacy_research_inventory as module
+    class Engine:
+        def connect(self):
+            class Context:
+                def __enter__(self):
+                    return FakeConnection(missing={("experiments", "experiment_id")})
+                def __exit__(self, *args):
+                    pass
+            return Context()
+        def dispose(self):
+            pass
+    monkeypatch.setattr(module, "create_engine", lambda url: Engine())
+    output = tmp_path / "legacy.json"
+    output.write_text("prior-valid-snapshot")
+    with pytest.raises(RuntimeError, match="HOPE_LEGACY_SCHEMA_INCOMPATIBLE"):
+        export_legacy_research_inventory(output, "postgresql://read-only")
+    assert output.read_text() == "prior-valid-snapshot"

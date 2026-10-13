@@ -8,6 +8,8 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import tempfile
+from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import Connection, create_engine, text
 
@@ -71,23 +73,56 @@ def inspect_legacy_research(connection: Connection) -> dict[str, object]:
     }
 
 
+def export_legacy_research_inventory(output: Path, database_url: str) -> Path:
+    """Atomically export verified legacy aggregates; never write incompatible data."""
+    if not database_url:
+        raise ValueError("HOPE_LEGACY_READONLY_DATABASE_URL_REQUIRED")
+    engine = create_engine(database_url)
+    try:
+        with engine.connect() as connection:
+            data = inspect_legacy_research(connection)
+            connection.rollback()
+    finally:
+        engine.dispose()
+    if not data["schema_compatible"]:
+        raise RuntimeError("HOPE_LEGACY_SCHEMA_INCOMPATIBLE")
+    output = Path(output)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temp_name = tempfile.mkstemp(prefix=".hope-legacy-", suffix=".json", dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_name, output)
+    finally:
+        if os.path.exists(temp_name):
+            os.unlink(temp_name)
+    return output
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Inspect legacy HOPE research counts (read-only)")
     parser.add_argument("--database-url-env", default="HOPE_LEGACY_READONLY_DATABASE_URL")
+    parser.add_argument("--output", type=Path, help="Atomically export verified aggregate JSON")
     args = parser.parse_args()
     if args.database_url_env != "HOPE_LEGACY_READONLY_DATABASE_URL":
         parser.error("Only the dedicated read-only environment variable is supported")
     database_url = os.environ.get(args.database_url_env, "")
     if not database_url:
         parser.error("HOPE_LEGACY_READONLY_DATABASE_URL is required")
-    engine = create_engine(database_url)
-    try:
-        with engine.connect() as connection:
-            result = inspect_legacy_research(connection)
-            connection.rollback()
-    finally:
-        engine.dispose()
-    print(json.dumps(result, sort_keys=True, separators=(",", ":")))
+    if args.output is not None:
+        export_legacy_research_inventory(args.output, database_url)
+    else:
+        engine = create_engine(database_url)
+        try:
+            with engine.connect() as connection:
+                result = inspect_legacy_research(connection)
+                connection.rollback()
+        finally:
+            engine.dispose()
+        print(json.dumps(result, sort_keys=True, separators=(",", ":")))
 
 
 if __name__ == "__main__":
