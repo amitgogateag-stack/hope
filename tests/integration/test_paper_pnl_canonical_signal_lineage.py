@@ -12,9 +12,23 @@ from sqlalchemy.exc import IntegrityError
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
+from hope.application.paper.signals import paper_signal_payload_hash
+from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
+
+
+def _signal_hash(signal_id, instrument_id, when, inputs_hash: str) -> str:
+    return paper_signal_payload_hash(Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="canonical-v1",
+        decision_time=when,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.5"),
+        inputs_hash=inputs_hash,
+    ))
 
 
 @pytest.mark.integration
@@ -75,7 +89,10 @@ def test_canonical_position_pnl_rejects_untracked_source_and_accepts_atomic_line
 
         with engine.begin() as connection:
             assert SqlAlchemyPaperEffectRepository(connection).record(
-                create_paper_effect(run, PaperEffectType.SIGNAL, signal_id, "b" * 64)
+                create_paper_effect(
+                    run, PaperEffectType.SIGNAL, signal_id,
+                    _signal_hash(signal_id, instrument_id, when, "a" * 64),
+                )
             ) is True
             write_accounting(connection)
 
@@ -130,7 +147,10 @@ def test_canonical_pnl_cross_job_source_owner_requires_success(
             assert jobs.claim(source) is True
             assert jobs.claim(consumer) is True
             assert SqlAlchemyPaperEffectRepository(connection).record(
-                create_paper_effect(source, PaperEffectType.SIGNAL, signal_id, "c" * 64)
+                create_paper_effect(
+                    source, PaperEffectType.SIGNAL, signal_id,
+                    _signal_hash(signal_id, instrument_id, when, "d" * 64),
+                )
             ) is True
             if source_succeeded:
                 assert jobs.complete(

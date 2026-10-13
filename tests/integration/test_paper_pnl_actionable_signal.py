@@ -12,6 +12,8 @@ from sqlalchemy.exc import IntegrityError
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
+from hope.application.paper.signals import paper_signal_payload_hash
+from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
@@ -49,8 +51,20 @@ def test_canonical_pnl_requires_actionable_source_signal(state: str) -> None:
             ), {"id": position_id, "instrument": instrument_id,
                 "signal": signal_id, "time": instant})
             assert SqlAlchemyJobRunRepository(connection).claim(run) is True
+            canonical_signal = Signal(
+                signal_id=signal_id,
+                instrument_id=instrument_id,
+                strategy_version="canonical-v1",
+                decision_time=instant,
+                signal_type=SignalType.ENTRY,
+                conviction=Decimal("0.5"),
+                inputs_hash="a" * 64,
+            )
             assert SqlAlchemyPaperEffectRepository(connection).record(
-                create_paper_effect(run, PaperEffectType.SIGNAL, signal_id, "b" * 64)
+                create_paper_effect(
+                    run, PaperEffectType.SIGNAL, signal_id,
+                    paper_signal_payload_hash(canonical_signal),
+                )
             ) is True
 
         def write_pnl():

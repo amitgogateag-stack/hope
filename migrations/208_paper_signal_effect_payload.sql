@@ -76,19 +76,8 @@ BEGIN
           JOIN paper_effects effect
             ON effect.effect_type = 'SIGNAL'
            AND effect.entity_id = source_signal.signal_id
-         WHERE source_signal.state <> 'SIGNAL'
-    ) THEN
-        RAISE EXCEPTION 'PAPER_SIGNAL_EFFECT_REQUIRES_ACTIONABLE_SIGNAL'
-            USING ERRCODE = '23514';
-    END IF;
-
-    IF EXISTS (
-        SELECT 1
-          FROM signals source_signal
-          JOIN paper_effects effect
-            ON effect.effect_type = 'SIGNAL'
-           AND effect.entity_id = source_signal.signal_id
-         WHERE hope_paper_signal_recovery_material_state(
+         WHERE source_signal.state = 'SIGNAL'
+           AND hope_paper_signal_recovery_material_state(
              source_signal.strategy_version,
              source_signal.signal_type,
              source_signal.conviction,
@@ -105,7 +94,8 @@ BEGIN
           JOIN paper_effects effect
             ON effect.effect_type = 'SIGNAL'
            AND effect.entity_id = source_signal.signal_id
-         WHERE hope_paper_signal_recovery_material_state(
+         WHERE source_signal.state = 'SIGNAL'
+           AND hope_paper_signal_recovery_material_state(
              source_signal.strategy_version,
              source_signal.signal_type,
              source_signal.conviction,
@@ -153,9 +143,11 @@ RETURNS VOID LANGUAGE plpgsql AS $$
 DECLARE
     material_state TEXT;
 BEGIN
+    -- NO_SIGNAL and STALE_SIGNAL rows are research/audit decisions. Existing
+    -- PNL lineage constraints decide whether they may authorize accounting;
+    -- this function authenticates only canonical actionable PAPER signals.
     IF target_state <> 'SIGNAL' THEN
-        RAISE EXCEPTION 'PAPER_SIGNAL_EFFECT_REQUIRES_ACTIONABLE_SIGNAL'
-            USING ERRCODE = '23514';
+        RETURN;
     END IF;
 
     material_state := hope_paper_signal_recovery_material_state(
