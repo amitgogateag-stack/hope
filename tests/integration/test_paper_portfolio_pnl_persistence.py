@@ -362,10 +362,14 @@ def test_paper_portfolio_pnl_requires_reusable_source_fill_ownership(monkeypatch
         assert repository.get(
             portfolio_id, fill.fill_id, current_job_run_id=pnl_run.job_run_id,
         ) is not None
+        get_reusable_for_job = repository._effects.get_reusable_for_job
         monkeypatch.setattr(
             repository._effects,
             "get_reusable_for_job",
-            lambda *args, **kwargs: None,
+            lambda effect_type, entity_id, job_run_id: (
+                None if effect_type is PaperEffectType.FILL
+                else get_reusable_for_job(effect_type, entity_id, job_run_id)
+            ),
         )
         with pytest.raises(
             ValueError,
