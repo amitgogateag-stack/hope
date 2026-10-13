@@ -69,7 +69,10 @@ class SqlAlchemyPaperPortfolioPnLRepository:
         ):
             raise ValueError("PAPER_PORTFOLIO_PNL_IDENTITY_CONFLICT")
 
-    def get(self, portfolio_id: UUID, fill_id: UUID) -> PaperPortfolioPnLEvent | None:
+    def get(
+        self, portfolio_id: UUID, fill_id: UUID, *,
+        current_job_run_id: UUID | None = None,
+    ) -> PaperPortfolioPnLEvent | None:
         event_id = paper_portfolio_pnl_event_id(portfolio_id, fill_id)
         row = self._get_row(event_id)
         if row is None:
@@ -103,6 +106,21 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_IDENTITY_CONFLICT")
         if effect.payload_hash != paper_portfolio_pnl_payload_hash(event):
             raise ValueError("PAPER_PORTFOLIO_PNL_EFFECT_PAYLOAD_CONFLICT")
+        # Public reads require completed ownership; only an authenticated
+        # in-flight caller may read its own provisional accounting.
+        try:
+            owner_effect = (
+                self._effects.get_recoverable(PaperEffectType.PNL, event.pnl_event_id)
+                if current_job_run_id is None
+                else self._effects.get_reusable_for_job(
+                    PaperEffectType.PNL, event.pnl_event_id, current_job_run_id,
+                )
+            )
+        except ValueError as exc:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE") from exc
+        if owner_effect is None or owner_effect != effect:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE")
+
         try:
             reusable_fill = self._effects.get_reusable_for_job(
                 PaperEffectType.FILL,

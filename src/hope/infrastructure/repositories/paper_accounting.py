@@ -70,7 +70,10 @@ class SqlAlchemyPaperAccountingRepository:
             )
             if transition is None:
                 try:
-                    event = self._pnl.get(portfolio_id, fill.fill_id)
+                    event = self._pnl.get(
+                        portfolio_id, fill.fill_id,
+                        current_job_run_id=context.job_run.job_run_id,
+                    )
                 except RuntimeError as exc:
                     if str(exc) != "PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL":
                         raise

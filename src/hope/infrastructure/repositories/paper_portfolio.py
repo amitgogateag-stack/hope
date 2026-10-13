@@ -573,7 +573,9 @@ class SqlAlchemyPaperPortfolioRepository:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_HISTORY_INCONSISTENT")
         for row in rows:
             fill_id = row["fill_id"]
-            event = pnl_repository.get(portfolio_id, fill_id)
+            event = pnl_repository.get(
+                portfolio_id, fill_id, current_job_run_id=current_job_run_id,
+            )
             if event is None:
                 raise RuntimeError("PAPER_PORTFOLIO_APPLIED_FILL_WITHOUT_PNL")
             try:

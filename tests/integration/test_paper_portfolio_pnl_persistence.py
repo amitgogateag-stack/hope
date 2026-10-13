@@ -602,6 +602,82 @@ def test_paper_portfolio_recovery_requires_successful_pnl_owner(monkeypatch) -> 
 
 
 @pytest.mark.integration
+def test_paper_pnl_direct_get_rejects_failed_foreign_owner() -> None:
+    """A succeeded source fill cannot authenticate PNL from FAILED work."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    source_run = create_scheduled_job_run(
+        f"paper-pnl-source-{uuid4()}", datetime(2026, 9, 10, 0, 21, tzinfo=UTC),
+    )
+    foreign_run = create_scheduled_job_run(
+        f"paper-pnl-foreign-{uuid4()}", datetime(2026, 9, 10, 0, 22, tzinfo=UTC),
+    )
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments(instrument_id, canonical_symbol, "
+                    "exchange, status) VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id, "symbol": f"PNL-OWNER-{instrument_id}"},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(source_run)
+            fill = persist_fill(
+                connection, PaperCycleContext(source_run), instrument_id,
+                OrderSide.BUY, "100", 21,
+            )
+            assert jobs.complete(create_job_run_completion(
+                source_run, JobRunStatus.SUCCEEDED,
+                source_run.scheduled_for + timedelta(seconds=30),
+            ))
+
+            assert jobs.claim(foreign_run)
+            foreign_context = PaperCycleContext(foreign_run)
+            portfolio = SqlAlchemyPaperPortfolioRepository(connection)
+            transition = portfolio.apply_fill_with_transition(
+                portfolio_id, Decimal("1000"), fill,
+                job_run_id=foreign_run.job_run_id,
+            )
+            assert transition is not None
+            pnl = SqlAlchemyPaperPortfolioPnLRepository(connection)
+            assert PaperPortfolioPnLWriter(pnl).record(
+                foreign_context, portfolio_id, fill, transition,
+            )
+            assert pnl.get(
+                portfolio_id, fill.fill_id,
+                current_job_run_id=foreign_run.job_run_id,
+            ) is not None
+            with pytest.raises(
+                RuntimeError, match="PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE",
+            ):
+                pnl.get(portfolio_id, fill.fill_id)
+
+            assert jobs.complete(create_job_run_completion(
+                foreign_run, JobRunStatus.FAILED,
+                foreign_run.scheduled_for + timedelta(seconds=30),
+                failure_code="EXPECTED_PNL_OWNER_FAILURE",
+            ))
+            for current_job in (None, foreign_run.job_run_id):
+                with pytest.raises(
+                    RuntimeError, match="PAPER_PORTFOLIO_PNL_OWNER_NOT_RECOVERABLE",
+                ):
+                    pnl.get(
+                        portfolio_id, fill.fill_id,
+                        current_job_run_id=current_job,
+                    )
+            connection.rollback()
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.integration
 def test_paper_pnl_application_cannot_be_deleted_to_orphan_event() -> None:
     """Database immutability prevents deletion from orphaning a durable PNL event."""
     url = os.getenv("HOPE_DATABASE_URL")
