@@ -30,6 +30,7 @@ def test_upgrade_requires_pinned_github_release_and_clean_checkout():
     assert "test_dashboard_upgrade_contract.py" in script
     assert "test_dashboard_readiness_contract.py" in script
     assert "test_legacy_research_inventory.py" in script
+    assert "test_dashboard_upgrade_probe.py" in script
 
 
 def test_upgrade_rolls_back_and_checks_private_health():
@@ -39,13 +40,9 @@ def test_upgrade_rolls_back_and_checks_private_health():
     assert 'checkout --detach --force "$PREVIOUS"' in script
     assert 'systemctl restart "$SERVICE"' in script
     assert 'systemctl is-active --quiet "$SERVICE"' in script
-    assert "http://127.0.0.1:8787" in script
-    assert 'status.get("service") == "RUNNING"' in script
-    assert 'b\'id="legacy-experiments"\'' in script
-    assert 'b"HOPE dashboard v0.5"' in script
-    assert 'fetch("/legacy-research.json")' in script
-    assert 'fetch("/snapshot.json")' in script
-    assert 'assert code in (200, 503)' in script
+    assert "hope.api.dashboard_upgrade_probe" in script
+    assert "--attempts 5 --delay 1" in script
+    assert 'PYTHONPATH="$ROOT/src"' in script
     assert "HOPE_DATABASE_URL" not in script
     assert "systemctl enable" not in script
     assert "systemctl disable" not in script

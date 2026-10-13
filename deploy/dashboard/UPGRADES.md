@@ -25,3 +25,7 @@ The staged regression suite now includes the legacy research inventory tests and
 ## Aggregate snapshot response minimization
 
 The private HTTP server treats snapshot JSON as untrusted local input even when the exporter is trusted. After verifying the complete expected schema, it **constructs a new JSON response from an explicit allowlist**: version, source, generated timestamp, research run count, PAPER environment state and four PAPER job counts. Unexpected nested or top-level fields are never returned, including if a malformed exporter writes them into the snapshot file. Integer counts are bounded to JavaScript's safe-integer range, and Boolean schema versions are rejected. The independent legacy research endpoint retains its own allowlist. These are defensive HTTP output boundaries, not changes to the database or PAPER runtime.
+
+## Bounded post-restart acceptance (v0.5)
+
+The deployment now runs `hope.api.dashboard_upgrade_probe` rather than an inline one-shot HTTP check. It performs the same release-specific HTML and independent feed checks with a 32-KiB maximum response, no proxies or HTTP redirects. A refused connection or socket timeout is retried up to five attempts, one second apart, to tolerate normal systemd startup latency. An HTTP error, wrong release, malformed response, unexpected feed, or non-loopback URL fails immediately and triggers rollback. The probe is independently unit-tested and included in the staged pre-switch tests. The acceptance probe is not a database readiness check and does not enable exporters.
