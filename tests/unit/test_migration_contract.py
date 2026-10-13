@@ -502,3 +502,15 @@ def test_paper_fill_requires_recoverable_source_risk_effect_owner():
     assert "FOR UPDATE" in sql
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
     assert "AFTER INSERT ON fills" in sql
+
+
+def test_paper_terminal_requires_recoverable_source_risk_effect_owner():
+    sql = (
+        ROOT / "migrations/219_paper_terminal_risk_effect_lineage.sql"
+    ).read_text()
+    assert "PAPER_TERMINAL_SOURCE_RISK_LINEAGE_CONFLICT" in sql
+    assert "risk_effect.job_run_id <> terminal_effect.job_run_id" in sql
+    assert "risk_owner.status IS DISTINCT FROM 'SUCCEEDED'" in sql
+    assert "FOR UPDATE" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+    assert "AFTER INSERT ON paper_order_terminal_events" in sql

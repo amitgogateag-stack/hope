@@ -994,3 +994,170 @@ def test_paper_terminal_restart_read_requires_source_order_lineage(monkeypatch):
             )
 
     engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("effect_first", [True, False])
+def test_paper_terminal_direct_write_requires_reusable_risk_effect_ownership(
+    effect_first: bool,
+) -> None:
+    """Terminal truth cannot borrow risk authorization from an unfinished job."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    signal_run = create_scheduled_job_run(
+        f"paper-terminal-risk-lineage-signal:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 18, 0, tzinfo=UTC),
+    )
+    risk_run = create_scheduled_job_run(
+        f"paper-terminal-risk-lineage-risk:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 18, 1, tzinfo=UTC),
+    )
+    terminal_run = create_scheduled_job_run(
+        f"paper-terminal-risk-lineage-terminal:{effect_first}:{uuid4()}",
+        datetime(2026, 10, 13, 18, 2, tzinfo=UTC),
+    )
+    signal_context = PaperCycleContext(signal_run)
+    risk_context = PaperCycleContext(risk_run)
+    terminal_context = PaperCycleContext(terminal_run)
+    decision_time = datetime(2026, 10, 13, 18, 0, tzinfo=UTC)
+    signal_id = signal_context.signal_id(
+        instrument_id=instrument_id,
+        strategy_version="paper-terminal-risk-lineage-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    signal = Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-terminal-risk-lineage-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.8"),
+        inputs_hash=INPUTS_HASH,
+    )
+    order = Order(
+        order_id=terminal_context.order_id(signal_id),
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+    outcome = ExecutionRejection(
+        order.order_id,
+        signal.signal_id,
+        instrument_id,
+        Environment.PAPER,
+        "TEST_RISK_LINEAGE_REJECT",
+        datetime(2026, 10, 13, 18, 3, tzinfo=UTC),
+    )
+    insert_terminal = text(
+        "INSERT INTO paper_order_terminal_events("
+        "order_id, outcome, reason_code, event_time, cancelled_quantity"
+        ") VALUES ("
+        ":order_id, 'REJECTED', :reason_code, :event_time, NULL"
+        ")"
+    )
+    terminal_params = {
+        "order_id": order.order_id,
+        "reason_code": outcome.reason_code,
+        "event_time": outcome.rejection_time,
+    }
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-TERMINAL-RISK-LINEAGE', "
+                    "'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            jobs = SqlAlchemyJobRunRepository(connection)
+            assert jobs.claim(signal_run)
+            assert PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(signal_context, signal)
+            assert jobs.complete(
+                create_job_run_completion(
+                    signal_run,
+                    JobRunStatus.SUCCEEDED,
+                    signal_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+
+            assert jobs.claim(risk_run)
+            assert PaperRiskWriter(
+                SqlAlchemyPaperRiskRepository(connection)
+            ).record(
+                risk_context,
+                RiskAssessment(
+                    signal_id=signal.signal_id,
+                    decision=RiskDecision.APPROVE,
+                    reason_code="TEST_APPROVED",
+                    approved_quantity=order.quantity,
+                ),
+            )
+
+            assert jobs.claim(terminal_run)
+            assert PaperOrderWriter(
+                SqlAlchemyPaperOrderRepository(connection)
+            ).record(terminal_context, order)
+
+            terminal_effect = create_paper_effect(
+                terminal_run,
+                PaperEffectType.REJECTION,
+                order.order_id,
+                paper_terminal_payload_hash(outcome),
+            )
+            effects = SqlAlchemyPaperEffectRepository(connection)
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_TERMINAL_SOURCE_RISK_LINEAGE_CONFLICT",
+            ):
+                with connection.begin_nested():
+                    if effect_first:
+                        assert effects.record(terminal_effect)
+                    connection.execute(insert_terminal, terminal_params)
+                    if not effect_first:
+                        assert effects.record(terminal_effect)
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_order_terminal_events "
+                    "WHERE order_id=:order_id"
+                ),
+                {"order_id": order.order_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE effect_type='REJECTION' AND entity_id=:order_id"
+                ),
+                {"order_id": order.order_id},
+            ).scalar_one() == 0
+
+            assert jobs.complete(
+                create_job_run_completion(
+                    risk_run,
+                    JobRunStatus.SUCCEEDED,
+                    risk_run.scheduled_for + timedelta(seconds=30),
+                )
+            )
+            assert PaperTerminalWriter(
+                SqlAlchemyPaperTerminalRepository(connection)
+            ).record(terminal_context, outcome)
+    finally:
+        engine.dispose()
