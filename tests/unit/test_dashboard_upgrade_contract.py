@@ -31,6 +31,10 @@ def test_upgrade_requires_pinned_github_release_and_clean_checkout():
     assert "test_dashboard_readiness_contract.py" in script
     assert "test_legacy_research_inventory.py" in script
     assert "test_dashboard_upgrade_probe.py" in script
+    assert "test_dashboard_first_upgrade_contract.py" in script
+    assert 'rev-parse --is-shallow-repository' in script
+    assert 'fetch --no-tags --unshallow' in script
+    assert '--depth=50' not in script
 
 
 def test_upgrade_rolls_back_and_checks_private_health():

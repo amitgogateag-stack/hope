@@ -33,3 +33,7 @@ The deployment now runs `hope.api.dashboard_upgrade_probe` rather than an inline
 ## Exact schema acceptance for served aggregate feeds
 
 The post-restart acceptance probe now checks **complete allowlisted JSON schemas**, not merely a source label: timestamps must be timezone-aware and not future-dated; counts must be nonnegative safe integers; PAPER totals must reconcile exactly; and unrecognized nested or top-level fields are rejected. The health endpoint must not claim an unavailable feed while supplying a snapshot timestamp. Adversarial tests cover credentials and identifiers accidentally included in either feed. A bad HTTP 200 response fails the upgrade and triggers rollback rather than being mistaken for a healthy dashboard.
+
+## First upgrade from EC2 v0.3
+
+Use the reviewed, CI-tested **[FIRST_UPGRADE.md](FIRST_UPGRADE.md)** one-paste AWS Session Manager procedure. It handles an older checkout that lacks the upgrade script, checks the exact approved branch SHA, extracts the script from the pinned commit, and delegates to the tested rollback-capable upgrade. Both the bootstrap and the upgrade now unshallow a shallow Git checkout if necessary, so an older installed ancestor is not falsely rejected because only the newest 50 commits were fetched. Use the authenticated EC2 SSM terminal when ready; do not run this on the user's work computer.

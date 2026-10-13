@@ -66,7 +66,11 @@ if [[ "$PREVIOUS" == "$TARGET" ]]; then
 fi
 
 echo "Fetching branch and verifying exact approved commit..."
-git -C "$ROOT" fetch --no-tags --depth=50 origin p0-pit-context
+if [[ "$(git -C "$ROOT" rev-parse --is-shallow-repository)" == "true" ]]; then
+  git -C "$ROOT" fetch --no-tags --unshallow origin p0-pit-context
+else
+  git -C "$ROOT" fetch --no-tags origin p0-pit-context
+fi
 [[ "$(git -C "$ROOT" rev-parse FETCH_HEAD)" == "$TARGET" ]] || {
   echo "STOP: branch HEAD differs from approved target; no files changed" >&2
   exit 2
@@ -89,7 +93,8 @@ echo "Running dashboard-only regression tests against staged source..."
     tests/unit/test_dashboard_upgrade_contract.py \
     tests/unit/test_dashboard_readiness_contract.py \
     tests/unit/test_legacy_research_inventory.py \
-    tests/unit/test_dashboard_upgrade_probe.py
+    tests/unit/test_dashboard_upgrade_probe.py \
+    tests/unit/test_dashboard_first_upgrade_contract.py
 )
 
 echo "Switching dashboard source and restarting the private web service..."
