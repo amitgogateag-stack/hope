@@ -20,7 +20,7 @@ def test_first_upgrade_paste_block_has_valid_bash_syntax():
 
 def test_first_upgrade_refuses_placeholder_without_touching_git():
     block = _shell_block()
-    inner = block.split("HOPE_FIRST_UPGRADE\n", 1)[1].rsplit("\nHOPE_FIRST_UPGRADE", 1)[0]
+    inner = block.split("\n", 1)[1].rsplit("\nHOPE_FIRST_UPGRADE", 1)[0]
     result = subprocess.run(["bash", "-c", inner], capture_output=True, text=True)
     assert result.returncode == 2
     assert "exact approved 40-character SHA required" in result.stderr
