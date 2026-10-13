@@ -452,3 +452,15 @@ def test_canonical_paper_fill_requires_durable_risk_authorization():
     assert "PAPER_FILL_RISK_NOT_APPROVED" in sql
     assert "PAPER_FILL_RISK_QUANTITY_MISMATCH" in sql
     assert "BEFORE INSERT ON fills" in sql
+
+
+def test_canonical_paper_terminal_requires_durable_risk_authorization():
+    sql = (
+        ROOT / "migrations/212_paper_terminal_risk_authorization.sql"
+    ).read_text()
+    assert "PAPER_TERMINAL_RISK_AUTHORIZATION_CONFLICT" in sql
+    assert "hope_lock_paper_order_risk_authorization" in sql
+    assert "PAPER_TERMINAL_RISK_AUTHORIZATION_MISSING" in sql
+    assert "PAPER_TERMINAL_RISK_NOT_APPROVED" in sql
+    assert "PAPER_TERMINAL_RISK_QUANTITY_MISMATCH" in sql
+    assert "BEFORE INSERT ON paper_order_terminal_events" in sql
