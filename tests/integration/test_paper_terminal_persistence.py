@@ -114,6 +114,7 @@ def test_paper_terminal_outcome_is_durable_idempotent_and_restart_readable(kind)
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         if kind == "CANCELLED":
             outcome = ExecutionCancellation(
                 order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
@@ -194,6 +195,7 @@ def test_paper_terminal_requires_reusable_source_order_ownership():
         source_context, signal, order = _setup_order(
             connection, source_run, instrument_id
         )
+        _approve_order(connection, source_context, order)
         terminal_context = PaperCycleContext(terminal_run)
         jobs = SqlAlchemyJobRunRepository(connection)
         assert jobs.claim(terminal_run)
@@ -495,6 +497,7 @@ def test_paper_terminal_restart_read_requires_matching_effect_lineage():
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         outcome = ExecutionRejection(
             order.order_id,
             signal.signal_id,
@@ -613,6 +616,7 @@ def test_paper_terminal_history_is_immutable():
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         outcome = ExecutionRejection(
             order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
             "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
@@ -929,6 +933,7 @@ def test_paper_terminal_restart_read_requires_source_order_lineage(monkeypatch):
     with engine.begin() as connection:
         apply_migrations(connection, migrations_dir)
         context, signal, order = _setup_order(connection, run, instrument_id)
+        _approve_order(connection, context, order)
         outcome = ExecutionRejection(
             order.order_id, signal.signal_id, instrument_id, Environment.PAPER,
             "TEST_REJECT", datetime(2026, 9, 9, 20, 1, tzinfo=UTC),
