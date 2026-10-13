@@ -464,3 +464,15 @@ def test_canonical_paper_terminal_requires_durable_risk_authorization():
     assert "PAPER_TERMINAL_RISK_NOT_APPROVED" in sql
     assert "PAPER_TERMINAL_RISK_QUANTITY_MISMATCH" in sql
     assert "BEFORE INSERT ON paper_order_terminal_events" in sql
+
+
+def test_paper_terminal_requires_recoverable_source_order_effect_owner():
+    sql = (
+        ROOT / "migrations/213_paper_terminal_order_effect_lineage.sql"
+    ).read_text()
+    assert "PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT" in sql
+    assert "source_effect.job_run_id <> terminal_effect.job_run_id" in sql
+    assert "source_owner.status <> 'SUCCEEDED'" in sql
+    assert "FOR UPDATE" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+    assert "AFTER INSERT ON paper_order_terminal_events" in sql

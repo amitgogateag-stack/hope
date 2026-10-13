@@ -212,6 +212,38 @@ def test_paper_terminal_requires_reusable_source_order_ownership():
         with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
             writer.record(terminal_context, outcome)
 
+        # Repository validation must not be the only boundary: direct durable
+        # writes with a foreign in-flight ORDER owner must also fail at commit.
+        foreign_effect = create_paper_effect(
+            terminal_context.job_run,
+            PaperEffectType.REJECTION,
+            order.order_id,
+            paper_terminal_payload_hash(outcome),
+        )
+        with pytest.raises(
+            IntegrityError,
+            match="PAPER_TERMINAL_SOURCE_ORDER_LINEAGE_CONFLICT",
+        ):
+            with connection.begin_nested():
+                assert SqlAlchemyPaperEffectRepository(connection).record(
+                    foreign_effect
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO paper_order_terminal_events("
+                        "order_id, outcome, reason_code, event_time"
+                        ") VALUES ("
+                        ":order_id, 'REJECTED', :reason_code, :event_time"
+                        ")"
+                    ),
+                    {
+                        "order_id": outcome.order_id,
+                        "reason_code": outcome.reason_code,
+                        "event_time": outcome.rejection_time,
+                    },
+                )
+                connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
         assert connection.execute(
             text(
                 "SELECT count(*) FROM paper_order_terminal_events "
