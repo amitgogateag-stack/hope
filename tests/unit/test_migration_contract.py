@@ -415,3 +415,15 @@ def test_research_invariant_runs_are_immutable_and_bound_to_research_runs():
     assert "CREATE TABLE research_invariant_runs" in sql
     assert "REFERENCES research_runs(research_run_id)" in sql
     assert "RESEARCH_INVARIANT_RUN_IMMUTABLE" in sql
+
+
+
+def test_paper_order_signal_authorization_is_database_enforced():
+    sql = (
+        ROOT / "migrations/209_paper_order_signal_authorization.sql"
+    ).read_text()
+    assert "PAPER_ORDER_SIGNAL_AUTHORIZATION_CONFLICT" in sql
+    assert "source_signal.state <> 'SIGNAL'" in sql
+    assert "PAPER_ORDER_SOURCE_SIGNAL_NOT_ACTIONABLE" in sql
+    assert "PAPER_ORDER_SIGNAL_TYPE_MISMATCH" in sql
+    assert "BEFORE INSERT ON orders" in sql
