@@ -98,7 +98,7 @@ def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
         assert status == expected
         if status == 200:
             assert headers["Content-Type"].startswith("application/json")
-            assert body == snapshot
+            assert json.loads(body) == json.loads(snapshot)
 
 
 def test_server_reports_liveness_separately_from_missing_data(tmp_path):
@@ -227,3 +227,50 @@ def test_legacy_inventory_whitelists_fields(tmp_path):
         assert code == 200
         assert b"unexpected_private_field" not in body
         assert b"must never be served" not in body
+
+
+
+def test_snapshot_endpoint_whitelists_all_fields_even_if_file_contains_secrets(tmp_path):
+    payload = json.loads(valid_snapshot())
+    payload["database_password"] = "NEVER_SERVE_THIS"
+    payload["private_instrument_ids"] = ["sensitive-id"]
+    payload["research"]["experiment_details"] = [{"api_key": "NEVER_SERVE_THIS"}]
+    payload["paper"]["broker_credentials"] = "NEVER_SERVE_THIS"
+    payload["paper"]["job_runs"]["order_ids"] = ["sensitive-order"]
+    with dashboard(tmp_path, json.dumps(payload).encode("utf-8")) as server:
+        status, headers, body = request(server, "/snapshot.json")
+        assert status == 200
+        assert headers["Cache-Control"].startswith("no-store")
+        assert b"NEVER_SERVE_THIS" not in body
+        assert b"sensitive-id" not in body
+        assert b"sensitive-order" not in body
+        safe = json.loads(body)
+        assert set(safe) == {"schema_version", "source", "generated_at", "research", "paper"}
+        assert set(safe["research"]) == {"run_count"}
+        assert set(safe["paper"]) == {"environment_state", "job_runs"}
+        assert set(safe["paper"]["job_runs"]) == {"total", "claimed", "succeeded", "failed"}
+        assert safe["paper"]["job_runs"]["total"] == 2
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(schema_version=True),
+    lambda d: d["research"].update(run_count=9007199254740992),
+    lambda d: d["paper"]["job_runs"].update(total=9007199254740992),
+    lambda d: d["paper"]["job_runs"].update(failed=9007199254740992),
+])
+def test_snapshot_rejects_unsafe_browser_counts_and_boolean_schema_version(tmp_path, mutate):
+    data = json.loads(valid_snapshot())
+    mutate(data)
+    with dashboard(tmp_path, json.dumps(data).encode("utf-8")) as server:
+        assert request(server, "/snapshot.json")[0] == 503
+        code, _, body = request(server, "/status.json")
+        assert code == 200
+        assert json.loads(body)["data_feed"] == "UNAVAILABLE"
+
+
+def test_legacy_rejects_boolean_schema_version(tmp_path):
+    payload = valid_legacy_inventory()
+    payload["schema_version"] = True
+    with dashboard(tmp_path) as server:
+        server.legacy.write_text(json.dumps(payload))
+        assert request(server, "/legacy-research.json")[0] == 503

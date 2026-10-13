@@ -21,3 +21,7 @@ The service remains accessible only through a private Session Manager or SSH por
 ## v0.5 acceptance gates
 
 The staged regression suite now includes the legacy research inventory tests and the read-only EC2 diagnostic contract. After restart, the script checks the loopback server's health, verifies the v0.5 Research Lab markers in the actual served HTML, and checks that both data endpoints either return their own valid, segregated source or the expected HTTP 503 missing-data response. An absent legacy inventory or newer PAPER snapshot is **not** interpreted as zero activity. Any unexpected HTTP response or malformed source triggers rollback to the previous dashboard commit. These checks do not require a PostgreSQL credential and do not enable the exporter.
+
+## Aggregate snapshot response minimization
+
+The private HTTP server treats snapshot JSON as untrusted local input even when the exporter is trusted. After verifying the complete expected schema, it **constructs a new JSON response from an explicit allowlist**: version, source, generated timestamp, research run count, PAPER environment state and four PAPER job counts. Unexpected nested or top-level fields are never returned, including if a malformed exporter writes them into the snapshot file. Integer counts are bounded to JavaScript's safe-integer range, and Boolean schema versions are rejected. The independent legacy research endpoint retains its own allowlist. These are defensive HTTP output boundaries, not changes to the database or PAPER runtime.

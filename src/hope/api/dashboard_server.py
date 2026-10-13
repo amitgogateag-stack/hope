@@ -19,14 +19,14 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     if len(payload) > 32768:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
     data = json.loads(payload)
-    if not isinstance(data, dict) or data.get("schema_version") != 1 or data.get("source") != "hope_postgresql":
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1 or data.get("source") != "hope_postgresql":
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
     research = data.get("research")
     paper = data.get("paper")
     if not isinstance(research, dict) or not isinstance(paper, dict):
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
     counts = paper.get("job_runs")
-    valid_count = lambda n: type(n) is int and n >= 0
+    valid_count = lambda n: type(n) is int and 0 <= n <= 9007199254740991
     if not valid_count(research.get("run_count")) or paper.get("environment_state") not in {"RUNNING", "HALTED"}:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
     if not isinstance(counts, dict) or not all(
@@ -46,7 +46,23 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
     if (generated - datetime.now(timezone.utc)).total_seconds() > 300:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_FROM_FUTURE")
-    return payload, generated
+    # The local snapshot file is an untrusted input boundary. Never serve
+    # arbitrary top-level or nested fields that could contain identifiers,
+    # credentials, fills, positions, or other sensitive database material.
+    safe = {
+        "schema_version": 1,
+        "source": "hope_postgresql",
+        "generated_at": generated.isoformat(),
+        "research": {"run_count": research["run_count"]},
+        "paper": {
+            "environment_state": paper["environment_state"],
+            "job_runs": {
+                key: counts[key]
+                for key in ("total", "claimed", "succeeded", "failed")
+            },
+        },
+    }
+    return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
@@ -57,7 +73,7 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
     if len(raw) > 8192:
         raise ValueError("HOPE_LEGACY_INVENTORY_TOO_LARGE")
     data = json.loads(raw)
-    if not isinstance(data, dict) or data.get("schema_version") != 1:
+    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
         raise ValueError("HOPE_LEGACY_INVENTORY_INVALID")
     if data.get("source") != "hope_legacy_research_inventory" or data.get("schema_compatible") is not True:
         raise ValueError("HOPE_LEGACY_INVENTORY_INCOMPATIBLE")
