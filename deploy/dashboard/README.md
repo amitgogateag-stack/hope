@@ -76,3 +76,11 @@ Open `http://127.0.0.1:8787/` in Chrome/Edge. SSH tunnel authentication is the a
 ## Runtime verification after v0.4 upgrade
 
 With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.json` should return `service: RUNNING`. `data_feed: UNAVAILABLE` is expected on EC2 until the three required newer tables exist and the read-only exporter is configured; do **not** manufacture database records or apply migrations just to turn this indicator green. The health endpoint does not report PAPER engine or broker readiness.
+
+## Read-only EC2 readiness diagnostic
+
+To inspect the installed web service and database compatibility before attempting any database exporter setup, run the **reviewed** `deploy/dashboard/inspect_ec2_readiness.sh` from a verified GitHub release on EC2. The diagnostic requires no credentials to be pasted into ChatGPT. It checks the local dashboard service, `/status.json`, presence of the snapshot file, the three required PostgreSQL tables and (if accessible) the separate `hope_dashboard` database role and effective table privileges. It displays **metadata only**, not table records or passwords.
+
+Missing `research_runs`, `job_runs` or `paper_environment_control_events` means the current exporter is **not schema-compatible** with the EC2 database. The correct action is to leave the exporter disabled and investigate schema/migration state independently, not to invent metrics, grant elevated access or run a bulk migration without a reviewed plan.
+
+The script does not install anything, change service state, write to the database or modify the frozen Day 29 checkout. If noninteractive `sudo -u postgres` is unavailable, the script reports `NOT CHECKED` rather than attempting an alternate privileged connection.
