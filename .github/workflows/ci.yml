@@ -1,0 +1,19 @@
+# Default-branch registration stub for the HOPE CI manual-dispatch button.
+# Select p0-pit-context in GitHub Actions to run that branch's full CI workflow.
+# Do not use main to validate HOPE engineering: it contains no application code.
+name: HOPE CI
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  default-branch-dispatch-notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain default branch
+        run: |
+          echo "The main branch contains only the workflow registration stub."
+          echo "To validate HOPE, dispatch this workflow on p0-pit-context."
