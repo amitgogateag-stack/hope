@@ -36,6 +36,18 @@ BEGIN
         RETURN NEW;
     END IF;
 
+    -- PostgreSQL fires BEFORE INSERT triggers before ON CONFLICT resolution.
+    -- An existing immutable FILL effect therefore identifies an idempotent
+    -- replay, not a newly introduced application/effect ordering transition.
+    IF EXISTS (
+        SELECT 1
+          FROM paper_effects
+         WHERE effect_type = 'FILL'
+           AND entity_id = NEW.entity_id
+    ) THEN
+        RETURN NEW;
+    END IF;
+
     IF EXISTS (
         SELECT 1
           FROM paper_portfolio_fill_applications application
