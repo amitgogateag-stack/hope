@@ -21,8 +21,12 @@ from hope.application.paper import (
     PaperSignalWriter,
 )
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
-from hope.application.paper.fills import PaperFillWriter
-from hope.application.paper.portfolio_pnl import paper_portfolio_pnl_event_id
+from hope.application.paper.fills import PaperFillWriter, paper_fill_payload_hash
+from hope.application.paper.portfolio_pnl import (
+    PaperPortfolioPnLEvent,
+    paper_portfolio_pnl_event_id,
+    paper_portfolio_pnl_payload_hash,
+)
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
@@ -33,6 +37,9 @@ from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffect
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_portfolio import SqlAlchemyPaperPortfolioRepository
+from hope.infrastructure.repositories.paper_portfolio_pnl import (
+    SqlAlchemyPaperPortfolioPnLRepository,
+)
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
@@ -1542,3 +1549,223 @@ def test_paper_accounting_retry_rejects_pnl_owned_by_another_claimed_run() -> No
         ).scalar_one() == 1
 
     engine.dispose()
+
+@pytest.mark.integration
+def test_application_first_cannot_bypass_database_timestamp_authentication() -> None:
+    """A late FILL effect must authenticate an already staged application."""
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id = uuid4()
+    portfolio_id = uuid4()
+    run = create_scheduled_job_run(
+        f"paper-application-late-effect-timestamp:{uuid4()}",
+        datetime(2026, 10, 13, 16, 0, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+    decision_time = datetime(2026, 10, 13, 15, 59, tzinfo=UTC)
+    signal_id = context.signal_id(
+        instrument_id=instrument_id,
+        strategy_version="paper-application-late-effect-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.75"),
+        inputs_hash=INPUTS_HASH,
+    )
+    signal = Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-application-late-effect-v1",
+        decision_time=decision_time,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.75"),
+        inputs_hash=INPUTS_HASH,
+    )
+    order = Order(
+        order_id=context.order_id(signal_id),
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+    fill = Fill(
+        context.fill_id(signal_id, 0),
+        order.order_id,
+        signal_id,
+        instrument_id,
+        OrderSide.BUY,
+        Decimal("1"),
+        Decimal("100"),
+        Decimal("0.25"),
+        Decimal("0"),
+        "paper-application-late-effect-cost-v1",
+        decision_time + timedelta(minutes=1),
+    )
+    assessment = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="TEST_APPROVED",
+        approved_quantity=Decimal("1"),
+    )
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill.fill_id,
+        instrument_id=instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=Decimal("0.25"),
+        event_time=fill.fill_time,
+    )
+
+    try:
+        with engine.begin() as connection:
+            apply_migrations(connection, migrations_dir)
+            connection.execute(
+                text(
+                    "INSERT INTO instruments("
+                    "instrument_id, canonical_symbol, exchange, status"
+                    ") VALUES (:id, 'PAPER-APPLICATION-LATE-EFFECT', "
+                    "'TEST', 'ACTIVE')"
+                ),
+                {"id": instrument_id},
+            )
+            assert SqlAlchemyJobRunRepository(connection).claim(run)
+            assert PaperSignalWriter(
+                SqlAlchemyPaperSignalRepository(connection)
+            ).record(context, signal)
+            assert PaperRiskWriter(
+                SqlAlchemyPaperRiskRepository(connection)
+            ).record(context, assessment)
+            assert PaperOrderWriter(
+                SqlAlchemyPaperOrderRepository(connection)
+            ).record(context, order)
+
+            with pytest.raises(
+                IntegrityError,
+                match=(
+                    "PAPER_PORTFOLIO_APPLICATION_TIMESTAMP_"
+                    "NOT_DATABASE_AUTHENTICATED"
+                ),
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO fills("
+                            "fill_id, order_id, quantity, fill_price, slippage, "
+                            "transaction_cost, filled_at, cost_model_version"
+                            ") VALUES ("
+                            ":fill_id, :order_id, :quantity, :fill_price, "
+                            ":slippage, :transaction_cost, :filled_at, "
+                            ":cost_model_version"
+                            ")"
+                        ),
+                        {
+                            "fill_id": fill.fill_id,
+                            "order_id": fill.order_id,
+                            "quantity": fill.quantity,
+                            "fill_price": fill.price,
+                            "slippage": fill.slippage,
+                            "transaction_cost": fill.commission,
+                            "filled_at": fill.fill_time,
+                            "cost_model_version": fill.cost_model_version,
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolios("
+                            "portfolio_id, initial_cash, cash, version"
+                            ") VALUES (:portfolio_id, 1000, 899.75, 1)"
+                        ),
+                        {"portfolio_id": portfolio_id},
+                    )
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolio_positions("
+                            "portfolio_id, instrument_id, quantity, "
+                            "average_price, realized_pnl, total_commission"
+                            ") VALUES ("
+                            ":portfolio_id, :instrument_id, 1, 100, 0, 0.25"
+                            ")"
+                        ),
+                        {
+                            "portfolio_id": portfolio_id,
+                            "instrument_id": instrument_id,
+                        },
+                    )
+                    connection.execute(
+                        text(
+                            "INSERT INTO paper_portfolio_fill_applications("
+                            "portfolio_id, fill_id, application_sequence, "
+                            "applied_at"
+                            ") VALUES ("
+                            ":portfolio_id, :fill_id, 1, "
+                            "transaction_timestamp() - interval '1 second'"
+                            ")"
+                        ),
+                        {
+                            "portfolio_id": portfolio_id,
+                            "fill_id": fill.fill_id,
+                        },
+                    )
+                    effects = SqlAlchemyPaperEffectRepository(connection)
+                    assert effects.record(
+                        create_paper_effect(
+                            run,
+                            PaperEffectType.FILL,
+                            fill.fill_id,
+                            paper_fill_payload_hash(fill),
+                        )
+                    )
+                    assert SqlAlchemyPaperPortfolioPnLRepository(
+                        connection
+                    ).persist(
+                        create_paper_effect(
+                            run,
+                            PaperEffectType.PNL,
+                            pnl_event.pnl_event_id,
+                            paper_portfolio_pnl_payload_hash(pnl_event),
+                        ),
+                        pnl_event,
+                    )
+                    connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+
+            assert connection.execute(
+                text("SELECT count(*) FROM fills WHERE fill_id=:fill_id"),
+                {"fill_id": fill.fill_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_portfolios "
+                    "WHERE portfolio_id=:portfolio_id"
+                ),
+                {"portfolio_id": portfolio_id},
+            ).scalar_one() == 0
+            assert connection.execute(
+                text(
+                    "SELECT count(*) FROM paper_effects "
+                    "WHERE entity_id IN (:fill_id, :pnl_event_id)"
+                ),
+                {
+                    "fill_id": fill.fill_id,
+                    "pnl_event_id": pnl_event.pnl_event_id,
+                },
+            ).scalar_one() == 0
+
+            assert PaperFillWriter(
+                SqlAlchemyPaperFillRepository(connection)
+            ).record(context, fill, sequence=0)
+            assert PaperAccountingWriter(
+                SqlAlchemyPaperAccountingRepository(connection)
+            ).apply_fill(
+                context,
+                portfolio_id,
+                Decimal("1000"),
+                fill,
+            )
+    finally:
+        engine.dispose()

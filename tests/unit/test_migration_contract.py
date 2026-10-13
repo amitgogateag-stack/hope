@@ -476,3 +476,18 @@ def test_paper_terminal_requires_recoverable_source_order_effect_owner():
     assert "FOR UPDATE" in sql
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
     assert "AFTER INSERT ON paper_order_terminal_events" in sql
+
+def test_paper_portfolio_application_timestamp_is_reciprocal_and_deferred():
+    sql = (
+        ROOT
+        / "migrations/217_paper_portfolio_application_timestamp_reciprocal.sql"
+    ).read_text()
+    assert (
+        "PAPER_PORTFOLIO_APPLICATION_TIMESTAMP_NOT_DATABASE_AUTHENTICATED"
+        in sql
+    )
+    assert "NEW.effect_type <> 'FILL'" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
+    assert "AFTER INSERT ON paper_portfolio_fill_applications" in sql
+    assert "DEFERRABLE INITIALLY DEFERRED" in sql
+    assert "transaction_timestamp()" in sql
