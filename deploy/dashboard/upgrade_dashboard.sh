@@ -86,7 +86,9 @@ echo "Running dashboard-only regression tests against staged source..."
     tests/unit/test_dashboard_server.py \
     tests/unit/test_dashboard_preview_contract.py \
     tests/unit/test_dashboard_deployment_contract.py \
-    tests/unit/test_dashboard_upgrade_contract.py
+    tests/unit/test_dashboard_upgrade_contract.py \
+    tests/unit/test_dashboard_readiness_contract.py \
+    tests/unit/test_legacy_research_inventory.py
 )
 
 echo "Switching dashboard source and restarting the private web service..."
@@ -96,16 +98,56 @@ git -C "$ROOT" checkout --detach "$TARGET"
 systemctl restart "$SERVICE"
 systemctl is-active --quiet "$SERVICE"
 
-echo "Verifying loopback HTTP health (no database connection required)..."
-curl --noproxy '*' --fail --silent --show-error --max-time 8 \
-  http://127.0.0.1:8787/status.json |
-  "$ROOT/.venv/bin/python" -c '
-import json, sys
-data = json.load(sys.stdin)
-assert data.get("schema_version") == 1
-assert data.get("service") == "RUNNING"
-assert data.get("data_feed") in ("CURRENT", "STALE", "UNAVAILABLE")
-print("Verified: web service RUNNING, database feed", data["data_feed"])
-'
+echo "Verifying private dashboard HTTP routes (no database connection required)..."
+"$ROOT/.venv/bin/python" - <<'PY'
+import json
+from urllib.error import HTTPError
+from urllib.request import ProxyHandler, Request, build_opener
+
+opener = build_opener(ProxyHandler({}))
+base = "http://127.0.0.1:8787"
+
+def fetch(path):
+    request = Request(base + path, headers={"Host": "127.0.0.1:8787"})
+    try:
+        with opener.open(request, timeout=8) as response:
+            return response.status, response.read(32769)
+    except HTTPError as exc:
+        return exc.code, exc.read(32769)
+
+code, body = fetch("/status.json")
+assert code == 200
+status = json.loads(body)
+assert status.get("schema_version") == 1
+assert status.get("service") == "RUNNING"
+assert status.get("data_feed") in ("CURRENT", "STALE", "UNAVAILABLE")
+
+code, body = fetch("/")
+assert code == 200
+assert b'id="legacy-experiments"' in body
+assert b'id="legacy-strategies"' in body
+assert b'id="legacy-datasets"' in body
+assert b"HOPE dashboard v0.5" in body
+
+code, body = fetch("/legacy-research.json")
+assert code in (200, 503)
+if code == 200:
+    data = json.loads(body)
+    assert data.get("source") == "hope_legacy_research_inventory"
+    assert data.get("paper") is None
+    assert data.get("schema_compatible") is True
+else:
+    assert body == b"Verified legacy research inventory unavailable"
+
+code, body = fetch("/snapshot.json")
+assert code in (200, 503)
+if code == 200:
+    data = json.loads(body)
+    assert data.get("source") == "hope_postgresql"
+    assert isinstance(data.get("paper"), dict)
+else:
+    assert body == b"Verified snapshot unavailable"
+print("Verified: web service RUNNING; legacy feed", "AVAILABLE" if fetch("/legacy-research.json")[0] == 200 else "UNAVAILABLE")
+PY
 echo "Dashboard upgraded to verified commit $TARGET"
 echo "Day 29 checkout, PostgreSQL and PAPER execution were not changed."

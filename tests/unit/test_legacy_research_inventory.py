@@ -89,6 +89,7 @@ def test_missing_columns_stop_all_count_queries(missing):
     {"experiments": -1, "strategy_versions": 3, "datasets": 2},
     {"experiments": True, "strategy_versions": 3, "datasets": 2},
     {"experiments": 7, "strategy_versions": 1.5, "datasets": 2},
+    {"experiments": 9007199254740992, "strategy_versions": 3, "datasets": 2},
 ])
 def test_invalid_counts_fail_closed(counts):
     with pytest.raises(ValueError, match="HOPE_LEGACY_INVALID_COUNT"):

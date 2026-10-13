@@ -54,7 +54,7 @@ def inspect_legacy_research(connection: Connection) -> dict[str, object]:
 
     def count(sql: str) -> int:
         value = connection.execute(text(sql)).scalar_one()
-        if type(value) is not int or value < 0:
+        if type(value) is not int or not 0 <= value <= 9007199254740991:
             raise ValueError("HOPE_LEGACY_INVALID_COUNT")
         return value
 
