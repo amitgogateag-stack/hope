@@ -427,3 +427,16 @@ def test_paper_order_signal_authorization_is_database_enforced():
     assert "PAPER_ORDER_SOURCE_SIGNAL_NOT_ACTIONABLE" in sql
     assert "PAPER_ORDER_SIGNAL_TYPE_MISMATCH" in sql
     assert "BEFORE INSERT ON orders" in sql
+
+
+
+def test_paper_order_risk_authorization_is_database_enforced():
+    sql = (
+        ROOT / "migrations/210_paper_order_risk_authorization.sql"
+    ).read_text()
+    assert "PAPER_ORDER_RISK_AUTHORIZATION_CONFLICT" in sql
+    assert "hope_lock_paper_order_risk_authorization" in sql
+    assert "PAPER_ORDER_RISK_NOT_APPROVED" in sql
+    assert "PAPER_ORDER_RISK_QUANTITY_MISMATCH" in sql
+    assert "BEFORE INSERT ON orders" in sql
+    assert "BEFORE INSERT ON paper_risk_assessments" in sql
