@@ -29,3 +29,7 @@ The private HTTP server treats snapshot JSON as untrusted local input even when 
 ## Bounded post-restart acceptance (v0.5)
 
 The deployment now runs `hope.api.dashboard_upgrade_probe` rather than an inline one-shot HTTP check. It performs the same release-specific HTML and independent feed checks with a 32-KiB maximum response, no proxies or HTTP redirects. A refused connection or socket timeout is retried up to five attempts, one second apart, to tolerate normal systemd startup latency. An HTTP error, wrong release, malformed response, unexpected feed, or non-loopback URL fails immediately and triggers rollback. The probe is independently unit-tested and included in the staged pre-switch tests. The acceptance probe is not a database readiness check and does not enable exporters.
+
+## Exact schema acceptance for served aggregate feeds
+
+The post-restart acceptance probe now checks **complete allowlisted JSON schemas**, not merely a source label: timestamps must be timezone-aware and not future-dated; counts must be nonnegative safe integers; PAPER totals must reconcile exactly; and unrecognized nested or top-level fields are rejected. The health endpoint must not claim an unavailable feed while supplying a snapshot timestamp. Adversarial tests cover credentials and identifiers accidentally included in either feed. A bad HTTP 200 response fails the upgrade and triggers rollback rather than being mistaken for a healthy dashboard.

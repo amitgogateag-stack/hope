@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from datetime import datetime, timezone
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -46,6 +47,60 @@ def _json(body: bytes) -> dict:
     return data
 
 
+
+_MAX_SAFE_INTEGER = 9007199254740991
+
+
+def _exact_keys(value, fields: set[str]) -> bool:
+    return isinstance(value, dict) and set(value) == fields
+
+
+def _count(value) -> bool:
+    return type(value) is int and 0 <= value <= _MAX_SAFE_INTEGER
+
+
+def _timestamp(value) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (parsed.tzinfo is not None
+            and (parsed - datetime.now(timezone.utc)).total_seconds() <= 300)
+
+
+def _validate_legacy(value: dict) -> None:
+    fields = {"registered_experiments", "registered_strategy_versions", "registered_datasets"}
+    if (not _exact_keys(value, {"schema_version", "source", "generated_at",
+                                "schema_compatible", "research", "paper"})
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["source"] != "hope_legacy_research_inventory"
+            or value["schema_compatible"] is not True or value["paper"] is not None
+            or not _timestamp(value["generated_at"])
+            or not _exact_keys(value["research"], fields)
+            or not all(_count(value["research"][key]) for key in fields)):
+        raise ValueError("HOPE_UPGRADE_LEGACY_INVALID")
+
+
+def _validate_paper(value: dict) -> None:
+    fields = {"total", "claimed", "succeeded", "failed"}
+    if (not _exact_keys(value, {"schema_version", "source", "generated_at", "research", "paper"})
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["source"] != "hope_postgresql"
+            or not _timestamp(value["generated_at"])
+            or not _exact_keys(value["research"], {"run_count"})
+            or not _count(value["research"]["run_count"])
+            or not _exact_keys(value["paper"], {"environment_state", "job_runs"})
+            or value["paper"]["environment_state"] not in ("RUNNING", "HALTED")
+            or not _exact_keys(value["paper"]["job_runs"], fields)
+            or not all(_count(value["paper"]["job_runs"][key]) for key in fields)):
+        raise ValueError("HOPE_UPGRADE_PAPER_INVALID")
+    counts = value["paper"]["job_runs"]
+    if counts["total"] != sum(counts[k] for k in ("claimed", "succeeded", "failed")):
+        raise ValueError("HOPE_UPGRADE_PAPER_INCONSISTENT")
+
+
 def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dict[str, str]:
     parts = urlsplit(base)
     if parts.scheme != "http" or parts.hostname != "127.0.0.1" or parts.username or parts.password or parts.path or parts.query or parts.fragment:
@@ -55,9 +110,12 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dic
     if status_code != 200:
         raise ValueError("HOPE_UPGRADE_HEALTH_HTTP_INVALID")
     status = _json(body)
-    if (type(status.get("schema_version")) is not int or status["schema_version"] != 1
-            or status.get("service") != "RUNNING"
-            or status.get("data_feed") not in ("CURRENT", "STALE", "UNAVAILABLE")):
+    if (not _exact_keys(status, {"schema_version", "service", "data_feed", "snapshot_generated_at"})
+            or type(status["schema_version"]) is not int or status["schema_version"] != 1
+            or status["service"] != "RUNNING"
+            or status["data_feed"] not in ("CURRENT", "STALE", "UNAVAILABLE")
+            or (status["data_feed"] == "UNAVAILABLE" and status["snapshot_generated_at"] is not None)
+            or (status["data_feed"] != "UNAVAILABLE" and not _timestamp(status["snapshot_generated_at"]))):
         raise ValueError("HOPE_UPGRADE_HEALTH_INVALID")
     page_code, page = _read(opener, base + "/", _MAX_BYTES)
     if page_code != 200 or any(marker not in page for marker in _REQUIRED_MARKERS):
@@ -65,20 +123,13 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dic
     legacy_code, legacy_body = _read(opener, base + "/legacy-research.json", 8192)
     if legacy_code == 200:
         legacy = _json(legacy_body)
-        if (legacy.get("schema_version") != 1
-                or legacy.get("source") != "hope_legacy_research_inventory"
-                or legacy.get("paper") is not None
-                or legacy.get("schema_compatible") is not True):
-            raise ValueError("HOPE_UPGRADE_LEGACY_INVALID")
+        _validate_legacy(legacy)
     elif legacy_code != 503 or legacy_body != b"Verified legacy research inventory unavailable":
         raise ValueError("HOPE_UPGRADE_LEGACY_HTTP_INVALID")
     paper_code, paper_body = _read(opener, base + "/snapshot.json", _MAX_BYTES)
     if paper_code == 200:
         paper = _json(paper_body)
-        if (paper.get("schema_version") != 1
-                or paper.get("source") != "hope_postgresql"
-                or not isinstance(paper.get("paper"), dict)):
-            raise ValueError("HOPE_UPGRADE_PAPER_INVALID")
+        _validate_paper(paper)
     elif paper_code != 503 or paper_body != b"Verified snapshot unavailable":
         raise ValueError("HOPE_UPGRADE_PAPER_HTTP_INVALID")
     return {

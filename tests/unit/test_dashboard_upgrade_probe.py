@@ -1,6 +1,7 @@
 """Real and adversarial tests for the private post-upgrade HTTP acceptance probe."""
 import io
 import json
+from datetime import timedelta
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from threading import Thread
@@ -41,10 +42,36 @@ def fixture_responses():
     return {
         "/status.json": (200, json.dumps({
             "schema_version": 1, "service": "RUNNING", "data_feed": "UNAVAILABLE",
+            "snapshot_generated_at": None,
         }).encode()),
         "/": (200, b'<div id="legacy-experiments" id="legacy-strategies" id="legacy-datasets">HOPE dashboard v0.5</div>'),
         "/legacy-research.json": (503, b"Verified legacy research inventory unavailable"),
         "/snapshot.json": (503, b"Verified snapshot unavailable"),
+    }
+
+
+
+def valid_legacy():
+    return {
+        "schema_version": 1, "source": "hope_legacy_research_inventory",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "schema_compatible": True, "paper": None,
+        "research": {
+            "registered_experiments": 7, "registered_strategy_versions": 3,
+            "registered_datasets": 2,
+        },
+    }
+
+
+def valid_paper():
+    return {
+        "schema_version": 1, "source": "hope_postgresql",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "research": {"run_count": 7},
+        "paper": {
+            "environment_state": "HALTED",
+            "job_runs": {"total": 2, "claimed": 0, "succeeded": 1, "failed": 1},
+        },
     }
 
 
@@ -55,14 +82,8 @@ def test_probe_accepts_missing_feeds_without_inventing_counts():
 
 def test_probe_accepts_valid_independent_data_feeds():
     responses = fixture_responses()
-    responses["/legacy-research.json"] = (200, json.dumps({
-        "schema_version": 1, "source": "hope_legacy_research_inventory",
-        "paper": None, "schema_compatible": True,
-    }).encode())
-    responses["/snapshot.json"] = (200, json.dumps({
-        "schema_version": 1, "source": "hope_postgresql",
-        "paper": {"environment_state": "HALTED"},
-    }).encode())
+    responses["/legacy-research.json"] = (200, json.dumps(valid_legacy()).encode())
+    responses["/snapshot.json"] = (200, json.dumps(valid_paper()).encode())
     assert verify_dashboard(opener=FakeOpener(responses))["legacy_feed"] == "AVAILABLE"
     assert verify_dashboard(opener=FakeOpener(responses))["paper_feed"] == "AVAILABLE"
 
@@ -136,6 +157,85 @@ def test_probe_checks_real_loopback_dashboard_server(tmp_path):
             assert result["service"] == "RUNNING"
             assert result["paper_feed"] == "UNAVAILABLE"
             assert result["legacy_feed"] == "UNAVAILABLE"
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(schema_version=True),
+    lambda d: d.update(generated_at="not-a-timestamp"),
+    lambda d: d.update(generated_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()),
+    lambda d: d.update(database_password="DO_NOT_LEAK"),
+    lambda d: d["research"].update(run_count=True),
+    lambda d: d["research"].update(run_count=9007199254740992),
+    lambda d: d["paper"].update(environment_state="LIVE"),
+    lambda d: d["paper"].update(broker_credentials="DO_NOT_LEAK"),
+    lambda d: d["paper"]["job_runs"].update(total=99),
+    lambda d: d["paper"]["job_runs"].update(claimed=-1),
+    lambda d: d["paper"]["job_runs"].update(failed=9007199254740992),
+    lambda d: d["paper"]["job_runs"].update(secret_orders=["DO_NOT_LEAK"]),
+])
+def test_probe_rejects_invalid_or_unsanitized_paper_response(mutate):
+    responses = fixture_responses()
+    payload = valid_paper()
+    mutate(payload)
+    responses["/snapshot.json"] = (200, json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="HOPE_UPGRADE_PAPER"):
+        verify_dashboard(opener=FakeOpener(responses))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(schema_version=True),
+    lambda d: d.update(generated_at="not-a-timestamp"),
+    lambda d: d.update(generated_at=(datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()),
+    lambda d: d.update(database_password="DO_NOT_LEAK"),
+    lambda d: d.update(paper={"job_runs": {"total": 1}}),
+    lambda d: d["research"].update(registered_experiments=True),
+    lambda d: d["research"].update(registered_datasets=-1),
+    lambda d: d["research"].update(registered_strategy_versions=9007199254740992),
+    lambda d: d["research"].update(secret="DO_NOT_LEAK"),
+])
+def test_probe_rejects_invalid_or_unsanitized_legacy_response(mutate):
+    responses = fixture_responses()
+    payload = valid_legacy()
+    mutate(payload)
+    responses["/legacy-research.json"] = (200, json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="HOPE_UPGRADE_LEGACY"):
+        verify_dashboard(opener=FakeOpener(responses))
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda d: d.update(extra="DO_NOT_LEAK"),
+    lambda d: d.update(snapshot_generated_at="not-a-timestamp"),
+    lambda d: d.update(data_feed="CURRENT"),
+])
+def test_probe_rejects_inconsistent_or_unsanitized_health_response(mutate):
+    responses = fixture_responses()
+    payload = json.loads(responses["/status.json"][1])
+    mutate(payload)
+    responses["/status.json"] = (200, json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="HOPE_UPGRADE_HEALTH_INVALID"):
+        verify_dashboard(opener=FakeOpener(responses))
+
+
+def test_probe_accepts_real_sanitized_paper_and_legacy_server_responses(tmp_path):
+    page = tmp_path / "preview.html"
+    page.write_bytes(fixture_responses()["/"][1])
+    snapshot = tmp_path / "snapshot.json"
+    snapshot.write_text(json.dumps(valid_paper()))
+    legacy = tmp_path / "legacy-research.json"
+    # The source inventory contains missing_columns; the server intentionally strips it.
+    legacy.write_text(json.dumps({**valid_legacy(), "missing_columns": {}}))
+    with DashboardHTTPServer(0, page, snapshot) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            result = verify_dashboard(f"http://127.0.0.1:{server.server_port}")
+            assert result == {
+                "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "AVAILABLE",
+            }
         finally:
             server.shutdown()
             thread.join(timeout=5)
