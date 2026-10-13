@@ -9,16 +9,18 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperRiskWriter, PaperSignalWriter
 from hope.application.paper.effects import PaperEffectType, create_paper_effect
 from hope.application.paper.fills import PaperFillWriter, paper_fill_payload_hash
 from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
 UTC = timezone.utc
@@ -37,6 +39,20 @@ def make_chain(context, instrument_id):
         Decimal("2"), Decimal("101.5"), Decimal("0.25"), Decimal("0.5"), "cost-v1",
         datetime(2026, 9, 9, 23, 41, tzinfo=UTC))
     return signal, order, fill
+
+
+def _approve_order(connection, context, order):
+    assert PaperRiskWriter(
+        SqlAlchemyPaperRiskRepository(connection)
+    ).record(
+        context,
+        RiskAssessment(
+            signal_id=order.signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=order.quantity,
+        ),
+    )
 
 
 @pytest.mark.integration
@@ -95,6 +111,7 @@ def test_paper_fill_and_effect_payload_mismatch_rolls_back_both_orders(
             PaperOrderWriter(
                 SqlAlchemyPaperOrderRepository(connection)
             ).record(context, order)
+            _approve_order(connection, context, order)
             bad_effect = create_paper_effect(
                 run,
                 PaperEffectType.FILL,
@@ -167,6 +184,7 @@ def test_new_paper_fill_persistence_timestamp_is_database_authenticated():
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(
             context, order
         )
+        _approve_order(connection, context, order)
 
         with pytest.raises(
             IntegrityError,
@@ -220,7 +238,7 @@ def test_paper_fill_is_durable_and_idempotent_across_scheduled_cycles():
         connection.execute(text("INSERT INTO instruments(instrument_id, canonical_symbol, exchange, status) VALUES (:id,'PAPER-FILL','TEST','ACTIVE')"), {"id": instrument_id})
         jobs = SqlAlchemyJobRunRepository(connection)
         sw = PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)); ow = PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)); fw = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
-        assert jobs.claim(first); assert sw.record(c1, signal); assert ow.record(c1, order); assert fw.record(c1, fill, sequence=0)
+        assert jobs.claim(first); assert sw.record(c1, signal); assert ow.record(c1, order); _approve_order(connection, c1, order); assert fw.record(c1, fill, sequence=0)
         assert jobs.complete(create_job_run_completion(first, JobRunStatus.SUCCEEDED, first.scheduled_for + timedelta(seconds=30)))
         assert jobs.claim(second); assert fw.record(c2, fill, sequence=0) is False
         assert connection.execute(text("SELECT count(*) FROM fills WHERE fill_id=:id"), {"id": fill.fill_id}).scalar_one() == 1
@@ -269,6 +287,7 @@ def test_paper_fill_retry_rejects_effect_owned_by_another_claimed_run():
         PaperOrderWriter(
             SqlAlchemyPaperOrderRepository(connection)
         ).record(first_context, order)
+        _approve_order(connection, first_context, order)
         writer = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
         assert writer.record(first_context, fill, sequence=0)
 
@@ -330,6 +349,7 @@ def test_paper_fill_rejects_order_owned_by_another_claimed_run():
         PaperOrderWriter(
             SqlAlchemyPaperOrderRepository(connection)
         ).record(first_context, order)
+        _approve_order(connection, first_context, order)
 
         assert jobs.claim(second)
         with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
@@ -369,6 +389,7 @@ def test_paper_fill_requires_tracked_order_and_rolls_back_failed_fill_effect():
         assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE entity_id=:id"), {"id": fill.fill_id}).scalar_one() == 0
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        _approve_order(connection, context, order)
         broken = Fill(fill.fill_id, uuid4(), fill.signal_id, fill.instrument_id, fill.side, fill.quantity, fill.price, fill.commission, fill.slippage, fill.cost_model_version, fill.fill_time)
         with pytest.raises(ValueError, match="PAPER_FILL_ORDER_IDENTITY_MISMATCH"):
             fw.record(context, broken, sequence=0)
@@ -388,6 +409,7 @@ def test_paper_fill_legacy_missing_cost_provenance_fails_closed():
         jobs = SqlAlchemyJobRunRepository(connection); assert jobs.claim(run)
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        _approve_order(connection, context, order)
         fill_effect = create_paper_effect(run, PaperEffectType.FILL, fill.fill_id, paper_fill_payload_hash(fill))
         connection.execute(
             text("INSERT INTO paper_effects(effect_id, job_run_id, effect_type, entity_id, payload_hash) VALUES (:effect_id, :job_run_id, 'FILL', :fill_id, :payload_hash)"),

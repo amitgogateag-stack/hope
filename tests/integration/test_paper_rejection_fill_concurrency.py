@@ -9,16 +9,18 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperRiskWriter, PaperSignalWriter
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution import Fill
 from hope.domain.execution.models import Environment, ExecutionRejection, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.repositories.paper_terminals import SqlAlchemyPaperTerminalRepository
 
@@ -65,6 +67,15 @@ def _setup_order(connection, run, instrument_id):
     assert SqlAlchemyJobRunRepository(connection).claim(run)
     assert PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
     assert PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+    assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+        context,
+        RiskAssessment(
+            signal_id=order.signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=order.quantity,
+        ),
+    )
     return context, signal, order
 
 

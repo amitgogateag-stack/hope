@@ -8,14 +8,16 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperSignalWriter
+from hope.application.paper import PaperCycleContext, PaperOrderWriter, PaperRiskWriter, PaperSignalWriter
 from hope.application.paper.fills import PaperFillWriter
 from hope.domain.execution import Environment, Fill, Order, OrderSide
+from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
+from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 
 
@@ -52,6 +54,20 @@ def _make_signal_order(context: PaperCycleContext, instrument_id):
         signal_type=SignalType.ENTRY,
     )
     return signal, order
+
+
+def _approve_order(connection, context, order):
+    assert PaperRiskWriter(
+        SqlAlchemyPaperRiskRepository(connection)
+    ).record(
+        context,
+        RiskAssessment(
+            signal_id=order.signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=order.quantity,
+        ),
+    )
 
 
 def _make_fill(
@@ -112,6 +128,7 @@ def test_paper_fill_must_match_tracked_order_identity() -> None:
         assert jobs.claim(run) is True
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        _approve_order(connection, context, order)
         writer = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
 
         bad_signal = _make_fill(context, order, sequence=0, signal_id=uuid4())
@@ -193,6 +210,7 @@ def test_paper_fill_cumulative_quantity_cannot_exceed_order() -> None:
         assert jobs.claim(run) is True
         PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
         PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+        _approve_order(connection, context, order)
         writer = PaperFillWriter(SqlAlchemyPaperFillRepository(connection))
 
         assert writer.record(context, first_fill, sequence=0) is True

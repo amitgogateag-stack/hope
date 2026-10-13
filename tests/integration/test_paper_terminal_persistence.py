@@ -80,6 +80,15 @@ def _setup_order(connection, run, instrument_id):
     assert SqlAlchemyJobRunRepository(connection).claim(run)
     assert PaperSignalWriter(SqlAlchemyPaperSignalRepository(connection)).record(context, signal)
     assert PaperOrderWriter(SqlAlchemyPaperOrderRepository(connection)).record(context, order)
+    assert PaperRiskWriter(SqlAlchemyPaperRiskRepository(connection)).record(
+        context,
+        RiskAssessment(
+            signal_id=order.signal_id,
+            decision=RiskDecision.APPROVE,
+            reason_code="TEST_APPROVED",
+            approved_quantity=order.quantity,
+        ),
+    )
     return context, signal, order
 
 

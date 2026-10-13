@@ -440,3 +440,15 @@ def test_paper_order_risk_authorization_is_database_enforced():
     assert "PAPER_ORDER_RISK_QUANTITY_MISMATCH" in sql
     assert "BEFORE INSERT ON orders" in sql
     assert "BEFORE INSERT ON paper_risk_assessments" in sql
+
+
+def test_canonical_paper_fill_requires_durable_risk_authorization():
+    sql = (
+        ROOT / "migrations/211_paper_fill_risk_authorization.sql"
+    ).read_text()
+    assert "PAPER_FILL_RISK_AUTHORIZATION_CONFLICT" in sql
+    assert "hope_lock_paper_order_risk_authorization" in sql
+    assert "PAPER_FILL_RISK_AUTHORIZATION_MISSING" in sql
+    assert "PAPER_FILL_RISK_NOT_APPROVED" in sql
+    assert "PAPER_FILL_RISK_QUANTITY_MISMATCH" in sql
+    assert "BEFORE INSERT ON fills" in sql
