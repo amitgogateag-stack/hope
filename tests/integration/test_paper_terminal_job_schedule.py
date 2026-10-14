@@ -15,7 +15,8 @@ from hope.application.paper import (
     PaperRiskWriter,
     PaperSignalWriter,
 )
-from hope.application.paper.terminals import PaperTerminalWriter
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
+from hope.application.paper.terminals import paper_terminal_payload_hash
 from hope.domain.execution import (
     Environment,
     ExecutionRejection,
@@ -119,16 +120,20 @@ def test_postgres_rejects_future_terminal_through_direct_repository_boundary() -
             PaperOrderWriter(
                 SqlAlchemyPaperOrderRepository(connection)
             ).record(context, order)
-            writer = PaperTerminalWriter(
-                SqlAlchemyPaperTerminalRepository(connection)
+            effect = create_paper_effect(
+                context.job_run,
+                PaperEffectType.REJECTION,
+                outcome.order_id,
+                paper_terminal_payload_hash(outcome),
             )
+            repository = SqlAlchemyPaperTerminalRepository(connection)
 
             with pytest.raises(
                 IntegrityError,
                 match="PAPER_TERMINAL_AFTER_JOB_SCHEDULE",
             ):
                 with connection.begin_nested():
-                    writer.record(context, outcome)
+                    repository.persist(effect, outcome)
                     connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
             assert connection.execute(

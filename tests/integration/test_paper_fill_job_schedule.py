@@ -11,19 +11,19 @@ from sqlalchemy.exc import IntegrityError
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper import (
     PaperCycleContext,
-    PaperFillAccountingWriter,
+    PaperEffectType,
     PaperOrderWriter,
     PaperRiskWriter,
     PaperSignalWriter,
+    create_paper_effect,
+    paper_fill_payload_hash,
 )
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
-from hope.infrastructure.repositories.paper_fill_accounting import (
-    SqlAlchemyPaperFillAccountingRepository,
-)
+from hope.infrastructure.repositories.paper_fills import SqlAlchemyPaperFillRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
@@ -121,22 +121,20 @@ def test_postgres_rejects_future_fill_through_direct_accounting_repository() -> 
                     approved_quantity=fill.quantity,
                 ),
             )
-            writer = PaperFillAccountingWriter(
-                SqlAlchemyPaperFillAccountingRepository(connection)
+            effect = create_paper_effect(
+                context.job_run,
+                PaperEffectType.FILL,
+                fill.fill_id,
+                paper_fill_payload_hash(fill),
             )
+            repository = SqlAlchemyPaperFillRepository(connection)
 
             with pytest.raises(
                 IntegrityError,
                 match="PAPER_FILL_AFTER_JOB_SCHEDULE",
             ):
                 with connection.begin_nested():
-                    writer.record(
-                        context,
-                        portfolio_id,
-                        Decimal("1000"),
-                        fill,
-                        sequence=0,
-                    )
+                    repository.persist(effect, fill)
                     connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
 
             assert connection.execute(

@@ -10,7 +10,8 @@ from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
-from hope.application.paper.signals import PaperSignalWriter
+from hope.application.paper.effects import PaperEffectType, create_paper_effect
+from hope.application.paper.signals import paper_signal_payload_hash
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -68,15 +69,19 @@ def test_postgres_rejects_future_signal_through_direct_repository_boundary() -> 
                 },
             )
             assert SqlAlchemyJobRunRepository(connection).claim(job_run) is True
-            writer = PaperSignalWriter(
-                SqlAlchemyPaperSignalRepository(connection)
+            effect = create_paper_effect(
+                context.job_run,
+                PaperEffectType.SIGNAL,
+                signal.signal_id,
+                paper_signal_payload_hash(signal),
             )
+            repository = SqlAlchemyPaperSignalRepository(connection)
 
             with pytest.raises(
                 IntegrityError,
                 match="PAPER_SIGNAL_AFTER_JOB_SCHEDULE",
             ):
-                writer.record(context, signal)
+                repository.persist(effect, signal)
                 connection.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
         finally:
             transaction.rollback()
