@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timezone
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -40,6 +41,12 @@ class PaperFillAccountingWriter:
             raise ValueError("PAPER_ACCOUNTING_PORTFOLIO_ID_INVALID")
         if not initial_cash.is_finite() or initial_cash < 0:
             raise ValueError("PAPER_ACCOUNTING_INITIAL_CASH_INVALID")
+
+        fill_time = fill.fill_time
+        if fill_time is None or fill_time.tzinfo is None or fill_time.utcoffset() is None:
+            raise ValueError("PAPER_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if fill_time.astimezone(timezone.utc) > context.job_run.scheduled_for:
+            raise ValueError("PAPER_FILL_AFTER_JOB_SCHEDULE")
 
         expected_order_id = context.order_id(fill.signal_id)
         if fill.order_id != expected_order_id:

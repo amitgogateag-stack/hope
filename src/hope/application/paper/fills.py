@@ -39,6 +39,12 @@ class PaperFillWriter:
         self._repository = repository
 
     def record(self, context: PaperCycleContext, fill: Fill, *, sequence: int) -> bool:
+        fill_time = fill.fill_time
+        if fill_time is None or fill_time.tzinfo is None or fill_time.utcoffset() is None:
+            raise ValueError("PAPER_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if fill_time.astimezone(timezone.utc) > context.job_run.scheduled_for:
+            raise ValueError("PAPER_FILL_AFTER_JOB_SCHEDULE")
+
         expected_order_id = context.order_id(fill.signal_id)
         if fill.order_id != expected_order_id:
             raise ValueError("PAPER_FILL_ORDER_IDENTITY_MISMATCH")

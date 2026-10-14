@@ -46,6 +46,12 @@ class PaperSignalWriter:
         self._repository = repository
 
     def record(self, context: PaperCycleContext, signal: Signal) -> bool:
+        decision_time = signal.decision_time
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+            raise ValueError("PAPER_SIGNAL_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if decision_time.astimezone(timezone.utc) > context.job_run.scheduled_for:
+            raise ValueError("PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE")
+
         expected_signal_id = context.signal_id(
             instrument_id=signal.instrument_id,
             strategy_version=signal.strategy_version,

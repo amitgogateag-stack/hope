@@ -18,5 +18,7 @@ class PaperTerminalWriter:
     def __init__(self,repository:PaperTerminalPersistence)->None: self._repository=repository
     def record(self,context:PaperCycleContext,outcome:PaperTerminalOutcome)->bool:
         if outcome.environment is not Environment.PAPER: raise ValueError("PAPER_TERMINAL_REQUIRES_PAPER_ENVIRONMENT")
+        event_time=outcome.cancellation_time if isinstance(outcome,ExecutionCancellation) else outcome.rejection_time
+        if event_time.astimezone(timezone.utc) > context.job_run.scheduled_for: raise ValueError("PAPER_TERMINAL_AFTER_JOB_SCHEDULE")
         kind=PaperEffectType.CANCELLATION if isinstance(outcome,ExecutionCancellation) else PaperEffectType.REJECTION
         return self._repository.persist(create_paper_effect(context.job_run,kind,outcome.order_id,paper_terminal_payload_hash(outcome)),outcome)

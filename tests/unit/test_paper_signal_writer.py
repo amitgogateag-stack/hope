@@ -119,3 +119,17 @@ def test_paper_signal_payload_hash_canonicalizes_equivalent_signal_content() -> 
 
     assert first.signal_id == second.signal_id
     assert paper_signal_payload_hash(first) == paper_signal_payload_hash(second)
+
+
+def test_paper_signal_writer_rejects_post_schedule_decision_before_persistence() -> None:
+    context = make_context()
+    signal = make_signal(
+        context,
+        decision_time=context.job_run.scheduled_for + timedelta(microseconds=1),
+    )
+    repository = FakePaperSignalPersistence()
+
+    with pytest.raises(ValueError, match="PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE"):
+        PaperSignalWriter(repository).record(context, signal)
+
+    assert repository.calls == []

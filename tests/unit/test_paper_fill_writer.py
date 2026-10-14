@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -25,11 +25,11 @@ def make_context():
     return PaperCycleContext(create_scheduled_job_run("paper-fill-writer", datetime(2026, 9, 9, 23, 30, tzinfo=UTC)))
 
 
-def make_fill(context, sequence=0):
+def make_fill(context, sequence=0, *, fill_time=None):
     signal_id = uuid4()
     return Fill(context.fill_id(signal_id, sequence), context.order_id(signal_id), signal_id, uuid4(), OrderSide.BUY,
                 Decimal("2"), Decimal("101.5"), Decimal("0.25"), Decimal("0.5"), "cost-v1",
-                datetime(2026, 9, 9, 23, 29, tzinfo=UTC))
+                fill_time or datetime(2026, 9, 9, 23, 29, tzinfo=UTC))
 
 
 def test_writer_records_fill_effect_with_job_lineage():
@@ -80,3 +80,17 @@ def test_payload_hash_rejects_noncanonical_cost_model_version():
     malformed = fill.__class__(**{**fill.__dict__, "cost_model_version": " cost-v1 "})
     with pytest.raises(ValueError, match="PAPER_FILL_COST_MODEL_VERSION_NOT_CANONICAL"):
         paper_fill_payload_hash(malformed)
+
+
+def test_writer_rejects_post_schedule_fill_before_persistence():
+    context = make_context()
+    fill = make_fill(
+        context,
+        fill_time=context.job_run.scheduled_for + timedelta(microseconds=1),
+    )
+    repo = FakePersistence()
+
+    with pytest.raises(ValueError, match="PAPER_FILL_AFTER_JOB_SCHEDULE"):
+        PaperFillWriter(repo).record(context, fill, sequence=0)
+
+    assert repo.calls == []

@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import uuid4
 
@@ -32,7 +32,12 @@ def _context() -> PaperCycleContext:
     )
 
 
-def _fill(context: PaperCycleContext, *, sequence: int = 0) -> Fill:
+def _fill(
+    context: PaperCycleContext,
+    *,
+    sequence: int = 0,
+    fill_time: datetime | None = None,
+) -> Fill:
     signal_id = uuid4()
     return Fill(
         context.fill_id(signal_id, sequence),
@@ -45,7 +50,7 @@ def _fill(context: PaperCycleContext, *, sequence: int = 0) -> Fill:
         Decimal("0.25"),
         Decimal("0"),
         "paper-accounting-writer-v1",
-        datetime(2026, 9, 30, 19, 59, tzinfo=UTC),
+        fill_time or datetime(2026, 9, 30, 19, 59, tzinfo=UTC),
     )
 
 
@@ -124,3 +129,23 @@ def test_paper_fill_accounting_writer_persists_valid_deterministic_fill() -> Non
 
     assert writer.record(context, portfolio_id, Decimal("1000"), fill, sequence=2) is True
     assert repository.calls == [(context, portfolio_id, Decimal("1000"), fill, 2)]
+
+
+def test_paper_fill_accounting_writer_rejects_post_schedule_fill_before_persistence() -> None:
+    context = _context()
+    fill = _fill(
+        context,
+        fill_time=context.job_run.scheduled_for + timedelta(microseconds=1),
+    )
+    repository = _Repository()
+
+    with pytest.raises(ValueError, match="PAPER_FILL_AFTER_JOB_SCHEDULE"):
+        PaperFillAccountingWriter(repository).record(
+            context,
+            uuid4(),
+            Decimal("1000"),
+            fill,
+            sequence=0,
+        )
+
+    assert repository.calls == []
