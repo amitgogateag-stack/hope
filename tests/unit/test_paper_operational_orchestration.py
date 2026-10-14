@@ -218,7 +218,8 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
     future = create_scheduled_job_run("paper-c", now + timedelta(minutes=1))
     calls = []
 
-    def fake_run(engine, job_run, registry, *, now):
+    def fake_run(engine, job_run, registry, *, now, claim_window):
+        assert claim_window == (now(), job_run.scheduled_for + timedelta(minutes=5))
         calls.append(job_run)
         from hope.application.paper.runner import PaperCycleOutcome
         return PaperCycleOutcome.EXECUTED
@@ -289,7 +290,7 @@ def test_due_paper_runner_never_reenters_runtime_after_no_replay_reconciliation(
         reconciled.append(job_run)
         return True
 
-    def fake_run(engine, job_run, registry, *, now):
+    def fake_run(engine, job_run, registry, *, now, claim_window):
         executed.append(job_run)
         return PaperCycleOutcome.EXECUTED
 
@@ -539,7 +540,7 @@ def test_due_paper_runner_rejects_stale_run_before_any_execution(monkeypatch) ->
             )
         )
 
-    def fake_run(engine, job_run, registry, *, now):
+    def fake_run(engine, job_run, registry, *, now, claim_window):
         calls.append(job_run)
         from hope.application.paper.runner import PaperCycleOutcome
         return PaperCycleOutcome.EXECUTED
@@ -574,7 +575,7 @@ def test_due_paper_runner_preflights_registry_before_any_execution(monkeypatch) 
     rogue = create_scheduled_job_run("paper-rogue", now - timedelta(minutes=1))
     calls = []
 
-    def fake_run(engine, job_run, registry, *, now):
+    def fake_run(engine, job_run, registry, *, now, claim_window):
         calls.append(job_run)
         from hope.application.paper.runner import PaperCycleOutcome
         return PaperCycleOutcome.EXECUTED
