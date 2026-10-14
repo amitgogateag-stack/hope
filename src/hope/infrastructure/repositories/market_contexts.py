@@ -228,6 +228,7 @@ class PITMarketContextRepository:
             "AND event_time <= :as_of "
             "AND available_time <= :as_of "
             "AND ingestion_time <= :as_of "
+            "AND (effective_time IS NULL OR effective_time <= :as_of) "
             "ORDER BY event_time, available_time, ingestion_time, instrument_id"
         ).bindparams(bindparam("instrument_ids", expanding=True))
         rows = self._connection.execute(

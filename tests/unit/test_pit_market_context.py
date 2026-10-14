@@ -115,3 +115,37 @@ def test_context_is_immutable():
 
     with pytest.raises((TypeError, ValueError)):
         context.as_of = t0 + timedelta(minutes=1)
+
+
+def test_context_excludes_future_effective_bar() -> None:
+    instrument = uuid4()
+    as_of = datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc)
+    future_bar = make_bar(
+        instrument, as_of - timedelta(minutes=3), as_of - timedelta(minutes=2), "999",
+    ).model_copy(update={"effective_time": as_of + timedelta(minutes=1)})
+    valid_bar = make_bar(
+        instrument, as_of - timedelta(minutes=2), as_of - timedelta(minutes=1), "100",
+    ).model_copy(update={"effective_time": as_of})
+
+    assert build_pit_market_context([future_bar, valid_bar], as_of).bars == (valid_bar,)
+
+
+def test_context_rejects_direct_future_effective_bar() -> None:
+    instrument = uuid4()
+    as_of = datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc)
+    bar = make_bar(
+        instrument, as_of - timedelta(minutes=2), as_of - timedelta(minutes=1), "999",
+    ).model_copy(update={"effective_time": as_of + timedelta(microseconds=1)})
+
+    with pytest.raises(ValueError, match="PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION"):
+        PITMarketContext(as_of=as_of, bars=(bar,))
+
+
+def test_context_accepts_effective_time_at_decision_boundary() -> None:
+    instrument = uuid4()
+    as_of = datetime(2026, 10, 14, 13, 0, tzinfo=timezone.utc)
+    bar = make_bar(
+        instrument, as_of - timedelta(minutes=2), as_of - timedelta(minutes=1), "100",
+    ).model_copy(update={"effective_time": as_of})
+
+    assert PITMarketContext(as_of=as_of, bars=(bar,)).bars == (bar,)

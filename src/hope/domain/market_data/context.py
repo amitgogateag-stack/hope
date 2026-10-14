@@ -10,8 +10,8 @@ from hope.domain.market_data.models import MarketBar
 class PITMarketContext(BaseModel):
     """Immutable market information that was available at one decision time.
 
-    A context may contain only bars whose event, availability, and ingestion
-    timestamps are all at or before ``as_of``. Bars are ordered deterministically
+    A context may contain only bars whose event, availability, ingestion,
+    and optional effective timestamps are at or before ``as_of``. Bars are ordered deterministically
     by event time, availability time, ingestion time, and instrument id.
     """
 
@@ -29,6 +29,7 @@ class PITMarketContext(BaseModel):
                 bar.event_time > self.as_of
                 or bar.available_time > self.as_of
                 or bar.ingestion_time > self.as_of
+                or (bar.effective_time is not None and bar.effective_time > self.as_of)
             ):
                 raise ValueError("PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION")
         if tuple(self.bars) != tuple(
@@ -59,6 +60,7 @@ def build_pit_market_context(bars: tuple[MarketBar, ...] | list[MarketBar], as_o
             bar.event_time <= as_of
             and bar.available_time <= as_of
             and bar.ingestion_time <= as_of
+            and (bar.effective_time is None or bar.effective_time <= as_of)
         )
     )
     visible = tuple(
