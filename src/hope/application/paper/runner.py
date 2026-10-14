@@ -19,7 +19,7 @@ from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.signals import PaperSignalWriter
 from hope.application.paper.terminals import PaperTerminalOutcome, PaperTerminalWriter
-from hope.domain.execution.models import Order
+from hope.domain.execution.models import ExecutionCancellation, Order
 from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment, RiskDecision
 from hope.domain.signal.models import Signal
@@ -89,6 +89,13 @@ class PaperRuntimeContext:
 
     def record_terminal(self, outcome: PaperTerminalOutcome) -> bool:
         self._environment_guard()
+        event_time = (
+            outcome.cancellation_time
+            if isinstance(outcome, ExecutionCancellation)
+            else outcome.rejection_time
+        )
+        if event_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
+            raise ValueError("PAPER_TERMINAL_AFTER_JOB_SCHEDULE")
         return self._terminal_writer.record(self.cycle, outcome)
 
     def record_fill(

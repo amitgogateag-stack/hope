@@ -8,7 +8,7 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
-from hope.domain.execution.models import OrderSide
+from hope.domain.execution.models import Environment, ExecutionRejection, OrderSide
 from hope.domain.execution.simulator import Fill
 from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry, run_paper_once
@@ -32,6 +32,7 @@ def _engine():
     (
         ("signal", "PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE"),
         ("fill", "PAPER_FILL_AFTER_JOB_SCHEDULE"),
+        ("terminal", "PAPER_TERMINAL_AFTER_JOB_SCHEDULE"),
     ),
 )
 def test_direct_runtime_effect_cannot_bypass_job_schedule(
@@ -69,6 +70,19 @@ def test_direct_runtime_effect_cannot_bypass_job_schedule(
                 inputs_hash="a" * 64,
             )
             runtime.record_signal(signal)
+            return
+
+        if effect_kind == "terminal":
+            runtime.record_terminal(
+                ExecutionRejection(
+                    order_id=runtime.cycle.order_id(signal_id),
+                    signal_id=signal_id,
+                    instrument_id=instrument_id,
+                    environment=Environment.PAPER,
+                    reason_code="DIRECT_RUNTIME_REJECT",
+                    rejection_time=future_time,
+                )
+            )
             return
 
         runtime.record_fill(
