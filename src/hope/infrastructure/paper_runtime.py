@@ -111,6 +111,18 @@ class DurableUniversePaperStrategyDecision:
             universe_version_id=self.universe_version_id,
             instrument_ids=active_instrument_ids,
         )
+        if market_context.as_of != self.as_of:
+            raise RuntimeError("PAPER_MARKET_CONTEXT_AS_OF_MISMATCH")
+        active_instrument_keys = {
+            str(instrument_id) for instrument_id in active_instrument_ids
+        }
+        if any(
+            bar.instrument_id not in active_instrument_keys
+            for bar in market_context.bars
+        ):
+            raise RuntimeError(
+                "PAPER_MARKET_CONTEXT_INSTRUMENT_OUTSIDE_ACTIVE_UNIVERSE"
+            )
         self.freshness_policy.assert_context_fresh(
             market_context,
             active_instrument_ids,
