@@ -15,8 +15,9 @@ from hope.application.paper import (
 )
 from hope.application.paper.terminals import PaperTerminalWriter
 from hope.domain.execution.models import Environment, ExecutionRejection, Order, OrderSide
+from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment, RiskDecision
-from hope.domain.signal.models import SignalType
+from hope.domain.signal.models import Signal, SignalType
 
 
 UTC = timezone.utc
@@ -199,9 +200,17 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         now=lambda: job_run.scheduled_for + timedelta(minutes=1),
     )
     portfolio_id = UUID(int=1)
-    signal = object()
     signal_id = UUID(int=2)
     instrument_id = UUID(int=4)
+    signal = Signal(
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        strategy_version="paper-cycle-v1",
+        decision_time=job_run.scheduled_for,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.75"),
+        inputs_hash="a" * 64,
+    )
     risk = RiskAssessment(
         signal_id=signal_id,
         decision=RiskDecision.APPROVE,
@@ -225,7 +234,19 @@ def test_paper_cycle_runtime_facade_routes_each_effect_through_authoritative_wri
         reason_code="TEST_REJECTION",
         rejection_time=job_run.scheduled_for + timedelta(seconds=30),
     )
-    fill = object()
+    fill = Fill(
+        fill_id=UUID(int=5),
+        order_id=order.order_id,
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        commission=Decimal("0"),
+        slippage=Decimal("0"),
+        cost_model_version="paper-cycle-v1",
+        fill_time=job_run.scheduled_for,
+    )
 
     def work(runtime) -> None:
         assert runtime.record_signal(signal) is True
