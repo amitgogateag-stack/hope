@@ -220,7 +220,7 @@ def test_paper_strategy_decision_job_validates_all_outputs_before_persisting() -
         inputs_hash=inputs_hash,
     )
     strategy.signals = (valid, invalid)
-    runtime = _runtime(decision_time + timedelta(minutes=1))
+    runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH"):
         PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
