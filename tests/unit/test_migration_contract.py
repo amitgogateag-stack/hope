@@ -514,15 +514,3 @@ def test_paper_terminal_requires_recoverable_source_risk_effect_owner():
     assert "FOR UPDATE" in sql
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
     assert "AFTER INSERT ON paper_order_terminal_events" in sql
-
-
-def test_failed_paper_job_cannot_own_durable_effects():
-    sql = (
-        ROOT / "migrations/220_paper_failed_job_effect_guard.sql"
-    ).read_text()
-    assert "PAPER_JOB_FAILURE_WITH_DURABLE_EFFECTS" in sql
-    assert "run.status = 'FAILED'" in sql
-    assert "OLD.status = 'CLAIMED'" in sql
-    assert "NEW.status = 'FAILED'" in sql
-    assert "effect.job_run_id = OLD.job_run_id" in sql
-    assert "BEFORE UPDATE ON job_runs" in sql

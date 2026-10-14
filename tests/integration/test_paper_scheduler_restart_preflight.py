@@ -6,7 +6,6 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import IntegrityError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper import PaperCycleContext, PaperSignalWriter
@@ -497,8 +496,8 @@ def test_scheduler_lock_is_released_after_failed_paper_work() -> None:
 
 
 @pytest.mark.integration
-def test_durable_effect_prevents_failed_state_before_scheduler_restart() -> None:
-    """Prevent the lifecycle contradiction that restart preflight rejects."""
+def test_failed_prior_run_with_durable_effect_blocks_entire_due_batch() -> None:
+    """A FAILED job cannot hide committed execution truth from restart preflight."""
     engine = _engine()
     now = datetime(2026, 10, 14, 3, 10, tzinfo=UTC)
     suffix = uuid4()
@@ -511,6 +510,7 @@ def test_durable_effect_prevents_failed_state_before_scheduler_restart() -> None
         now - timedelta(minutes=1),
     )
     instrument_id = uuid4()
+    calls = []
     migrations_dir = Path(__file__).parents[2] / "migrations"
 
     with engine.begin() as connection:
@@ -550,24 +550,47 @@ def test_durable_effect_prevents_failed_state_before_scheduler_restart() -> None
         assert PaperSignalWriter(
             SqlAlchemyPaperSignalRepository(connection)
         ).record(context, signal)
-        with pytest.raises(
-            IntegrityError,
-            match="PAPER_JOB_FAILURE_WITH_DURABLE_EFFECTS",
-        ):
-            with connection.begin_nested():
-                jobs.complete(
-                    create_job_run_completion(
-                        failed,
-                        JobRunStatus.FAILED,
-                        failed.scheduled_for + timedelta(seconds=30),
-                        failure_code="FAILED_AFTER_DURABLE_EFFECT",
-                    )
-                )
+        assert jobs.complete(
+            create_job_run_completion(
+                failed,
+                JobRunStatus.FAILED,
+                failed.scheduled_for + timedelta(seconds=30),
+                failure_code="FAILED_AFTER_DURABLE_EFFECT",
+            )
+        ) is True
 
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                failed.job_key,
+                lambda runtime: calls.append(failed.job_run_id),
+            ),
+            PaperJobDefinition(
+                fresh.job_key,
+                lambda runtime: calls.append(fresh.job_run_id),
+            ),
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT",
+    ):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            [fresh, failed],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+    with engine.connect() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
         failed_record = jobs.get_record(failed.job_run_id)
         assert failed_record is not None
-        assert failed_record.status is JobRunStatus.CLAIMED
-        assert failed_record.failure_code is None
+        assert failed_record.status is JobRunStatus.FAILED
+        assert failed_record.failure_code == "FAILED_AFTER_DURABLE_EFFECT"
         assert jobs.get_record(fresh.job_run_id) is None
         assert connection.execute(
             text(
