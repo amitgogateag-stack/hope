@@ -78,7 +78,12 @@ def _prepare_job(engine, job_run) -> None:
 
 
 def _insert_durable_decision_inputs(
-    engine, as_of, *, second_bar_effective_time=None, second_bar_ingestion_time=None,
+    engine,
+    as_of,
+    *,
+    member_valid_to=None,
+    second_bar_effective_time=None,
+    second_bar_ingestion_time=None,
 ):
     universe_id = uuid4()
     universe_version_id = uuid4()
@@ -119,10 +124,15 @@ def _insert_durable_decision_inputs(
         )
         connection.execute(
             text(
-                "INSERT INTO universe_members(universe_version_id, instrument_id) "
-                "VALUES (:version_id, :instrument_id)"
+                "INSERT INTO universe_members("
+                "universe_version_id, instrument_id, valid_to"
+                ") VALUES (:version_id, :instrument_id, :valid_to)"
             ),
-            {"version_id": universe_version_id, "instrument_id": instrument_id},
+            {
+                "version_id": universe_version_id,
+                "instrument_id": instrument_id,
+                "valid_to": member_valid_to,
+            },
         )
         connection.execute(
             text(
@@ -337,6 +347,59 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
     assert tuple(member.instrument_id for member in members) == (instrument_id,)
     assert received_parameters is parameters
     assert len(inputs_hash) == 64
+
+
+@pytest.mark.integration
+def test_durable_strategy_excludes_expired_member_and_its_bars() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-expired-universe-member",
+        datetime(2026, 10, 14, 13, 35, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, instrument_id, dataset_version_id = (
+        _insert_durable_decision_inputs(
+            engine,
+            job_run.scheduled_for,
+            member_valid_to=job_run.scheduled_for - timedelta(minutes=1),
+        )
+    )
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry([
+        PaperJobDefinition(
+            job_run.job_key,
+            DurableUniversePaperStrategyDecision(
+                strategy, dataset_version_id, job_run.scheduled_for,
+                universe_version_id, _Parameters(),
+                PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
+            ),
+        )
+    ])
+
+    assert run_paper_once(
+        engine, job_run, registry,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+    ) is PaperCycleOutcome.EXECUTED
+    assert len(strategy.calls) == 1
+    context, _, members, _, _ = strategy.calls[0]
+    assert context.bars == ()
+    assert members == ()
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM market_bars "
+                "WHERE dataset_version_id=:dataset_version_id "
+                "AND instrument_id=:instrument_id"
+            ),
+            {
+                "dataset_version_id": dataset_version_id,
+                "instrument_id": instrument_id,
+            },
+        ).scalar_one() == 2
+    engine.dispose()
 
 
 @pytest.mark.integration

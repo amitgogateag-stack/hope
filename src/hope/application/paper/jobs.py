@@ -78,10 +78,11 @@ class PaperStrategyDecisionJob:
             self.parameters,
             dataset_version_id=self.dataset_version_id,
         )
+        active_members = self.universe.active_members(as_of)
         signals = self.strategy.generate_signals(
             self.market_context,
             self.universe.version,
-            self.universe.members,
+            active_members,
             self.parameters,
             expected_inputs_hash,
         )
@@ -89,7 +90,7 @@ class PaperStrategyDecisionJob:
             raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
 
         universe_members_by_id = {
-            member.instrument_id: member for member in self.universe.members
+            member.instrument_id: member for member in active_members
         }
         for signal in signals:
             if not isinstance(signal, Signal):

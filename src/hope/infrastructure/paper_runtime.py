@@ -103,15 +103,16 @@ class DurableUniversePaperStrategyDecision:
         snapshot = UniverseSnapshotRepository(connection).get(self.universe_version_id)
         if snapshot is None:
             raise RuntimeError("PAPER_DURABLE_DECISION_UNIVERSE_NOT_FOUND")
+        active_instrument_ids = snapshot.active_instrument_ids(self.as_of)
         market_context = PITMarketContextRepository(connection).get(
             self.dataset_version_id,
             as_of=self.as_of,
             universe_version_id=self.universe_version_id,
-            instrument_ids=tuple(member.instrument_id for member in snapshot.members),
+            instrument_ids=active_instrument_ids,
         )
         self.freshness_policy.assert_context_fresh(
             market_context,
-            snapshot.active_instrument_ids(self.as_of),
+            active_instrument_ids,
         )
         return PaperStrategyDecisionJob(
             self.strategy,
