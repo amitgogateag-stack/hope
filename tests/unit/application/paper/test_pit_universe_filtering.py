@@ -6,6 +6,7 @@ from uuid import uuid4
 from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.market_data.context import PITMarketContext
+from hope.domain.market_data.models import MarketBar
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.domain.universe.models import UniverseMember, UniverseVersion
 from hope.infrastructure.paper_runtime import (
@@ -64,7 +65,24 @@ def test_durable_decision_exposes_only_active_members_to_context_and_strategy(
             ),
         ),
     )
-    context = PITMarketContext(as_of=as_of, bars=())
+    fresh_time = as_of - timedelta(minutes=1)
+    context = PITMarketContext(
+        as_of=as_of,
+        bars=(
+            MarketBar(
+                instrument_id=str(active_id),
+                event_time=fresh_time,
+                available_time=fresh_time,
+                effective_time=fresh_time,
+                ingestion_time=fresh_time,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=Decimal("1"),
+            ),
+        ),
+    )
     requested = []
 
     class FakeSnapshots:

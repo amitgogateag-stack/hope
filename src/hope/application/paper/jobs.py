@@ -90,7 +90,7 @@ class PaperStrategyDecisionJob:
             raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
 
         universe_members_by_id = {
-            member.instrument_id: member for member in active_members
+            member.instrument_id: member for member in self.universe.members
         }
         for signal in signals:
             if not isinstance(signal, Signal):
