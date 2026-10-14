@@ -580,7 +580,7 @@ def test_paper_fill_direct_write_requires_reusable_risk_effect_ownership(
         Decimal("0.25"),
         Decimal("0.5"),
         "cost-v1",
-        datetime(2026, 10, 13, 17, 3, tzinfo=UTC),
+        fill_run.scheduled_for,
     )
     insert_fill = text(
         "INSERT INTO fills("

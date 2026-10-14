@@ -355,7 +355,7 @@ def test_late_paper_pnl_effect_serializes_with_portfolio_recovery() -> None:
     event_time = datetime(2026, 10, 8, 9, 30, tzinfo=timezone.utc)
     job_run = create_scheduled_job_run(
         f"paper-portfolio-late-effect-serialization:{uuid4()}",
-        event_time - timedelta(minutes=1),
+        event_time,
     )
     instrument_id = uuid4()
     signal_id = uuid4()
