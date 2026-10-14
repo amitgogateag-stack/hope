@@ -292,5 +292,10 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
             if job_run.job_run_id in recovery.terminal_run_ids:
                 results.append((job_run, PaperCycleOutcome.SKIPPED_TERMINAL))
             else:
+                execution_time = _aware_schedule_time(now())
+                if execution_time < current or execution_time < job_run.scheduled_for:
+                    raise RuntimeError("PAPER_SCHEDULER_CLOCK_REGRESSION")
+                if execution_time - job_run.scheduled_for > max_lateness:
+                    raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
                 results.append((job_run, run_paper_once(engine, job_run, registry, now=now)))
         return tuple(results)

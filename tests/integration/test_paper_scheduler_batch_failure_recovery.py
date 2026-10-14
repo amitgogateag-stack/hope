@@ -109,3 +109,52 @@ def test_batch_restart_skips_failed_terminal_run_and_executes_remaining_due_work
         assert failed_record.failure_code == "RuntimeError"
         assert remaining_record is not None
         assert remaining_record.status is JobRunStatus.SUCCEEDED
+
+
+@pytest.mark.integration
+def test_batch_rechecks_lateness_after_prior_job_advances_clock() -> None:
+    """Later PAPER work cannot start after its deadline passes during the batch."""
+    from uuid import uuid4
+
+    engine = _engine()
+    initial = datetime(2026, 10, 14, 5, 0, tzinfo=UTC)
+    clock = [initial]
+    suffix = uuid4()
+    first = create_scheduled_job_run(
+        f"paper-batch-time-advance-first-{suffix}",
+        initial - timedelta(minutes=4),
+    )
+    second = create_scheduled_job_run(
+        f"paper-batch-time-advance-second-{suffix}",
+        initial - timedelta(minutes=3),
+    )
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    def first_work(runtime) -> None:
+        calls.append(first.job_run_id)
+        clock[0] = initial + timedelta(minutes=3)
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(first.job_key, first_work),
+            PaperJobDefinition(second.job_key, lambda runtime: calls.append(second.job_run_id)),
+        ]
+    )
+    with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            (first, second),
+            now=lambda: clock[0],
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == [first.job_run_id]
+    with engine.connect() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.get_record(first.job_run_id).status is JobRunStatus.SUCCEEDED
+        assert jobs.get_record(second.job_run_id) is None
+    engine.dispose()
