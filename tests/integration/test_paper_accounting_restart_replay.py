@@ -517,7 +517,7 @@ def test_partial_fill_cancellation_reconciles_without_replaying_economic_effects
             partial_fill.instrument_id,
             Environment.PAPER,
             "PARTIAL_CANCEL",
-            partial_fill.fill_time + timedelta(seconds=30),
+            run.scheduled_for,
             Decimal("1"),
         )
         assert PaperTerminalWriter(

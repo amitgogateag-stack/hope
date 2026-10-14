@@ -1057,7 +1057,7 @@ def test_paper_terminal_direct_write_requires_reusable_risk_effect_ownership(
         instrument_id,
         Environment.PAPER,
         "TEST_RISK_LINEAGE_REJECT",
-        datetime(2026, 10, 13, 18, 3, tzinfo=UTC),
+        terminal_run.scheduled_for,
     )
     insert_terminal = text(
         "INSERT INTO paper_order_terminal_events("
