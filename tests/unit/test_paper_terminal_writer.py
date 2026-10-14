@@ -87,3 +87,40 @@ def test_terminal_writer_rejects_post_schedule_outcome_before_persistence(kind: 
         PaperTerminalWriter(repository).record(context, outcome)
 
     assert repository.calls == []
+
+
+@pytest.mark.parametrize("kind", ["CANCELLED", "REJECTED"])
+def test_terminal_writer_rejects_foreign_order_identity_before_persistence(kind: str) -> None:
+    scheduled_for = datetime(2026, 9, 9, 20, 0, tzinfo=timezone.utc)
+    context = PaperCycleContext(
+        create_scheduled_job_run("paper-terminal-writer", scheduled_for)
+    )
+    signal_id, instrument_id = uuid4(), uuid4()
+    foreign_order_id = uuid4()
+    while foreign_order_id == context.order_id(signal_id):
+        foreign_order_id = uuid4()
+    if kind == "CANCELLED":
+        outcome = ExecutionCancellation(
+            foreign_order_id,
+            signal_id,
+            instrument_id,
+            Environment.PAPER,
+            "TEST_CANCEL",
+            scheduled_for,
+            Decimal("2"),
+        )
+    else:
+        outcome = ExecutionRejection(
+            foreign_order_id,
+            signal_id,
+            instrument_id,
+            Environment.PAPER,
+            "TEST_REJECT",
+            scheduled_for,
+        )
+    repository = _TerminalRepository()
+
+    with pytest.raises(ValueError, match="PAPER_TERMINAL_ORDER_IDENTITY_MISMATCH"):
+        PaperTerminalWriter(repository).record(context, outcome)
+
+    assert repository.calls == []
