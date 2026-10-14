@@ -229,7 +229,29 @@ def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
     assert _FakePortfolioRepository.loaded_portfolios == []
 
 
-def test_verifier_accepts_authoritative_portfolio_pnl_lineage() -> None:
+def test_reconciliation_lineage_rejects_legacy_position_pnl() -> None:
+    """Legacy PNL remains valid history, not proof of portfolio reconciliation."""
+    effects, signal, order, risk, fill, pnl_event = _filled_fixture()
+    connection = _LineageConnection(
+        (
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            _pnl_row(pnl_event),
+        )
+    )
+
+    assert verify_paper_recovery_lineage(
+        connection, effects, require_portfolio_pnl=True,
+    ) is False
+    assert _FakePortfolioRepository.loaded_portfolios == []
+
+
+@pytest.mark.parametrize("require_portfolio_pnl", [False, True])
+def test_verifier_accepts_authoritative_portfolio_pnl_lineage(
+    require_portfolio_pnl: bool,
+) -> None:
     effects, signal, order, risk, fill, _ = _filled_fixture()
     portfolio_id = uuid4()
     pnl_event = PaperPortfolioPnLEvent(
@@ -273,7 +295,9 @@ def test_verifier_accepts_authoritative_portfolio_pnl_lineage() -> None:
         )
     )
 
-    assert verify_paper_recovery_lineage(connection, effects) is True
+    assert verify_paper_recovery_lineage(
+        connection, effects, require_portfolio_pnl=require_portfolio_pnl,
+    ) is True
     assert _FakePortfolioRepository.loaded_portfolios == [
         (portfolio_id, effects[-1].job_run_id)
     ]

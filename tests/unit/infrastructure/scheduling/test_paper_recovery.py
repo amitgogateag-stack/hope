@@ -250,3 +250,51 @@ def test_recovery_report_fails_closed_on_incomplete_before_stale(monkeypatch) ->
     assert incomplete_assessment.decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         report.assert_safe_to_execute()
+
+
+def test_recovery_does_not_acknowledge_legacy_pnl_as_reconcilable(monkeypatch) -> None:
+    """Only portfolio-accounting lineage can produce a complete recovery decision."""
+    current = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+    run = create_scheduled_job_run("paper:legacy-pnl-check", current)
+    effect_types = (
+        PaperEffectType.SIGNAL, PaperEffectType.RISK, PaperEffectType.ORDER,
+        PaperEffectType.FILL, PaperEffectType.PNL,
+    )
+    effects = tuple(SimpleNamespace(effect_type=kind) for kind in effect_types)
+
+    class FakeJobs:
+        def __init__(self, connection):
+            pass
+
+        def get_record_for_run(self, job_run):
+            assert job_run == run
+            return SimpleNamespace(status=JobRunStatus.CLAIMED)
+
+    class FakeEffects:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            assert job_run_id == run.job_run_id
+            return effects
+
+    called = []
+
+    def verify_lineage(connection, run_effects, *, require_portfolio_pnl):
+        assert run_effects == effects
+        called.append(require_portfolio_pnl)
+        return False  # A valid legacy-only PNL chain is not portfolio-complete.
+
+    monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeJobs)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffects)
+    monkeypatch.setattr(recovery, "verify_paper_recovery_lineage", verify_lineage)
+
+    report = assess_due_paper_recovery(
+        object(), (run,), current=current, max_lateness=timedelta(minutes=0),
+    )
+
+    assert called == [True]
+    assert report.assessments[0].evidence is PaperRecoveryEvidence.COMPLETE
+    assert report.assessments[0].lineage_verified is False
+    assert report.assessments[0].decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
+    assert report.completed_effect_run_ids == frozenset()

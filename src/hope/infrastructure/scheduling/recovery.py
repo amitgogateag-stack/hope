@@ -165,7 +165,9 @@ def assess_due_paper_recovery(
             if classify_paper_effect_topology(
                 effect.effect_type for effect in run_effects
             ) is PaperEffectTopology.COMPLETE:
-                lineage_verified = verify_paper_recovery_lineage(connection, run_effects)
+                lineage_verified = verify_paper_recovery_lineage(
+                    connection, run_effects, require_portfolio_pnl=True,
+                )
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
         elif current - job_run.scheduled_for > max_lateness:

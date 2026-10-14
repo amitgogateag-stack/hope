@@ -82,6 +82,8 @@ def _verify_partial_fill_cancellation(
 def verify_paper_recovery_lineage(
     connection: Connection,
     effects: tuple[PaperEffect, ...],
+    *,
+    require_portfolio_pnl: bool = False,
 ) -> bool:
     """Prove one durable PAPER execution chain without replaying it.
 
@@ -425,6 +427,11 @@ def verify_paper_recovery_lineage(
         ).where(pnl_events.c.pnl_event_id == pnl_event_id)
     ).mappings().one_or_none()
     if pnl is not None:
+        # Position-based legacy PNL can authenticate historical lineage, but
+        # cannot prove the portfolio accounting required for run reconciliation.
+        # A recovery decision must never advertise that chain as complete.
+        if require_portfolio_pnl:
+            return False
         if pnl["event_time"] < durable_fill.fill_time:
             return False
         try:
