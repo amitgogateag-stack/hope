@@ -63,6 +63,24 @@ class PaperRuntimeContext:
         repr=False,
         compare=False,
     )
+    _recorded_orders: dict[UUID, Order] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _recorded_fills: dict[UUID, Fill] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _terminal_outcomes: dict[UUID, PaperTerminalOutcome] = field(
+        default_factory=dict,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def record_signal(self, signal: Signal) -> bool:
         decision_time = signal.decision_time
@@ -85,7 +103,12 @@ class PaperRuntimeContext:
             raise ValueError("PAPER_ORDER_REQUIRES_RUNTIME_RISK_APPROVAL")
         if approved_quantity != order.quantity:
             raise ValueError("PAPER_ORDER_RUNTIME_RISK_QUANTITY_MISMATCH")
-        return self._order_writer.record(self.cycle, order)
+        existing = self._recorded_orders.get(order.order_id)
+        if existing is not None and existing != order:
+            raise ValueError("PAPER_ORDER_RUNTIME_IDENTITY_CONFLICT")
+        recorded = self._order_writer.record(self.cycle, order)
+        self._recorded_orders[order.order_id] = order
+        return recorded
 
     def record_terminal(self, outcome: PaperTerminalOutcome) -> bool:
         self._environment_guard()
@@ -96,7 +119,37 @@ class PaperRuntimeContext:
         )
         if event_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_TERMINAL_AFTER_JOB_SCHEDULE")
-        return self._terminal_writer.record(self.cycle, outcome)
+        order = self._recorded_orders.get(outcome.order_id)
+        if order is None:
+            raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_UNTRACKED")
+        if (
+            order.signal_id != outcome.signal_id
+            or order.instrument_id != outcome.instrument_id
+            or order.environment is not outcome.environment
+        ):
+            raise ValueError("PAPER_TERMINAL_ORDER_IDENTITY_MISMATCH")
+        existing = self._terminal_outcomes.get(outcome.order_id)
+        if existing is not None and existing != outcome:
+            raise ValueError("PAPER_ORDER_TERMINAL_CONFLICT")
+        filled_quantity = sum(
+            (
+                fill.quantity
+                for fill in self._recorded_fills.values()
+                if fill.order_id == outcome.order_id
+            ),
+            Decimal("0"),
+        )
+        remaining_quantity = order.quantity - filled_quantity
+        if remaining_quantity <= 0:
+            raise ValueError("PAPER_TERMINAL_REQUIRES_REMAINING_QUANTITY")
+        if isinstance(outcome, ExecutionCancellation):
+            if outcome.cancelled_quantity != remaining_quantity:
+                raise ValueError("PAPER_CANCELLATION_QUANTITY_MISMATCH")
+        elif filled_quantity != 0:
+            raise ValueError("PAPER_REJECTION_REQUIRES_UNFILLED_ORDER")
+        recorded = self._terminal_writer.record(self.cycle, outcome)
+        self._terminal_outcomes[outcome.order_id] = outcome
+        return recorded
 
     def record_fill(
         self,
@@ -111,13 +164,40 @@ class PaperRuntimeContext:
             raise ValueError("PAPER_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
         if fill_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_FILL_AFTER_JOB_SCHEDULE")
-        return self._fill_writer.record(
+        if fill.order_id in self._terminal_outcomes:
+            raise ValueError("PAPER_FILL_AFTER_TERMINAL_FORBIDDEN")
+        order = self._recorded_orders.get(fill.order_id)
+        if order is None:
+            raise ValueError("PAPER_FILL_SOURCE_ORDER_UNTRACKED")
+        if (
+            order.signal_id != fill.signal_id
+            or order.instrument_id != fill.instrument_id
+            or order.side is not fill.side
+        ):
+            raise ValueError("PAPER_FILL_ORDER_IDENTITY_MISMATCH")
+        existing = self._recorded_fills.get(fill.fill_id)
+        if existing is not None and existing != fill:
+            raise ValueError("PAPER_FILL_IDENTITY_CONFLICT")
+        already_filled = sum(
+            (
+                recorded_fill.quantity
+                for recorded_fill in self._recorded_fills.values()
+                if recorded_fill.order_id == fill.order_id
+                and recorded_fill.fill_id != fill.fill_id
+            ),
+            Decimal("0"),
+        )
+        if already_filled + fill.quantity > order.quantity:
+            raise ValueError("PAPER_FILL_CUMULATIVE_QUANTITY_EXCEEDS_ORDER")
+        recorded = self._fill_writer.record(
             self.cycle,
             portfolio_id,
             initial_cash,
             fill,
             sequence=sequence,
         )
+        self._recorded_fills[fill.fill_id] = fill
+        return recorded
 
 
 class PaperCycleRunner:
