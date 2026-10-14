@@ -287,6 +287,16 @@ def run_paper_once(
 
     with engine.begin() as connection:
         SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
+        # A durable terminal run must not depend on PIT inputs still being
+        # available on restart. Authenticate the exact run identity before
+        # resolving a connection-bound handler, without replaying its work.
+        durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(job_run)
+        if durable is not None:
+            if durable.status in (JobRunStatus.SUCCEEDED, JobRunStatus.FAILED):
+                return PaperCycleOutcome.SKIPPED_TERMINAL
+            if durable.status is JobRunStatus.CLAIMED:
+                raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+            raise RuntimeError("PAPER_JOB_DURABLE_STATE_INVALID")
         runtime = SqlAlchemyPaperRuntime(connection, now=now)
         work = (
             registered_work.bind(connection)

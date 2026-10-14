@@ -752,3 +752,98 @@ def test_failed_paper_work_rolls_back_partial_signal_and_effect_before_terminali
     ) is PaperCycleOutcome.SKIPPED_TERMINAL
     assert calls == [job_run.job_run_id]
     engine.dispose()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("terminal_failure", (False, True))
+def test_terminal_one_shot_restart_does_not_rebind_unavailable_durable_inputs(
+    terminal_failure: bool,
+) -> None:
+    """Completed jobs are idempotent even after their PIT input loader goes offline."""
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        f"paper-one-shot-terminal-rebind-{uuid4()}",
+        datetime(2026, 10, 14, 5, 20, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    bind_calls = []
+    work_calls = []
+
+    class VanishingDurableInputs:
+        def bind(self, connection):
+            bind_calls.append(job_run.job_run_id)
+            if len(bind_calls) > 1:
+                raise RuntimeError("PAPER_INPUTS_NO_LONGER_AVAILABLE")
+
+            def work(runtime):
+                work_calls.append(runtime.cycle.job_run.job_run_id)
+                if terminal_failure:
+                    raise ValueError("EXPECTED_FIRST_TERMINAL_FAILURE")
+
+            return work
+
+    registry = PaperJobRegistry(
+        [PaperJobDefinition(job_run.job_key, VanishingDurableInputs())]
+    )
+    clock = job_run.scheduled_for + timedelta(minutes=1)
+    if terminal_failure:
+        with pytest.raises(ValueError, match="EXPECTED_FIRST_TERMINAL_FAILURE"):
+            run_paper_once(engine, job_run, registry, now=lambda: clock)
+    else:
+        assert run_paper_once(engine, job_run, registry, now=lambda: clock) is PaperCycleOutcome.EXECUTED
+
+    with engine.connect() as connection:
+        record_before = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record_before is not None
+        assert record_before.status is (
+            JobRunStatus.FAILED if terminal_failure else JobRunStatus.SUCCEEDED
+        )
+
+    assert run_paper_once(
+        engine,
+        job_run,
+        registry,
+        now=lambda: clock + timedelta(minutes=2),
+    ) is PaperCycleOutcome.SKIPPED_TERMINAL
+    assert bind_calls == [job_run.job_run_id]
+    assert work_calls == [job_run.job_run_id]
+
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) == record_before
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_incomplete_one_shot_restart_rejects_before_durable_input_rebind() -> None:
+    """CLAIMED is never treated as terminal and never reruns PIT preparation."""
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        f"paper-one-shot-incomplete-rebind-{uuid4()}",
+        datetime(2026, 10, 14, 5, 25, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    with engine.begin() as connection:
+        assert SqlAlchemyJobRunRepository(connection).claim(job_run)
+
+    bind_calls = []
+
+    class UnexpectedRebind:
+        def bind(self, connection):
+            bind_calls.append(job_run.job_run_id)
+            raise AssertionError("INCOMPLETE_RUN_MUST_NOT_REBIND")
+
+    registry = PaperJobRegistry(
+        [PaperJobDefinition(job_run.job_key, UnexpectedRebind())]
+    )
+    with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert bind_calls == []
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id).status is JobRunStatus.CLAIMED
+    engine.dispose()
