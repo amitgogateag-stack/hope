@@ -297,5 +297,19 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
                     raise RuntimeError("PAPER_SCHEDULER_CLOCK_REGRESSION")
                 if execution_time - job_run.scheduled_for > max_lateness:
                     raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
-                results.append((job_run, run_paper_once(engine, job_run, registry, now=now)))
+                results.append(
+                    (
+                        job_run,
+                        run_paper_once(
+                            engine,
+                            job_run,
+                            registry,
+                            now=now,
+                            claim_window=(
+                                execution_time,
+                                job_run.scheduled_for + max_lateness,
+                            ),
+                        ),
+                    )
+                )
         return tuple(results)

@@ -158,3 +158,81 @@ def test_batch_rechecks_lateness_after_prior_job_advances_clock() -> None:
         assert jobs.get_record(first.job_run_id).status is JobRunStatus.SUCCEEDED
         assert jobs.get_record(second.job_run_id) is None
     engine.dispose()
+
+
+@pytest.mark.integration
+def test_scheduler_rejects_job_that_expires_while_binding_durable_inputs() -> None:
+    """The last deadline check must occur after expensive connection-bound preparation."""
+    from uuid import uuid4
+
+    engine = _engine()
+    start = datetime(2026, 10, 14, 6, 0, tzinfo=UTC)
+    clock = [start]
+    job = create_scheduled_job_run(
+        f"paper-batch-slow-bind-{uuid4()}",
+        start - timedelta(minutes=4),
+    )
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    class SlowDurableBinding:
+        def bind(self, connection):
+            # The initial scheduler preflight is timely, but PIT preparation
+            # crosses the job's five-minute lateness deadline.
+            clock[0] = start + timedelta(minutes=2)
+            return lambda runtime: calls.append(job.job_run_id)
+
+    registry = PaperJobRegistry([PaperJobDefinition(job.job_key, SlowDurableBinding())])
+    with pytest.raises(RuntimeError, match="PAPER_SCHEDULER_RUN_STALE"):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            (job,),
+            now=lambda: clock[0],
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job.job_run_id) is None
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_scheduler_allows_binding_at_exact_lateness_deadline() -> None:
+    """The boundary remains inclusive; only work beyond the deadline is rejected."""
+    from uuid import uuid4
+
+    engine = _engine()
+    start = datetime(2026, 10, 14, 6, 10, tzinfo=UTC)
+    clock = [start]
+    job = create_scheduled_job_run(
+        f"paper-batch-boundary-bind-{uuid4()}",
+        start - timedelta(minutes=4),
+    )
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+
+    class BoundaryDurableBinding:
+        def bind(self, connection):
+            clock[0] = start + timedelta(minutes=1)
+            return lambda runtime: calls.append(job.job_run_id)
+
+    registry = PaperJobRegistry([PaperJobDefinition(job.job_key, BoundaryDurableBinding())])
+    result = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        (job,),
+        now=lambda: clock[0],
+        max_lateness=timedelta(minutes=5),
+    )
+
+    assert calls == [job.job_run_id]
+    assert result[0][1] is not None and result[0][1].value == "EXECUTED"
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job.job_run_id).status is JobRunStatus.SUCCEEDED
+    engine.dispose()

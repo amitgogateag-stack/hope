@@ -268,6 +268,7 @@ def run_paper_once(
     registry: PaperJobRegistry,
     *,
     now: Callable[[], datetime],
+    claim_window: tuple[datetime, datetime] | None = None,
 ) -> PaperCycleOutcome:
     """Execute exactly one registered PAPER job and durably preserve terminal state.
 
@@ -292,6 +293,33 @@ def run_paper_once(
             if isinstance(registered_work, ConnectionBoundPaperJob)
             else registered_work
         )
+        # A connection-bound handler may spend time reading PIT market inputs.
+        # The scheduler's pre-bind deadline check cannot authorize a claim
+        # after that preparation crosses the permitted execution window.
+        if claim_window is not None:
+            if (
+                not isinstance(claim_window, tuple)
+                or len(claim_window) != 2
+                or any(
+                    not isinstance(bound, datetime)
+                    or bound.tzinfo is None
+                    or bound.utcoffset() is None
+                    for bound in claim_window
+                )
+            ):
+                raise ValueError("PAPER_ONE_SHOT_CLAIM_WINDOW_INVALID")
+            claim_time = now()
+            if (
+                not isinstance(claim_time, datetime)
+                or claim_time.tzinfo is None
+                or claim_time.utcoffset() is None
+            ):
+                raise ValueError("PAPER_ONE_SHOT_CLAIM_TIME_MUST_BE_AWARE")
+            earliest, latest = claim_window
+            if claim_time < earliest or claim_time < job_run.scheduled_for:
+                raise RuntimeError("PAPER_SCHEDULER_CLOCK_REGRESSION")
+            if claim_time > latest:
+                raise RuntimeError("PAPER_SCHEDULER_RUN_STALE")
         # The runner records FAILED inside its transaction before re-raising
         # application errors. Without a savepoint, previously written PAPER
         # effects would commit alongside FAILED and poison restart recovery.
