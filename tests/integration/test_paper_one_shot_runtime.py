@@ -77,7 +77,9 @@ def _prepare_job(engine, job_run) -> None:
         )
 
 
-def _insert_durable_decision_inputs(engine, as_of):
+def _insert_durable_decision_inputs(
+    engine, as_of, *, second_bar_effective_time=None, second_bar_ingestion_time=None,
+):
     universe_id = uuid4()
     universe_version_id = uuid4()
     instrument_id = uuid4()
@@ -165,10 +167,10 @@ def _insert_durable_decision_inputs(engine, as_of):
             text(
                 "INSERT INTO market_bars("
                 "dataset_version_id, instrument_id, event_time, available_time, ingestion_time, "
-                "open, high, low, close, volume"
+                "effective_time, open, high, low, close, volume"
                 ") VALUES ("
                 ":dataset_version_id, :instrument_id, :event_time, :available_time, :ingestion_time, "
-                "999, 999, 999, 999, 1000"
+                ":effective_time, 999, 999, 999, 999, 1000"
                 ")"
             ),
             {
@@ -176,7 +178,8 @@ def _insert_durable_decision_inputs(engine, as_of):
                 "instrument_id": instrument_id,
                 "event_time": as_of - timedelta(minutes=2),
                 "available_time": as_of - timedelta(minutes=1),
-                "ingestion_time": as_of + timedelta(minutes=1),
+                "ingestion_time": second_bar_ingestion_time or as_of + timedelta(minutes=1),
+                "effective_time": second_bar_effective_time,
             },
         )
         SqlAlchemyMarketDataVersionFinalizer(connection).finalize(
@@ -334,6 +337,94 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
     assert tuple(member.instrument_id for member in members) == (instrument_id,)
     assert received_parameters is parameters
     assert len(inputs_hash) == 64
+
+
+@pytest.mark.integration
+def test_durable_strategy_excludes_future_effective_bar_from_sealed_postgres() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-future-effective-bar",
+        datetime(2026, 10, 14, 13, 40, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, instrument_id, dataset_version_id = (
+        _insert_durable_decision_inputs(
+            engine,
+            job_run.scheduled_for,
+            second_bar_effective_time=job_run.scheduled_for + timedelta(microseconds=1),
+            second_bar_ingestion_time=job_run.scheduled_for - timedelta(seconds=30),
+        )
+    )
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry([
+        PaperJobDefinition(
+            job_run.job_key,
+            DurableUniversePaperStrategyDecision(
+                strategy, dataset_version_id, job_run.scheduled_for,
+                universe_version_id, _Parameters(),
+                PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
+            ),
+        )
+    ])
+
+    assert run_paper_once(
+        engine, job_run, registry,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+    ) is PaperCycleOutcome.EXECUTED
+    assert len(strategy.calls) == 1
+    context = strategy.calls[0][0]
+    assert len(context.bars) == 1
+    assert context.bars[0].instrument_id == str(instrument_id)
+    assert context.bars[0].close == Decimal("100")
+    assert context.bars[0].event_time == job_run.scheduled_for - timedelta(minutes=5)
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
+        assert connection.execute(
+            text("SELECT count(*) FROM market_bars WHERE dataset_version_id=:id"),
+            {"id": dataset_version_id},
+        ).scalar_one() == 2
+    engine.dispose()
+
+
+@pytest.mark.integration
+def test_future_effective_bar_cannot_bypass_paper_freshness_gate() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-future-effective-stale",
+        datetime(2026, 10, 14, 13, 41, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, _, dataset_version_id = (
+        _insert_durable_decision_inputs(
+            engine,
+            job_run.scheduled_for,
+            second_bar_effective_time=job_run.scheduled_for + timedelta(seconds=1),
+            second_bar_ingestion_time=job_run.scheduled_for - timedelta(seconds=30),
+        )
+    )
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry([
+        PaperJobDefinition(
+            job_run.job_key,
+            DurableUniversePaperStrategyDecision(
+                strategy, dataset_version_id, job_run.scheduled_for,
+                universe_version_id, _Parameters(),
+                PaperMarketDataFreshnessPolicy(timedelta(minutes=4)),
+            ),
+        )
+    ])
+
+    with pytest.raises(RuntimeError, match="PAPER_MARKET_DATA_STALE"):
+        run_paper_once(
+            engine, job_run, registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+    assert strategy.calls == []
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id) is None
+    engine.dispose()
 
 
 @pytest.mark.integration
