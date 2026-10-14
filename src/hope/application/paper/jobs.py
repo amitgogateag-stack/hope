@@ -68,8 +68,12 @@ class PaperStrategyDecisionJob:
         as_of = self.market_context.as_of
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("PAPER_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")
-        if as_of.astimezone(timezone.utc) > runtime.cycle.job_run.scheduled_for:
+        scheduled_for = runtime.cycle.job_run.scheduled_for
+        canonical_as_of = as_of.astimezone(timezone.utc)
+        if canonical_as_of > scheduled_for:
             raise ValueError("PAPER_DECISION_AFTER_JOB_SCHEDULE")
+        if canonical_as_of < scheduled_for:
+            raise ValueError("PAPER_DECISION_BEFORE_JOB_SCHEDULE")
 
         expected_inputs_hash = paper_decision_inputs_hash(
             self.strategy,

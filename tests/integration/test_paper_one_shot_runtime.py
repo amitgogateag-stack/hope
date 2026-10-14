@@ -582,6 +582,57 @@ def test_durable_strategy_decision_missing_dataset_fails_before_lifecycle_claim(
 
 
 @pytest.mark.integration
+def test_durable_strategy_rejects_historically_fresh_context_before_schedule() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-historically-fresh-context",
+        datetime(2026, 10, 14, 14, 30, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    historical_as_of = job_run.scheduled_for - timedelta(hours=1)
+    _, universe_version_id, _, dataset_version_id = _insert_durable_decision_inputs(
+        engine,
+        historical_as_of,
+    )
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                job_run.job_key,
+                DurableUniversePaperStrategyDecision(
+                    strategy,
+                    dataset_version_id,
+                    historical_as_of,
+                    universe_version_id,
+                    _Parameters(),
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
+                ),
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="PAPER_DECISION_BEFORE_JOB_SCHEDULE"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert strategy.calls == []
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.failure_code == "ValueError"
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:run_id"),
+            {"run_id": job_run.job_run_id},
+        ).scalar_one() == 0
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_durable_strategy_decision_fails_closed_on_stale_market_data_before_claim() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(
