@@ -298,3 +298,95 @@ def test_recovery_does_not_acknowledge_legacy_pnl_as_reconcilable(monkeypatch) -
     assert report.assessments[0].lineage_verified is False
     assert report.assessments[0].decision is PaperRecoveryDecision.REQUIRE_RECONCILIATION
     assert report.completed_effect_run_ids == frozenset()
+
+
+def test_failed_terminal_with_durable_effects_is_rejected(monkeypatch) -> None:
+    """FAILED lifecycle state cannot hide committed PAPER execution effects."""
+    current = datetime(2026, 10, 14, 3, 0, tzinfo=UTC)
+    failed = create_scheduled_job_run(
+        "paper:failed-with-effects",
+        current - timedelta(minutes=1),
+    )
+    effects = (SimpleNamespace(effect_type=PaperEffectType.SIGNAL),)
+
+    class FakeJobs:
+        def __init__(self, connection):
+            pass
+
+        def get_record_for_run(self, job_run):
+            assert job_run == failed
+            return SimpleNamespace(status=JobRunStatus.FAILED)
+
+    class FakeEffects:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            assert job_run_id == failed.job_run_id
+            return effects
+
+    monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeJobs)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffects)
+
+    report = assess_due_paper_recovery(
+        object(),
+        (failed,),
+        current=current,
+        max_lateness=timedelta(minutes=5),
+    )
+    assessment = report.assessments[0]
+
+    assert assessment.disposition is PaperRecoveryDisposition.TERMINAL
+    assert assessment.status is JobRunStatus.FAILED
+    assert assessment.durable_effect_types == frozenset({PaperEffectType.SIGNAL})
+    assert assessment.effect_counts == ((PaperEffectType.SIGNAL, 1),)
+    assert assessment.terminal_effect_conflict is True
+    assert (
+        assessment.decision
+        is PaperRecoveryDecision.REJECT_TERMINAL_EFFECT_CONFLICT
+    )
+    assert report.terminal_effect_conflict_run_ids == frozenset(
+        {failed.job_run_id}
+    )
+    assert report.reconciliation_run_ids == frozenset()
+    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
+        report.assert_safe_to_execute()
+
+
+def test_failed_terminal_without_effects_remains_acknowledged(monkeypatch) -> None:
+    """Ordinary pre-effect failures remain terminal and do not block later work."""
+    current = datetime(2026, 10, 14, 3, 5, tzinfo=UTC)
+    failed = create_scheduled_job_run(
+        "paper:failed-without-effects",
+        current - timedelta(minutes=1),
+    )
+
+    class FakeJobs:
+        def __init__(self, connection):
+            pass
+
+        def get_record_for_run(self, job_run):
+            return SimpleNamespace(status=JobRunStatus.FAILED)
+
+    class FakeEffects:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            return ()
+
+    monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeJobs)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffects)
+
+    report = assess_due_paper_recovery(
+        object(),
+        (failed,),
+        current=current,
+        max_lateness=timedelta(minutes=5),
+    )
+    assessment = report.assessments[0]
+
+    assert assessment.terminal_effect_conflict is False
+    assert assessment.decision is PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL
+    assert report.terminal_effect_conflict_run_ids == frozenset()
+    report.assert_safe_to_execute()

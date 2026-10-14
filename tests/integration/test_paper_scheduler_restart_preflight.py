@@ -1,5 +1,6 @@
 import os
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -7,9 +8,12 @@ import pytest
 from sqlalchemy import create_engine, text
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
+from hope.application.paper import PaperCycleContext, PaperSignalWriter
+from hope.domain.signal.models import Signal, SignalType
 from hope.infrastructure.paper_runtime import PaperJobDefinition, PaperJobRegistry
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.scheduling.paper import (
     _PAPER_SCHEDULER_LOCK_NAME,
     run_due_operational_paper_jobs,
@@ -489,3 +493,111 @@ def test_scheduler_lock_is_released_after_failed_paper_work() -> None:
         assert record.status is JobRunStatus.FAILED
         assert record.failure_code == "RuntimeError"
 
+
+
+@pytest.mark.integration
+def test_failed_prior_run_with_durable_effect_blocks_entire_due_batch() -> None:
+    """A FAILED job cannot hide committed execution truth from restart preflight."""
+    engine = _engine()
+    now = datetime(2026, 10, 14, 3, 10, tzinfo=UTC)
+    suffix = uuid4()
+    failed = create_scheduled_job_run(
+        f"paper-batch-failed-with-effect-{suffix}",
+        now - timedelta(minutes=2),
+    )
+    fresh = create_scheduled_job_run(
+        f"paper-batch-fresh-after-effect-failure-{suffix}",
+        now - timedelta(minutes=1),
+    )
+    instrument_id = uuid4()
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {
+                "id": instrument_id,
+                "symbol": f"FAILED-EFFECT-{str(instrument_id)[:8]}",
+            },
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(failed) is True
+        context = PaperCycleContext(failed)
+        decision_time = failed.scheduled_for
+        signal_id = context.signal_id(
+            instrument_id=instrument_id,
+            strategy_version="failed-effect-recovery-v1",
+            decision_time=decision_time,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="d" * 64,
+        )
+        signal = Signal(
+            signal_id=signal_id,
+            instrument_id=instrument_id,
+            strategy_version="failed-effect-recovery-v1",
+            decision_time=decision_time,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="d" * 64,
+        )
+        assert PaperSignalWriter(
+            SqlAlchemyPaperSignalRepository(connection)
+        ).record(context, signal)
+        assert jobs.complete(
+            create_job_run_completion(
+                failed,
+                JobRunStatus.FAILED,
+                failed.scheduled_for + timedelta(seconds=30),
+                failure_code="FAILED_AFTER_DURABLE_EFFECT",
+            )
+        ) is True
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                failed.job_key,
+                lambda runtime: calls.append(failed.job_run_id),
+            ),
+            PaperJobDefinition(
+                fresh.job_key,
+                lambda runtime: calls.append(fresh.job_run_id),
+            ),
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT",
+    ):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            [fresh, failed],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+    with engine.connect() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
+        failed_record = jobs.get_record(failed.job_run_id)
+        assert failed_record is not None
+        assert failed_record.status is JobRunStatus.FAILED
+        assert failed_record.failure_code == "FAILED_AFTER_DURABLE_EFFECT"
+        assert jobs.get_record(fresh.job_run_id) is None
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE job_run_id=:job_run_id"
+            ),
+            {"job_run_id": failed.job_run_id},
+        ).scalar_one() == 1
+
+    engine.dispose()

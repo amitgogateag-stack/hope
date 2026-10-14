@@ -39,6 +39,7 @@ class PaperRecoveryDecision(str, Enum):
     ACKNOWLEDGE_COMPLETE_EFFECTS = "ACKNOWLEDGE_COMPLETE_EFFECTS"
     REQUIRE_RECONCILIATION = "REQUIRE_RECONCILIATION"
     REJECT_STALE = "REJECT_STALE"
+    REJECT_TERMINAL_EFFECT_CONFLICT = "REJECT_TERMINAL_EFFECT_CONFLICT"
 
 
 def _classify_recovery_evidence(
@@ -73,6 +74,15 @@ class PaperRecoveryAssessment:
         return bool(self.durable_effect_types)
 
     @property
+    def terminal_effect_conflict(self) -> bool:
+        """A failed terminal run must never own durable execution effects."""
+        return (
+            self.disposition is PaperRecoveryDisposition.TERMINAL
+            and self.status is JobRunStatus.FAILED
+            and self.has_durable_effects
+        )
+
+    @property
     def evidence(self) -> PaperRecoveryEvidence:
         if self.effect_counts:
             topology = classify_paper_effect_topology(
@@ -85,6 +95,8 @@ class PaperRecoveryAssessment:
 
     @property
     def decision(self) -> PaperRecoveryDecision:
+        if self.terminal_effect_conflict:
+            return PaperRecoveryDecision.REJECT_TERMINAL_EFFECT_CONFLICT
         if self.disposition is PaperRecoveryDisposition.FRESH:
             return PaperRecoveryDecision.EXECUTE_FRESH
         if self.disposition is PaperRecoveryDisposition.TERMINAL:
@@ -103,6 +115,14 @@ class PaperRecoveryReport:
     @property
     def terminal_run_ids(self) -> frozenset[UUID]:
         return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.TERMINAL)
+
+    @property
+    def terminal_effect_conflict_run_ids(self) -> frozenset[UUID]:
+        return frozenset(
+            item.job_run_id
+            for item in self.assessments
+            if item.terminal_effect_conflict
+        )
 
     @property
     def succeeded_run_ids(self) -> frozenset[UUID]:
@@ -134,6 +154,8 @@ class PaperRecoveryReport:
         return frozenset(item.job_run_id for item in self.assessments if item.disposition is PaperRecoveryDisposition.STALE)
 
     def assert_safe_to_execute(self) -> None:
+        if self.terminal_effect_conflict_run_ids:
+            raise RuntimeError("PAPER_JOB_TERMINAL_EFFECT_CONFLICT")
         if self.incomplete_run_ids:
             raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
         if self.stale_run_ids:
@@ -170,6 +192,16 @@ def assess_due_paper_recovery(
                 )
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
+            if record.status is JobRunStatus.FAILED:
+                # A normal failed run has no committed effects. Any durable
+                # effect owned by FAILED work is contradictory lifecycle truth:
+                # it is neither recoverable nor safe to ignore as terminal.
+                run_effects = effects.list_for_job_run(job_run.job_run_id)
+                counts = Counter(effect.effect_type for effect in run_effects)
+                durable_effect_types = frozenset(counts)
+                effect_counts = tuple(
+                    sorted(counts.items(), key=lambda item: item[0].value)
+                )
         elif current - job_run.scheduled_for > max_lateness:
             disposition = PaperRecoveryDisposition.STALE
         else:
