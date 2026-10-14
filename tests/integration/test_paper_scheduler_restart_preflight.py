@@ -601,3 +601,109 @@ def test_failed_prior_run_with_durable_effect_blocks_entire_due_batch() -> None:
         ).scalar_one() == 1
 
     engine.dispose()
+
+@pytest.mark.integration
+def test_succeeded_prior_run_with_partial_effect_blocks_entire_due_batch() -> None:
+    """A terminal success cannot hide an incomplete durable PAPER effect chain."""
+    engine = _engine()
+    now = datetime(2026, 10, 14, 6, 10, tzinfo=UTC)
+    suffix = uuid4()
+    succeeded = create_scheduled_job_run(
+        f"paper-batch-succeeded-with-partial-effect-{suffix}",
+        now - timedelta(minutes=2),
+    )
+    fresh = create_scheduled_job_run(
+        f"paper-batch-fresh-after-partial-success-{suffix}",
+        now - timedelta(minutes=1),
+    )
+    instrument_id = uuid4()
+    calls = []
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {
+                "id": instrument_id,
+                "symbol": f"SUCCESS-PARTIAL-{str(instrument_id)[:8]}",
+            },
+        )
+        jobs = SqlAlchemyJobRunRepository(connection)
+        assert jobs.claim(succeeded) is True
+        context = PaperCycleContext(succeeded)
+        decision_time = succeeded.scheduled_for
+        signal_id = context.signal_id(
+            instrument_id=instrument_id,
+            strategy_version="succeeded-partial-recovery-v1",
+            decision_time=decision_time,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="e" * 64,
+        )
+        signal = Signal(
+            signal_id=signal_id,
+            instrument_id=instrument_id,
+            strategy_version="succeeded-partial-recovery-v1",
+            decision_time=decision_time,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="e" * 64,
+        )
+        assert PaperSignalWriter(
+            SqlAlchemyPaperSignalRepository(connection)
+        ).record(context, signal)
+        assert jobs.complete(
+            create_job_run_completion(
+                succeeded,
+                JobRunStatus.SUCCEEDED,
+                succeeded.scheduled_for + timedelta(seconds=30),
+            )
+        ) is True
+
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                succeeded.job_key,
+                lambda runtime: calls.append(succeeded.job_run_id),
+            ),
+            PaperJobDefinition(
+                fresh.job_key,
+                lambda runtime: calls.append(fresh.job_run_id),
+            ),
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT",
+    ):
+        run_due_operational_paper_jobs(
+            engine,
+            registry,
+            [fresh, succeeded],
+            now=lambda: now,
+            max_lateness=timedelta(minutes=5),
+        )
+
+    assert calls == []
+    with engine.connect() as connection:
+        jobs = SqlAlchemyJobRunRepository(connection)
+        succeeded_record = jobs.get_record(succeeded.job_run_id)
+        assert succeeded_record is not None
+        assert succeeded_record.status is JobRunStatus.SUCCEEDED
+        assert jobs.get_record(fresh.job_run_id) is None
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE job_run_id=:job_run_id"
+            ),
+            {"job_run_id": succeeded.job_run_id},
+        ).scalar_one() == 1
+
+    engine.dispose()
+

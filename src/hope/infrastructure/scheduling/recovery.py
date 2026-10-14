@@ -75,12 +75,17 @@ class PaperRecoveryAssessment:
 
     @property
     def terminal_effect_conflict(self) -> bool:
-        """A failed terminal run must never own durable execution effects."""
-        return (
-            self.disposition is PaperRecoveryDisposition.TERMINAL
-            and self.status is JobRunStatus.FAILED
-            and self.has_durable_effects
-        )
+        """Reject terminal lifecycle state that contradicts durable effect truth."""
+        if self.disposition is not PaperRecoveryDisposition.TERMINAL:
+            return False
+        if self.status is JobRunStatus.FAILED:
+            return self.has_durable_effects
+        if self.status is JobRunStatus.SUCCEEDED and self.has_durable_effects:
+            return (
+                self.evidence is not PaperRecoveryEvidence.COMPLETE
+                or not self.lineage_verified
+            )
+        return False
 
     @property
     def evidence(self) -> PaperRecoveryEvidence:
@@ -192,15 +197,21 @@ def assess_due_paper_recovery(
                 )
         elif record is not None:
             disposition = PaperRecoveryDisposition.TERMINAL
-            if record.status is JobRunStatus.FAILED:
-                # A normal failed run has no committed effects. Any durable
-                # effect owned by FAILED work is contradictory lifecycle truth:
-                # it is neither recoverable nor safe to ignore as terminal.
-                run_effects = effects.list_for_job_run(job_run.job_run_id)
-                counts = Counter(effect.effect_type for effect in run_effects)
-                durable_effect_types = frozenset(counts)
-                effect_counts = tuple(
-                    sorted(counts.items(), key=lambda item: item[0].value)
+            run_effects = effects.list_for_job_run(job_run.job_run_id)
+            counts = Counter(effect.effect_type for effect in run_effects)
+            durable_effect_types = frozenset(counts)
+            effect_counts = tuple(
+                sorted(counts.items(), key=lambda item: item[0].value)
+            )
+            if (
+                record.status is JobRunStatus.SUCCEEDED
+                and classify_paper_effect_topology(
+                    effect.effect_type for effect in run_effects
+                )
+                is PaperEffectTopology.COMPLETE
+            ):
+                lineage_verified = verify_paper_recovery_lineage(
+                    connection, run_effects, require_portfolio_pnl=True,
                 )
         elif current - job_run.scheduled_for > max_lateness:
             disposition = PaperRecoveryDisposition.STALE

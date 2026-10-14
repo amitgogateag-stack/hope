@@ -390,3 +390,109 @@ def test_failed_terminal_without_effects_remains_acknowledged(monkeypatch) -> No
     assert assessment.decision is PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL
     assert report.terminal_effect_conflict_run_ids == frozenset()
     report.assert_safe_to_execute()
+
+def _terminal_effects(*effect_types: PaperEffectType):
+    return tuple(SimpleNamespace(effect_type=kind) for kind in effect_types)
+
+
+def test_succeeded_terminal_with_partial_effects_is_rejected(monkeypatch) -> None:
+    """SUCCEEDED cannot silently bless an incomplete durable execution chain."""
+    current = datetime(2026, 10, 14, 6, 0, tzinfo=UTC)
+    succeeded = create_scheduled_job_run("paper:succeeded-partial", current)
+
+    class FakeJobs:
+        def __init__(self, connection):
+            pass
+
+        def get_record_for_run(self, job_run):
+            assert job_run == succeeded
+            return SimpleNamespace(status=JobRunStatus.SUCCEEDED)
+
+    class FakeEffects:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            assert job_run_id == succeeded.job_run_id
+            return _terminal_effects(PaperEffectType.SIGNAL)
+
+    monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeJobs)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffects)
+
+    report = assess_due_paper_recovery(
+        object(), (succeeded,), current=current, max_lateness=timedelta(minutes=5),
+    )
+    assessment = report.assessments[0]
+
+    assert assessment.status is JobRunStatus.SUCCEEDED
+    assert assessment.evidence is PaperRecoveryEvidence.PARTIAL
+    assert assessment.lineage_verified is False
+    assert assessment.terminal_effect_conflict is True
+    assert (
+        assessment.decision
+        is PaperRecoveryDecision.REJECT_TERMINAL_EFFECT_CONFLICT
+    )
+    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
+        report.assert_safe_to_execute()
+
+
+@pytest.mark.parametrize("lineage_verified", [False, True])
+def test_succeeded_terminal_complete_effects_require_verified_lineage(
+    monkeypatch, lineage_verified: bool,
+) -> None:
+    current = datetime(2026, 10, 14, 6, 5, tzinfo=UTC)
+    succeeded = create_scheduled_job_run("paper:succeeded-complete", current)
+    effects = _terminal_effects(
+        PaperEffectType.SIGNAL,
+        PaperEffectType.RISK,
+        PaperEffectType.ORDER,
+        PaperEffectType.FILL,
+        PaperEffectType.PNL,
+    )
+
+    class FakeJobs:
+        def __init__(self, connection):
+            pass
+
+        def get_record_for_run(self, job_run):
+            return SimpleNamespace(status=JobRunStatus.SUCCEEDED)
+
+    class FakeEffects:
+        def __init__(self, connection):
+            pass
+
+        def list_for_job_run(self, job_run_id):
+            return effects
+
+    verified = []
+
+    def verify_lineage(connection, run_effects, *, require_portfolio_pnl):
+        assert run_effects == effects
+        assert require_portfolio_pnl is True
+        verified.append(True)
+        return lineage_verified
+
+    monkeypatch.setattr(recovery, "SqlAlchemyJobRunRepository", FakeJobs)
+    monkeypatch.setattr(recovery, "SqlAlchemyPaperEffectRepository", FakeEffects)
+    monkeypatch.setattr(recovery, "verify_paper_recovery_lineage", verify_lineage)
+
+    report = assess_due_paper_recovery(
+        object(), (succeeded,), current=current, max_lateness=timedelta(minutes=5),
+    )
+    assessment = report.assessments[0]
+
+    assert verified == [True]
+    assert assessment.evidence is PaperRecoveryEvidence.COMPLETE
+    assert assessment.lineage_verified is lineage_verified
+    assert assessment.terminal_effect_conflict is (not lineage_verified)
+    if lineage_verified:
+        assert assessment.decision is PaperRecoveryDecision.ACKNOWLEDGE_TERMINAL
+        report.assert_safe_to_execute()
+    else:
+        assert (
+            assessment.decision
+            is PaperRecoveryDecision.REJECT_TERMINAL_EFFECT_CONFLICT
+        )
+        with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
+            report.assert_safe_to_execute()
+
