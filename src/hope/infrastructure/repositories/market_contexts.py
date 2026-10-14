@@ -222,13 +222,8 @@ class PITMarketContextRepository:
         statement = text(
             "SELECT instrument_id, event_time, available_time, effective_time, ingestion_time, "
             "open, high, low, close, volume "
-            "FROM market_bars "
-            "WHERE dataset_version_id = :dataset_version_id "
-            "AND instrument_id IN :instrument_ids "
-            "AND event_time <= :as_of "
-            "AND available_time <= :as_of "
-            "AND ingestion_time <= :as_of "
-            "AND (effective_time IS NULL OR effective_time <= :as_of) "
+            "FROM hope_pit_market_bars(:dataset_version_id, :as_of) "
+            "WHERE instrument_id IN :instrument_ids "
             "ORDER BY event_time, available_time, ingestion_time, instrument_id"
         ).bindparams(bindparam("instrument_ids", expanding=True))
         rows = self._connection.execute(

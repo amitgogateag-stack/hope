@@ -448,6 +448,18 @@ def test_durable_strategy_excludes_future_effective_bar_from_sealed_postgres() -
             text("SELECT count(*) FROM market_bars WHERE dataset_version_id=:id"),
             {"id": dataset_version_id},
         ).scalar_one() == 2
+        visible_close = connection.execute(
+            text(
+                "SELECT close FROM hope_pit_market_bars(:id, :as_of) "
+                "WHERE instrument_id=:instrument_id"
+            ),
+            {
+                "id": dataset_version_id,
+                "as_of": job_run.scheduled_for,
+                "instrument_id": instrument_id,
+            },
+        ).scalar_one()
+        assert visible_close == Decimal("100")
     engine.dispose()
 
 

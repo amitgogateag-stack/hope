@@ -514,3 +514,13 @@ def test_paper_terminal_requires_recoverable_source_risk_effect_owner():
     assert "FOR UPDATE" in sql
     assert "DEFERRABLE INITIALLY DEFERRED" in sql
     assert "AFTER INSERT ON paper_order_terminal_events" in sql
+
+
+def test_postgres_pit_market_bar_visibility_enforces_all_information_clocks():
+    sql = (ROOT / "migrations/220_pit_market_bar_visibility.sql").read_text()
+    assert "CREATE OR REPLACE FUNCTION hope_pit_market_bars" in sql
+    assert "bar.event_time <= p_as_of" in sql
+    assert "bar.available_time <= p_as_of" in sql
+    assert "bar.ingestion_time <= p_as_of" in sql
+    assert "bar.effective_time IS NULL OR bar.effective_time <= p_as_of" in sql
+    assert "LANGUAGE sql STABLE" in sql
