@@ -852,6 +852,71 @@ def test_scheduler_preflight_rejects_persisted_incomplete_claim() -> None:
 
 
 @pytest.mark.integration
+def test_scheduler_preflight_rejects_terminal_partial_effect_topology() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        f"paper-scheduler-terminal-partial-{uuid4()}",
+        datetime(2026, 10, 14, 8, 15, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    instrument_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {
+                "id": instrument_id,
+                "symbol": f"TERMINAL-PARTIAL-{str(instrument_id)[:8]}",
+            },
+        )
+
+    def write_partial_terminal_effect(runtime) -> None:
+        signal = Signal(
+            signal_id=runtime.cycle.signal_id(
+                instrument_id=instrument_id,
+                strategy_version="terminal-partial-v1",
+                decision_time=job_run.scheduled_for,
+                signal_type=SignalType.ENTRY,
+                conviction=Decimal("0.75"),
+                inputs_hash="f" * 64,
+            ),
+            instrument_id=instrument_id,
+            strategy_version="terminal-partial-v1",
+            decision_time=job_run.scheduled_for,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="f" * 64,
+        )
+        assert runtime.record_signal(signal) is True
+
+    registry = PaperJobRegistry(
+        [PaperJobDefinition(job_run.job_key, write_partial_terminal_effect)]
+    )
+    assert run_paper_once(
+        engine,
+        job_run,
+        registry,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+    ) is PaperCycleOutcome.EXECUTED
+
+    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
+        _preflight_due_paper_job_states(engine, [job_run])
+
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.SUCCEEDED
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:run_id"),
+            {"run_id": job_run.job_run_id},
+        ).scalar_one() == 1
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_failed_paper_work_rolls_back_partial_signal_and_effect_before_terminalizing() -> None:
     """A FAILED one-shot job must never commit execution effects from its failed attempt."""
     engine = _engine()

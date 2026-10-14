@@ -220,9 +220,13 @@ def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[Scheduled
         return frozenset()
     current = max(run.scheduled_for for run in runs)
     with engine.connect() as connection:
-        recovery = assess_due_paper_recovery(connection, runs, current=current, max_lateness=timedelta.max)
-        if recovery.incomplete_run_ids:
-            raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")
+        recovery = assess_due_paper_recovery(
+            connection,
+            runs,
+            current=current,
+            max_lateness=timedelta.max,
+        )
+        recovery.assert_safe_to_execute()
         return recovery.terminal_run_ids
 
 
