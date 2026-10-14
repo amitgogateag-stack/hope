@@ -232,8 +232,8 @@ def test_paper_effects_are_durable_idempotent_and_require_claimed_job() -> None:
 
 
 @pytest.mark.integration
-def test_failed_owner_cannot_reuse_its_own_durable_effect_after_restart() -> None:
-    """Same-run identity must not bypass terminal FAILED owner verification."""
+def test_job_with_durable_paper_effect_cannot_transition_to_failed() -> None:
+    """Reject contradictory terminal state before restart recovery is needed."""
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         pytest.skip("HOPE_DATABASE_URL is not configured")
@@ -245,7 +245,6 @@ def test_failed_owner_cannot_reuse_its_own_durable_effect_after_restart() -> Non
     )
     effect = create_paper_effect(run, PaperEffectType.SIGNAL, uuid4(), PAYLOAD)
     try:
-        # A committed FAILED job is the restart boundary under test.
         with engine.begin() as connection:
             apply_migrations(connection, migrations_dir)
             jobs = SqlAlchemyJobRunRepository(connection)
@@ -255,19 +254,32 @@ def test_failed_owner_cannot_reuse_its_own_durable_effect_after_restart() -> Non
             assert effects.get_reusable_for_job(
                 effect.effect_type, effect.entity_id, run.job_run_id,
             ) == effect
-            assert jobs.complete(create_job_run_completion(
-                run, JobRunStatus.FAILED,
-                run.scheduled_for + timedelta(minutes=1),
-                failure_code="EXPECTED_FAILED_SELF_REUSE",
-            )) is True
+            with pytest.raises(
+                IntegrityError,
+                match="PAPER_JOB_FAILURE_WITH_DURABLE_EFFECTS",
+            ):
+                with connection.begin_nested():
+                    jobs.complete(create_job_run_completion(
+                        run, JobRunStatus.FAILED,
+                        run.scheduled_for + timedelta(minutes=1),
+                        failure_code="EXPECTED_FAILED_SELF_REUSE",
+                    ))
 
-        with engine.begin() as connection:
-            effects = SqlAlchemyPaperEffectRepository(connection)
-            with pytest.raises(ValueError, match="PAPER_EFFECT_IDENTITY_CONFLICT"):
-                effects.get_reusable_for_job(
-                    effect.effect_type, effect.entity_id, run.job_run_id,
-                )
-            with pytest.raises(ValueError, match="PAPER_EFFECT_OWNER_NOT_RECOVERABLE"):
-                effects.get_recoverable(effect.effect_type, effect.entity_id)
+            record = jobs.get_record(run.job_run_id)
+            assert record is not None
+            assert record.status is JobRunStatus.CLAIMED
+            assert effects.get_reusable_for_job(
+                effect.effect_type, effect.entity_id, run.job_run_id,
+            ) == effect
+
+            # A durable effect may still complete successfully after its
+            # accounting and reconciliation contract has been proven.
+            assert jobs.complete(create_job_run_completion(
+                run, JobRunStatus.SUCCEEDED,
+                run.scheduled_for + timedelta(minutes=1),
+            )) is True
+            assert effects.get_recoverable(
+                effect.effect_type, effect.entity_id,
+            ) == effect
     finally:
         engine.dispose()
