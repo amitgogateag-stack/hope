@@ -541,74 +541,6 @@ def test_quarantine_incomplete_claim_fails_closed_when_terminal_write_loses() ->
 
 
 
-def test_paper_runtime_rejects_fill_without_recorded_source_order() -> None:
-    job_run = make_run()
-    repository = FakeJobRunRepository()
-    fill_writer = RecordingFillAccountingWriter()
-    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
-    fill = Fill(
-        fill_id=UUID(int=101),
-        order_id=UUID(int=102),
-        signal_id=UUID(int=103),
-        instrument_id=UUID(int=104),
-        side=OrderSide.BUY,
-        quantity=Decimal("1"),
-        price=Decimal("100"),
-        commission=Decimal("0"),
-        slippage=Decimal("0"),
-        cost_model_version="paper-cycle-v1",
-        fill_time=job_run.scheduled_for,
-    )
-
-    with pytest.raises(ValueError, match="PAPER_FILL_SOURCE_ORDER_UNTRACKED"):
-        runner.run_runtime(
-            job_run,
-            RecordingSignalWriter(),
-            RecordingRiskWriter(),
-            RecordingOrderWriter(),
-            fill_writer,
-            lambda runtime: runtime.record_fill(
-                UUID(int=105),
-                Decimal("1000"),
-                fill,
-                sequence=0,
-            ),
-            terminal_writer=RecordingTerminalWriter(),
-        )
-
-    assert fill_writer.calls == []
-    assert repository.completions[0].status is JobRunStatus.FAILED
-
-
-def test_paper_runtime_rejects_terminal_without_recorded_source_order() -> None:
-    job_run = make_run()
-    repository = FakeJobRunRepository()
-    terminal_writer = RecordingTerminalWriter()
-    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
-    terminal = ExecutionRejection(
-        order_id=UUID(int=111),
-        signal_id=UUID(int=112),
-        instrument_id=UUID(int=113),
-        environment=Environment.PAPER,
-        reason_code="TEST_REJECTION",
-        rejection_time=job_run.scheduled_for,
-    )
-
-    with pytest.raises(ValueError, match="PAPER_TERMINAL_SOURCE_ORDER_UNTRACKED"):
-        runner.run_runtime(
-            job_run,
-            RecordingSignalWriter(),
-            RecordingRiskWriter(),
-            RecordingOrderWriter(),
-            RecordingFillAccountingWriter(),
-            lambda runtime: runtime.record_terminal(terminal),
-            terminal_writer=terminal_writer,
-        )
-
-    assert terminal_writer.calls == []
-    assert repository.completions[0].status is JobRunStatus.FAILED
-
-
 def test_paper_runtime_rejects_fill_after_terminal_before_persistence() -> None:
     job_run = make_run()
     repository = FakeJobRunRepository()
@@ -671,4 +603,70 @@ def test_paper_runtime_rejects_fill_after_terminal_before_persistence() -> None:
         )
 
     assert fill_writer.calls == []
+    assert repository.completions[0].status is JobRunStatus.FAILED
+
+
+
+def test_paper_runtime_rejects_rejection_after_same_run_partial_fill() -> None:
+    job_run = make_run()
+    repository = FakeJobRunRepository()
+    terminal_writer = RecordingTerminalWriter()
+    runner = PaperCycleRunner(repository, now=lambda: job_run.scheduled_for)
+    signal_id = UUID(int=131)
+    instrument_id = UUID(int=132)
+    order = Order(
+        order_id=UUID(int=133),
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("2"),
+        environment=Environment.PAPER,
+        signal_type=SignalType.ENTRY,
+    )
+    risk = RiskAssessment(
+        signal_id=signal_id,
+        decision=RiskDecision.APPROVE,
+        reason_code="PORTFOLIO_RISK_APPROVED",
+        approved_quantity=Decimal("2"),
+    )
+    fill = Fill(
+        fill_id=UUID(int=134),
+        order_id=order.order_id,
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        side=OrderSide.BUY,
+        quantity=Decimal("1"),
+        price=Decimal("100"),
+        commission=Decimal("0"),
+        slippage=Decimal("0"),
+        cost_model_version="paper-cycle-v1",
+        fill_time=job_run.scheduled_for,
+    )
+    rejection = ExecutionRejection(
+        order_id=order.order_id,
+        signal_id=signal_id,
+        instrument_id=instrument_id,
+        environment=Environment.PAPER,
+        reason_code="TEST_REJECTION",
+        rejection_time=job_run.scheduled_for,
+    )
+
+    def work(runtime) -> None:
+        runtime.record_risk(risk)
+        runtime.record_order(order)
+        runtime.record_fill(UUID(int=135), Decimal("1000"), fill, sequence=0)
+        runtime.record_terminal(rejection)
+
+    with pytest.raises(ValueError, match="PAPER_REJECTION_REQUIRES_UNFILLED_ORDER"):
+        runner.run_runtime(
+            job_run,
+            RecordingSignalWriter(),
+            RecordingRiskWriter(),
+            RecordingOrderWriter(),
+            RecordingFillAccountingWriter(),
+            work,
+            terminal_writer=terminal_writer,
+        )
+
+    assert terminal_writer.calls == []
     assert repository.completions[0].status is JobRunStatus.FAILED

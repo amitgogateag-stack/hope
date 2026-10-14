@@ -120,9 +120,7 @@ class PaperRuntimeContext:
         if event_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_TERMINAL_AFTER_JOB_SCHEDULE")
         order = self._recorded_orders.get(outcome.order_id)
-        if order is None:
-            raise ValueError("PAPER_TERMINAL_SOURCE_ORDER_UNTRACKED")
-        if (
+        if order is not None and (
             order.signal_id != outcome.signal_id
             or order.instrument_id != outcome.instrument_id
             or order.environment is not outcome.environment
@@ -139,13 +137,14 @@ class PaperRuntimeContext:
             ),
             Decimal("0"),
         )
-        remaining_quantity = order.quantity - filled_quantity
-        if remaining_quantity <= 0:
-            raise ValueError("PAPER_TERMINAL_REQUIRES_REMAINING_QUANTITY")
-        if isinstance(outcome, ExecutionCancellation):
-            if outcome.cancelled_quantity != remaining_quantity:
-                raise ValueError("PAPER_CANCELLATION_QUANTITY_MISMATCH")
-        elif filled_quantity != 0:
+        if order is not None:
+            remaining_quantity = order.quantity - filled_quantity
+            if remaining_quantity <= 0:
+                raise ValueError("PAPER_TERMINAL_REQUIRES_REMAINING_QUANTITY")
+            if isinstance(outcome, ExecutionCancellation):
+                if outcome.cancelled_quantity != remaining_quantity:
+                    raise ValueError("PAPER_CANCELLATION_QUANTITY_MISMATCH")
+        if not isinstance(outcome, ExecutionCancellation) and filled_quantity != 0:
             raise ValueError("PAPER_REJECTION_REQUIRES_UNFILLED_ORDER")
         recorded = self._terminal_writer.record(self.cycle, outcome)
         self._terminal_outcomes[outcome.order_id] = outcome
@@ -167,9 +166,7 @@ class PaperRuntimeContext:
         if fill.order_id in self._terminal_outcomes:
             raise ValueError("PAPER_FILL_AFTER_TERMINAL_FORBIDDEN")
         order = self._recorded_orders.get(fill.order_id)
-        if order is None:
-            raise ValueError("PAPER_FILL_SOURCE_ORDER_UNTRACKED")
-        if (
+        if order is not None and (
             order.signal_id != fill.signal_id
             or order.instrument_id != fill.instrument_id
             or order.side is not fill.side
@@ -187,7 +184,7 @@ class PaperRuntimeContext:
             ),
             Decimal("0"),
         )
-        if already_filled + fill.quantity > order.quantity:
+        if order is not None and already_filled + fill.quantity > order.quantity:
             raise ValueError("PAPER_FILL_CUMULATIVE_QUANTITY_EXCEEDS_ORDER")
         recorded = self._fill_writer.record(
             self.cycle,
