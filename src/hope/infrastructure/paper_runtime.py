@@ -33,6 +33,7 @@ from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepos
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
 from hope.infrastructure.repositories.paper_terminals import SqlAlchemyPaperTerminalRepository
 from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
+from hope.infrastructure.scheduling.recovery import assess_due_paper_recovery
 
 
 PaperJobWork = Callable[[PaperRuntimeContext], None]
@@ -294,6 +295,17 @@ def run_paper_once(
         durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(job_run)
         if durable is not None:
             if durable.status in (JobRunStatus.SUCCEEDED, JobRunStatus.FAILED):
+                # Direct one-shot restarts must apply the same terminal-effect
+                # authentication as scheduler preflight. A terminal job row alone
+                # cannot authorize a skip when its durable effects are partial,
+                # contradictory, or fail execution-lineage verification.
+                recovery = assess_due_paper_recovery(
+                    connection,
+                    (job_run,),
+                    current=job_run.scheduled_for,
+                    max_lateness=timedelta(0),
+                )
+                recovery.assert_safe_to_execute()
                 return PaperCycleOutcome.SKIPPED_TERMINAL
             if durable.status is JobRunStatus.CLAIMED:
                 raise RuntimeError("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM")

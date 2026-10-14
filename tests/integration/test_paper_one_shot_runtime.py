@@ -905,6 +905,16 @@ def test_scheduler_preflight_rejects_terminal_partial_effect_topology() -> None:
     with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
         _preflight_due_paper_job_states(engine, [job_run])
 
+    # The one-shot restart boundary must not bypass the same recovery proof by
+    # treating the terminal job row as sufficient evidence for an idempotent skip.
+    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=2),
+        )
+
     with engine.connect() as connection:
         record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
         assert record is not None
