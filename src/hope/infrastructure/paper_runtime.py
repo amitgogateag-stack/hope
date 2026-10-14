@@ -8,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine
 
-from hope.application.jobs import JobRunStatus, ScheduledJobRun
+from hope.application.jobs import JobRunStatus, ScheduledJobRun, create_job_run_completion
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.jobs import PaperEntryOrderDecisionJob, PaperStrategyDecisionJob
 from hope.application.paper.orders import PaperOrderWriter
@@ -258,6 +258,10 @@ class SqlAlchemyPaperRuntime:
         return self._runner.quarantine_incomplete_claim(job_run)
 
 
+class _RollbackFailedPaperWork(Exception):
+    """Internal signal: discard partial work while preserving a FAILED lifecycle."""
+
+
 def run_paper_once(
     engine: Engine,
     job_run: ScheduledJobRun,
@@ -283,18 +287,39 @@ def run_paper_once(
     with engine.begin() as connection:
         SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
         runtime = SqlAlchemyPaperRuntime(connection, now=now)
+        work = (
+            registered_work.bind(connection)
+            if isinstance(registered_work, ConnectionBoundPaperJob)
+            else registered_work
+        )
+        # The runner records FAILED inside its transaction before re-raising
+        # application errors. Without a savepoint, previously written PAPER
+        # effects would commit alongside FAILED and poison restart recovery.
+        # Roll back only the failed attempt, then persist its terminal failure.
         try:
-            work = (
-                registered_work.bind(connection)
-                if isinstance(registered_work, ConnectionBoundPaperJob)
-                else registered_work
+            with connection.begin_nested():
+                try:
+                    outcome = runtime._run_registered(job_run, work)
+                except Exception as exc:
+                    record = SqlAlchemyJobRunRepository(connection).get_record(
+                        job_run.job_run_id
+                    )
+                    if record is None or record.status is not JobRunStatus.FAILED:
+                        raise
+                    work_error = exc
+                    raise _RollbackFailedPaperWork() from exc
+        except _RollbackFailedPaperWork:
+            repository = SqlAlchemyJobRunRepository(connection)
+            if not repository.claim(job_run):
+                raise RuntimeError("PAPER_JOB_FAILURE_RECLAIM_CONFLICT")
+            completion = create_job_run_completion(
+                job_run,
+                JobRunStatus.FAILED,
+                now(),
+                failure_code=type(work_error).__name__,
             )
-            outcome = runtime._run_registered(job_run, work)
-        except Exception as exc:
-            record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
-            if record is None or record.status is not JobRunStatus.FAILED:
-                raise
-            work_error = exc
+            if not repository.complete(completion):
+                raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
 
     if work_error is not None:
         raise work_error

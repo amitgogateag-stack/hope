@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from pathlib import Path
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from sqlalchemy.exc import OperationalError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
+from hope.domain.signal.models import Signal, SignalType
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.paper_runtime import (
     DurableUniversePaperStrategyDecision,
@@ -681,3 +683,72 @@ def test_scheduler_preflight_rejects_persisted_incomplete_claim() -> None:
 
     with pytest.raises(RuntimeError, match="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"):
         _preflight_due_paper_job_states(engine, [job_run])
+
+
+@pytest.mark.integration
+def test_failed_paper_work_rolls_back_partial_signal_and_effect_before_terminalizing() -> None:
+    """A FAILED one-shot job must never commit execution effects from its failed attempt."""
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        f"paper-one-shot-partial-effect-{uuid4()}",
+        datetime(2026, 10, 14, 4, 20, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    instrument_id = uuid4()
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, :symbol, 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id, "symbol": f"FAIL-ROLLBACK-{str(instrument_id)[:8]}"},
+        )
+
+    calls = []
+
+    def write_then_fail(runtime) -> None:
+        calls.append(job_run.job_run_id)
+        signal = Signal(
+            signal_id=runtime.cycle.signal_id(
+                instrument_id=instrument_id,
+                strategy_version="failure-savepoint-v1",
+                decision_time=job_run.scheduled_for,
+                signal_type=SignalType.ENTRY,
+                conviction=Decimal("0.75"),
+                inputs_hash="e" * 64,
+            ),
+            instrument_id=instrument_id,
+            strategy_version="failure-savepoint-v1",
+            decision_time=job_run.scheduled_for,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.75"),
+            inputs_hash="e" * 64,
+        )
+        assert runtime.record_signal(signal) is True
+        raise ValueError("EXPECTED_FAILURE_AFTER_SIGNAL_EFFECT")
+
+    registry = PaperJobRegistry([PaperJobDefinition(job_run.job_key, write_then_fail)])
+    completed_at = job_run.scheduled_for + timedelta(minutes=1)
+    with pytest.raises(ValueError, match="EXPECTED_FAILURE_AFTER_SIGNAL_EFFECT"):
+        run_paper_once(engine, job_run, registry, now=lambda: completed_at)
+
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.failure_code == "ValueError"
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:run_id"),
+            {"run_id": job_run.job_run_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM signals WHERE instrument_id=:instrument_id"),
+            {"instrument_id": instrument_id},
+        ).scalar_one() == 0
+
+    assert run_paper_once(
+        engine, job_run, registry, now=lambda: completed_at + timedelta(minutes=1),
+    ) is PaperCycleOutcome.SKIPPED_TERMINAL
+    assert calls == [job_run.job_run_id]
+    engine.dispose()
