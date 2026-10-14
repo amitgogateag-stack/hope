@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from enum import Enum
 from typing import Callable, Protocol
@@ -65,6 +65,11 @@ class PaperRuntimeContext:
     )
 
     def record_signal(self, signal: Signal) -> bool:
+        decision_time = signal.decision_time
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+            raise ValueError("PAPER_SIGNAL_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")
+        if decision_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
+            raise ValueError("PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE")
         return self._signal_writer.record(self.cycle, signal)
 
     def record_risk(self, assessment: RiskAssessment) -> bool:
@@ -94,6 +99,11 @@ class PaperRuntimeContext:
         *,
         sequence: int,
     ) -> bool:
+        fill_time = fill.fill_time
+        if fill_time is None or fill_time.tzinfo is None or fill_time.utcoffset() is None:
+            raise ValueError("PAPER_FILL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if fill_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
+            raise ValueError("PAPER_FILL_AFTER_JOB_SCHEDULE")
         return self._fill_writer.record(
             self.cycle,
             portfolio_id,
