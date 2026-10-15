@@ -961,7 +961,7 @@ def test_scheduler_preflight_acknowledges_authenticated_signal_stage() -> None:
         job_run,
         registry,
         now=lambda: job_run.scheduled_for + timedelta(minutes=2),
-    ) is PaperCycleOutcome.SKIPPED
+    ) is PaperCycleOutcome.SKIPPED_TERMINAL
 
     with engine.connect() as connection:
         record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
