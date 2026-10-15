@@ -83,14 +83,30 @@ class PaperRuntimeContext:
         repr=False,
         compare=False,
     )
+    _recorded_signal_ids: set[UUID] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+        compare=False,
+    )
+    _recorded_no_trade_job_ids: set[UUID] = field(
+        default_factory=set,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     def record_signal(self, signal: Signal) -> bool:
+        if self._recorded_no_trade_job_ids:
+            raise ValueError("PAPER_NO_TRADE_EFFECT_EXCLUSIVITY")
         decision_time = signal.decision_time
         if decision_time.tzinfo is None or decision_time.utcoffset() is None:
             raise ValueError("PAPER_SIGNAL_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")
         if decision_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE")
-        return self._signal_writer.record(self.cycle, signal)
+        recorded = self._signal_writer.record(self.cycle, signal)
+        self._recorded_signal_ids.add(signal.signal_id)
+        return recorded
 
     def record_no_trade(
         self,
@@ -101,12 +117,16 @@ class PaperRuntimeContext:
     ) -> bool:
         if self._no_trade_writer is None:
             raise RuntimeError("PAPER_RUNTIME_NO_TRADE_WRITER_REQUIRED")
-        return self._no_trade_writer.record(
+        if self._recorded_signal_ids:
+            raise ValueError("PAPER_NO_TRADE_EFFECT_EXCLUSIVITY")
+        recorded = self._no_trade_writer.record(
             self.cycle,
             strategy_version=strategy_version,
             decision_time=decision_time,
             inputs_hash=inputs_hash,
         )
+        self._recorded_no_trade_job_ids.add(self.cycle.job_run.job_run_id)
+        return recorded
 
     def record_risk(self, assessment: RiskAssessment) -> bool:
         recorded = self._risk_writer.record(self.cycle, assessment)

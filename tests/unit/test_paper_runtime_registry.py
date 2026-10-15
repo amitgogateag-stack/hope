@@ -280,9 +280,65 @@ class _RecordingWriter:
     def __init__(self) -> None:
         self.calls = []
 
-    def record(self, *args):
-        self.calls.append(args)
+    def record(self, *args, **kwargs):
+        self.calls.append((args, kwargs))
         return True
+
+
+def _decision_runtime():
+    scheduled_for = datetime(2026, 10, 15, 15, 0, tzinfo=UTC)
+    job_run = create_scheduled_job_run("paper-decision-exclusivity", scheduled_for)
+    signal_writer = _RecordingWriter()
+    no_trade_writer = _RecordingWriter()
+    runtime = PaperRuntimeContext(
+        PaperCycleContext(job_run),
+        signal_writer,
+        _RecordingWriter(),
+        _RecordingWriter(),
+        _RecordingWriter(),
+        _RecordingWriter(),
+        no_trade_writer,
+    )
+    signal = Signal(
+        signal_id=uuid4(),
+        instrument_id=uuid4(),
+        strategy_version="paper-exclusive-v1",
+        decision_time=scheduled_for,
+        signal_type=SignalType.ENTRY,
+        conviction=Decimal("0.7"),
+        inputs_hash="d" * 64,
+    )
+    return runtime, signal, signal_writer, no_trade_writer
+
+
+def test_paper_runtime_rejects_signal_after_no_trade_before_persistence() -> None:
+    runtime, signal, signal_writer, no_trade_writer = _decision_runtime()
+
+    assert runtime.record_no_trade(
+        strategy_version=signal.strategy_version,
+        decision_time=signal.decision_time,
+        inputs_hash=signal.inputs_hash,
+    ) is True
+    with pytest.raises(ValueError, match="PAPER_NO_TRADE_EFFECT_EXCLUSIVITY"):
+        runtime.record_signal(signal)
+
+    assert len(no_trade_writer.calls) == 1
+    assert signal_writer.calls == []
+
+
+def test_paper_runtime_rejects_no_trade_after_signal_before_persistence() -> None:
+    runtime, signal, signal_writer, no_trade_writer = _decision_runtime()
+
+    assert runtime.record_signal(signal) is True
+    with pytest.raises(ValueError, match="PAPER_NO_TRADE_EFFECT_EXCLUSIVITY"):
+        runtime.record_no_trade(
+            strategy_version=signal.strategy_version,
+            decision_time=signal.decision_time,
+            inputs_hash=signal.inputs_hash,
+        )
+
+    assert len(signal_writer.calls) == 1
+    assert no_trade_writer.calls == []
 
 
 def test_paper_runtime_rechecks_environment_before_order_effect() -> None:

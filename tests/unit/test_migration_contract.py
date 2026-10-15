@@ -533,3 +533,15 @@ def test_no_trade_decisions_have_reciprocal_durable_recovery_evidence() -> None:
     assert "PAPER_NO_TRADE_EFFECT_REQUIRED" in sql
     assert "PAPER_NO_TRADE_DECISION_REQUIRED" in sql
     assert "ARRAY['NO_TRADE']::TEXT[]" in sql
+
+
+def test_no_trade_effect_is_exclusive_per_job_and_serialized() -> None:
+    sql = (
+        ROOT / "migrations/228_paper_no_trade_effect_exclusivity.sql"
+    ).read_text()
+    assert "PAPER_NO_TRADE_EFFECT_EXCLUSIVITY" in sql
+    assert "effect.job_run_id = NEW.job_run_id" in sql
+    assert "effect.effect_type = 'NO_TRADE'" in sql
+    assert "FROM job_runs" in sql
+    assert "FOR UPDATE" in sql
+    assert "BEFORE INSERT ON paper_effects" in sql
