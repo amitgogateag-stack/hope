@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
@@ -10,7 +9,7 @@ from uuid import UUID
 from hope.application.jobs import JobRunStatus, ScheduledJobRun
 from hope.application.paper.effect_topology import (
     PaperEffectTopology,
-    classify_paper_effect_topology,
+    classify_paper_reconciliation_effect_topology,
 )
 from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -45,19 +44,8 @@ class PaperRecoveryDecision(str, Enum):
 def _classify_recovery_topology(
     effect_types: Iterable[PaperEffectType],
 ) -> PaperEffectTopology:
-    """Recognize an atomic accounting stage without trusting its missing sources.
-
-    FILL + PNL is the complete *local* effect shape emitted by
-    PaperFillAccountingJob.  Lineage verification must still hydrate and
-    authenticate the succeeded SIGNAL, RISK, and ORDER owners before recovery
-    may acknowledge it.
-    """
-    values = tuple(effect_types)
-    if Counter(values) == Counter(
-        {PaperEffectType.FILL: 1, PaperEffectType.PNL: 1}
-    ):
-        return PaperEffectTopology.COMPLETE
-    return classify_paper_effect_topology(values)
+    """Use the shared exact reconciliation topology at every recovery boundary."""
+    return classify_paper_reconciliation_effect_topology(effect_types)
 
 
 def _classify_recovery_evidence(

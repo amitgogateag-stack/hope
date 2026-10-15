@@ -7,7 +7,9 @@ from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uu
 from sqlalchemy.dialects.postgresql import JSONB, insert as pg_insert
 
 from hope.application.jobs import JobRunRecord, JobRunStatus
-from hope.application.paper.effect_topology import require_complete_paper_effects
+from hope.application.paper.effect_topology import (
+    require_complete_paper_reconciliation_effects,
+)
 from hope.application.paper.effects import PaperEffect, _deterministic_effect_id
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
 
@@ -63,7 +65,7 @@ class SqlAlchemyPaperReconciliationAuditRepository:
             ):
                 raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_PAYLOAD_INVALID")
         try:
-            require_complete_paper_effects(effects)
+            require_complete_paper_reconciliation_effects(effects)
         except ValueError as exc:
             raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID") from exc
 

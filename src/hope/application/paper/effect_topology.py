@@ -31,6 +31,12 @@ _COMPLETE_EFFECT_SHAPES = frozenset(
     }
 )
 
+_STAGED_RECONCILIATION_EFFECT_SHAPES = frozenset(
+    {
+        frozenset({PaperEffectType.FILL, PaperEffectType.PNL}),
+    }
+)
+
 
 def classify_paper_effect_topology(
     effect_types: Iterable[PaperEffectType],
@@ -60,3 +66,34 @@ def classify_paper_effect_topology(
 def require_complete_paper_effects(effects: tuple[PaperEffect, ...]) -> None:
     if classify_paper_effect_topology(effect.effect_type for effect in effects) is not PaperEffectTopology.COMPLETE:
         raise ValueError("PAPER_EFFECT_TOPOLOGY_NOT_COMPLETE")
+
+
+def classify_paper_reconciliation_effect_topology(
+    effect_types: Iterable[PaperEffectType],
+) -> PaperEffectTopology:
+    """Classify exact local stage or complete execution topology.
+
+    A local stage is complete only for the job that owns those effects. Durable
+    cross-job source effects must still be authenticated by recovery lineage
+    verification before the stage can be reconciled.
+    """
+    values = tuple(effect_types)
+    counts = Counter(values)
+    unique = frozenset(counts)
+    if unique in _STAGED_RECONCILIATION_EFFECT_SHAPES:
+        if all(count == 1 for count in counts.values()):
+            return PaperEffectTopology.COMPLETE
+        return PaperEffectTopology.CONTRADICTORY
+    return classify_paper_effect_topology(values)
+
+
+def require_complete_paper_reconciliation_effects(
+    effects: tuple[PaperEffect, ...],
+) -> None:
+    if (
+        classify_paper_reconciliation_effect_topology(
+            effect.effect_type for effect in effects
+        )
+        is not PaperEffectTopology.COMPLETE
+    ):
+        raise ValueError("PAPER_RECONCILIATION_EFFECT_TOPOLOGY_NOT_COMPLETE")

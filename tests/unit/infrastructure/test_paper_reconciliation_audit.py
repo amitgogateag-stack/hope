@@ -161,6 +161,10 @@ def _completion_and_effects(
             PaperEffectType.ORDER,
             PaperEffectType.REJECTION,
         ),
+        (
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+        ),
     ],
 )
 def test_reconciliation_receipt_accepts_only_complete_terminal_shapes(
@@ -227,6 +231,16 @@ def test_reconciliation_receipt_accepts_only_complete_terminal_shapes(
             PaperEffectType.SIGNAL,
             PaperEffectType.RISK,
             PaperEffectType.ORDER,
+            PaperEffectType.PNL,
+        ),
+        (
+            PaperEffectType.FILL,
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
+        ),
+        (
+            PaperEffectType.FILL,
+            PaperEffectType.PNL,
             PaperEffectType.PNL,
         ),
     ],
