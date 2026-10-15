@@ -60,6 +60,38 @@ class _NoTradeStrategy(Strategy):
         return ()
 
 
+class _DuplicateSignalStrategy(Strategy):
+    name = "paper-one-shot-duplicate-signal"
+    version = "v1"
+
+    def __init__(self) -> None:
+        self.calls = []
+        self.signal = None
+
+    def generate_signals(
+        self,
+        market_context,
+        universe,
+        universe_members,
+        parameters,
+        inputs_hash,
+    ):
+        self.calls.append(
+            (market_context, universe, universe_members, parameters, inputs_hash)
+        )
+        signal = Signal(
+            signal_id=uuid4(),
+            instrument_id=universe_members[0].instrument_id,
+            strategy_version=self.version,
+            decision_time=market_context.as_of,
+            signal_type=SignalType.ENTRY,
+            conviction=Decimal("0.5"),
+            inputs_hash=inputs_hash,
+        )
+        self.signal = signal
+        return (signal, signal)
+
+
 def _engine():
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
@@ -390,6 +422,61 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
                 ),
                 {"id": job_run.job_run_id},
             )
+
+
+@pytest.mark.integration
+def test_durable_strategy_rejects_duplicate_signal_ids_atomically() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-duplicate-signal",
+        datetime(2026, 10, 15, 14, 0, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, _, dataset_version_id = _insert_durable_decision_inputs(
+        engine,
+        job_run.scheduled_for,
+    )
+    strategy = _DuplicateSignalStrategy()
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                job_run.job_key,
+                DurableUniversePaperStrategyDecision(
+                    strategy,
+                    dataset_version_id,
+                    job_run.scheduled_for,
+                    universe_version_id,
+                    _Parameters(),
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=5)),
+                ),
+            ),
+        ]
+    )
+
+    with pytest.raises(ValueError, match="PAPER_STRATEGY_DUPLICATE_SIGNAL_ID"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert len(strategy.calls) == 1
+    assert strategy.signal is not None
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.failure_code == "ValueError"
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:run_id"),
+            {"run_id": job_run.job_run_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM signals WHERE signal_id=:signal_id"),
+            {"signal_id": strategy.signal.signal_id},
+        ).scalar_one() == 0
+    engine.dispose()
 
 
 @pytest.mark.integration

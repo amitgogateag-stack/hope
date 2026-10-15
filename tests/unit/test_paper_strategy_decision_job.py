@@ -240,6 +240,29 @@ def test_paper_strategy_decision_job_validates_all_outputs_before_persisting() -
     assert runtime.recorded == []
 
 
+def test_paper_strategy_decision_job_rejects_duplicate_signal_ids_before_persisting(
+) -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    context = PITMarketContext(as_of=decision_time, bars=())
+    universe = _snapshot()
+    parameters = _Parameters()
+    strategy = _Strategy()
+    inputs_hash = paper_decision_inputs_hash(strategy, context, universe, parameters)
+    signal = _signal(
+        decision_time,
+        instrument_id=universe.members[0].instrument_id,
+        inputs_hash=inputs_hash,
+    )
+    strategy.signals = (signal, signal)
+    runtime = _runtime(decision_time)
+
+    with pytest.raises(ValueError, match="PAPER_STRATEGY_DUPLICATE_SIGNAL_ID"):
+        PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
+
+    assert runtime.recorded == []
+    assert runtime.no_trade == []
+
+
 def test_paper_strategy_decision_job_rejects_non_tuple_output() -> None:
     decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
     context = PITMarketContext(as_of=decision_time, bars=())

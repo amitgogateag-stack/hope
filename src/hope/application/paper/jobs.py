@@ -96,6 +96,7 @@ class PaperStrategyDecisionJob:
         universe_members_by_id = {
             member.instrument_id: member for member in self.universe.members
         }
+        seen_signal_ids: set[UUID] = set()
         for signal in signals:
             if not isinstance(signal, Signal):
                 raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
@@ -121,6 +122,9 @@ class PaperStrategyDecisionJob:
                 raise ValueError(
                     "PAPER_STRATEGY_SIGNAL_OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"
                 )
+            if signal.signal_id in seen_signal_ids:
+                raise ValueError("PAPER_STRATEGY_DUPLICATE_SIGNAL_ID")
+            seen_signal_ids.add(signal.signal_id)
 
         for signal in signals:
             runtime.record_signal(signal)
