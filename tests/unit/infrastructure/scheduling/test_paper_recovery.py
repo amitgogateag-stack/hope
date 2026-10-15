@@ -395,8 +395,10 @@ def _terminal_effects(*effect_types: PaperEffectType):
     return tuple(SimpleNamespace(effect_type=kind) for kind in effect_types)
 
 
-def test_succeeded_terminal_with_partial_effects_is_rejected(monkeypatch) -> None:
-    """SUCCEEDED cannot silently bless an incomplete durable execution chain."""
+def test_succeeded_terminal_with_unauthenticated_signal_stage_is_rejected(
+    monkeypatch,
+) -> None:
+    """SUCCEEDED cannot silently bless an unauthenticated decision stage."""
     current = datetime(2026, 10, 14, 6, 0, tzinfo=UTC)
     succeeded = create_scheduled_job_run("paper:succeeded-partial", current)
 
@@ -425,7 +427,8 @@ def test_succeeded_terminal_with_partial_effects_is_rejected(monkeypatch) -> Non
     assessment = report.assessments[0]
 
     assert assessment.status is JobRunStatus.SUCCEEDED
-    assert assessment.evidence is PaperRecoveryEvidence.PARTIAL
+    assert assessment.evidence is PaperRecoveryEvidence.COMPLETE
+    assert assessment.lineage_verified is False
     assert assessment.lineage_verified is False
     assert assessment.terminal_effect_conflict is True
     assert (

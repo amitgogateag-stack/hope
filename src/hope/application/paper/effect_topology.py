@@ -38,6 +38,10 @@ _STAGED_RECONCILIATION_EFFECT_SHAPES = frozenset(
     }
 )
 
+_MULTI_ENTITY_STAGED_RECONCILIATION_EFFECT_TYPES = frozenset(
+    {PaperEffectType.SIGNAL}
+)
+
 
 def classify_paper_effect_topology(
     effect_types: Iterable[PaperEffectType],
@@ -79,6 +83,14 @@ def classify_paper_reconciliation_effect_topology(
     verification before the stage can be reconciled.
     """
     values = tuple(effect_types)
+    if (
+        values
+        and frozenset(values) == _MULTI_ENTITY_STAGED_RECONCILIATION_EFFECT_TYPES
+    ):
+        # One decision job may durably emit several independent signals. Entity
+        # identity and payload authentication remain the responsibility of the
+        # reconciliation receipt and lineage boundaries.
+        return PaperEffectTopology.COMPLETE
     counts = Counter(values)
     unique = frozenset(counts)
     if unique in _STAGED_RECONCILIATION_EFFECT_SHAPES:

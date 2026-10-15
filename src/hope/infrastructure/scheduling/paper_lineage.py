@@ -39,6 +39,68 @@ from hope.infrastructure.repositories.paper_portfolio import (
 )
 
 
+def _verify_staged_signal_lineage(
+    connection: Connection,
+    effects: tuple[PaperEffect, ...],
+) -> bool:
+    """Authenticate every independent signal emitted by one decision job."""
+    if (
+        not effects
+        or any(
+            not isinstance(effect, PaperEffect)
+            or effect.effect_type is not PaperEffectType.SIGNAL
+            for effect in effects
+        )
+        or len({effect.effect_id for effect in effects}) != len(effects)
+        or len({effect.entity_id for effect in effects}) != len(effects)
+        or len({effect.job_run_id for effect in effects}) != 1
+    ):
+        return False
+
+    metadata = MetaData()
+    signals = Table(
+        "signals",
+        metadata,
+        Column("signal_id", Uuid, primary_key=True),
+        Column("instrument_id", Uuid, nullable=False),
+        Column("decision_time", DateTime(timezone=True), nullable=False),
+        Column("state", String, nullable=False),
+        Column("strategy_version", String),
+        Column("signal_type", String),
+        Column("conviction", Numeric),
+        Column("inputs_hash", String),
+    )
+    for effect in effects:
+        row = connection.execute(
+            select(
+                signals.c.instrument_id,
+                signals.c.decision_time,
+                signals.c.state,
+                signals.c.strategy_version,
+                signals.c.signal_type,
+                signals.c.conviction,
+                signals.c.inputs_hash,
+            ).where(signals.c.signal_id == effect.entity_id)
+        ).mappings().one_or_none()
+        if row is None or row["state"] != "SIGNAL":
+            return False
+        try:
+            signal = Signal(
+                signal_id=effect.entity_id,
+                instrument_id=row["instrument_id"],
+                strategy_version=row["strategy_version"],
+                decision_time=row["decision_time"],
+                signal_type=row["signal_type"],
+                conviction=row["conviction"],
+                inputs_hash=row["inputs_hash"],
+            )
+        except (TypeError, ValueError):
+            return False
+        if effect.payload_hash != paper_signal_payload_hash(signal):
+            return False
+    return True
+
+
 
 def _verify_partial_fill_cancellation(
     connection: Connection,
@@ -187,6 +249,9 @@ def verify_paper_recovery_lineage(
     by_type: dict[PaperEffectType, list[PaperEffect]] = {}
     for effect in effects:
         by_type.setdefault(effect.effect_type, []).append(effect)
+
+    if set(by_type) == {PaperEffectType.SIGNAL}:
+        return _verify_staged_signal_lineage(connection, effects)
 
     if set(by_type) == {PaperEffectType.FILL, PaperEffectType.PNL}:
         if any(len(items) != 1 for items in by_type.values()):

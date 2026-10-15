@@ -219,6 +219,67 @@ def _recoverable_effect_row(effect):
     }
 
 
+def test_staged_signal_batch_authenticates_every_durable_signal() -> None:
+    job_run_id = uuid4()
+    signals = (_signal(uuid4()), _signal(uuid4()))
+    effects = tuple(
+        _effect(
+            job_run_id,
+            PaperEffectType.SIGNAL,
+            signal.signal_id,
+            paper_signal_payload_hash(signal),
+        )
+        for signal in signals
+    )
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(tuple(_signal_row(signal) for signal in signals)),
+        effects,
+        require_portfolio_pnl=True,
+    ) is True
+
+
+@pytest.mark.parametrize("tamper", ["missing", "payload", "duplicate", "owner"])
+def test_staged_signal_batch_rejects_unauthenticated_or_ambiguous_signal(
+    tamper,
+) -> None:
+    job_run_id = uuid4()
+    signals = (_signal(uuid4()), _signal(uuid4()))
+    effects = [
+        _effect(
+            job_run_id,
+            PaperEffectType.SIGNAL,
+            signal.signal_id,
+            paper_signal_payload_hash(signal),
+        )
+        for signal in signals
+    ]
+    rows = [_signal_row(signal) for signal in signals]
+    if tamper == "missing":
+        rows[1] = None
+    elif tamper == "payload":
+        effects[1] = _effect(
+            job_run_id, PaperEffectType.SIGNAL, signals[1].signal_id, "f" * 64,
+        )
+    elif tamper == "duplicate":
+        effects[1] = effects[0]
+        rows = []
+    else:
+        effects[1] = _effect(
+            uuid4(),
+            PaperEffectType.SIGNAL,
+            signals[1].signal_id,
+            paper_signal_payload_hash(signals[1]),
+        )
+        rows = []
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(tuple(rows)),
+        tuple(effects),
+        require_portfolio_pnl=True,
+    ) is False
+
+
 def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
     effects, signal, order, risk, fill, pnl_event = _filled_fixture()
     connection = _LineageConnection(

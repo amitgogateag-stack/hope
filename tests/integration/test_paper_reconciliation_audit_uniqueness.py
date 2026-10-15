@@ -190,15 +190,15 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
             ).scalar_one()
             assert count == 1
 
-            partial_job_run_id = uuid4()
+            decision_job_run_id = uuid4()
             connection.execute(
                 text(
                     "INSERT INTO job_runs(job_run_id, job_key, scheduled_for, created_at) "
                     "VALUES (:id, :key, transaction_timestamp(), transaction_timestamp())"
                 ),
                 {
-                    "id": partial_job_run_id,
-                    "key": f"paper:USA:{strategy_version_id}:reconciliation-audit-partial",
+                    "id": decision_job_run_id,
+                    "key": f"paper:USA:{strategy_version_id}:reconciliation-audit-decision",
                 },
             )
             connection.execute(
@@ -207,30 +207,37 @@ def test_paper_reconciliation_receipt_is_unique_per_authenticated_job_run() -> N
                     "effect_id, job_run_id, effect_type, entity_id, payload_hash"
                     ") VALUES (:effect_id, :job_run_id, 'SIGNAL', :entity_id, :payload_hash)"
                 ),
-                {
-                    "effect_id": uuid4(),
-                    "job_run_id": partial_job_run_id,
-                    "entity_id": uuid4(),
-                    "payload_hash": "b" * 64,
-                },
+                [
+                    {
+                        "effect_id": uuid4(),
+                        "job_run_id": decision_job_run_id,
+                        "entity_id": uuid4(),
+                        "payload_hash": payload_hash,
+                    }
+                    for payload_hash in ("b" * 64, "c" * 64)
+                ],
             )
             connection.execute(
                 text(
                     "UPDATE job_runs SET status='SUCCEEDED', completed_at=transaction_timestamp() "
                     "WHERE job_run_id=:id"
                 ),
-                {"id": partial_job_run_id},
+                {"id": decision_job_run_id},
             )
 
-            with pytest.raises(
-                IntegrityError,
-                match="PAPER_RECONCILIATION_AUDIT_PAYLOAD_INVALID",
-            ):
-                with connection.begin_nested():
-                    connection.execute(
-                        text(receipt),
-                        {"id": uuid4(), "job_run_id": partial_job_run_id},
-                    )
+            connection.execute(
+                text(receipt),
+                {"id": uuid4(), "job_run_id": decision_job_run_id},
+            )
+            decision_receipt_count = connection.execute(
+                text(
+                    "SELECT count(*) FROM audit_events "
+                    "WHERE event_type = 'PAPER_RUN_RECONCILED' "
+                    "AND entity_type = 'JOB_RUN' AND entity_id = :entity_id"
+                ),
+                {"entity_id": str(decision_job_run_id)},
+            ).scalar_one()
+            assert decision_receipt_count == 1
         finally:
             transaction.rollback()
 

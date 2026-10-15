@@ -68,6 +68,8 @@ def _completion(job_run):
         ),
         (PaperEffectType.RISK, PaperEffectType.ORDER),
         (PaperEffectType.FILL, PaperEffectType.PNL),
+        (PaperEffectType.SIGNAL,),
+        (PaperEffectType.SIGNAL, PaperEffectType.SIGNAL),
     ],
 )
 def test_recovery_complete_shape_is_receipt_admissible(effect_types) -> None:
@@ -180,3 +182,20 @@ def test_duplicate_terminal_or_signal_evidence_cannot_create_recovery_receipt(
         ValueError, match="PAPER_RECONCILIATION_AUDIT_EFFECT_SHAPE_INVALID",
     ):
         repository._expected(_completion(run), effects)
+
+
+def test_staged_signal_receipt_rejects_duplicate_signal_identity() -> None:
+    run = create_scheduled_job_run(
+        "paper:USA:00000000-0000-0000-0000-000000000001:duplicate-signal",
+        datetime(2026, 10, 6, 11, 0, tzinfo=UTC),
+    )
+    signal_id = uuid4()
+    effect = create_paper_effect(
+        run, PaperEffectType.SIGNAL, signal_id, "a" * 64,
+    )
+    repository = SqlAlchemyPaperReconciliationAuditRepository(_Connection())
+
+    with pytest.raises(
+        ValueError, match="PAPER_RECONCILIATION_AUDIT_EFFECT_IDENTITY_INVALID",
+    ):
+        repository._expected(_completion(run), (effect, effect))

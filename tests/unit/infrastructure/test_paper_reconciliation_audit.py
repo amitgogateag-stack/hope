@@ -169,6 +169,8 @@ def _completion_and_effects(
             PaperEffectType.RISK,
             PaperEffectType.ORDER,
         ),
+        (PaperEffectType.SIGNAL,),
+        (PaperEffectType.SIGNAL, PaperEffectType.SIGNAL),
     ],
 )
 def test_reconciliation_receipt_accepts_only_complete_terminal_shapes(

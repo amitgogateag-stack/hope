@@ -49,6 +49,12 @@ class SqlAlchemyPaperReconciliationAuditRepository:
             raise ValueError("PAPER_RECONCILIATION_AUDIT_REQUIRES_COMPLETION_TIME")
         if any(effect.job_run_id != completion.run.job_run_id for effect in effects):
             raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_RUN_MISMATCH")
+        if (
+            len({effect.effect_id for effect in effects}) != len(effects)
+            or len({(effect.effect_type, effect.entity_id) for effect in effects})
+            != len(effects)
+        ):
+            raise ValueError("PAPER_RECONCILIATION_AUDIT_EFFECT_IDENTITY_INVALID")
         for effect in effects:
             if (
                 not isinstance(effect, PaperEffect)
