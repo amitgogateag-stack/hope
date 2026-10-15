@@ -38,10 +38,6 @@ class SqlAlchemyPaperFillRepository:
             Column("side", String, nullable=False),
             Column("quantity", Numeric, nullable=False),
         )
-        self._terminal_events = Table(
-            "paper_order_terminal_events", metadata,
-            Column("order_id", Uuid, primary_key=True),
-        )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
     def _get_row(self, fill_id: UUID):
@@ -119,17 +115,6 @@ class SqlAlchemyPaperFillRepository:
                 if self._effects.record(effect):
                     raise RuntimeError("PAPER_FILL_RETRY_RECREATED_EFFECT")
                 return False
-
-            # Both terminal writers and fill writers lock the source order. Check
-            # only after authenticated replay, so historical fills remain replayable
-            # even if a terminal event was recorded later.
-            terminal_order_id = self._connection.execute(
-                select(self._terminal_events.c.order_id).where(
-                    self._terminal_events.c.order_id == fill.order_id
-                )
-            ).scalar_one_or_none()
-            if terminal_order_id is not None:
-                raise ValueError("PAPER_FILL_AFTER_TERMINAL_FORBIDDEN")
 
             already_filled = self._connection.execute(
                 select(func.coalesce(func.sum(self._fills.c.quantity), 0)).where(
