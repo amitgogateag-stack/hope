@@ -42,17 +42,35 @@ class PaperRecoveryDecision(str, Enum):
     REJECT_TERMINAL_EFFECT_CONFLICT = "REJECT_TERMINAL_EFFECT_CONFLICT"
 
 
+def _classify_recovery_topology(
+    effect_types: Iterable[PaperEffectType],
+) -> PaperEffectTopology:
+    """Recognize an atomic accounting stage without trusting its missing sources.
+
+    FILL + PNL is the complete *local* effect shape emitted by
+    PaperFillAccountingJob.  Lineage verification must still hydrate and
+    authenticate the succeeded SIGNAL, RISK, and ORDER owners before recovery
+    may acknowledge it.
+    """
+    values = tuple(effect_types)
+    if Counter(values) == Counter(
+        {PaperEffectType.FILL: 1, PaperEffectType.PNL: 1}
+    ):
+        return PaperEffectTopology.COMPLETE
+    return classify_paper_effect_topology(values)
+
+
 def _classify_recovery_evidence(
     durable_effect_types: frozenset[PaperEffectType],
 ) -> PaperRecoveryEvidence:
-    topology = classify_paper_effect_topology(durable_effect_types)
+    topology = _classify_recovery_topology(durable_effect_types)
     return PaperRecoveryEvidence(topology.value)
 
 
 def _has_unambiguous_recovery_cardinality(
     effect_counts: tuple[tuple[PaperEffectType, int], ...],
 ) -> bool:
-    topology = classify_paper_effect_topology(
+    topology = _classify_recovery_topology(
         effect_type
         for effect_type, count in effect_counts
         for _ in range(count)
@@ -90,7 +108,7 @@ class PaperRecoveryAssessment:
     @property
     def evidence(self) -> PaperRecoveryEvidence:
         if self.effect_counts:
-            topology = classify_paper_effect_topology(
+            topology = _classify_recovery_topology(
                 effect_type
                 for effect_type, count in self.effect_counts
                 for _ in range(count)
@@ -189,7 +207,7 @@ def assess_due_paper_recovery(
             counts = Counter(effect.effect_type for effect in run_effects)
             durable_effect_types = frozenset(counts)
             effect_counts = tuple(sorted(counts.items(), key=lambda item: item[0].value))
-            if classify_paper_effect_topology(
+            if _classify_recovery_topology(
                 effect.effect_type for effect in run_effects
             ) is PaperEffectTopology.COMPLETE:
                 lineage_verified = verify_paper_recovery_lineage(
@@ -205,7 +223,7 @@ def assess_due_paper_recovery(
             )
             if (
                 record.status is JobRunStatus.SUCCEEDED
-                and classify_paper_effect_topology(
+                and _classify_recovery_topology(
                     effect.effect_type for effect in run_effects
                 )
                 is PaperEffectTopology.COMPLETE

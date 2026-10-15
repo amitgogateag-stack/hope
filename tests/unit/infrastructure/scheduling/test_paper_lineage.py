@@ -208,6 +208,17 @@ def _pnl_row(event):
     }
 
 
+def _recoverable_effect_row(effect):
+    return {
+        "effect_id": effect.effect_id,
+        "job_run_id": effect.job_run_id,
+        "effect_type": effect.effect_type.value,
+        "entity_id": effect.entity_id,
+        "payload_hash": effect.payload_hash,
+        "owner_status": "SUCCEEDED",
+    }
+
+
 def test_verifier_accepts_one_coherent_filled_execution_lineage() -> None:
     effects, signal, order, risk, fill, pnl_event = _filled_fixture()
     connection = _LineageConnection(
@@ -1177,3 +1188,87 @@ def test_legacy_partial_fill_cancellation_requires_exact_terminal_evidence(
     ))
     assert verify_paper_recovery_lineage(connection, effects) is expected
     assert _FakePortfolioRepository.loaded_portfolios == []
+
+
+
+def test_verifier_hydrates_succeeded_sources_for_staged_fill_accounting() -> None:
+    effects, signal, order, risk, fill, _ = _filled_fixture()
+    portfolio_id = uuid4()
+    pnl_event = PaperPortfolioPnLEvent(
+        pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id),
+        portfolio_id=portfolio_id,
+        fill_id=fill.fill_id,
+        instrument_id=fill.instrument_id,
+        realized_pnl_delta=Decimal("0"),
+        commission_delta=fill.commission,
+        event_time=fill.fill_time,
+    )
+    local_job_run_id = uuid4()
+    local_effects = (
+        _effect(
+            local_job_run_id,
+            PaperEffectType.FILL,
+            fill.fill_id,
+            paper_fill_payload_hash(fill),
+        ),
+        _effect(
+            local_job_run_id,
+            PaperEffectType.PNL,
+            pnl_event.pnl_event_id,
+            paper_portfolio_pnl_payload_hash(pnl_event),
+        ),
+    )
+    connection = _LineageConnection(
+        (
+            {"order_id": order.order_id, "signal_id": signal.signal_id},
+            _recoverable_effect_row(effects[0]),
+            _recoverable_effect_row(effects[1]),
+            _recoverable_effect_row(effects[2]),
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+            _fill_row(fill),
+            None,
+            {
+                "portfolio_id": pnl_event.portfolio_id,
+                "fill_id": pnl_event.fill_id,
+                "instrument_id": pnl_event.instrument_id,
+                "realized_pnl_delta": pnl_event.realized_pnl_delta,
+                "commission_delta": pnl_event.commission_delta,
+                "event_time": pnl_event.event_time,
+            },
+            {
+                "application_sequence": 1,
+                "applied_at": fill.fill_time,
+                "version": 1,
+                "application_count": 1,
+            },
+        )
+    )
+
+    assert verify_paper_recovery_lineage(
+        connection, local_effects, require_portfolio_pnl=True,
+    ) is True
+    assert _FakePortfolioRepository.loaded_portfolios == [
+        (portfolio_id, local_job_run_id)
+    ]
+
+
+def test_staged_fill_accounting_rejects_failed_source_owner() -> None:
+    effects, signal, order, _, fill, _ = _filled_fixture()
+    local_effects = (
+        _effect(uuid4(), PaperEffectType.FILL, fill.fill_id, paper_fill_payload_hash(fill)),
+        _effect(uuid4(), PaperEffectType.PNL, uuid4(), "f" * 64),
+    )
+    failed_signal = _recoverable_effect_row(effects[0])
+    failed_signal["owner_status"] = "FAILED"
+    connection = _LineageConnection(
+        (
+            {"order_id": order.order_id, "signal_id": signal.signal_id},
+            failed_signal,
+        )
+    )
+
+    assert verify_paper_recovery_lineage(
+        connection, local_effects, require_portfolio_pnl=True,
+    ) is False

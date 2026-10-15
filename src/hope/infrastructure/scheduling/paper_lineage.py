@@ -31,6 +31,9 @@ from hope.domain.execution.models import Environment, ExecutionCancellation, Exe
 from hope.domain.execution.simulator import Fill
 from hope.domain.risk.models import RiskAssessment
 from hope.domain.signal.models import Signal
+from hope.infrastructure.repositories.paper_effects import (
+    SqlAlchemyPaperEffectRepository,
+)
 from hope.infrastructure.repositories.paper_portfolio import (
     SqlAlchemyPaperPortfolioRepository,
 )
@@ -79,6 +82,59 @@ def _verify_partial_fill_cancellation(
     return cancellation_effect.payload_hash == paper_terminal_payload_hash(cancellation)
 
 
+def _hydrate_staged_fill_accounting_lineage(
+    connection: Connection,
+    effects: tuple[PaperEffect, ...],
+) -> tuple[PaperEffect, ...] | None:
+    """Authenticate cross-job sources for one atomic FILL + PNL stage."""
+    by_type = {effect.effect_type: effect for effect in effects}
+    if set(by_type) != {PaperEffectType.FILL, PaperEffectType.PNL}:
+        return None
+
+    metadata = MetaData()
+    fills = Table(
+        "fills",
+        metadata,
+        Column("fill_id", Uuid, primary_key=True),
+        Column("order_id", Uuid, nullable=False),
+    )
+    orders = Table(
+        "orders",
+        metadata,
+        Column("order_id", Uuid, primary_key=True),
+        Column("signal_id", Uuid, nullable=False),
+    )
+    dependency = connection.execute(
+        select(
+            fills.c.order_id,
+            orders.c.signal_id,
+        )
+        .select_from(fills.join(orders, fills.c.order_id == orders.c.order_id))
+        .where(fills.c.fill_id == by_type[PaperEffectType.FILL].entity_id)
+    ).mappings().one_or_none()
+    if dependency is None:
+        return None
+
+    repository = SqlAlchemyPaperEffectRepository(connection)
+    try:
+        sources = (
+            repository.get_recoverable(
+                PaperEffectType.SIGNAL, dependency["signal_id"]
+            ),
+            repository.get_recoverable(
+                PaperEffectType.RISK, dependency["signal_id"]
+            ),
+            repository.get_recoverable(
+                PaperEffectType.ORDER, dependency["order_id"]
+            ),
+        )
+    except ValueError:
+        return None
+    if any(source is None for source in sources):
+        return None
+    return tuple(source for source in sources if source is not None) + effects
+
+
 def verify_paper_recovery_lineage(
     connection: Connection,
     effects: tuple[PaperEffect, ...],
@@ -94,6 +150,18 @@ def verify_paper_recovery_lineage(
     by_type: dict[PaperEffectType, list[PaperEffect]] = {}
     for effect in effects:
         by_type.setdefault(effect.effect_type, []).append(effect)
+
+    if set(by_type) == {PaperEffectType.FILL, PaperEffectType.PNL}:
+        if any(len(items) != 1 for items in by_type.values()):
+            return False
+        hydrated = _hydrate_staged_fill_accounting_lineage(connection, effects)
+        if hydrated is None:
+            return False
+        return verify_paper_recovery_lineage(
+            connection,
+            hydrated,
+            require_portfolio_pnl=require_portfolio_pnl,
+        )
 
     filled_required = (
         PaperEffectType.SIGNAL,
