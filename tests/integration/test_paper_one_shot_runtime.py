@@ -903,7 +903,7 @@ def test_scheduler_preflight_rejects_persisted_incomplete_claim() -> None:
 
 
 @pytest.mark.integration
-def test_scheduler_preflight_rejects_terminal_partial_effect_topology() -> None:
+def test_scheduler_preflight_acknowledges_authenticated_signal_stage() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(
         f"paper-scheduler-terminal-partial-{uuid4()}",
@@ -953,18 +953,15 @@ def test_scheduler_preflight_rejects_terminal_partial_effect_topology() -> None:
         now=lambda: job_run.scheduled_for + timedelta(minutes=1),
     ) is PaperCycleOutcome.EXECUTED
 
-    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
-        _preflight_due_paper_job_states(engine, [job_run])
+    _preflight_due_paper_job_states(engine, [job_run])
 
-    # The one-shot restart boundary must not bypass the same recovery proof by
-    # treating the terminal job row as sufficient evidence for an idempotent skip.
-    with pytest.raises(RuntimeError, match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT"):
-        run_paper_once(
-            engine,
-            job_run,
-            registry,
-            now=lambda: job_run.scheduled_for + timedelta(minutes=2),
-        )
+    # A verified decision-stage SIGNAL is terminal and must not be replayed.
+    assert run_paper_once(
+        engine,
+        job_run,
+        registry,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=2),
+    ) is PaperCycleOutcome.SKIPPED
 
     with engine.connect() as connection:
         record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
