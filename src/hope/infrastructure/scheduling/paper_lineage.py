@@ -135,17 +135,54 @@ def _hydrate_staged_fill_accounting_lineage(
     return tuple(source for source in sources if source is not None) + effects
 
 
+def _hydrate_staged_entry_lineage(
+    connection: Connection,
+    effects: tuple[PaperEffect, ...],
+) -> tuple[PaperEffect, ...] | None:
+    """Authenticate the succeeded SIGNAL source for one RISK + ORDER stage."""
+    by_type = {effect.effect_type: effect for effect in effects}
+    if set(by_type) != {PaperEffectType.RISK, PaperEffectType.ORDER}:
+        return None
+
+    signal_id = by_type[PaperEffectType.RISK].entity_id
+    order_id = by_type[PaperEffectType.ORDER].entity_id
+    metadata = MetaData()
+    orders = Table(
+        "orders",
+        metadata,
+        Column("order_id", Uuid, primary_key=True),
+        Column("signal_id", Uuid, nullable=False),
+    )
+    dependency = connection.execute(
+        select(orders.c.signal_id).where(orders.c.order_id == order_id)
+    ).mappings().one_or_none()
+    if dependency is None or dependency["signal_id"] != signal_id:
+        return None
+
+    try:
+        source = SqlAlchemyPaperEffectRepository(connection).get_recoverable(
+            PaperEffectType.SIGNAL, signal_id
+        )
+    except ValueError:
+        return None
+    if source is None:
+        return None
+    return (source,) + effects
+
+
 def verify_paper_recovery_lineage(
     connection: Connection,
     effects: tuple[PaperEffect, ...],
     *,
     require_portfolio_pnl: bool = False,
+    _allow_staged_entry: bool = False,
 ) -> bool:
     """Prove one durable PAPER execution chain without replaying it.
 
-    Filled, rejected, and cancelled paths each require an exact effect shape. Their durable
-    relational state must converge on the same signal/order lineage, and non-fill terminal
-    payloads must match the immutable terminal event before recovery can acknowledge them.
+    Filled, rejected, cancelled, and staged entry paths each require an exact
+    effect shape. Their durable relational state must converge on the same
+    signal/order lineage, and non-fill terminal payloads must match the
+    immutable terminal event before recovery can acknowledge them.
     """
     by_type: dict[PaperEffectType, list[PaperEffect]] = {}
     for effect in effects:
@@ -163,6 +200,19 @@ def verify_paper_recovery_lineage(
             require_portfolio_pnl=require_portfolio_pnl,
         )
 
+    if set(by_type) == {PaperEffectType.RISK, PaperEffectType.ORDER}:
+        if any(len(items) != 1 for items in by_type.values()):
+            return False
+        hydrated = _hydrate_staged_entry_lineage(connection, effects)
+        if hydrated is None:
+            return False
+        return verify_paper_recovery_lineage(
+            connection,
+            hydrated,
+            require_portfolio_pnl=require_portfolio_pnl,
+            _allow_staged_entry=True,
+        )
+
     filled_required = (
         PaperEffectType.SIGNAL,
         PaperEffectType.RISK,
@@ -177,7 +227,19 @@ def verify_paper_recovery_lineage(
     partial_fill_cancellation = set(by_type) == set(filled_required) | {
         PaperEffectType.CANCELLATION,
     }
-    if set(by_type) == set(filled_required):
+    staged_entry = _allow_staged_entry and set(by_type) == {
+        PaperEffectType.SIGNAL,
+        PaperEffectType.RISK,
+        PaperEffectType.ORDER,
+    }
+    if staged_entry:
+        required = (
+            PaperEffectType.SIGNAL,
+            PaperEffectType.RISK,
+            PaperEffectType.ORDER,
+        )
+        terminal_type = None
+    elif set(by_type) == set(filled_required):
         required = filled_required
         terminal_type = None
     elif partial_fill_cancellation:
@@ -392,6 +454,9 @@ def verify_paper_recovery_lineage(
         != paper_order_payload_hash(order_object)
     ):
         return False
+
+    if staged_entry:
+        return True
 
     if terminal_type is not None and not partial_fill_cancellation:
         terminal_effect = by_type[terminal_type][0]

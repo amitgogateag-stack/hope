@@ -33,6 +33,7 @@ _COMPLETE_EFFECT_SHAPES = frozenset(
 
 _STAGED_RECONCILIATION_EFFECT_SHAPES = frozenset(
     {
+        frozenset({PaperEffectType.RISK, PaperEffectType.ORDER}),
         frozenset({PaperEffectType.FILL, PaperEffectType.PNL}),
     }
 )

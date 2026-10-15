@@ -1272,3 +1272,81 @@ def test_staged_fill_accounting_rejects_failed_source_owner() -> None:
     assert verify_paper_recovery_lineage(
         connection, local_effects, require_portfolio_pnl=True,
     ) is False
+
+
+def test_verifier_hydrates_succeeded_signal_for_staged_entry() -> None:
+    effects, signal, order, risk, _, _ = _filled_fixture()
+    local_job_run_id = uuid4()
+    local_effects = (
+        _effect(
+            local_job_run_id,
+            PaperEffectType.RISK,
+            signal.signal_id,
+            paper_risk_payload_hash(risk),
+        ),
+        _effect(
+            local_job_run_id,
+            PaperEffectType.ORDER,
+            order.order_id,
+            paper_order_payload_hash(order),
+        ),
+    )
+    connection = _LineageConnection(
+        (
+            {"signal_id": signal.signal_id},
+            _recoverable_effect_row(effects[0]),
+            _signal_row(signal),
+            _risk_row(risk),
+            _order_row(order),
+        )
+    )
+
+    assert verify_paper_recovery_lineage(
+        connection, local_effects, require_portfolio_pnl=True,
+    ) is True
+    assert _FakePortfolioRepository.loaded_portfolios == []
+
+
+@pytest.mark.parametrize(
+    "tamper",
+    ["missing_source", "failed_source", "wrong_source_hash", "wrong_order_signal"],
+)
+def test_staged_entry_rejects_unauthenticated_signal_source(tamper) -> None:
+    effects, signal, order, risk, _, _ = _filled_fixture()
+    local_job_run_id = uuid4()
+    local_effects = (
+        _effect(
+            local_job_run_id,
+            PaperEffectType.RISK,
+            signal.signal_id,
+            paper_risk_payload_hash(risk),
+        ),
+        _effect(
+            local_job_run_id,
+            PaperEffectType.ORDER,
+            order.order_id,
+            paper_order_payload_hash(order),
+        ),
+    )
+    dependency_signal_id = (
+        uuid4() if tamper == "wrong_order_signal" else signal.signal_id
+    )
+    rows = [{"signal_id": dependency_signal_id}]
+    if tamper != "wrong_order_signal":
+        if tamper == "missing_source":
+            rows.append(None)
+        else:
+            source = _recoverable_effect_row(effects[0])
+            if tamper == "failed_source":
+                source["owner_status"] = "FAILED"
+            elif tamper == "wrong_source_hash":
+                source["payload_hash"] = "f" * 64
+            rows.append(source)
+            if tamper == "wrong_source_hash":
+                rows.append(_signal_row(signal))
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(tuple(rows)),
+        local_effects,
+        require_portfolio_pnl=True,
+    ) is False

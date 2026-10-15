@@ -66,6 +66,8 @@ def _completion(job_run):
             PaperEffectType.ORDER,
             PaperEffectType.REJECTION,
         ),
+        (PaperEffectType.RISK, PaperEffectType.ORDER),
+        (PaperEffectType.FILL, PaperEffectType.PNL),
     ],
 )
 def test_recovery_complete_shape_is_receipt_admissible(effect_types) -> None:

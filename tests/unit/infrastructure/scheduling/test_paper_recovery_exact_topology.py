@@ -97,10 +97,17 @@ def test_recovery_uses_exact_canonical_terminal_topology(
 
 
 
-def test_recovery_accepts_exact_staged_fill_accounting_topology() -> None:
-    assert _classify_recovery_topology(
-        (PaperEffectType.FILL, PaperEffectType.PNL)
-    ).value == PaperRecoveryEvidence.COMPLETE.value
+@pytest.mark.parametrize(
+    "effect_types",
+    [
+        (PaperEffectType.RISK, PaperEffectType.ORDER),
+        (PaperEffectType.FILL, PaperEffectType.PNL),
+    ],
+)
+def test_recovery_accepts_exact_staged_topology(effect_types) -> None:
+    assert _classify_recovery_topology(effect_types).value == (
+        PaperRecoveryEvidence.COMPLETE.value
+    )
 
 
 @pytest.mark.parametrize(
@@ -110,9 +117,13 @@ def test_recovery_accepts_exact_staged_fill_accounting_topology() -> None:
         (PaperEffectType.PNL,),
         (PaperEffectType.FILL, PaperEffectType.FILL, PaperEffectType.PNL),
         (PaperEffectType.FILL, PaperEffectType.PNL, PaperEffectType.PNL),
+        (PaperEffectType.RISK,),
+        (PaperEffectType.ORDER,),
+        (PaperEffectType.RISK, PaperEffectType.RISK, PaperEffectType.ORDER),
+        (PaperEffectType.RISK, PaperEffectType.ORDER, PaperEffectType.ORDER),
     ],
 )
-def test_staged_fill_accounting_requires_exact_local_cardinality(
+def test_staged_reconciliation_requires_exact_local_cardinality(
     effect_types: tuple[PaperEffectType, ...],
 ) -> None:
     assert _classify_recovery_topology(effect_types).value != (
