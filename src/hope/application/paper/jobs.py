@@ -21,6 +21,26 @@ from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.domain.trading.kernel import create_order_intent, materialize_order
 
 
+def assert_paper_market_data_fresh(
+    market_context: PITMarketContext,
+    active_instrument_ids: tuple[UUID, ...],
+    max_age: timedelta,
+) -> None:
+    """Fail closed when an autonomous PAPER decision lacks fresh market data."""
+
+    if not isinstance(max_age, timedelta):
+        raise TypeError("PAPER_MARKET_DATA_FRESHNESS_REQUIRES_TIMEDELTA")
+    if max_age <= timedelta(0):
+        raise ValueError("PAPER_MARKET_DATA_FRESHNESS_MUST_BE_POSITIVE")
+    for instrument_id in active_instrument_ids:
+        bars = market_context.for_instrument(str(instrument_id))
+        if not bars:
+            raise RuntimeError("PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT")
+        latest_event_time = max(bar.event_time for bar in bars)
+        if market_context.as_of - latest_event_time > max_age:
+            raise RuntimeError("PAPER_MARKET_DATA_STALE")
+
+
 @dataclass(frozen=True)
 class PaperSignalPersistenceJob:
     """Persist one already-decided PAPER signal through the authoritative runtime boundary."""
@@ -48,8 +68,8 @@ class PaperStrategyDecisionJob:
     market_context: PITMarketContext
     universe: UniverseSnapshot
     parameters: ParameterSnapshot
+    market_data_max_age: timedelta
     dataset_version_id: UUID | None = None
-    market_data_max_age: timedelta | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -64,11 +84,10 @@ class PaperStrategyDecisionJob:
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_PARAMETER_SNAPSHOT")
         if self.dataset_version_id is not None and not isinstance(self.dataset_version_id, UUID):
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_DATASET_VERSION_ID")
-        if self.market_data_max_age is not None:
-            if not isinstance(self.market_data_max_age, timedelta):
-                raise TypeError("PAPER_DECISION_JOB_REQUIRES_FRESHNESS_TIMEDELTA")
-            if self.market_data_max_age <= timedelta(0):
-                raise ValueError("PAPER_DECISION_JOB_REQUIRES_POSITIVE_FRESHNESS")
+        if not isinstance(self.market_data_max_age, timedelta):
+            raise TypeError("PAPER_DECISION_JOB_REQUIRES_FRESHNESS_TIMEDELTA")
+        if self.market_data_max_age <= timedelta(0):
+            raise ValueError("PAPER_DECISION_JOB_REQUIRES_POSITIVE_FRESHNESS")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
         as_of = self.market_context.as_of
@@ -81,6 +100,12 @@ class PaperStrategyDecisionJob:
         if canonical_as_of < scheduled_for:
             raise ValueError("PAPER_DECISION_BEFORE_JOB_SCHEDULE")
 
+        active_members = self.universe.active_members(as_of)
+        assert_paper_market_data_fresh(
+            self.market_context,
+            tuple(member.instrument_id for member in active_members),
+            self.market_data_max_age,
+        )
         expected_inputs_hash = paper_decision_inputs_hash(
             self.strategy,
             self.market_context,
@@ -89,7 +114,6 @@ class PaperStrategyDecisionJob:
             dataset_version_id=self.dataset_version_id,
             market_data_max_age=self.market_data_max_age,
         )
-        active_members = self.universe.active_members(as_of)
         signals = self.strategy.generate_signals(
             self.market_context,
             self.universe.version,

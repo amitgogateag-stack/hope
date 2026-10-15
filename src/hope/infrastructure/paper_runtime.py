@@ -10,7 +10,11 @@ from sqlalchemy import Connection, Engine
 
 from hope.application.jobs import JobRunStatus, ScheduledJobRun, create_job_run_completion
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
-from hope.application.paper.jobs import PaperEntryOrderDecisionJob, PaperStrategyDecisionJob
+from hope.application.paper.jobs import (
+    PaperEntryOrderDecisionJob,
+    PaperStrategyDecisionJob,
+    assert_paper_market_data_fresh,
+)
 from hope.application.paper.no_trade import PaperNoTradeWriter
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
@@ -66,13 +70,11 @@ class PaperMarketDataFreshnessPolicy:
         market_context,
         active_instrument_ids: tuple[UUID, ...],
     ) -> None:
-        for instrument_id in active_instrument_ids:
-            bars = market_context.for_instrument(str(instrument_id))
-            if not bars:
-                raise RuntimeError("PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT")
-            latest_event_time = max(bar.event_time for bar in bars)
-            if market_context.as_of - latest_event_time > self.max_age:
-                raise RuntimeError("PAPER_MARKET_DATA_STALE")
+        assert_paper_market_data_fresh(
+            market_context,
+            active_instrument_ids,
+            self.max_age,
+        )
 
 
 @dataclass(frozen=True)
@@ -134,8 +136,8 @@ class DurableUniversePaperStrategyDecision:
             market_context,
             snapshot,
             self.parameters,
+            self.freshness_policy.max_age,
             dataset_version_id=self.dataset_version_id,
-            market_data_max_age=self.freshness_policy.max_age,
         )
 
 

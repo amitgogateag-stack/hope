@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
+from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.paper.provenance import paper_decision_inputs_hash
 from hope.domain.signal.models import Signal, SignalType
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
@@ -23,6 +24,7 @@ from hope.infrastructure.paper_runtime import (
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+from hope.infrastructure.repositories.market_contexts import PITMarketContextRepository
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
 from hope.infrastructure.scheduling.paper import _preflight_due_paper_job_states
@@ -444,6 +446,69 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
                 ),
                 {"id": job_run.job_run_id},
             )
+
+
+@pytest.mark.integration
+def test_direct_strategy_decision_cannot_bypass_market_data_freshness() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-direct-stale-inputs",
+        datetime(2026, 10, 15, 14, 5, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, instrument_id, dataset_version_id = (
+        _insert_durable_decision_inputs(engine, job_run.scheduled_for)
+    )
+    with engine.connect() as connection:
+        universe = UniverseSnapshotRepository(connection).get(universe_version_id)
+        assert universe is not None
+        market_context = PITMarketContextRepository(connection).get(
+            dataset_version_id,
+            as_of=job_run.scheduled_for,
+            universe_version_id=universe_version_id,
+            instrument_ids=(instrument_id,),
+        )
+
+    strategy = _NoTradeStrategy()
+    registry = PaperJobRegistry(
+        [
+            PaperJobDefinition(
+                job_run.job_key,
+                PaperStrategyDecisionJob(
+                    strategy,
+                    market_context,
+                    universe,
+                    _Parameters(),
+                    timedelta(minutes=4),
+                    dataset_version_id=dataset_version_id,
+                ),
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="PAPER_MARKET_DATA_STALE"):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert strategy.calls == []
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert record.failure_code == "RuntimeError"
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
+            {"id": job_run.job_run_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_no_trade_decisions WHERE job_run_id=:id"),
+            {"id": job_run.job_run_id},
+        ).scalar_one() == 0
+    engine.dispose()
 
 
 @pytest.mark.integration
