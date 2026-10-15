@@ -603,8 +603,8 @@ def test_failed_prior_run_with_durable_effect_blocks_entire_due_batch() -> None:
     engine.dispose()
 
 @pytest.mark.integration
-def test_succeeded_prior_run_with_partial_effect_blocks_entire_due_batch() -> None:
-    """A terminal success cannot hide an incomplete durable PAPER effect chain."""
+def test_succeeded_authenticated_signal_stage_allows_fresh_due_work() -> None:
+    """A completed decision stage is not an incomplete execution chain."""
     engine = _engine()
     now = datetime(2026, 10, 14, 6, 10, tzinfo=UTC)
     suffix = uuid4()
@@ -678,25 +678,26 @@ def test_succeeded_prior_run_with_partial_effect_blocks_entire_due_batch() -> No
         ]
     )
 
-    with pytest.raises(
-        RuntimeError,
-        match="PAPER_JOB_TERMINAL_EFFECT_CONFLICT",
-    ):
-        run_due_operational_paper_jobs(
-            engine,
-            registry,
-            [fresh, succeeded],
-            now=lambda: now,
-            max_lateness=timedelta(minutes=5),
-        )
+    results = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        [fresh, succeeded],
+        now=lambda: now,
+        max_lateness=timedelta(minutes=5),
+    )
 
-    assert calls == []
+    assert [run.job_run_id for run, _ in results] == [
+        succeeded.job_run_id, fresh.job_run_id,
+    ]
+    assert calls == [fresh.job_run_id]
     with engine.connect() as connection:
         jobs = SqlAlchemyJobRunRepository(connection)
         succeeded_record = jobs.get_record(succeeded.job_run_id)
         assert succeeded_record is not None
         assert succeeded_record.status is JobRunStatus.SUCCEEDED
-        assert jobs.get_record(fresh.job_run_id) is None
+        fresh_record = jobs.get_record(fresh.job_run_id)
+        assert fresh_record is not None
+        assert fresh_record.status is JobRunStatus.SUCCEEDED
         assert connection.execute(
             text(
                 "SELECT count(*) FROM paper_effects "
