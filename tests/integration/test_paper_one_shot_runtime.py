@@ -6,7 +6,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
@@ -347,6 +347,49 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
     assert tuple(member.instrument_id for member in members) == (instrument_id,)
     assert received_parameters is parameters
     assert len(inputs_hash) == 64
+    with engine.connect() as connection:
+        decision = connection.execute(
+            text(
+                "SELECT job_run_id, strategy_version, decision_time, inputs_hash "
+                "FROM paper_no_trade_decisions WHERE decision_id=:id"
+            ),
+            {"id": job_run.job_run_id},
+        ).mappings().one()
+        assert decision["job_run_id"] == job_run.job_run_id
+        assert decision["strategy_version"] == strategy.version
+        assert decision["decision_time"] == job_run.scheduled_for
+        assert decision["inputs_hash"] == inputs_hash
+        effect = connection.execute(
+            text(
+                "SELECT effect_type, entity_id, payload_hash FROM paper_effects "
+                "WHERE job_run_id=:id"
+            ),
+            {"id": job_run.job_run_id},
+        ).mappings().one()
+        assert effect["effect_type"] == "NO_TRADE"
+        assert effect["entity_id"] == job_run.job_run_id
+        assert effect["payload_hash"] != inputs_hash
+        assert len(effect["payload_hash"]) == 64
+
+    # Restart authentication must recognize the explicit no-trade proof and
+    # must not replay strategy generation.
+    assert run_paper_once(
+        engine,
+        job_run,
+        registry,
+        now=lambda: job_run.scheduled_for + timedelta(minutes=2),
+    ) is PaperCycleOutcome.SKIPPED_TERMINAL
+    assert len(strategy.calls) == 1
+
+    with pytest.raises(IntegrityError, match="PAPER_NO_TRADE_IMMUTABLE"):
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "UPDATE paper_no_trade_decisions SET strategy_version='tampered' "
+                    "WHERE decision_id=:id"
+                ),
+                {"id": job_run.job_run_id},
+            )
 
 
 @pytest.mark.integration

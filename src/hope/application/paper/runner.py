@@ -15,6 +15,7 @@ from hope.application.jobs import (
 )
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
+from hope.application.paper.no_trade import PaperNoTradeWriter
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.signals import PaperSignalWriter
@@ -52,6 +53,7 @@ class PaperRuntimeContext:
     _order_writer: PaperOrderWriter
     _fill_writer: PaperFillAccountingWriter
     _terminal_writer: PaperTerminalWriter
+    _no_trade_writer: PaperNoTradeWriter | None = None
     _environment_guard: Callable[[], None] = field(
         default=lambda: None,
         repr=False,
@@ -89,6 +91,22 @@ class PaperRuntimeContext:
         if decision_time.astimezone(timezone.utc) > self.cycle.job_run.scheduled_for:
             raise ValueError("PAPER_SIGNAL_DECISION_AFTER_JOB_SCHEDULE")
         return self._signal_writer.record(self.cycle, signal)
+
+    def record_no_trade(
+        self,
+        *,
+        strategy_version: str,
+        decision_time: datetime,
+        inputs_hash: str,
+    ) -> bool:
+        if self._no_trade_writer is None:
+            raise RuntimeError("PAPER_RUNTIME_NO_TRADE_WRITER_REQUIRED")
+        return self._no_trade_writer.record(
+            self.cycle,
+            strategy_version=strategy_version,
+            decision_time=decision_time,
+            inputs_hash=inputs_hash,
+        )
 
     def record_risk(self, assessment: RiskAssessment) -> bool:
         recorded = self._risk_writer.record(self.cycle, assessment)
@@ -256,6 +274,7 @@ class PaperCycleRunner:
         work: Callable[[PaperRuntimeContext], None],
         *,
         terminal_writer: PaperTerminalWriter,
+        no_trade_writer: PaperNoTradeWriter | None = None,
     ) -> PaperCycleOutcome:
         """Run ordinary PAPER work through separate authoritative durable boundaries."""
         if not isinstance(signal_writer, PaperSignalWriter):
@@ -278,6 +297,7 @@ class PaperCycleRunner:
                     order_writer,
                     fill_writer,
                     terminal_writer,
+                    no_trade_writer,
                 )
             ),
         )

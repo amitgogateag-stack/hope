@@ -137,6 +137,7 @@ def test_durable_decision_exposes_only_active_members_to_context_and_strategy(
             job_run=SimpleNamespace(scheduled_for=as_of),
         ),
         record_signal=lambda signal: None,
+        record_no_trade=lambda **outcome: None,
     )
     work(runtime)
 

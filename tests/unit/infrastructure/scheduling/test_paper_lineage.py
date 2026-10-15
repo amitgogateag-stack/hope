@@ -6,6 +6,10 @@ import pytest
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
+from hope.application.paper.no_trade import (
+    PaperNoTradeDecision,
+    paper_no_trade_payload_hash,
+)
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
 from hope.application.paper.portfolio_pnl import (
@@ -38,6 +42,39 @@ def _effect(job_run_id, effect_type, entity_id, payload_hash="0" * 64):
         entity_id=entity_id,
         payload_hash=payload_hash,
     )
+
+
+def test_no_trade_lineage_requires_matching_job_owned_decision() -> None:
+    job_run_id = uuid4()
+    decision = PaperNoTradeDecision(
+        decision_id=job_run_id,
+        strategy_version="strategy-v1",
+        decision_time=datetime(2026, 10, 15, 13, 0, tzinfo=UTC),
+        inputs_hash="a" * 64,
+    )
+    effect = _effect(
+        job_run_id,
+        PaperEffectType.NO_TRADE,
+        job_run_id,
+        paper_no_trade_payload_hash(decision),
+    )
+    row = {
+        "decision_id": decision.decision_id,
+        "job_run_id": job_run_id,
+        "strategy_version": decision.strategy_version,
+        "decision_time": decision.decision_time,
+        "inputs_hash": decision.inputs_hash,
+    }
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection((row,)), (effect,), require_portfolio_pnl=True
+    ) is True
+
+    assert verify_paper_recovery_lineage(
+        _LineageConnection(({**row, "inputs_hash": "b" * 64},)),
+        (effect,),
+        require_portfolio_pnl=True,
+    ) is False
 
 
 def _approved_risk(signal_id):

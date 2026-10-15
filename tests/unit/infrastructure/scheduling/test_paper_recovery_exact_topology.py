@@ -110,6 +110,26 @@ def test_recovery_accepts_exact_staged_topology(effect_types) -> None:
     )
 
 
+def test_recovery_accepts_exact_no_trade_decision_topology() -> None:
+    assert _classify_recovery_topology((PaperEffectType.NO_TRADE,)).value == (
+        PaperRecoveryEvidence.COMPLETE.value
+    )
+
+
+@pytest.mark.parametrize(
+    "effect_types",
+    [
+        (PaperEffectType.NO_TRADE, PaperEffectType.NO_TRADE),
+        (PaperEffectType.NO_TRADE, PaperEffectType.SIGNAL),
+        (PaperEffectType.NO_TRADE, PaperEffectType.RISK, PaperEffectType.ORDER),
+    ],
+)
+def test_no_trade_decision_topology_rejects_duplicates_and_side_effects(effect_types) -> None:
+    assert _classify_recovery_topology(effect_types).value == (
+        PaperRecoveryEvidence.CONTRADICTORY.value
+    )
+
+
 @pytest.mark.parametrize(
     "effect_types",
     [

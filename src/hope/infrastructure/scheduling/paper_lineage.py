@@ -18,6 +18,7 @@ from sqlalchemy import (
 
 from hope.application.paper.effects import PaperEffect, PaperEffectType
 from hope.application.paper.fills import paper_fill_payload_hash
+from hope.application.paper.no_trade import PaperNoTradeDecision, paper_no_trade_payload_hash
 from hope.application.paper.orders import paper_order_payload_hash
 from hope.application.paper.pnl import PaperPnLEvent, paper_pnl_payload_hash
 from hope.application.paper.portfolio_pnl import (
@@ -100,6 +101,38 @@ def _verify_staged_signal_lineage(
             return False
     return True
 
+
+def _verify_no_trade_lineage(
+    connection: Connection,
+    effect: PaperEffect,
+) -> bool:
+    if effect.effect_type is not PaperEffectType.NO_TRADE:
+        return False
+    metadata = MetaData()
+    decisions = Table(
+        "paper_no_trade_decisions",
+        metadata,
+        Column("decision_id", Uuid, primary_key=True),
+        Column("job_run_id", Uuid, nullable=False),
+        Column("strategy_version", String, nullable=False),
+        Column("decision_time", DateTime(timezone=True), nullable=False),
+        Column("inputs_hash", String, nullable=False),
+    )
+    row = connection.execute(
+        select(decisions).where(decisions.c.decision_id == effect.entity_id)
+    ).mappings().one_or_none()
+    if row is None or row["job_run_id"] != effect.job_run_id:
+        return False
+    try:
+        decision = PaperNoTradeDecision(
+            decision_id=row["decision_id"],
+            strategy_version=row["strategy_version"],
+            decision_time=row["decision_time"],
+            inputs_hash=row["inputs_hash"],
+        )
+    except (TypeError, ValueError):
+        return False
+    return effect.payload_hash == paper_no_trade_payload_hash(decision)
 
 
 def _verify_partial_fill_cancellation(
@@ -241,523 +274,550 @@ def verify_paper_recovery_lineage(
 ) -> bool:
     """Prove one durable PAPER execution chain without replaying it.
 
-    Filled, rejected, cancelled, and staged entry paths each require an exact
-    effect shape. Their durable relational state must converge on the same
-    signal/order lineage, and non-fill terminal payloads must match the
-    immutable terminal event before recovery can acknowledge them.
-    """
-    by_type: dict[PaperEffectType, list[PaperEffect]] = {}
-    for effect in effects:
-        by_type.setdefault(effect.effect_type, []).append(effect)
+    Filled, rejected, cancelled, and staged entry paths each require an exactnıïËh‘éì¶»§q«^uËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    if set(by_type) == {PaperEffectType.SIGNAL}:
-        return _verify_staged_signal_lineage(connection, effects)
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Ûˆ
+ÈXÚ[X[
+ŒŒHŠKˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÜÜ›Û[×Ü›İÚ]İ]Ù\˜X›WÙš[Ø\XØ][ÛŠ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    if set(by_type) == {PaperEffectType.FILL, PaperEffectType.PNL}:
-        if any(len(items) != 1 for items in by_type.values()):
-            return False
-        hydrated = _hydrate_staged_fill_accounting_lineage(connection, effects)
-        if hydrated is None:
-            return False
-        return verify_paper_recovery_lineage(
-            connection,
-            hydrated,
-            require_portfolio_pnl=require_portfolio_pnl,
-        )
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆ›Û™Kˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÜÜ›Û[×Ø\XØ][Û—İ]Ü™Y]\×Ùš[
 
-    if set(by_type) == {PaperEffectType.RISK, PaperEffectType.ORDER}:
-        if any(len(items) != 1 for items in by_type.values()):
-            return False
-        hydrated = _hydrate_staged_entry_lineage(connection, effects)
-        if hydrated is None:
-            return False
-        return verify_paper_recovery_lineage(
-            connection,
-            hydrated,
-            require_portfolio_pnl=require_portfolio_pnl,
-            _allow_staged_entry=True,
-        )
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    filled_required = (
-        PaperEffectType.SIGNAL,
-        PaperEffectType.RISK,
-        PaperEffectType.ORDER,
-        PaperEffectType.FILL,
-        PaperEffectType.PNL,
-    )
-    non_fill_terminal_types = set(by_type) & {
-        PaperEffectType.CANCELLATION,
-        PaperEffectType.REJECTION,
-    }
-    partial_fill_cancellation = set(by_type) == set(filled_required) | {
-        PaperEffectType.CANCELLATION,
-    }
-    staged_entry = _allow_staged_entry and set(by_type) == {
-        PaperEffectType.SIGNAL,
-        PaperEffectType.RISK,
-        PaperEffectType.ORDER,
-    }
-    if staged_entry:
-        required = (
-            PaperEffectType.SIGNAL,
-            PaperEffectType.RISK,
-            PaperEffectType.ORDER,
-        )
-        terminal_type = None
-    elif set(by_type) == set(filled_required):
-        required = filled_required
-        terminal_type = None
-    elif partial_fill_cancellation:
-        required = filled_required + (PaperEffectType.CANCELLATION,)
-        terminal_type = PaperEffectType.CANCELLATION
-    elif len(non_fill_terminal_types) == 1:
-        terminal_type = next(iter(non_fill_terminal_types))
-        required = (
-            PaperEffectType.SIGNAL,
-            PaperEffectType.RISK,
-            PaperEffectType.ORDER,
-            terminal_type,
-        )
-        if set(by_type) != set(required):
-            return False
-    else:
-        return False
-    if any(len(by_type[effect_type]) != 1 for effect_type in required):
-        return False
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆÂˆ˜\XØ][Û—ÜÙ\]Y[˜ÙHˆKˆ˜\YYØ]ˆš[™š[İ[YHH[YY[JZXÜ›ÜÙXÛÛ™ÏLJKˆ™\œÚ[ÛˆˆKˆ˜\XØ][Û—ØÛİ[ˆKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÜÜ›Û[×Ø\XØ][Û—Ø™^[Û™ÛX]\šX[^™Yİ™\œÚ[ÛŠ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    signal_id = by_type[PaperEffectType.SIGNAL][0].entity_id
-    risk_signal_id = by_type[PaperEffectType.RISK][0].entity_id
-    order_id = by_type[PaperEffectType.ORDER][0].entity_id
-    if risk_signal_id != signal_id:
-        return False
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆÂˆ˜\XØ][Û—ÜÙ\]Y[˜ÙHˆ‹ˆ˜\YYØ]ˆš[™š[İ[YKˆ™\œÚ[ÛˆˆKˆ˜\XØ][Û—ØÛİ[ˆ‹ˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÜÜ›Û[×İ™\œÚ[Û—ØZXYÛÙ—Ø\XØ][Û—Ú\İÜJ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    metadata = MetaData()
-    signals = Table(
-        "signals",
-        metadata,
-        Column("signal_id", Uuid, primary_key=True),
-        Column("instrument_id", Uuid, nullable=False),
-        Column("decision_time", DateTime(timezone=True), nullable=False),
-        Column("state", String, nullable=False),
-        Column("strategy_version", String),
-        Column("signal_type", String),
-        Column("conviction", Numeric),
-        Column("inputs_hash", String),
-    )
-    orders = Table(
-        "orders",
-        metadata,
-        Column("order_id", Uuid, primary_key=True),
-        Column("signal_id", Uuid, nullable=False),
-        Column("instrument_id", Uuid, nullable=False),
-        Column("environment", String, nullable=False),
-        Column("side", String, nullable=False),
-        Column("quantity", Numeric, nullable=False),
-        Column("signal_type", String),
-    )
-    fills = Table(
-        "fills",
-        metadata,
-        Column("fill_id", Uuid, primary_key=True),
-        Column("order_id", Uuid, nullable=False),
-        Column("quantity", Numeric, nullable=False),
-        Column("fill_price", Numeric, nullable=False),
-        Column("slippage", Numeric, nullable=False),
-        Column("transaction_cost", Numeric, nullable=False),
-        Column("filled_at", DateTime(timezone=True), nullable=False),
-        Column("cost_model_version", String, nullable=False),
-    )
-    pnl_events = Table(
-        "pnl_events",
-        metadata,
-        Column("pnl_event_id", Uuid, primary_key=True),
-        Column("position_id", Uuid, nullable=False),
-        Column("amount", Numeric, nullable=False),
-        Column("event_time", DateTime(timezone=True), nullable=False),
-    )
-    portfolio_pnl_events = Table(
-        "paper_portfolio_pnl_events",
-        metadata,
-        Column("pnl_event_id", Uuid, primary_key=True),
-        Column("portfolio_id", Uuid, nullable=False),
-        Column("fill_id", Uuid, nullable=False),
-        Column("instrument_id", Uuid, nullable=False),
-        Column("realized_pnl_delta", Numeric, nullable=False),
-        Column("commission_delta", Numeric, nullable=False),
-        Column("event_time", DateTime(timezone=True), nullable=False),
-    )
-    portfolio_fill_applications = Table(
-        "paper_portfolio_fill_applications",
-        metadata,
-        Column("portfolio_id", Uuid, primary_key=True),
-        Column("fill_id", Uuid, primary_key=True),
-        Column("application_sequence", BigInteger, nullable=False),
-        Column("applied_at", DateTime(timezone=True), nullable=False),
-    )
-    portfolios = Table(
-        "paper_portfolios",
-        metadata,
-        Column("portfolio_id", Uuid, primary_key=True),
-        Column("version", BigInteger, nullable=False),
-    )
-    positions = Table(
-        "positions",
-        metadata,
-        Column("position_id", Uuid, primary_key=True),
-        Column("instrument_id", Uuid, nullable=False),
-        Column("opened_from_signal_id", Uuid, nullable=False),
-        Column("opened_at", DateTime(timezone=True), nullable=False),
-    )
-    terminal_events = Table(
-        "paper_order_terminal_events",
-        metadata,
-        Column("order_id", Uuid, primary_key=True),
-        Column("outcome", String, nullable=False),
-        Column("reason_code", String, nullable=False),
-        Column("event_time", DateTime(timezone=True), nullable=False),
-        Column("cancelled_quantity", Numeric),
-    )
-    risk_assessments = Table(
-        "paper_risk_assessments",
-        metadata,
-        Column("signal_id", Uuid, primary_key=True),
-        Column("decision", String, nullable=False),
-        Column("reason_code", String, nullable=False),
-        Column("approved_quantity", Numeric, nullable=False),
-    )
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆÂˆ˜\XØ][Û—ÜÙ\]Y[˜ÙHˆKˆ˜\YYØ]ˆš[™š[İ[YKˆ™\œÚ[Ûˆˆ‹ˆ˜\XØ][Û—ØÛİ[ˆKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ú[˜ÛÛœÚ\İ[Ù[ÜÜ›Û[×ØXØÛİ[[™×Ú\İÜJ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
 
-    signal_row = connection.execute(
-        select(
-            signals.c.instrument_id,
-            signals.c.decision_time,
-            signals.c.state,
-            signals.c.strategy_version,
-            signals.c.signal_type,
-            signals.c.conviction,
-            signals.c.inputs_hash,
-        ).where(signals.c.signal_id == signal_id)
-    ).mappings().one_or_none()
-    if signal_row is None or signal_row["state"] != "SIGNAL":
-        return False
-    try:
-        signal = Signal(
-            signal_id=signal_id,
-            instrument_id=signal_row["instrument_id"],
-            strategy_version=signal_row["strategy_version"],
-            decision_time=signal_row["decision_time"],
-            signal_type=signal_row["signal_type"],
-            conviction=signal_row["conviction"],
-            inputs_hash=signal_row["inputs_hash"],
-        )
-    except (TypeError, ValueError):
-        return False
-    if (
-        by_type[PaperEffectType.SIGNAL][0].payload_hash
-        != paper_signal_payload_hash(signal)
-    ):
-        return False
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÑ˜ZÙTÜ›Û[Ô™\ÜÚ]ÜK›ØYÙ\œ›ÜˆH[[YQ\œ›ÜŠˆ”TT—ÔÔ•“ÓS×ÓPUT’PSV‘QÔÕUWÒSÓÓ”ÒTÕS•‚ˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆÂˆ˜\XØ][Û—ÜÙ\]Y[˜ÙHˆKˆ˜\YYØ]ˆš[™š[İ[YKˆ™\œÚ[ÛˆˆKˆ˜\XØ][Û—ØÛİ[ˆKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙBˆ\ÜÙ\Ñ˜ZÙTÜ›Û[Ô™\ÜÚ]ÜK›ØYYÜÜ›Û[ÜÈOHÂˆ
+Ü›Û[×ÚYY™™XİÖËLWKš›Ø—Ü[—ÚY
+BˆB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÛZ\ÜÚ[™×ØØ[›ÛšXØ[ÜÚYÛ˜[Ü™XÛİ™\WÛX]\šX[
 
-    risk_row = connection.execute(
-        select(
-            risk_assessments.c.decision,
-            risk_assessments.c.reason_code,
-            risk_assessments.c.approved_quantity,
-        ).where(risk_assessments.c.signal_id == signal_id)
-    ).mappings().one_or_none()
-    if risk_row is None:
-        return False
-    try:
-        risk_assessment = RiskAssessment(
-            signal_id=signal_id,
-            decision=risk_row["decision"],
-            reason_code=risk_row["reason_code"],
-            approved_quantity=risk_row["approved_quantity"],
-        )
-    except (TypeError, ValueError):
-        return False
-    if not risk_assessment.approved:
-        return False
-    if (
-        by_type[PaperEffectType.RISK][0].payload_hash
-        != paper_risk_payload_hash(risk_assessment)
-    ):
-        return False
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[ËËËÈHÙš[YÙš^\™J
+Bˆ›İÈHÜÚYÛ˜[Ü›İÊÚYÛ˜[
+Bˆ›İÖÈœİ˜]YŞWİ™\œÚ[Ûˆ—HH›Û™B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+›İË
+JKY™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÜÚYÛ˜[Ü^[ØYÛZ\ÛX]Ú
 
-    order_row = connection.execute(
-        select(
-            orders.c.signal_id,
-            orders.c.instrument_id,
-            orders.c.environment,
-            orders.c.side,
-            orders.c.quantity,
-            orders.c.signal_type,
-        ).where(orders.c.order_id == order_id)
-    ).mappings().one_or_none()
-    if (
-        order_row is None
-        or order_row["signal_id"] != signal_id
-        or order_row["instrument_id"] != signal.instrument_id
-        or order_row["environment"] != Environment.PAPER.value
-        or order_row["signal_type"] != signal.signal_type.value
-        or order_row["quantity"] != risk_assessment.approved_quantity
-    ):
-        return False
-    try:
-        order_object = Order(
-            order_id=order_id,
-            signal_id=signal_id,
-            instrument_id=order_row["instrument_id"],
-            side=order_row["side"],
-            quantity=order_row["quantity"],
-            environment=order_row["environment"],
-            signal_type=order_row["signal_type"],
-        )
-    except (TypeError, ValueError):
-        return False
-    if (
-        by_type[PaperEffectType.ORDER][0].payload_hash
-        != paper_order_payload_hash(order_object)
-    ):
-        return False
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[ËËËÈHÙš[YÙš^\™J
+BˆÛÜœ\YH
+ˆÙY™™Xİ
+Y™™XİÖÌKš›Ø—Ü[—ÚY\\‘Y™™Xİ\K”ÒQÓSÚYÛ˜[œÚYÛ˜[ÚY™ˆˆ
+ˆ
+Kˆ
+H
+ÈY™™XİÖÌN—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+K
+JKÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÛÜ™\—Ü^[ØYÛZ\ÛX]Ú
 
-    if staged_entry:
-        return True
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËËÈHÙš[YÙš^\™J
+BˆÛÜœ\YHY™™XİÖÎŒ—H
+È
+ˆÙY™™Xİ
+Y™™XİÖÌ—Kš›Ø—Ü[—ÚY\\‘Y™™Xİ\K“Ô‘T‹Ü™\‹›Ü™\—ÚY™ˆˆ
+ˆ
+Kˆ
+H
+ÈY™™XİÖÌÎ—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KÜš\Ú×Ü›İÊš\ÚÊKÛÜ™\—Ü›İÊÜ™\ŠJJKˆÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÛÜ™\—ÜÚYÛ˜[İ\WÛZ\ÛX]Ú
 
-    if terminal_type is not None and not partial_fill_cancellation:
-        terminal_effect = by_type[terminal_type][0]
-        if terminal_effect.entity_id != order_id:
-            return False
-        order = order_row
-        terminal = connection.execute(
-            select(
-                terminal_events.c.outcome,
-                terminal_events.c.reason_code,
-                terminal_events.c.event_time,
-                terminal_events.c.cancelled_quantity,
-            ).where(terminal_events.c.order_id == order_id)
-        ).mappings().one_or_none()
-        if terminal is None or terminal["event_time"] < signal.decision_time:
-            return False
-        try:
-            if terminal_type is PaperEffectType.REJECTION:
-                if (
-                    terminal["outcome"] != "REJECTED"
-                    or terminal["cancelled_quantity"] is not None
-                ):
-                    return False
-                outcome = ExecutionRejection(
-                    order_id,
-                    signal_id,
-                    order["instrument_id"],
-                    Environment.PAPER,
-                    terminal["reason_code"],
-                    terminal["event_time"],
-                )
-            else:
-                if (
-                    terminal["outcome"] != "CANCELLED"
-                    or terminal["cancelled_quantity"] is None
-                    or terminal["cancelled_quantity"] != order_object.quantity
-                ):
-                    return False
-                outcome = ExecutionCancellation(
-                    order_id,
-                    signal_id,
-                    order["instrument_id"],
-                    Environment.PAPER,
-                    terminal["reason_code"],
-                    terminal["event_time"],
-                    terminal["cancelled_quantity"],
-                )
-        except (TypeError, ValueError):
-            return False
-        return terminal_effect.payload_hash == paper_terminal_payload_hash(outcome)
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËËÈHÙš[YÙš^\™J
+Bˆ›İÈHÛÜ™\—Ü›İÊÜ™\ŠBˆ›İÖÈœÚYÛ˜[İ\H—HHÚYÛ˜[\K‘VU˜[YB‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KÜš\Ú×Ü›İÊš\ÚÊK›İÊJKY™™XİÂˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÛÜ™\—Ü]X[]WØX›İ™WÙ\˜X›WÜš\Ú×Ø\›İ˜[
 
-    fill_id = by_type[PaperEffectType.FILL][0].entity_id
-    pnl_event_id = by_type[PaperEffectType.PNL][0].entity_id
-    fill = connection.execute(
-        select(
-            fills.c.order_id,
-            fills.c.quantity,
-            fills.c.fill_price,
-            fills.c.slippage,
-            fills.c.transaction_cost,
-            fills.c.filled_at,
-            fills.c.cost_model_version,
-        ).where(fills.c.fill_id == fill_id)
-    ).mappings().one_or_none()
-    if (
-        fill is None
-        or fill["order_id"] != order_id
-        or fill["filled_at"] < signal.decision_time
-    ):
-        return False
-    try:
-        durable_fill = Fill(
-            fill_id=fill_id,
-            order_id=order_id,
-            signal_id=signal_id,
-            instrument_id=order_object.instrument_id,
-            side=order_object.side,
-            quantity=fill["quantity"],
-            price=fill["fill_price"],
-            commission=fill["transaction_cost"],
-            slippage=fill["slippage"],
-            cost_model_version=fill["cost_model_version"],
-            fill_time=fill["filled_at"],
-        )
-        expected_fill_hash = paper_fill_payload_hash(durable_fill)
-    except (TypeError, ValueError):
-        return False
-    if partial_fill_cancellation:
-        if durable_fill.quantity >= order_object.quantity:
-            return False
-    elif durable_fill.quantity != order_object.quantity:
-        return False
-    if by_type[PaperEffectType.FILL][0].payload_hash != expected_fill_hash:
-        return False
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹ËËÈHÙš[YÙš^\™J
+Bˆš\ÚÈHš\ÚĞ\ÜÙ\ÜÛY[
+ˆÚYÛ˜[ÚY\ÚYÛ˜[œÚYÛ˜[ÚYˆXÚ\Ú[ÛTš\ÚÑXÚ\Ú[Û‹T“Õ‘Kˆ™X\ÛÛ—ØÛÙOH•TÕĞT“Õ‘Q‹ˆ\›İ™YÜ]X[]O[Ü™\‹œ]X[]HHXÚ[X[
+ŒHŠKˆ
+BˆY™™XİÈHY™™XİÖÎŒWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”’TÒËˆÚYÛ˜[œÚYÛ˜[ÚYˆ\\—Üš\Ú×Ü^[ØYÚ\Ú
+š\ÚÊKˆ
+Kˆ
+H
+ÈY™™XİÖÌ—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KÜš\Ú×Ü›İÊš\ÚÊKÛÜ™\—Ü›İÊÜ™\ŠJBˆ
+KˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ùš[Û[šÙYİ×ÙY™™\™[ÛÜ™\Š
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆZ\ÛX]ÚYÙš[HÙš[Ü›İÊš[
+BˆZ\ÛX]ÚYÙš[È›Ü™\—ÚY—HH]ZY
 
-    pnl = connection.execute(
-        select(
-            pnl_events.c.position_id,
-            pnl_events.c.amount,
-            pnl_events.c.event_time,
-        ).where(pnl_events.c.pnl_event_id == pnl_event_id)
-    ).mappings().one_or_none()
-    if pnl is not None:
-        # Position-based legacy PNL can authenticate historical lineage, but
-        # cannot prove the portfolio accounting required for run reconciliation.
-        # A recovery decision must never advertise that chain as complete.
-        if require_portfolio_pnl:
-            return False
-        if pnl["event_time"] < durable_fill.fill_time:
-            return False
-        try:
-            durable_pnl = PaperPnLEvent(
-                pnl_event_id=pnl_event_id,
-                position_id=pnl["position_id"],
-                amount=pnl["amount"],
-                event_time=pnl["event_time"],
-            )
-            expected_pnl_hash = paper_pnl_payload_hash(durable_pnl)
-        except (TypeError, ValueError):
-            return False
-        if by_type[PaperEffectType.PNL][0].payload_hash != expected_pnl_hash:
-            return False
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆZ\ÛX]ÚYÙš[ˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ùš[Ü^[ØYÛZ\ÛX]Ú
 
-        position = connection.execute(
-            select(
-                positions.c.instrument_id,
-                positions.c.opened_from_signal_id,
-                positions.c.opened_at,
-            ).where(
-                positions.c.position_id == pnl["position_id"]
-            )
-        ).mappings().one_or_none()
-        if not (
-            position is not None
-            and position["opened_from_signal_id"] == signal_id
-            and position["instrument_id"] == durable_fill.instrument_id
-            and position["opened_at"] <= durable_fill.fill_time
-        ):
-            return False
-        # Legacy PNL is valid evidence only for its own position lineage.
-        # A partially filled order also requires a separately authenticated
-        # cancellation of the exact remaining quantity, not just valid PNL.
-        if partial_fill_cancellation:
-            return _verify_partial_fill_cancellation(
-                connection, terminal_events, by_type[PaperEffectType.CANCELLATION][0],
-                order_id, signal_id, order_object, durable_fill,
-            )
-        return True
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÛÜœ\YHY™™XİÖÎŒ×H
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌ×Kš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K‘’Sˆš[™š[ÚYˆ™ˆˆ
+ˆˆ
+Kˆ
+H
+ÈY™™XİÖÍ—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ
+Bˆ
+KˆÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ùš[İ]Ü™Y]\×ÜÚYÛ˜[ÙXÚ\Ú[ÛŠ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+Bˆ™[X]\™WÙš[Hš[
+ˆš[ÚYYš[™š[ÚYˆÜ™\—ÚYYš[›Ü™\—ÚYˆÚYÛ˜[ÚYYš[œÚYÛ˜[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆÚYOYš[œÚYKˆ]X[]OYš[œ]X[]KˆšXÙOYš[œšXÙKˆÛÛ[Z\ÜÚ[ÛYš[˜ÛÛ[Z\ÜÚ[Û‹ˆÛ\YÙOYš[œÛ\YÙKˆÛÜİÛ[Ù[İ™\œÚ[ÛYš[˜ÛÜİÛ[Ù[İ™\œÚ[Û‹ˆš[İ[YO\ÚYÛ˜[™XÚ\Ú[Û—İ[YHH[YY[JZ[]\ÏLJKˆ
+BˆY™™XİÈHY™™XİÖÎŒ×H
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌ×Kš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K‘’Sˆ™[X]\™WÙš[™š[ÚYˆ\\—Ùš[Ü^[ØYÚ\Ú
+™[X]\™WÙš[
+Kˆ
+Kˆ
+H
+ÈY™™XİÖÍ—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊ™[X]\™WÙš[
+Kˆ
+Bˆ
+KˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü\X[Ùš[Ø\×ØÛÛ\]WÙ^Xİ][ÛŠ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+Bˆ\X[Ùš[Hš[
+ˆš[ÚYYš[™š[ÚYˆÜ™\—ÚYYš[›Ü™\—ÚYˆÚYÛ˜[ÚYYš[œÚYÛ˜[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆÚYOYš[œÚYKˆ]X[]OYš[œ]X[]HHXÚ[X[
+ŒHŠKˆšXÙOYš[œšXÙKˆÛÛ[Z\ÜÚ[ÛYš[˜ÛÛ[Z\ÜÚ[Û‹ˆÛ\YÙOYš[œÛ\YÙKˆÛÜİÛ[Ù[İ™\œÚ[ÛYš[˜ÛÜİÛ[Ù[İ™\œÚ[Û‹ˆš[İ[YOYš[™š[İ[YKˆ
+BˆY™™XİÈHY™™XİÖÎŒ×H
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌ×Kš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K‘’Sˆ\X[Ùš[™š[ÚYˆ\\—Ùš[Ü^[ØYÚ\Ú
+\X[Ùš[
+Kˆ
+Kˆ
+H
+ÈY™™XİÖÍ—B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊ\X[Ùš[
+Kˆ
+Bˆ
+KˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü›Ü^[ØYÛZ\ÛX]Ú
 
-    portfolio_pnl = connection.execute(
-        select(
-            portfolio_pnl_events.c.portfolio_id,
-            portfolio_pnl_events.c.fill_id,
-            portfolio_pnl_events.c.instrument_id,
-            portfolio_pnl_events.c.realized_pnl_delta,
-            portfolio_pnl_events.c.commission_delta,
-            portfolio_pnl_events.c.event_time,
-        ).where(portfolio_pnl_events.c.pnl_event_id == pnl_event_id)
-    ).mappings().one_or_none()
-    if portfolio_pnl is None:
-        return False
-    try:
-        durable_portfolio_pnl = PaperPortfolioPnLEvent(
-            pnl_event_id=pnl_event_id,
-            portfolio_id=portfolio_pnl["portfolio_id"],
-            fill_id=portfolio_pnl["fill_id"],
-            instrument_id=portfolio_pnl["instrument_id"],
-            realized_pnl_delta=portfolio_pnl["realized_pnl_delta"],
-            commission_delta=portfolio_pnl["commission_delta"],
-            event_time=portfolio_pnl["event_time"],
-        )
-    except (TypeError, ValueError):
-        return False
-    if (
-        durable_portfolio_pnl.fill_id != durable_fill.fill_id
-        or durable_portfolio_pnl.instrument_id != durable_fill.instrument_id
-        or durable_portfolio_pnl.event_time != durable_fill.fill_time
-        or durable_portfolio_pnl.commission_delta != durable_fill.commission
-    ):
-        return False
-    counted_applications = portfolio_fill_applications.alias("counted_applications")
-    application_counts = (
-        select(
-            counted_applications.c.portfolio_id,
-            func.count().label("application_count"),
-        )
-        .group_by(counted_applications.c.portfolio_id)
-        .subquery()
-    )
-    application = connection.execute(
-        select(
-            portfolio_fill_applications.c.application_sequence,
-            portfolio_fill_applications.c.applied_at,
-            portfolios.c.version,
-            application_counts.c.application_count,
-        )
-        .select_from(
-            portfolio_fill_applications.join(
-                portfolios,
-                portfolio_fill_applications.c.portfolio_id == portfolios.c.portfolio_id,
-            ).join(
-                application_counts,
-                portfolio_fill_applications.c.portfolio_id
-                == application_counts.c.portfolio_id,
-            )
-        )
-        .where(
-            portfolio_fill_applications.c.portfolio_id
-            == durable_portfolio_pnl.portfolio_id,
-            portfolio_fill_applications.c.fill_id == durable_fill.fill_id,
-        )
-    ).mappings().one_or_none()
-    if (
-        application is None
-        or application["applied_at"] < durable_fill.fill_time
-        or application["application_sequence"] > application["version"]
-        or application["version"] != application["application_count"]
-    ):
-        return False
-    if (
-        by_type[PaperEffectType.PNL][0].payload_hash
-        != paper_portfolio_pnl_payload_hash(durable_portfolio_pnl)
-    ):
-        return False
-    try:
-        verified_ledger = SqlAlchemyPaperPortfolioRepository(connection).verify_accounting_history(
-            durable_portfolio_pnl.portfolio_id,
-            current_job_run_id=by_type[PaperEffectType.PNL][0].job_run_id,
-        )
-    except (RuntimeError, ValueError):
-        return False
-    if verified_ledger is None:
-        return False
-    if not partial_fill_cancellation:
-        return True
-    return _verify_partial_fill_cancellation(
-        connection, terminal_events, by_type[PaperEffectType.CANCELLATION][0],
-        order_id, signal_id, order_object, durable_fill,
-    )
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[›Ù]™[HÙš[YÙš^\™J
+BˆÛÜœ\YHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ™ˆˆ
+ˆˆ
+Kˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ›Ù]™[
+Kˆ
+Bˆ
+KˆÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü›İ]Ü™Y]\×Ùš[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[›Ù]™[HÙš[YÙš^\™J
+Bˆ™[X]\™WÜ›H\\”“]™[
+ˆ›Ù]™[ÚY\›Ù]™[œ›Ù]™[ÚYˆÜÚ][Û—ÚY\›Ù]™[œÜÚ][Û—ÚYˆ[[İ[\›Ù]™[˜[[İ[ˆ]™[İ[YOYš[™š[İ[YHH[YY[JZ[]\ÏLJKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ™[X]\™WÜ›œ›Ù]™[ÚYˆ\\—Ü›Ü^[ØYÚ\Ú
+™[X]\™WÜ›
+Kˆ
+Kˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ™[X]\™WÜ›
+Kˆ
+Bˆ
+KˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü›ÜÜÚ][Û—Ùœ›ÛWÙY™™\™[ÜÚYÛ˜[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[›Ù]™[HÙš[YÙš^\™J
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ›Ù]™[
+KˆÂˆš[œİ[Y[ÚYˆÚYÛ˜[š[œİ[Y[ÚYˆ›Ü[™YÙœ›ÛWÜÚYÛ˜[ÚYˆ]ZY
+
+Kˆ›Ü[™YØ]ˆÚYÛ˜[™XÚ\Ú[Û—İ[YKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü›ÜÜÚ][Û—Ù›Ü—ÙY™™\™[Ú[œİ[Y[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[›Ù]™[HÙš[YÙš^\™J
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ›Ù]™[
+KˆÂˆš[œİ[Y[ÚYˆ]ZY
+
+Kˆ›Ü[™YÙœ›ÛWÜÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYˆ›Ü[™YØ]ˆÚYÛ˜[™XÚ\Ú[Û—İ[YKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Ü›ÜÜÚ][Û—ÛÜ[™YØY\—Ùš[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[›Ù]™[HÙš[YÙš^\™J
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ›Ù]™[
+KˆÂˆš[œİ[Y[ÚYˆÚYÛ˜[š[œİ[Y[ÚYˆ›Ü[™YÙœ›ÛWÜÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYˆ›Ü[™YØ]ˆš[™š[İ[YH
+È[YY[JÙXÛÛ™ÏLJKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È˜[ÙB‚‚™YˆÛ›Û—Ùš[Ùš^\™J\›Z[˜[İ\JN‚ˆ›Ø—Ü[—ÚYH]ZY
+
+BˆÚYÛ˜[ÚYH]ZY
+
+BˆÜ™\—ÚYH]ZY
+
+Bˆ]™[İ[YHH]][YJŒ‹L‹MKš[™›ÏUUÊBˆÚYÛ˜[HÜÚYÛ˜[
+ÚYÛ˜[ÚY
+BˆÜ™\ˆHÛÜ™\ŠÜ™\—ÚYÚYÛ˜[
+Bˆš\ÚÈHØ\›İ™YÜš\ÚÊÚYÛ˜[ÚY
+BˆYˆ\›Z[˜[İ\H\È\\‘Y™™Xİ\K”‘R‘PÕSÓ‚ˆİ]ÛÛYHH^Xİ][Û”™Z™Xİ[ÛŠˆÜ™\—ÚYˆÚYÛ˜[ÚYˆÚYÛ˜[š[œİ[Y[ÚYˆ[š\›Û›Y[”TT‹ˆ•TÕÔ‘R‘PÕSÓˆ‹ˆ]™[İ[YKˆ
+Bˆ[ÙN‚ˆİ]ÛÛYHH^Xİ][ÛØ[˜Ù[][ÛŠˆÜ™\—ÚYˆÚYÛ˜[ÚYˆÚYÛ˜[š[œİ[Y[ÚYˆ[š\›Û›Y[”TT‹ˆ•TÕĞĞSÑSUSÓˆ‹ˆ]™[İ[YKˆXÚ[X[
+ŒLŠKˆ
+BˆY™™XİÈH
+ˆÙY™™Xİ
+›Ø—Ü[—ÚY\\‘Y™™Xİ\K”ÒQÓSÚYÛ˜[ÚY\\—ÜÚYÛ˜[Ü^[ØYÚ\Ú
+ÚYÛ˜[
+JKˆÙY™™Xİ
+›Ø—Ü[—ÚY\\‘Y™™Xİ\K”’TÒËÚYÛ˜[ÚY\\—Üš\Ú×Ü^[ØYÚ\Ú
+š\ÚÊJKˆÙY™™Xİ
+›Ø—Ü[—ÚY\\‘Y™™Xİ\K“Ô‘T‹Ü™\—ÚY\\—ÛÜ™\—Ü^[ØYÚ\Ú
+Ü™\ŠJKˆÙY™™Xİ
+›Ø—Ü[—ÚY\›Z[˜[İ\KÜ™\—ÚY\\—İ\›Z[˜[Ü^[ØYÚ\Ú
+İ]ÛÛYJJKˆ
+Bˆ™]\›ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÂ‚‚™Yˆİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÊN‚ˆØ[˜Ù[YÜ]X[]HH
+ˆİ]ÛÛYK˜Ø[˜Ù[YÜ]X[]HYˆ\Ú[œİ[˜ÙJİ]ÛÛYK^Xİ][ÛØ[˜Ù[][ÛŠH[ÙH›Û™Bˆ
+Bˆ™]\›ˆ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÂˆ›İ]ÛÛYHˆ
+ˆĞSÑSQˆYˆ\Ú[œİ[˜ÙJİ]ÛÛYK^Xİ][ÛØ[˜Ù[][ÛŠH[ÙH”‘R‘PÕQ‚ˆ
+Kˆœ™X\ÛÛ—ØÛÙHˆİ]ÛÛYKœ™X\ÛÛ—ØÛÙKˆ™]™[İ[YHˆ
+ˆİ]ÛÛYK˜Ø[˜Ù[][Û—İ[YBˆYˆ\Ú[œİ[˜ÙJİ]ÛÛYK^Xİ][ÛØ[˜Ù[][ÛŠBˆ[ÙHİ]ÛÛYKœ™Z™Xİ[Û—İ[YBˆ
+Kˆ˜Ø[˜Ù[YÜ]X[]HˆØ[˜Ù[YÜ]X[]KˆKˆ
+B‚‚™Yˆ\İİ™\šYšY\—ØXØÙ\×ØÛÚ\™[Ü™Z™Xİ[Û—Û[™XYÙJ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÈHÛ›Û—Ùš[Ùš^\™J\\‘Y™™Xİ\K”‘R‘PÕSÓŠBˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÊJKY™™XİÂˆ
+H\ÈYB‚‚™Yˆ\İİ™\šYšY\—ØXØÙ\×ØÛÚ\™[ØØ[˜Ù[][Û—Û[™XYÙJ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÈHÛ›Û—Ùš[Ùš^\™J\\‘Y™™Xİ\KĞSÑSUSÓŠBˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÊJKY™™XİÂˆ
+H\ÈYB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×İ\›Z[˜[Ü^[ØYÛZ\ÛX]Ú
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÈHÛ›Û—Ùš[Ùš^\™J\\‘Y™™Xİ\K”‘R‘PÕSÓŠBˆÛÜœ\YHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”‘R‘PÕSÓ‹ˆİ]ÛÛYK›Ü™\—ÚYˆ™ˆˆ
+ˆˆ
+Kˆ
+Bˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÊJKÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×İ\›Z[˜[Ù]™[İ]Ü™Y]\×ÜÚYÛ˜[ÙXÚ\Ú[ÛŠ
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÈHÛ›Û—Ùš[Ùš^\™Jˆ\\‘Y™™Xİ\K”‘R‘PÕSÓ‚ˆ
+Bˆ™[X]\™HH^Xİ][Û”™Z™Xİ[ÛŠˆİ]ÛÛYK›Ü™\—ÚYˆİ]ÛÛYKœÚYÛ˜[ÚYˆİ]ÛÛYKš[œİ[Y[ÚYˆİ]ÛÛYK™[š\›Û›Y[ˆİ]ÛÛYKœ™X\ÛÛ—ØÛÙKˆÚYÛ˜[™XÚ\Ú[Û—İ[YHH[YY[JZ[]\ÏLJKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”‘R‘PÕSÓ‹ˆ™[X]\™K›Ü™\—ÚYˆ\\—İ\›Z[˜[Ü^[ØYÚ\Ú
+™[X]\™JKˆ
+Kˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹™[X]\™Kš\ÚÊJKˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ØØ[˜Ù[][Û—İ]ÛX]™\×İ[™š[YÜ]X[]WÛÜ[Š
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹İ]ÛÛYKš\ÚÈHÛ›Û—Ùš[Ùš^\™Jˆ\\‘Y™™Xİ\KĞSÑSUSÓ‚ˆ
+Bˆ[˜ÛÛ\]HH^Xİ][ÛØ[˜Ù[][ÛŠˆİ]ÛÛYK›Ü™\—ÚYˆİ]ÛÛYKœÚYÛ˜[ÚYˆİ]ÛÛYKš[œİ[Y[ÚYˆİ]ÛÛYK™[š\›Û›Y[ˆİ]ÛÛYKœ™X\ÛÛ—ØÛÙKˆİ]ÛÛYK˜Ø[˜Ù[][Û—İ[YKˆİ]ÛÛYK˜Ø[˜Ù[YÜ]X[]HHXÚ[X[
+ŒHŠKˆ
+BˆY™™XİÈHY™™XİÖÎ‹LWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖËLWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\KĞSÑSUSÓ‹ˆ[˜ÛÛ\]K›Ü™\—ÚYˆ\\—İ\›Z[˜[Ü^[ØYÚ\Ú
+[˜ÛÛ\]JKˆ
+Kˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠİ\›Z[˜[Ü›İÜÊÚYÛ˜[Ü™\‹[˜ÛÛ\]Kš\ÚÊJKˆY™™XİËˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Üš\Ú×ÙY™™XİİÚ]İ]ÛX]Ú[™×Ø\ÜÙ\ÜÛY[Ü^[ØY
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ëš\ÚËËÈHÙš[YÙš^\™J
+BˆÛÜœ\YHY™™XİÖÎŒWH
+È
+ˆÙY™™Xİ
+Y™™XİÖÌWKš›Ø—Ü[—ÚY\\‘Y™™Xİ\K”’TÒËÚYÛ˜[œÚYÛ˜[ÚY™ˆˆ
+ˆ
+Kˆ
+H
+ÈY™™XİÖÌ—Bˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KÜš\Ú×Ü›İÊš\ÚÊJJKÛÜœ\Yˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×ÛZ\ÜÚ[™×Ù\˜X›WÜš\Ú×Ø\ÜÙ\ÜÛY[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[ËËËÈHÙš[YÙš^\™J
+Bˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+K›Û™JJKY™™XİÂˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—Ü™Z™Xİ×Û›Û—Ø\›İ™YÙ\˜X›WÜš\Ú×Ø\ÜÙ\ÜÛY[
+
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[ËËËÈHÙš[YÙš^\™J
+Bˆ™Z™XİYHš\ÚĞ\ÜÙ\ÜÛY[
+ˆÚYÛ˜[ÚY\ÚYÛ˜[œÚYÛ˜[ÚYˆXÚ\Ú[ÛTš\ÚÑXÚ\Ú[Û‹”‘R‘PÕˆ™X\ÛÛ—ØÛÙOH•TÕÔ‘R‘PÕQ‹ˆ\›İ™YÜ]X[]OQXÚ[X[
+ŒŠKˆ
+BˆY™™XİÈHY™™XİÖÎŒWH
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌWKš›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”’TÒËˆÚYÛ˜[œÚYÛ˜[ÚYˆ\\—Üš\Ú×Ü^[ØYÚ\Ú
+™Z™XİY
+Kˆ
+Kˆ
+H
+ÈY™™XİÖÌ—Bˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KÜš\Ú×Ü›İÊ™Z™XİY
+JJKY™™XİÂˆ
+H\È˜[ÙB‚‚]\İ›X\šËœ\˜[Y]š^™Jˆ
+[\\ˆ‹™^XİYŠKˆÂˆ
+›Û™KYJKˆ
+›Z\ÜÚ[™È‹˜[ÙJKˆ
+[™\—ØØ[˜Ù[Y‹˜[ÙJKˆ
+›İ™\—ØØ[˜Ù[Y‹˜[ÙJKˆ
+˜™Y›Ü™WÙš[‹˜[ÙJKˆ
+Ü›Û™×Ûİ]ÛÛYH‹˜[ÙJKˆ
+Ü›Û™×Ú\Ú‹˜[ÙJKˆ
+Ü›Û™×ÛÜ™\ˆ‹˜[ÙJKˆKŠB™Yˆ\İÛYØXŞWÜ\X[Ùš[ØØ[˜Ù[][Û—Ü™\]Z\™\×Ù^Xİİ\›Z[˜[Ù]šY[˜ÙJˆ[\\‹^XİYŠHOˆ›Û™N‚ˆˆˆ“YØXŞHÜÚ][Ûˆ“]\İ›İ\\ÜÈ\X[Yš[Ø[˜Ù[][Ûˆ›ÛÙ‹ˆˆˆ‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚË[Ùš[›Ù]™[HÙš[YÙš^\™J
+Bˆš[Hš[
+ˆš[ÚYY[Ùš[™š[ÚYˆÜ™\—ÚYY[Ùš[›Ü™\—ÚYˆÚYÛ˜[ÚYY[Ùš[œÚYÛ˜[ÚYˆ[œİ[Y[ÚYY[Ùš[š[œİ[Y[ÚYˆÚYOY[Ùš[œÚYKˆ]X[]OQXÚ[X[
+ŠKˆšXÙOY[Ùš[œšXÙKˆÛÛ[Z\ÜÚ[ÛY[Ùš[˜ÛÛ[Z\ÜÚ[Û‹ˆÛ\YÙOY[Ùš[œÛ\YÙKˆÛÜİÛ[Ù[İ™\œÚ[ÛY[Ùš[˜ÛÜİÛ[Ù[İ™\œÚ[Û‹ˆš[İ[YOY[Ùš[™š[İ[YKˆ
+BˆØ[˜Ù[][ÛˆH^Xİ][ÛØ[˜Ù[][ÛŠˆÜ™\‹›Ü™\—ÚYÚYÛ˜[œÚYÛ˜[ÚYÚYÛ˜[š[œİ[Y[ÚYˆ[š\›Û›Y[”TT‹•TÕÔT•PSĞĞSÑS‹ˆš[™š[İ[YH
+È[YY[JÙXÛÛ™ÏLŠKXÚ[X[
+ˆŠKˆ
+BˆØ[˜Ù[][Û—ÙY™™XİHÙY™™Xİ
+ˆY™™XİÖÌKš›Ø—Ü[—ÚY\\‘Y™™Xİ\KĞSÑSUSÓ‹ˆ]ZY
+
+HYˆ[\\ˆOHÜ›Û™×ÛÜ™\ˆˆ[ÙHÜ™\‹›Ü™\—ÚYˆ™ˆˆ
+ˆYˆ[\\ˆOHÜ›Û™×Ú\Úˆ[ÙH\\—İ\›Z[˜[Ü^[ØYÚ\Ú
+Ø[˜Ù[][ÛŠKˆ
+BˆY™™XİÈHY™™XİÖÎŒ×H
+È
+ˆÙY™™Xİ
+ˆY™™XİÖÌKš›Ø—Ü[—ÚY\\‘Y™™Xİ\K‘’Sˆš[™š[ÚY\\—Ùš[Ü^[ØYÚ\Ú
+š[
+Kˆ
+KˆY™™XİÖÍKˆØ[˜Ù[][Û—ÙY™™Xİˆ
+Bˆ\›Z[˜[HÂˆ›İ]ÛÛYHˆ”‘R‘PÕQˆYˆ[\\ˆOHÜ›Û™×Ûİ]ÛÛYHˆ[ÙHĞSÑSQ‹ˆœ™X\ÛÛ—ØÛÙHˆØ[˜Ù[][Û‹œ™X\ÛÛ—ØÛÙKˆ™]™[İ[YHˆ
+ˆš[™š[İ[YHH[YY[JÙXÛÛ™ÏLJBˆYˆ[\\ˆOH˜™Y›Ü™WÙš[ˆ[ÙHØ[˜Ù[][Û‹˜Ø[˜Ù[][Û—İ[YBˆ
+Kˆ˜Ø[˜Ù[YÜ]X[]Hˆ
+ˆXÚ[X[
+HŠHYˆ[\\ˆOH[™\—ØØ[˜Ù[Y‚ˆ[ÙHXÚ[X[
+ÈŠHYˆ[\\ˆOH›İ™\—ØØ[˜Ù[Y‚ˆ[ÙHØ[˜Ù[][Û‹˜Ø[˜Ù[YÜ]X[]Bˆ
+KˆBˆYˆ[\\ˆOH›Z\ÜÚ[™È‚ˆ\›Z[˜[H›Û™BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠ
+ˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+KˆÜ›Ü›İÊ›Ù]™[
+KˆÂˆš[œİ[Y[ÚYˆÚYÛ˜[š[œİ[Y[ÚYˆ›Ü[™YÙœ›ÛWÜÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYˆ›Ü[™YØ]ˆÚYÛ˜[™XÚ\Ú[Û—İ[YKˆKˆ\›Z[˜[ˆ
+JBˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJÛÛ›™Xİ[Û‹Y™™XİÊH\È^XİYˆ\ÜÙ\Ñ˜ZÙTÜ›Û[Ô™\ÜÚ]ÜK›ØYYÜÜ›Û[ÜÈOH×B‚‚‚™Yˆ\İİ™\šYšY\—ÚY˜]\×ÜİXØÙYYYÜÛİ\˜Ù\×Ù›Ü—ÜİYÙYÙš[ØXØÛİ[[™Ê
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËš[ÈHÙš[YÙš^\™J
+BˆÜ›Û[×ÚYH]ZY
+
+Bˆ›Ù]™[H\\”Ü›Û[Ô“]™[
+ˆ›Ù]™[ÚY\\\—ÜÜ›Û[×Ü›Ù]™[ÚY
+Ü›Û[×ÚYš[™š[ÚY
+KˆÜ›Û[×ÚY\Ü›Û[×ÚYˆš[ÚYYš[™š[ÚYˆ[œİ[Y[ÚYYš[š[œİ[Y[ÚYˆ™X[^™YÜ›Ù[OQXÚ[X[
+ŒŠKˆÛÛ[Z\ÜÚ[Û—Ù[OYš[˜ÛÛ[Z\ÜÚ[Û‹ˆ]™[İ[YOYš[™š[İ[YKˆ
+BˆØØ[Ú›Ø—Ü[—ÚYH]ZY
+
+BˆØØ[ÙY™™XİÈH
+ˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K‘’Sˆš[™š[ÚYˆ\\—Ùš[Ü^[ØYÚ\Ú
+š[
+Kˆ
+KˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”“ˆ›Ù]™[œ›Ù]™[ÚYˆ\\—ÜÜ›Û[×Ü›Ü^[ØYÚ\Ú
+›Ù]™[
+Kˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÈ›Ü™\—ÚYˆÜ™\‹›Ü™\—ÚYœÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYKˆÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌJKˆÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌWJKˆÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌ—JKˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆÙš[Ü›İÊš[
+Kˆ›Û™KˆÂˆœÜ›Û[×ÚYˆ›Ù]™[œÜ›Û[×ÚYˆ™š[ÚYˆ›Ù]™[™š[ÚYˆš[œİ[Y[ÚYˆ›Ù]™[š[œİ[Y[ÚYˆœ™X[^™YÜ›Ù[Hˆ›Ù]™[œ™X[^™YÜ›Ù[Kˆ˜ÛÛ[Z\ÜÚ[Û—Ù[Hˆ›Ù]™[˜ÛÛ[Z\ÜÚ[Û—Ù[Kˆ™]™[İ[YHˆ›Ù]™[™]™[İ[YKˆKˆÂˆ˜\XØ][Û—ÜÙ\]Y[˜ÙHˆKˆ˜\YYØ]ˆš[™š[İ[YKˆ™\œÚ[ÛˆˆKˆ˜\XØ][Û—ØÛİ[ˆKˆKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÛÛ›™Xİ[Û‹ØØ[ÙY™™XİË™\]Z\™WÜÜ›Û[×Ü›UYKˆ
+H\ÈYBˆ\ÜÙ\Ñ˜ZÙTÜ›Û[Ô™\ÜÚ]ÜK›ØYYÜÜ›Û[ÜÈOHÂˆ
+Ü›Û[×ÚYØØ[Ú›Ø—Ü[—ÚY
+BˆB‚‚™Yˆ\İÜİYÙYÙš[ØXØÛİ[[™×Ü™Z™Xİ×Ù˜Z[YÜÛİ\˜ÙWÛİÛ™\Š
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹Ëš[ÈHÙš[YÙš^\™J
+BˆØØ[ÙY™™XİÈH
+ˆÙY™™Xİ
+]ZY
+
+K\\‘Y™™Xİ\K‘’Sš[™š[ÚY\\—Ùš[Ü^[ØYÚ\Ú
+š[
+JKˆÙY™™Xİ
+]ZY
+
+K\\‘Y™™Xİ\K”“]ZY
+
+K™ˆˆ
+ˆ
+Kˆ
+Bˆ˜Z[YÜÚYÛ˜[HÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌJBˆ˜Z[YÜÚYÛ˜[È›İÛ™\—Üİ]\È—HH‘RSQ‚ˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÈ›Ü™\—ÚYˆÜ™\‹›Ü™\—ÚYœÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYKˆ˜Z[YÜÚYÛ˜[ˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÛÛ›™Xİ[Û‹ØØ[ÙY™™XİË™\]Z\™WÜÜ›Û[×Ü›UYKˆ
+H\È˜[ÙB‚‚™Yˆ\İİ™\šYšY\—ÚY˜]\×ÜİXØÙYYYÜÚYÛ˜[Ù›Ü—ÜİYÙYÙ[J
+HOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËËÈHÙš[YÙš^\™J
+BˆØØ[Ú›Ø—Ü[—ÚYH]ZY
+
+BˆØØ[ÙY™™XİÈH
+ˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”’TÒËˆÚYÛ˜[œÚYÛ˜[ÚYˆ\\—Üš\Ú×Ü^[ØYÚ\Ú
+š\ÚÊKˆ
+KˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K“Ô‘T‹ˆÜ™\‹›Ü™\—ÚYˆ\\—ÛÜ™\—Ü^[ØYÚ\Ú
+Ü™\ŠKˆ
+Kˆ
+BˆÛÛ›™Xİ[ÛˆHÓ[™XYÙPÛÛ›™Xİ[ÛŠˆ
+ˆÈœÚYÛ˜[ÚYˆÚYÛ˜[œÚYÛ˜[ÚYKˆÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌJKˆÜÚYÛ˜[Ü›İÊÚYÛ˜[
+KˆÜš\Ú×Ü›İÊš\ÚÊKˆÛÜ™\—Ü›İÊÜ™\ŠKˆ
+Bˆ
+B‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÛÛ›™Xİ[Û‹ØØ[ÙY™™XİË™\]Z\™WÜÜ›Û[×Ü›UYKˆ
+H\ÈYBˆ\ÜÙ\Ñ˜ZÙTÜ›Û[Ô™\ÜÚ]ÜK›ØYYÜÜ›Û[ÜÈOH×B‚‚]\İ›X\šËœ\˜[Y]š^™Jˆ[\\ˆ‹ˆÈ›Z\ÜÚ[™×ÜÛİ\˜ÙH‹™˜Z[YÜÛİ\˜ÙH‹Ü›Û™×ÜÛİ\˜ÙWÚ\Ú‹Ü›Û™×ÛÜ™\—ÜÚYÛ˜[—KŠB™Yˆ\İÜİYÙYÙ[WÜ™Z™Xİ×İ[˜]][XØ]YÜÚYÛ˜[ÜÛİ\˜ÙJ[\\ŠHOˆ›Û™N‚ˆY™™XİËÚYÛ˜[Ü™\‹š\ÚËËÈHÙš[YÙš^\™J
+BˆØØ[Ú›Ø—Ü[—ÚYH]ZY
+
+BˆØØ[ÙY™™XİÈH
+ˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K”’TÒËˆÚYÛ˜[œÚYÛ˜[ÚYˆ\\—Üš\Ú×Ü^[ØYÚ\Ú
+š\ÚÊKˆ
+KˆÙY™™Xİ
+ˆØØ[Ú›Ø—Ü[—ÚYˆ\\‘Y™™Xİ\K“Ô‘T‹ˆÜ™\‹›Ü™\—ÚYˆ\\—ÛÜ™\—Ü^[ØYÚ\Ú
+Ü™\ŠKˆ
+Kˆ
+Bˆ\[™[˜ŞWÜÚYÛ˜[ÚYH
+ˆ]ZY
+
+HYˆ[\\ˆOHÜ›Û™×ÛÜ™\—ÜÚYÛ˜[ˆ[ÙHÚYÛ˜[œÚYÛ˜[ÚYˆ
+Bˆ›İÜÈHŞÈœÚYÛ˜[ÚYˆ\[™[˜ŞWÜÚYÛ˜[ÚYWBˆYˆ[\\ˆOHÜ›Û™×ÛÜ™\—ÜÚYÛ˜[‚ˆYˆ[\\ˆOH›Z\ÜÚ[™×ÜÛİ\˜ÙH‚ˆ›İÜË˜\[™
+›Û™JBˆ[ÙN‚ˆÛİ\˜ÙHHÜ™XÛİ™\˜X›WÙY™™XİÜ›İÊY™™XİÖÌJBˆYˆ[\\ˆOH™˜Z[YÜÛİ\˜ÙH‚ˆÛİ\˜ÙVÈ›İÛ™\—Üİ]\È—HH‘RSQ‚ˆ[Yˆ[\\ˆOHÜ›Û™×ÜÛİ\˜ÙWÚ\Ú‚ˆÛİ\˜ÙVÈœ^[ØYÚ\Ú—HH™ˆˆ
+ˆˆ›İÜË˜\[™
+Ûİ\˜ÙJBˆYˆ[\\ˆOHÜ›Û™×ÜÛİ\˜ÙWÚ\Ú‚ˆ›İÜË˜\[™
+ÜÚYÛ˜[Ü›İÊÚYÛ˜[
+JB‚ˆ\ÜÙ\™\šYWÜ\\—Ü™XÛİ™\WÛ[™XYÙJˆÓ[™XYÙPÛÛ›™Xİ[ÛŠ\J›İÜÊJKˆØØ[ÙY™™XİËˆ™\]Z\™WÜÜ›Û[×Ü›UYKˆ
+H\È˜[ÙB

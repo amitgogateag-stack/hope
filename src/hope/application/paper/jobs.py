@@ -124,6 +124,12 @@ class PaperStrategyDecisionJob:
 
         for signal in signals:
             runtime.record_signal(signal)
+        if not signals:
+            runtime.record_no_trade(
+                strategy_version=self.strategy.version,
+                decision_time=as_of,
+                inputs_hash=expected_inputs_hash,
+            )
 
 
 @dataclass(frozen=True)

@@ -9,6 +9,7 @@ from hope.application.jobs import ScheduledJobRun
 
 
 class PaperEffectType(str, Enum):
+    NO_TRADE = "NO_TRADE"
     SIGNAL = "SIGNAL"
     RISK = "RISK"
     ORDER = "ORDER"

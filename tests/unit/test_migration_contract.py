@@ -524,3 +524,12 @@ def test_postgres_pit_market_bar_visibility_enforces_all_information_clocks():
     assert "bar.ingestion_time <= p_as_of" in sql
     assert "bar.effective_time IS NULL OR bar.effective_time <= p_as_of" in sql
     assert "LANGUAGE sql STABLE" in sql
+
+
+def test_no_trade_decisions_have_reciprocal_durable_recovery_evidence() -> None:
+    sql = (ROOT / "migrations/227_paper_no_trade_decision_recovery.sql").read_text()
+    assert "CREATE TABLE paper_no_trade_decisions" in sql
+    assert "CHECK (decision_id = job_run_id)" in sql
+    assert "PAPER_NO_TRADE_EFFECT_REQUIRED" in sql
+    assert "PAPER_NO_TRADE_DECISION_REQUIRED" in sql
+    assert "ARRAY['NO_TRADE']::TEXT[]" in sql

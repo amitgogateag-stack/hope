@@ -42,7 +42,6 @@ _MULTI_ENTITY_STAGED_RECONCILIATION_EFFECT_TYPES = frozenset(
     {PaperEffectType.SIGNAL}
 )
 
-
 def classify_paper_effect_topology(
     effect_types: Iterable[PaperEffectType],
 ) -> PaperEffectTopology:
@@ -83,6 +82,10 @@ def classify_paper_reconciliation_effect_topology(
     verification before the stage can be reconciled.
     """
     values = tuple(effect_types)
+    if values == (PaperEffectType.NO_TRADE,):
+        return PaperEffectTopology.COMPLETE
+    if PaperEffectType.NO_TRADE in values:
+        return PaperEffectTopology.CONTRADICTORY
     if (
         values
         and frozenset(values) == _MULTI_ENTITY_STAGED_RECONCILIATION_EFFECT_TYPES

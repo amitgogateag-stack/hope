@@ -22,9 +22,14 @@ class _Runtime:
     def __init__(self, job_run) -> None:
         self.cycle = PaperCycleContext(job_run)
         self.recorded = []
+        self.no_trade = []
 
     def record_signal(self, signal: Signal) -> bool:
         self.recorded.append(signal)
+        return True
+
+    def record_no_trade(self, **outcome) -> bool:
+        self.no_trade.append(outcome)
         return True
 
 
@@ -184,9 +189,16 @@ def test_paper_strategy_decision_job_allows_explicit_no_trade() -> None:
     strategy = _Strategy(())
     runtime = _runtime(decision_time)
 
-    PaperStrategyDecisionJob(strategy, context, _snapshot(), _Parameters())(runtime)
+    parameters = _Parameters()
+    universe = _snapshot()
+    PaperStrategyDecisionJob(strategy, context, universe, parameters)(runtime)
 
     assert runtime.recorded == []
+    assert runtime.no_trade == [{
+        "strategy_version": strategy.version,
+        "decision_time": decision_time,
+        "inputs_hash": paper_decision_inputs_hash(strategy, context, universe, parameters),
+    }]
 
 
 def test_paper_strategy_decision_job_rejects_context_after_schedule_before_strategy_runs() -> None:

@@ -11,6 +11,7 @@ from sqlalchemy import Connection, Engine
 from hope.application.jobs import JobRunStatus, ScheduledJobRun, create_job_run_completion
 from hope.application.paper.fill_accounting import PaperFillAccountingWriter
 from hope.application.paper.jobs import PaperEntryOrderDecisionJob, PaperStrategyDecisionJob
+from hope.application.paper.no_trade import PaperNoTradeWriter
 from hope.application.paper.orders import PaperOrderWriter
 from hope.application.paper.risk import PaperRiskWriter
 from hope.application.paper.runner import PaperCycleOutcome, PaperCycleRunner, PaperRuntimeContext
@@ -28,6 +29,7 @@ from hope.infrastructure.repositories.market_intelligence_assessments import (
 )
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.paper_fill_accounting import SqlAlchemyPaperFillAccountingRepository
+from hope.infrastructure.repositories.paper_no_trade import SqlAlchemyPaperNoTradeRepository
 from hope.infrastructure.repositories.paper_orders import SqlAlchemyPaperOrderRepository
 from hope.infrastructure.repositories.paper_risk import SqlAlchemyPaperRiskRepository
 from hope.infrastructure.repositories.paper_signals import SqlAlchemyPaperSignalRepository
@@ -250,6 +252,9 @@ class SqlAlchemyPaperRuntime:
         self._terminal_writer = PaperTerminalWriter(
             SqlAlchemyPaperTerminalRepository(connection)
         )
+        self._no_trade_writer = PaperNoTradeWriter(
+            SqlAlchemyPaperNoTradeRepository(connection)
+        )
 
     def _run_registered(
         self,
@@ -265,6 +270,7 @@ class SqlAlchemyPaperRuntime:
             self._fill_writer,
             work,
             terminal_writer=self._terminal_writer,
+            no_trade_writer=self._no_trade_writer,
         )
 
     def quarantine_incomplete_claim(self, job_run: ScheduledJobRun) -> PaperCycleOutcome:
