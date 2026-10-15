@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from uuid import UUID
 
 from hope.application.experiments.config_hash import configuration_hash
@@ -15,8 +16,21 @@ def paper_decision_inputs_hash(
     parameters: ParameterSnapshot,
     *,
     dataset_version_id: UUID | None = None,
+    market_data_max_age: timedelta | None = None,
 ) -> str:
     """Hash the exact PAPER decision inputs, including durable universe and dataset identity."""
+    if market_data_max_age is not None:
+        if not isinstance(market_data_max_age, timedelta):
+            raise TypeError("PAPER_DECISION_INPUTS_REQUIRES_FRESHNESS_TIMEDELTA")
+        if market_data_max_age <= timedelta(0):
+            raise ValueError("PAPER_DECISION_INPUTS_REQUIRES_POSITIVE_FRESHNESS")
+        freshness_microseconds = (
+            market_data_max_age.days * 86_400_000_000
+            + market_data_max_age.seconds * 1_000_000
+            + market_data_max_age.microseconds
+        )
+    else:
+        freshness_microseconds = None
     return configuration_hash(
         {
             "strategy": {
@@ -35,5 +49,8 @@ def paper_decision_inputs_hash(
                 "membership_hash": universe.membership_hash,
             },
             "parameters": parameters.model_dump(mode="json"),
+            "market_data_freshness": {
+                "max_age_microseconds": freshness_microseconds,
+            },
         }
     )

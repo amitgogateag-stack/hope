@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
 from hope.application.paper import PaperCycleOutcome
+from hope.application.paper.provenance import paper_decision_inputs_hash
 from hope.domain.signal.models import Signal, SignalType
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.infrastructure.paper_runtime import (
@@ -23,6 +24,7 @@ from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
+from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
 from hope.infrastructure.scheduling.paper import _preflight_due_paper_job_states
 from hope.infrastructure.repositories.market_data_finalizer import (
     SqlAlchemyMarketDataVersionFinalizer,
@@ -380,6 +382,26 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
     assert received_parameters is parameters
     assert len(inputs_hash) == 64
     with engine.connect() as connection:
+        durable_snapshot = UniverseSnapshotRepository(connection).get(
+            universe_version_id
+        )
+        assert durable_snapshot is not None
+        assert inputs_hash == paper_decision_inputs_hash(
+            strategy,
+            market_context,
+            durable_snapshot,
+            parameters,
+            dataset_version_id=dataset_version_id,
+            market_data_max_age=timedelta(minutes=5),
+        )
+        assert inputs_hash != paper_decision_inputs_hash(
+            strategy,
+            market_context,
+            durable_snapshot,
+            parameters,
+            dataset_version_id=dataset_version_id,
+            market_data_max_age=timedelta(minutes=6),
+        )
         decision = connection.execute(
             text(
                 "SELECT job_run_id, strategy_version, decision_time, inputs_hash "

@@ -142,6 +142,42 @@ def test_paper_decision_inputs_hash_changes_with_decision_inputs() -> None:
     assert paper_decision_inputs_hash(
         strategy, context, universe, _TunedParameters(lookback=21)
     ) != baseline
+    assert paper_decision_inputs_hash(
+        strategy,
+        context,
+        universe,
+        parameters,
+        market_data_max_age=timedelta(minutes=5),
+    ) != paper_decision_inputs_hash(
+        strategy,
+        context,
+        universe,
+        parameters,
+        market_data_max_age=timedelta(minutes=6),
+    )
+
+
+@pytest.mark.parametrize(
+    ("max_age", "error_code"),
+    (
+        ("5 minutes", "PAPER_DECISION_INPUTS_REQUIRES_FRESHNESS_TIMEDELTA"),
+        (timedelta(0), "PAPER_DECISION_INPUTS_REQUIRES_POSITIVE_FRESHNESS"),
+    ),
+)
+def test_paper_decision_inputs_hash_rejects_invalid_freshness_policy(
+    max_age,
+    error_code: str,
+) -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+
+    with pytest.raises((TypeError, ValueError), match=error_code):
+        paper_decision_inputs_hash(
+            _Strategy(),
+            PITMarketContext(as_of=decision_time, bars=()),
+            _snapshot(),
+            _TunedParameters(lookback=20),
+            market_data_max_age=max_age,
+        )
 
 
 def test_paper_strategy_decision_job_requires_universe_snapshot() -> None:

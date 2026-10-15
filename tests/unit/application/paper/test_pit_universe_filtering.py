@@ -131,6 +131,7 @@ def test_durable_decision_exposes_only_active_members_to_context_and_strategy(
     work = decision.bind(object())
 
     assert isinstance(work, PaperStrategyDecisionJob)
+    assert work.market_data_max_age == timedelta(minutes=5)
     assert requested == [(active_id,)]
     runtime = SimpleNamespace(
         cycle=SimpleNamespace(

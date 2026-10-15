@@ -135,6 +135,7 @@ class DurableUniversePaperStrategyDecision:
             snapshot,
             self.parameters,
             dataset_version_id=self.dataset_version_id,
+            market_data_max_age=self.freshness_policy.max_age,
         )
 
 

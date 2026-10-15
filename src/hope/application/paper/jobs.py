@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
 
@@ -49,6 +49,7 @@ class PaperStrategyDecisionJob:
     universe: UniverseSnapshot
     parameters: ParameterSnapshot
     dataset_version_id: UUID | None = None
+    market_data_max_age: timedelta | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -63,6 +64,11 @@ class PaperStrategyDecisionJob:
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_PARAMETER_SNAPSHOT")
         if self.dataset_version_id is not None and not isinstance(self.dataset_version_id, UUID):
             raise TypeError("PAPER_DECISION_JOB_REQUIRES_DATASET_VERSION_ID")
+        if self.market_data_max_age is not None:
+            if not isinstance(self.market_data_max_age, timedelta):
+                raise TypeError("PAPER_DECISION_JOB_REQUIRES_FRESHNESS_TIMEDELTA")
+            if self.market_data_max_age <= timedelta(0):
+                raise ValueError("PAPER_DECISION_JOB_REQUIRES_POSITIVE_FRESHNESS")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
         as_of = self.market_context.as_of
@@ -81,6 +87,7 @@ class PaperStrategyDecisionJob:
             self.universe,
             self.parameters,
             dataset_version_id=self.dataset_version_id,
+            market_data_max_age=self.market_data_max_age,
         )
         active_members = self.universe.active_members(as_of)
         signals = self.strategy.generate_signals(
