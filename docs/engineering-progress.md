@@ -66,6 +66,12 @@ before the isolation guard, then passed after it. The initial broad run also
 caught the migration inventory's missing 229 entry; the explicit expected list
 was extended and the fresh-database rerun passed. No test assertion was weakened.
 Final code review found no additional material issue in the quarantine scope.
+The first push (`57dd1cbb4ff4da7dff4f567206340f76cdc112d0`) and its retry
+could not initialize CI containers: ECR Public returned `toomanyrequests: Data
+limit exceeded` before checkout or tests. CI now pulls the identical pinned
+PostgreSQL digest from Docker Hub. Its registry manifest was verified by digest;
+the database image, Python version, test command and coverage requirement are
+unchanged. This is a repair of this batch's actual CI infrastructure failure.
 Exact pushed-head CI and its run URL/result are published by Actions in issue #5;
 verify that its SHA equals the live branch before resuming the next batch.
 
