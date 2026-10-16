@@ -449,7 +449,7 @@ def test_durable_strategy_decision_loads_exact_universe_and_pit_market_data() ->
 
 
 @pytest.mark.integration
-def test_direct_strategy_decision_without_dataset_identity_fails_before_claim() -> None:
+def test_direct_strategy_decision_cannot_substitute_dataset_identity_before_claim() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(
         "paper-one-shot-direct-unbound-dataset",
@@ -471,7 +471,7 @@ def test_direct_strategy_decision_without_dataset_identity_fails_before_claim() 
 
     with pytest.raises(
         ValueError,
-        match="PAPER_REGISTERED_STRATEGY_REQUIRES_DATASET_VERSION_ID",
+        match="PAPER_REGISTERED_STRATEGY_REQUIRES_DURABLE_BINDING",
     ):
         PaperJobDefinition(
             job_run.job_key,
@@ -481,6 +481,7 @@ def test_direct_strategy_decision_without_dataset_identity_fails_before_claim() 
                 universe,
                 _Parameters(),
                 timedelta(minutes=5),
+                dataset_version_id=uuid4(),
             ),
         )
 
@@ -490,38 +491,29 @@ def test_direct_strategy_decision_without_dataset_identity_fails_before_claim() 
 
 
 @pytest.mark.integration
-def test_direct_strategy_decision_cannot_bypass_market_data_freshness() -> None:
+def test_durable_strategy_decision_cannot_bypass_market_data_freshness() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(
         "paper-one-shot-direct-stale-inputs",
         datetime(2026, 10, 15, 14, 5, tzinfo=UTC),
     )
     _prepare_job(engine, job_run)
-    _, universe_version_id, instrument_id, dataset_version_id = (
+    _, universe_version_id, _, dataset_version_id = (
         _insert_durable_decision_inputs(engine, job_run.scheduled_for)
     )
-    with engine.connect() as connection:
-        universe = UniverseSnapshotRepository(connection).get(universe_version_id)
-        assert universe is not None
-        market_context = PITMarketContextRepository(connection).get(
-            dataset_version_id,
-            as_of=job_run.scheduled_for,
-            universe_version_id=universe_version_id,
-            instrument_ids=(instrument_id,),
-        )
 
     strategy = _NoTradeStrategy()
     registry = PaperJobRegistry(
         [
             PaperJobDefinition(
                 job_run.job_key,
-                PaperStrategyDecisionJob(
+                DurableUniversePaperStrategyDecision(
                     strategy,
-                    market_context,
-                    universe,
+                    dataset_version_id,
+                    job_run.scheduled_for,
+                    universe_version_id,
                     _Parameters(),
-                    timedelta(minutes=4),
-                    dataset_version_id=dataset_version_id,
+                    PaperMarketDataFreshnessPolicy(timedelta(minutes=4)),
                 ),
             )
         ]

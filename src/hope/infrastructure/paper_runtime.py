@@ -209,13 +209,8 @@ class PaperJobDefinition:
             raise ValueError("PAPER_JOB_KEY_NOT_CANONICAL")
         if not callable(self.work) and not isinstance(self.work, ConnectionBoundPaperJob):
             raise TypeError("PAPER_JOB_HANDLER_MUST_BE_CALLABLE")
-        if (
-            isinstance(self.work, PaperStrategyDecisionJob)
-            and self.work.dataset_version_id is None
-        ):
-            raise ValueError(
-                "PAPER_REGISTERED_STRATEGY_REQUIRES_DATASET_VERSION_ID"
-            )
+        if isinstance(self.work, PaperStrategyDecisionJob):
+            raise ValueError("PAPER_REGISTERED_STRATEGY_REQUIRES_DURABLE_BINDING")
 
 
 class PaperJobRegistry:

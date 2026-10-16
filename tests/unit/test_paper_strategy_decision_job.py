@@ -254,7 +254,7 @@ def test_paper_strategy_decision_job_requires_valid_freshness_policy(
         )
 
 
-def test_registered_paper_strategy_decision_requires_durable_dataset_identity() -> None:
+def test_registered_paper_strategy_decision_requires_durable_binding() -> None:
     decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
     universe = _snapshot()
     work = PaperStrategyDecisionJob(
@@ -263,11 +263,12 @@ def test_registered_paper_strategy_decision_requires_durable_dataset_identity() 
         universe,
         _Parameters(),
         FRESHNESS_MAX_AGE,
+        dataset_version_id=uuid4(),
     )
 
     with pytest.raises(
         ValueError,
-        match="PAPER_REGISTERED_STRATEGY_REQUIRES_DATASET_VERSION_ID",
+        match="PAPER_REGISTERED_STRATEGY_REQUIRES_DURABLE_BINDING",
     ):
         PaperJobDefinition("paper-strategy-decision", work)
 
