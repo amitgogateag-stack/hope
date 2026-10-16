@@ -14,6 +14,7 @@ from hope.domain.market_data.models import MarketBar
 from hope.domain.signal.models import Signal, SignalType
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.domain.universe.models import UniverseMember, UniverseVersion
+from hope.infrastructure.paper_runtime import PaperJobDefinition
 
 
 UTC = timezone.utc
@@ -251,6 +252,24 @@ def test_paper_strategy_decision_job_requires_valid_freshness_policy(
             _Parameters(),
             max_age,
         )
+
+
+def test_registered_paper_strategy_decision_requires_durable_dataset_identity() -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    universe = _snapshot()
+    work = PaperStrategyDecisionJob(
+        _Strategy(),
+        _context(decision_time, universe),
+        universe,
+        _Parameters(),
+        FRESHNESS_MAX_AGE,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_REGISTERED_STRATEGY_REQUIRES_DATASET_VERSION_ID",
+    ):
+        PaperJobDefinition("paper-strategy-decision", work)
 
 
 @pytest.mark.parametrize(
