@@ -111,6 +111,22 @@ def test_existing_receipts_are_verified_and_reported(harness, monkeypatch):
     assert result.already_reconciled_run_ids == (runs[1].job_run_id,)
 
 
+def test_claimed_proofs_precede_terminal_history_reverification_after_all_locks(harness, monkeypatch):
+    connection, events = harness
+    runs = sorted([_run(), _run(), _run()], key=lambda r: r.job_run_id.int)
+
+    def lock(run):
+        events.append(("lock", run.job_run_id))
+        return run != runs[0]
+
+    monkeypatch.setattr(batch, "SqlAlchemyJobRunRepository", lambda c:
+                        SimpleNamespace(lock_claimed_for_reconciliation=lock))
+    batch.reconcile_completed_paper_batch(connection, reversed(runs), current=NOW)
+    ids = tuple(r.job_run_id for r in runs)
+    assert events == ["begin", "control", *[("lock", i) for i in ids],
+                      ("proof", ids[1]), ("proof", ids[2]), ("proof", ids[0]), "release"]
+
+
 @pytest.mark.parametrize("failure", [RuntimeError("proof failed"), SQLAlchemyError("db failed"), KeyboardInterrupt()])
 def test_failure_rolls_back_whole_batch(harness, monkeypatch, failure):
     connection, events = harness

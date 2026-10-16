@@ -1,6 +1,6 @@
 # HOPE engineering progress
 
-## October 16, 2026 — Batch A: evidence-preserving quarantine
+## October 16, 2026 - Batch A: evidence-preserving quarantine
 
 Starting verified branch HEAD: `cae46ba2c1ddc0b37aab39e515af28fc8a685580`.
 Its exact-head push CI and issue #5 marker were green before implementation.
@@ -89,11 +89,9 @@ read-only connection.
 
 ## Next investigations
 
-1. Reproduce shared-portfolio recovery of multiple complete CLAIMED jobs. Code
-   review indicates per-job owner verification may reject a peer in the same
-   locked batch. Existing batch fixtures use NO_TRADE; add genuine multi-job
-   economic histories before choosing a change. Do not admit arbitrary CLAIMED
-   owners or weaken public recovery ownership checks.
+1. Shared-portfolio investigation now has an executable reproduction; see the
+   October 16 continuation below. Keep verifying supported writer boundaries
+   before introducing any wider recovery capability.
 2. Batch B: trace PIT effective-time/freshness and immutable research provenance
    through cost/slippage, out-of-sample and walk-forward validation; implement only
    demonstrated defects or justified capability gaps.
@@ -112,3 +110,45 @@ results and blockers here. Never modify `day29-green-baseline` at
 `7e9d341742818a97accce3e2301b1c7f96596795`, enable LIVE, alter existing risk/strategy
 rules, expose credentials or fabricate evidence. Confirm scheduler execution from
 actual runs; creation alone is not proof that an unattended cycle has executed.
+
+## October 16 continuation - shared-portfolio reconciliation order
+
+Starting HEAD 76d8fd734127cd859f5d898beee93d0f0c3408c1 was reverified against
+successful exact-head CI run 38909626010 and issue #5 before work.
+
+The initially suspected state of two complete CLAIMED owners sharing a portfolio
+is rejected by the authoritative fill/accounting writer. Executable tests confirm
+that it refuses to extend history owned by another CLAIMED job, preserving cash
+and effects. No owner-allowlist bypass or relaxed accounting verification is needed.
+
+A narrower, reachable batch defect was reproduced using only supported writers:
+reconcile the first job, then persist the second job's complete accounting. A
+mixed selection containing the first SUCCEEDED receipt and second CLAIMED job
+fails if UUID processing order verifies the first receipt first. That receipt
+checks the entire current portfolio and rejects the newer CLAIMED owner, even
+though the same batch could safely reconcile that explicitly selected owner.
+
+The fix keeps every job lock in UUID order, then processes selected CLAIMED jobs
+before terminal receipt verification. All existing topology, lineage, accounting,
+owner and immutable receipt proofs run unchanged under the original batch
+savepoint. The batch still rejects omitted CLAIMED peers, partial evidence,
+FAILED members and corrupt histories; any late verification error rolls back the
+new transition and receipt. This neither discovers jobs nor reapplies accounting.
+
+Regression scenarios cover deterministic UUID order, both input orders,
+incomplete-member rollback, omitted peer refusal, concurrent retries, historical
+proof failure after new receipt insertion, backend death before commit, and exact
+cash/position/P&L/effect/receipt cardinality after restart. Local test results and
+exact pushed-head CI are recorded in the completion report and Actions issue #5.
+
+The existing AWS stored-data authentication limitation remains unchanged. No
+AWS deployment, credential disclosure, risk/strategy changes or LIVE enablement
+is part of this continuation.
+
+Continuation validation: five new real PostgreSQL scenarios passed; the batch
+unit suite passed 18 checks. The complete local Python 3.12 / PostgreSQL 17.11
+run passed 2,401 tests in 212.14 seconds with 89.26% coverage (unchanged 89%
+minimum), including all PostgreSQL tests. Three Bash-dependent contract files
+remain excluded locally because this Windows host lacks Bash; exact-head Linux
+CI executes them. The updated batch module has 100% statement coverage. No
+existing test assertion, owner authorization, strategy or risk rule was relaxed.

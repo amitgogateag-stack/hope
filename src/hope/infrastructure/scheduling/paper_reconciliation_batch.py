@@ -65,13 +65,20 @@ def reconcile_completed_paper_batch(
         with connection.begin_nested():
             SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
             repository = SqlAlchemyJobRunRepository(connection)
+            claimed, terminal = [], []
             for run in ordered:
                 # False may mean a terminal run. Its receipt is authenticated
                 # below while the row lock remains held; it is never skipped.
-                _job_identity_checked(
+                is_claimed = _job_identity_checked(
                     lambda run=run: repository.lock_claimed_for_reconciliation(run)
                 )
-            for run in ordered:
+                (claimed if is_claimed else terminal).append(run)
+            # Prior terminal receipts reverify the complete current portfolio
+            # history. Reconcile selected in-flight owners first so an older
+            # receipt cannot reject a valid newer accounting owner in this same
+            # batch. Lock acquisition remains canonical; all proofs and any
+            # transitions still share the batch savepoint and owner checks.
+            for run in (*claimed, *terminal):
                 changed = _reconcile_completed_paper_run(connection, run, current=current)
                 (reconciled if changed else existing).append(run.job_run_id)
     except SQLAlchemyError as exc:

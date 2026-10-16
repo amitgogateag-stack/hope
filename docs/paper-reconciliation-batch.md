@@ -8,10 +8,17 @@ The frozen `day29-green-baseline` branch remains at
 
 The batch consumes at most `max_runs + 1` input entries and rejects excess input,
 empty selections, duplicate run IDs, non-PAPER identities, invalid clocks, and
-limits outside 1–32 before issuing database operations. It takes the existing
+limits outside 1-32 before issuing database operations. It takes the existing
 PAPER control lock, checks RUNNING, then locks job rows in UUID order before any
 proof. This keeps opposite-order batches consistent with the existing control
 and effect-writer serialization protocol.
+
+Proof order is distinct from lock order. After all UUID-ordered locks are held,
+selected CLAIMED runs are reconciled first, then terminal receipts are reverified.
+An older receipt verifies the portfolio's entire current accounting history; it
+must not reject a valid newer owner that this same batch can first reconcile.
+Each group retains UUID order. Unselected CLAIMED owners remain ineligible, and
+partial/FAILED/unauthenticated selected members still roll back the whole batch.
 
 All selected runs must pass the existing exact topology, durable execution lineage,
 accounting, terminal state and immutable audit receipt checks. Already reconciled
