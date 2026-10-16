@@ -263,6 +263,102 @@ def test_pnl_persist_rejects_event_not_derived_from_durable_fill(mismatch):
         repository.persist(pnl_effect, event)
 
 
+@pytest.mark.parametrize("mismatch", ["instrument", "event_time", "commission"])
+def test_pnl_read_rejects_legacy_event_not_derived_from_durable_fill(mismatch):
+    event = _event()
+    run = create_scheduled_job_run(
+        "pnl-read-source-material", datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    pnl_effect = create_paper_effect(
+        run,
+        PaperEffectType.PNL,
+        event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    fill_effect = create_paper_effect(
+        run, PaperEffectType.FILL, event.fill_id, "a" * 64,
+    )
+    source = {
+        "instrument_id": event.instrument_id,
+        "filled_at": event.event_time,
+        "transaction_cost": event.commission_delta,
+    }
+    if mismatch == "instrument":
+        source["instrument_id"] = uuid4()
+    elif mismatch == "event_time":
+        source["filled_at"] = event.event_time - timedelta(seconds=1)
+    else:
+        source["transaction_cost"] = event.commission_delta + Decimal("0.01")
+
+    class _Result:
+        def __init__(self, *, scalar=None, mapping=None):
+            self._scalar = scalar
+            self._mapping = mapping
+
+        def scalar_one_or_none(self):
+            return self._scalar
+
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return self._mapping
+
+    class _Connection:
+        def __init__(self):
+            self.calls = 0
+
+        def execute(self, statement):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(scalar=event.fill_id)
+            return _Result(mapping=source)
+
+    class _Effects:
+        def get(self, effect_type, entity_id):
+            return pnl_effect
+
+        def get_reusable_for_job(self, effect_type, entity_id, job_run_id):
+            if effect_type is PaperEffectType.PNL:
+                return pnl_effect
+            assert (effect_type, entity_id, job_run_id) == (
+                PaperEffectType.FILL, event.fill_id, run.job_run_id,
+            )
+            return fill_effect
+
+    from sqlalchemy import Column, DateTime, MetaData, Numeric, Table, Uuid
+
+    metadata = MetaData()
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._connection = _Connection()
+    repository._effects = _Effects()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", metadata,
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
+    repository._fills = Table(
+        "fills", metadata,
+        Column("fill_id", Uuid), Column("order_id", Uuid),
+        Column("filled_at", DateTime(timezone=True)),
+        Column("transaction_cost", Numeric),
+    )
+    repository._orders = Table(
+        "orders", metadata,
+        Column("order_id", Uuid), Column("instrument_id", Uuid),
+    )
+    repository._get_row = lambda event_id: vars(event)
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_MATERIAL_MISMATCH",
+    ):
+        repository.get(
+            event.portfolio_id,
+            event.fill_id,
+            current_job_run_id=run.job_run_id,
+        )
+
+
 @pytest.mark.parametrize("mismatch", ["portfolio", "fill", "event_id"])
 def test_pnl_read_rejects_row_not_matching_requested_identity(mismatch):
     event = _event()

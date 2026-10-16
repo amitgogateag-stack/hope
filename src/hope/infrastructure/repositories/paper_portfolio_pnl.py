@@ -185,6 +185,10 @@ class SqlAlchemyPaperPortfolioPnLRepository:
         ).scalar_one_or_none()
         if application is None:
             raise RuntimeError("PAPER_PORTFOLIO_PNL_EVENT_WITHOUT_APPLICATION")
+        # Triggers reject newly inserted source-material mismatches, but rows
+        # that predate those migrations remain possible.  Recovery must not
+        # treat such legacy accounting as authenticated durable state.
+        self._assert_source_fill_material(event)
         return event
 
     def persist(self, effect: PaperEffect, event: PaperPortfolioPnLEvent) -> bool:
