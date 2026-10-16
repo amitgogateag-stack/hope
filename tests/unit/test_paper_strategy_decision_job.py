@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -20,6 +20,7 @@ from hope.infrastructure.paper_runtime import PaperJobDefinition
 
 UTC = timezone.utc
 FRESHNESS_MAX_AGE = timedelta(minutes=5)
+BOUND_DATASET_VERSION_ID = UUID("00000000-0000-0000-0000-000000000001")
 
 
 class _Runtime:
@@ -122,6 +123,23 @@ def _context(
         for member in universe.active_members(as_of)
     )
     return PITMarketContext(as_of=as_of, bars=bars)
+
+
+def _durably_bound_decision(
+    strategy: Strategy,
+    context: PITMarketContext,
+    universe: UniverseSnapshot,
+    parameters: ParameterSnapshot,
+    max_age: timedelta = FRESHNESS_MAX_AGE,
+) -> PaperStrategyDecisionJob:
+    return PaperStrategyDecisionJob._from_durable_binding(
+        strategy,
+        context,
+        universe,
+        parameters,
+        max_age,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
+    )
 
 
 def test_paper_decision_inputs_hash_is_deterministic() -> None:
@@ -318,6 +336,59 @@ def test_wrapped_strategy_decision_cannot_bypass_durable_binding() -> None:
     assert runtime.no_trade == []
 
 
+def test_runtime_proxy_cannot_bypass_durable_binding() -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    universe = _snapshot()
+    strategy = _Strategy(())
+    decision = PaperStrategyDecisionJob(
+        strategy,
+        _context(decision_time, universe),
+        universe,
+        _Parameters(),
+        FRESHNESS_MAX_AGE,
+        dataset_version_id=uuid4(),
+    )
+
+    class _ProductionRuntime(PaperRuntimeContext):
+        def __init__(self):
+            object.__setattr__(self, "cycle", PaperCycleContext(
+                create_scheduled_job_run("paper-proxied-decision", decision_time)
+            ))
+            object.__setattr__(self, "recorded", [])
+            object.__setattr__(self, "no_trade", [])
+
+        def record_signal(self, signal):
+            self.recorded.append(signal)
+            return True
+
+        def record_no_trade(self, **outcome):
+            self.no_trade.append(outcome)
+            return True
+
+    class _RuntimeProxy:
+        def __init__(self, runtime):
+            self._runtime = runtime
+
+        def __getattr__(self, name):
+            return getattr(self._runtime, name)
+
+    runtime = _ProductionRuntime()
+    definition = PaperJobDefinition(
+        "paper-proxied-decision",
+        lambda active_runtime: decision(_RuntimeProxy(active_runtime)),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING",
+    ):
+        definition.work(runtime)
+
+    assert strategy.calls == []
+    assert runtime.recorded == []
+    assert runtime.no_trade == []
+
+
 @pytest.mark.parametrize(
     ("context_factory", "error_code"),
     (
@@ -349,7 +420,7 @@ def test_paper_strategy_decision_job_rejects_unfresh_context_before_strategy_run
     runtime = _runtime(decision_time)
 
     with pytest.raises(RuntimeError, match=error_code):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy,
             context,
             universe,
@@ -373,6 +444,7 @@ def test_paper_strategy_decision_job_records_valid_strategy_signals() -> None:
         context,
         universe,
         parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
         market_data_max_age=FRESHNESS_MAX_AGE,
     )
     signal = _signal(
@@ -383,7 +455,7 @@ def test_paper_strategy_decision_job_records_valid_strategy_signals() -> None:
     strategy.signals = (signal,)
     runtime = _runtime(decision_time)
 
-    PaperStrategyDecisionJob(
+    _durably_bound_decision(
         strategy, context, universe, parameters, FRESHNESS_MAX_AGE
     )(runtime)
 
@@ -401,7 +473,7 @@ def test_paper_strategy_decision_job_allows_explicit_no_trade() -> None:
     parameters = _Parameters()
     universe = _snapshot()
     context = _context(decision_time, universe)
-    PaperStrategyDecisionJob(
+    _durably_bound_decision(
         strategy, context, universe, parameters, FRESHNESS_MAX_AGE
     )(runtime)
 
@@ -414,6 +486,7 @@ def test_paper_strategy_decision_job_allows_explicit_no_trade() -> None:
             context,
             universe,
             parameters,
+            dataset_version_id=BOUND_DATASET_VERSION_ID,
             market_data_max_age=FRESHNESS_MAX_AGE,
         ),
     }]
@@ -427,7 +500,7 @@ def test_paper_strategy_decision_job_rejects_context_after_schedule_before_strat
     runtime = _runtime(scheduled_for)
 
     with pytest.raises(ValueError, match="PAPER_DECISION_AFTER_JOB_SCHEDULE"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, _Parameters(), FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -442,7 +515,12 @@ def test_paper_strategy_decision_job_validates_all_outputs_before_persisting() -
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(
-        strategy, context, universe, parameters, market_data_max_age=FRESHNESS_MAX_AGE
+        strategy,
+        context,
+        universe,
+        parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
+        market_data_max_age=FRESHNESS_MAX_AGE,
     )
     valid = _signal(
         decision_time,
@@ -458,7 +536,7 @@ def test_paper_strategy_decision_job_validates_all_outputs_before_persisting() -
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -473,7 +551,12 @@ def test_paper_strategy_decision_job_rejects_duplicate_signal_ids_before_persist
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(
-        strategy, context, universe, parameters, market_data_max_age=FRESHNESS_MAX_AGE
+        strategy,
+        context,
+        universe,
+        parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
+        market_data_max_age=FRESHNESS_MAX_AGE,
     )
     signal = _signal(
         decision_time,
@@ -484,7 +567,7 @@ def test_paper_strategy_decision_job_rejects_duplicate_signal_ids_before_persist
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_DUPLICATE_SIGNAL_ID"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -500,7 +583,7 @@ def test_paper_strategy_decision_job_rejects_non_tuple_output() -> None:
     runtime = _runtime(decision_time)
 
     with pytest.raises(TypeError, match="PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, _Parameters(), FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -514,7 +597,12 @@ def test_paper_strategy_decision_job_rejects_strategy_version_mismatch() -> None
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(
-        strategy, context, universe, parameters, market_data_max_age=FRESHNESS_MAX_AGE
+        strategy,
+        context,
+        universe,
+        parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
+        market_data_max_age=FRESHNESS_MAX_AGE,
     )
     strategy.signals = (
         _signal(
@@ -527,7 +615,7 @@ def test_paper_strategy_decision_job_rejects_strategy_version_mismatch() -> None
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -551,7 +639,7 @@ def test_paper_strategy_decision_job_rejects_inputs_hash_mismatch_without_persis
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -565,13 +653,18 @@ def test_paper_strategy_decision_job_rejects_signal_outside_universe() -> None:
     parameters = _Parameters()
     strategy = _Strategy()
     inputs_hash = paper_decision_inputs_hash(
-        strategy, context, universe, parameters, market_data_max_age=FRESHNESS_MAX_AGE
+        strategy,
+        context,
+        universe,
+        parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
+        market_data_max_age=FRESHNESS_MAX_AGE,
     )
     strategy.signals = (_signal(decision_time, inputs_hash=inputs_hash),)
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 
@@ -602,6 +695,7 @@ def test_paper_strategy_decision_job_rejects_signal_outside_membership_interval(
         context,
         universe,
         parameters,
+        dataset_version_id=BOUND_DATASET_VERSION_ID,
         market_data_max_age=FRESHNESS_MAX_AGE,
     )
     strategy.signals = (
@@ -614,7 +708,7 @@ def test_paper_strategy_decision_job_rejects_signal_outside_membership_interval(
     runtime = _runtime(decision_time)
 
     with pytest.raises(ValueError, match="OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"):
-        PaperStrategyDecisionJob(
+        _durably_bound_decision(
             strategy, context, universe, parameters, FRESHNESS_MAX_AGE
         )(runtime)
 

@@ -122,10 +122,7 @@ class PaperStrategyDecisionJob:
         # Registry type checks can be hidden behind a plain callable.  Enforce
         # durable market-data binding at the execution boundary as well, where
         # wrappers can no longer disguise an in-memory strategy decision.
-        if (
-            isinstance(runtime, PaperRuntimeContext)
-            and self._durable_binding is not _DURABLE_PAPER_STRATEGY_BINDING
-        ):
+        if self._durable_binding is not _DURABLE_PAPER_STRATEGY_BINDING:
             raise RuntimeError("PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING")
         as_of = self.market_context.as_of
         if as_of.tzinfo is None or as_of.utcoffset() is None:

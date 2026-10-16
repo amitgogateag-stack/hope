@@ -491,7 +491,7 @@ def test_direct_strategy_decision_cannot_substitute_dataset_identity_before_clai
 
 
 @pytest.mark.integration
-def test_wrapped_strategy_decision_cannot_bypass_durable_binding() -> None:
+def test_runtime_proxy_cannot_bypass_durable_strategy_binding() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(
         "paper-one-shot-wrapped-unbound-dataset",
@@ -520,10 +520,18 @@ def test_wrapped_strategy_decision_cannot_bypass_durable_binding() -> None:
         timedelta(minutes=5),
         dataset_version_id=uuid4(),
     )
+
+    class _RuntimeProxy:
+        def __init__(self, runtime):
+            self._runtime = runtime
+
+        def __getattr__(self, name):
+            return getattr(self._runtime, name)
+
     registry = PaperJobRegistry([
         PaperJobDefinition(
             job_run.job_key,
-            lambda runtime: decision(runtime),
+            lambda runtime: decision(_RuntimeProxy(runtime)),
         )
     ])
 
