@@ -98,7 +98,22 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
             start=plan.start, end=plan.end)
         if len(runs) > 256:
             raise RuntimeError("PAPER_SERVICE_RUN_LIMIT_EXCEEDED")
-    outcomes = run_due_operational_paper_jobs(engine, registry, runs, now=now, max_lateness=plan.max_lateness)
+
+    def authorize_current_candidates(connection: Connection) -> None:
+        # This second read is intentionally inside the scheduler's candidate
+        # transition lock. The first read validates the reviewed plan; this one
+        # closes the demotion-between-validation-and-claim race.
+        candidates = SqlAlchemyStrategyCandidateRepository(connection).current()
+        build_operational_paper_registry(candidates, plan.bindings)
+
+    outcomes = run_due_operational_paper_jobs(
+        engine,
+        registry,
+        runs,
+        now=now,
+        max_lateness=plan.max_lateness,
+        authorize=authorize_current_candidates,
+    )
     return (sum(outcome is PaperCycleOutcome.EXECUTED for _, outcome in outcomes),
             sum(outcome is PaperCycleOutcome.SKIPPED_TERMINAL for _, outcome in outcomes))
 

@@ -239,6 +239,74 @@ def test_due_paper_runner_executes_only_due_runs_in_deterministic_order(monkeypa
     assert [run for run, _ in results] == [due_early, due_late]
 
 
+def test_due_paper_runner_reauthorizes_inside_scheduler_lock_before_recovery(
+    monkeypatch,
+) -> None:
+    events = []
+
+    class AuthorizationConnection:
+        def execute(self, statement, parameters):
+            assert parameters == {
+                "lock_name": "hope:strategy-candidate-capacity"
+            }
+            events.append("candidate-lock")
+
+    authorization_connection = AuthorizationConnection()
+    current = datetime(2026, 9, 23, 14, 0, tzinfo=UTC)
+    run = create_scheduled_job_run("paper-a", current)
+
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository",
+        _RunningPaperControl,
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock",
+        lambda engine: nullcontext(authorization_connection),
+    )
+
+    def recovery(connection, job_runs, *, current, max_lateness):
+        events.append("recovery")
+        return _fresh_recovery(
+            connection,
+            job_runs,
+            current=current,
+            max_lateness=max_lateness,
+        )
+
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.assess_due_paper_recovery",
+        recovery,
+    )
+    monkeypatch.setattr(
+        "hope.infrastructure.scheduling.paper.run_paper_once",
+        lambda *args, **kwargs: events.append("claim") or PaperCycleOutcome.EXECUTED,
+    )
+    registry = __import__(
+        "hope.infrastructure.paper_runtime", fromlist=["PaperJobRegistry"]
+    ).PaperJobRegistry(
+        [
+            __import__(
+                "hope.infrastructure.paper_runtime", fromlist=["PaperJobDefinition"]
+            ).PaperJobDefinition("paper-a", lambda runtime: None)
+        ]
+    )
+
+    def authorize(connection):
+        assert connection is authorization_connection
+        events.append("authorize")
+
+    run_due_operational_paper_jobs(
+        _ControlEngine(),
+        registry,
+        [run],
+        now=lambda: current,
+        max_lateness=timedelta(minutes=1),
+        authorize=authorize,
+    )
+
+    assert events == ["candidate-lock", "authorize", "recovery", "claim"]
+
+
 def test_due_paper_runner_never_reenters_runtime_after_no_replay_reconciliation(monkeypatch) -> None:
     monkeypatch.setattr("hope.infrastructure.scheduling.paper.SqlAlchemyPaperEnvironmentControlRepository", _RunningPaperControl)
     monkeypatch.setattr("hope.infrastructure.scheduling.paper._operational_paper_scheduler_lock", lambda engine: nullcontext())

@@ -23,7 +23,7 @@ from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryReport,
     assess_due_paper_recovery,
 )
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 
 @dataclass(frozen=True)
@@ -174,6 +174,7 @@ def _aware_schedule_time(value: datetime) -> datetime:
 
 
 _PAPER_SCHEDULER_LOCK_NAME = "hope:paper:operational-scheduler"
+_STRATEGY_CANDIDATE_CAPACITY_LOCK_NAME = "hope:strategy-candidate-capacity"
 
 
 @contextmanager
@@ -192,7 +193,7 @@ def _operational_paper_scheduler_lock(engine: Engine):
         # context rolls that transaction back and releases the lock on every
         # success or failure path, before the physical session returns to the
         # SQLAlchemy pool.
-        yield
+        yield connection
 
 
 def _assert_recovery_report_matches_due(
@@ -230,7 +231,15 @@ def _preflight_due_paper_job_states(engine: Engine, job_runs: Iterable[Scheduled
         return recovery.terminal_run_ids
 
 
-def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, job_runs: Iterable[ScheduledJobRun], *, now: Callable[[], datetime], max_lateness: timedelta) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
+def run_due_operational_paper_jobs(
+    engine: Engine,
+    registry: PaperJobRegistry,
+    job_runs: Iterable[ScheduledJobRun],
+    *,
+    now: Callable[[], datetime],
+    max_lateness: timedelta,
+    authorize: Callable[[Connection], None] | None = None,
+) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute due PAPER work after durable restart reconciliation and safety preflight."""
     if not isinstance(registry, PaperJobRegistry):
         raise TypeError("PAPER_SCHEDULER_REQUIRES_JOB_REGISTRY")
@@ -238,6 +247,8 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
         raise TypeError("PAPER_SCHEDULER_REQUIRES_MAX_LATENESS")
     if max_lateness < timedelta(0):
         raise ValueError("PAPER_SCHEDULER_MAX_LATENESS_MUST_BE_NONNEGATIVE")
+    if authorize is not None and not callable(authorize):
+        raise TypeError("PAPER_SCHEDULER_AUTHORIZATION_CALLBACK_INVALID")
     current = _aware_schedule_time(now())
     ordered: list[ScheduledJobRun] = []
     seen: set[UUID] = set()
@@ -252,7 +263,20 @@ def run_due_operational_paper_jobs(engine: Engine, registry: PaperJobRegistry, j
     due = [job_run for job_run in ordered if job_run.scheduled_for <= current]
     for job_run in due:
         registry.resolve(job_run)
-    with _operational_paper_scheduler_lock(engine):
+    with _operational_paper_scheduler_lock(engine) as scheduler_lock_connection:
+        if authorize is not None:
+            # Candidate transitions take this exact transaction-scoped lock in
+            # migration 113. Re-read authorization only after acquiring it and
+            # retain it through every claim/effect commit, so a concurrent
+            # demotion can never race a previously validated registry.
+            scheduler_lock_connection.execute(
+                text(
+                    "SELECT pg_advisory_xact_lock("
+                    "hashtext(:lock_name)::bigint)"
+                ),
+                {"lock_name": _STRATEGY_CANDIDATE_CAPACITY_LOCK_NAME},
+            )
+            authorize(scheduler_lock_connection)
         with engine.connect() as control_connection:
             SqlAlchemyPaperEnvironmentControlRepository(control_connection).assert_running()
             recovery = assess_due_paper_recovery(control_connection, due, current=current, max_lateness=max_lateness)

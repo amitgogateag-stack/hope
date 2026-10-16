@@ -265,6 +265,52 @@ def test_missing_catalog_and_missing_plan_cannot_authorize_work(admitted_plan, m
 
 
 @pytest.mark.integration
+def test_candidate_demotion_after_plan_validation_precedes_claim(admitted_plan, monkeypatch):
+    """A fresh protected catalog read rejects a post-validation demotion."""
+    engine, plan, run = admitted_plan
+    operational = service.SqlAlchemyStrategyCandidateRepository.current(None)
+    demoted = [
+        operational[0].model_copy(
+            update={"state": StrategyCandidateState.BACKUP_CANDIDATE}
+        )
+    ]
+    reads = iter((operational, demoted))
+    monkeypatch.setattr(
+        service.SqlAlchemyStrategyCandidateRepository,
+        "current",
+        lambda _: next(reads),
+    )
+
+    with pytest.raises(ValueError, match="PAPER_ORCHESTRATION_CANDIDATE_NOT_OPERATIONAL"):
+        _cycle(engine, lambda *_: plan())
+
+    assert _counts(engine, run) == (0, 0, 0)
+
+
+@pytest.mark.integration
+def test_candidate_transition_lock_is_held_through_paper_effect_commit(admitted_plan):
+    """The DB trigger's transition lock cannot be acquired while work executes."""
+    engine, plan, run = admitted_plan
+
+    def no_trade_while_probing_transition_lock(runtime):
+        with engine.connect() as probe:
+            assert probe.execute(
+                text(
+                    "SELECT pg_try_advisory_xact_lock("
+                    "hashtext('hope:strategy-candidate-capacity')::bigint)"
+                )
+            ).scalar_one() is False
+        runtime.record_no_trade(
+            strategy_version="v1",
+            decision_time=NOW,
+            inputs_hash="d" * 64,
+        )
+
+    assert _cycle(engine, lambda *_: plan(no_trade_while_probing_transition_lock)) == (1, 0)
+    assert _counts(engine, run) == (1, 1, 1)
+
+
+@pytest.mark.integration
 def test_factory_writes_rejected_and_closed_market_is_valid_idle(admitted_plan):
     from dataclasses import replace
     engine, plan, run = admitted_plan
