@@ -6,15 +6,15 @@ Status: **deployment-ready source and tests only**. These steps have NOT been ex
 
 - HTTP server binds **127.0.0.1:8787 only**, and checks the Host header. There is no internet-facing dashboard port, reverse proxy, or public URL.
 - Access uses the existing EC2 SSH authentication, forwarded over an SSH tunnel. Do **not** add inbound TCP 8787 to the AWS security group.
-- Dedicated OS account `hope-dashboard`, no login shell. Separate PostgreSQL `hope_dashboard` role with **SELECT only** on three aggregate source tables. No database writes, no trading commands.
+- Dedicated OS account `hope-dashboard`, no login shell. Separate PostgreSQL `hope_dashboard` role with **SELECT only** on five aggregate source tables. No database writes, no trading commands.
 - Exporter produces an atomic JSON snapshot every five minutes; browser refreshes every minute. Missing/invalid data fails closed; data older than an hour is marked stale. Snapshot contains no identifiers, credentials, fills or P&L.
-- Engineering CI status in HTML is a fixed snapshot, not a real-time deployment status. Deployment health requires separate monitoring.
+- Engineering CI is not fetched by the HTML; GitHub Actions is authoritative. Deployment health requires separate monitoring.
 
 ## Preflight — stop on any failed condition
 
 1. Verify OS is compatible with systemd and Python 3.13 virtual environment exists at `/opt/hope/.venv`. Do not overwrite an existing HOPE service or change its Python environment. Adjust unit paths after inspecting the real installation.
 2. Verify `/opt/hope` contains the approved commit and all CI checks are green. Use a separately staged checkout if the current production path differs.
-3. Verify the PostgreSQL database and required tables exist: `research_runs`, `job_runs`, `paper_environment_control_events`.
+3. Verify the PostgreSQL database and required tables exist: `research_runs`, `job_runs`, `paper_environment_control_events`, `paper_effects`, `audit_events`.
 4. Confirm AWS security group has **no inbound 8787** rule, and that EC2 SSH access is restricted appropriately.
 5. Never place passwords or private dashboard snapshots in GitHub, public S3, or a publicly served path.
 
@@ -27,7 +27,8 @@ CREATE ROLE hope_dashboard LOGIN;
 GRANT CONNECT ON DATABASE hope TO hope_dashboard;
 GRANT USAGE ON SCHEMA public TO hope_dashboard;
 GRANT SELECT ON TABLE public.research_runs,
-  public.job_runs, public.paper_environment_control_events TO hope_dashboard;
+  public.job_runs, public.paper_environment_control_events,
+  public.paper_effects, public.audit_events TO hope_dashboard;
 ALTER ROLE hope_dashboard SET default_transaction_read_only = on;
 ```
 
@@ -75,12 +76,28 @@ Open `http://127.0.0.1:8787/` in Chrome/Edge. SSH tunnel authentication is the a
 
 ## Runtime verification after v0.4 upgrade
 
-With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.json` should return `service: RUNNING`. `data_feed: UNAVAILABLE` is expected on EC2 until the three required newer tables exist and the read-only exporter is configured; do **not** manufacture database records or apply migrations just to turn this indicator green. The health endpoint does not report PAPER engine or broker readiness.
+With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.json` should return `service: RUNNING`. `data_feed: UNAVAILABLE` is expected on EC2 until all five required source tables exist and the read-only exporter is configured; do **not** manufacture database records or apply migrations just to turn this indicator green. The health endpoint does not report PAPER engine or broker readiness.
 
 ## Read-only EC2 readiness diagnostic
 
-To inspect the installed web service and database compatibility before attempting any database exporter setup, run the **reviewed** `deploy/dashboard/inspect_ec2_readiness.sh` from a verified GitHub release on EC2. The diagnostic requires no credentials to be pasted into ChatGPT. It checks the local dashboard service, `/status.json`, presence of the snapshot file, the three required PostgreSQL tables and (if accessible) the separate `hope_dashboard` database role and effective table privileges. It displays **metadata only**, not table records or passwords.
+To inspect the installed web service and database compatibility before attempting any database exporter setup, run the **reviewed** `deploy/dashboard/inspect_ec2_readiness.sh` from a verified GitHub release on EC2. The diagnostic requires no credentials to be pasted into ChatGPT. It checks the local dashboard service, `/status.json`, presence of the snapshot file, the five required PostgreSQL tables and (if accessible) the separate `hope_dashboard` database role and effective table privileges. It displays **metadata only**, not table records or passwords.
 
-Missing `research_runs`, `job_runs` or `paper_environment_control_events` means the current exporter is **not schema-compatible** with the EC2 database. The correct action is to leave the exporter disabled and investigate schema/migration state independently, not to invent metrics, grant elevated access or run a bulk migration without a reviewed plan.
+Missing any of `research_runs`, `job_runs`, `paper_environment_control_events`, `paper_effects` or `audit_events` means the current exporter is **not schema-compatible** with the EC2 database. The correct action is to leave the exporter disabled and investigate schema/migration state independently, not to invent metrics, grant elevated access or run a bulk migration without a reviewed plan.
 
 The script does not install anything, change service state, write to the database or modify the frozen Day 29 checkout. If noninteractive `sudo -u postgres` is unavailable, the script reports `NOT CHECKED` rather than attempting an alternate privileged connection.
+
+## Recovery projection compatibility
+
+The recovery exporter requires SELECT on both `paper_effects` and `audit_events`
+in addition to the original three source tables. An older installation can serve
+its last complete snapshot, but export remains unavailable until an operator
+reviews schema and grants. The metadata-only diagnostic checks all five sources;
+it does not grant permissions or read application rows.
+
+Upgrade acceptance supports original aggregate snapshots and snapshots with the
+complete recovery extension. It rejects malformed, contradictory or extra fields
+in HTTP responses. A successful loopback probe proves response compatibility,
+not database connectivity, least privilege or current data: inspect the feed
+status and as-of timestamp separately. Development validation does not establish
+that this release is installed on AWS. No deployment, role change or stored-data
+inspection has been performed by this compatibility batch.

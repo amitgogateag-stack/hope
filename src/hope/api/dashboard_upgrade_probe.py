@@ -85,13 +85,19 @@ def _validate_legacy(value: dict) -> None:
 
 def _validate_paper(value: dict) -> None:
     fields = {"total", "claimed", "succeeded", "failed"}
+    paper = value.get("paper")
+    paper_keys = {"environment_state", "job_runs"}
+    # Recovery aggregates are a backward-compatible extension, but their exact
+    # response shape remains part of the no-private-fields acceptance boundary.
+    valid_paper_keys = (isinstance(paper, dict)
+                        and set(paper) in (paper_keys, paper_keys | {"recovery"}))
     if (not _exact_keys(value, {"schema_version", "source", "generated_at", "research", "paper"})
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["source"] != "hope_postgresql"
             or not _timestamp(value["generated_at"])
             or not _exact_keys(value["research"], {"run_count"})
             or not _count(value["research"]["run_count"])
-            or not _exact_keys(value["paper"], {"environment_state", "job_runs"})
+            or not valid_paper_keys
             or value["paper"]["environment_state"] not in ("RUNNING", "HALTED")
             or not _exact_keys(value["paper"]["job_runs"], fields)
             or not all(_count(value["paper"]["job_runs"][key]) for key in fields)):
@@ -99,6 +105,19 @@ def _validate_paper(value: dict) -> None:
     counts = value["paper"]["job_runs"]
     if counts["total"] != sum(counts[k] for k in ("claimed", "succeeded", "failed")):
         raise ValueError("HOPE_UPGRADE_PAPER_INCONSISTENT")
+    if "recovery" in paper:
+        recovery = paper["recovery"]
+        recovery_fields = {
+            "claimed_with_effects", "claimed_without_effects",
+            "claims_older_than_one_hour", "reconciliation_receipts",
+        }
+        if (not _exact_keys(recovery, recovery_fields)
+                or not all(_count(recovery[key]) for key in recovery_fields)):
+            raise ValueError("HOPE_UPGRADE_PAPER_RECOVERY_INVALID")
+        if (recovery["claimed_with_effects"] + recovery["claimed_without_effects"] != counts["claimed"]
+                or recovery["claims_older_than_one_hour"] > counts["claimed"]
+                or recovery["reconciliation_receipts"] > counts["succeeded"]):
+            raise ValueError("HOPE_UPGRADE_PAPER_RECOVERY_INCONSISTENT")
 
 
 def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dict[str, str]:

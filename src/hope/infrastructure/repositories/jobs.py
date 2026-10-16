@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select, update
+from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from hope.application.jobs.models import JobRunRecord, JobRunStatus, ScheduledJobRun
@@ -120,6 +120,42 @@ class SqlAlchemyJobRunRepository:
         if existing_id is not None and existing_id != completion.run.job_run_id:
             raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
         return False
+
+    def quarantine_empty_claim(self, completion: JobRunRecord) -> bool:
+        """Preserve recoverable evidence and roll back rejected transitions.
+
+        PAPER effect inserts lock this same job row. The lock is retained until
+        the caller commits or rolls back, so a writer cannot cross the empty
+        check and append an effect after quarantine. No trading writer runs here.
+        """
+        if (
+            completion.status is not JobRunStatus.FAILED
+            or completion.failure_code != "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM"
+        ):
+            raise ValueError("PAPER_JOB_QUARANTINE_COMPLETION_INVALID")
+        with self._connection.begin_nested():
+            isolation = self._connection.execute(
+                text("SELECT current_setting('transaction_isolation')")
+            ).scalar_one()
+            if isolation != "read committed":
+                raise RuntimeError("PAPER_JOB_QUARANTINE_REQUIRES_READ_COMMITTED")
+            claimed = self.lock_claimed(completion.run)
+            durable = self.get_record_for_run(completion.run)
+            if durable is None:
+                raise RuntimeError("PAPER_JOB_CLAIM_STATE_MISSING")
+            if not claimed:
+                return False
+            has_effects = self._connection.execute(
+                text("SELECT EXISTS (SELECT 1 FROM paper_effects WHERE job_run_id=:id)"),
+                {"id": completion.run.job_run_id},
+            ).scalar_one()
+            if has_effects:
+                raise RuntimeError("PAPER_JOB_QUARANTINE_REQUIRES_RECONCILIATION")
+            if not self.complete(completion):
+                raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
+            if self.get_record_for_run(completion.run) != completion:
+                raise RuntimeError("PAPER_JOB_QUARANTINE_NOT_DURABLE")
+            return True
 
     def get_record_for_run(self, job_run: ScheduledJobRun) -> JobRunRecord | None:
         """Resolve persisted state by both durable-ID and schedule identity, failing on mismatch."""

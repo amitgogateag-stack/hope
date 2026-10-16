@@ -175,6 +175,7 @@ def test_postgres_migrations_apply_and_are_idempotent() -> None:
             "226_paper_staged_signal_reconciliation.sql",
             "227_paper_no_trade_decision_recovery.sql",
             "228_paper_no_trade_effect_exclusivity.sql",
+            "229_paper_quarantine_evidence_guard.sql",
         ]
         assert second == []
         assert connection.execute(text("SELECT 1 FROM information_schema.tables WHERE table_name='experiments'")).scalar_one() == 1

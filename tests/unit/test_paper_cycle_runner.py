@@ -52,6 +52,17 @@ class FakeJobRunRepository:
     def get_record(self, job_run_id) -> JobRunRecord | None:
         return self.record
 
+    def quarantine_empty_claim(self, completion):
+        if self.record is None:
+            raise RuntimeError("PAPER_JOB_CLAIM_STATE_MISSING")
+        if self.record.run != completion.run:
+            raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
+        if self.record.status is not JobRunStatus.CLAIMED:
+            return False
+        if not self.complete(completion):
+            raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
+        return True
+
 
 class RecordingSignalWriter(PaperSignalWriter):
     def __init__(self) -> None:

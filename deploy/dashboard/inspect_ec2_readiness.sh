@@ -70,7 +70,8 @@ SELECT required.name || ': ' ||
   CASE WHEN to_regclass('public.' || required.name) IS NULL
        THEN 'MISSING' ELSE 'PRESENT' END
 FROM (VALUES ('research_runs'), ('job_runs'),
-             ('paper_environment_control_events')) AS required(name)
+             ('paper_environment_control_events'), ('paper_effects'),
+             ('audit_events')) AS required(name)
 ORDER BY required.name;
 SQL
 
@@ -88,7 +89,8 @@ SELECT 'Table SELECT-only: ' ||
   CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'hope_dashboard')
    AND NOT EXISTS (
     SELECT 1 FROM (VALUES ('research_runs'), ('job_runs'),
-       ('paper_environment_control_events')) AS required(name)
+       ('paper_environment_control_events'), ('paper_effects'),
+       ('audit_events')) AS required(name)
     WHERE to_regclass('public.' || required.name) IS NULL
        OR NOT has_table_privilege(to_regrole('hope_dashboard'), to_regclass('public.' || required.name), 'SELECT')
        OR has_table_privilege(to_regrole('hope_dashboard'), to_regclass('public.' || required.name), 'INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')

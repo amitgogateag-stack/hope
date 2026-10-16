@@ -42,3 +42,17 @@ def test_diagnostic_uses_only_metadata_queries():
     assert "research_runs" in script
     assert "job_runs" in script
     assert "paper_environment_control_events" in script
+    # Every source must appear in both presence and effective privilege checks.
+    for table in ("research_runs", "job_runs", "paper_environment_control_events", "paper_effects", "audit_events"):
+        assert script.count(f"('{table}')") == 2
+
+
+def test_deployment_grants_cover_every_exporter_source_without_write_privileges():
+    root = Path(__file__).resolve().parents[2]
+    runbook = (root / "deploy/dashboard/README.md").read_text(encoding="utf-8")
+    grant = runbook.split("GRANT SELECT ON TABLE ", 1)[1].split(";", 1)[0]
+    assert {name.strip() for name in grant.split(" TO hope_dashboard")[0].split(",")} == {
+        "public.research_runs", "public.job_runs", "public.paper_environment_control_events",
+        "public.paper_effects", "public.audit_events",
+    }
+    assert "ALTER ROLE hope_dashboard SET default_transaction_read_only = on" in runbook

@@ -220,11 +220,19 @@ def test_probe_rejects_inconsistent_or_unsanitized_health_response(mutate):
         verify_dashboard(opener=FakeOpener(responses))
 
 
-def test_probe_accepts_real_sanitized_paper_and_legacy_server_responses(tmp_path):
+@pytest.mark.parametrize("with_recovery", [False, True], ids=["original", "recovery"])
+def test_probe_accepts_real_sanitized_paper_and_legacy_server_responses(tmp_path, with_recovery):
     page = tmp_path / "preview.html"
     page.write_bytes(fixture_responses()["/"][1])
     snapshot = tmp_path / "snapshot.json"
-    snapshot.write_text(json.dumps(valid_paper()))
+    payload = valid_paper()
+    if with_recovery:
+        payload["paper"]["job_runs"] = {"total": 4, "claimed": 2, "succeeded": 1, "failed": 1}
+        payload["paper"]["recovery"] = {
+            "claimed_with_effects": 1, "claimed_without_effects": 1,
+            "claims_older_than_one_hour": 2, "reconciliation_receipts": 1,
+        }
+    snapshot.write_text(json.dumps(payload))
     legacy = tmp_path / "legacy-research.json"
     # The source inventory contains missing_columns; the server intentionally strips it.
     legacy.write_text(json.dumps({**valid_legacy(), "missing_columns": {}}))
@@ -239,3 +247,32 @@ def test_probe_accepts_real_sanitized_paper_and_legacy_server_responses(tmp_path
         finally:
             server.shutdown()
             thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("change", [
+    {"claimed_with_effects": True}, {"claimed_without_effects": -1},
+    {"claimed_with_effects": 9007199254740992},
+    {"claims_older_than_one_hour": 3}, {"reconciliation_receipts": 2},
+    {"claimed_without_effects": 2}, {"credentials": "DO_NOT_LEAK"},
+])
+def test_probe_rejects_corrupt_or_unsanitized_recovery_http_response(change):
+    payload = valid_paper()
+    payload["paper"]["job_runs"] = {"total": 4, "claimed": 2, "succeeded": 1, "failed": 1}
+    payload["paper"]["recovery"] = {
+        "claimed_with_effects": 1, "claimed_without_effects": 1,
+        "claims_older_than_one_hour": 2, "reconciliation_receipts": 1, **change,
+    }
+    responses = fixture_responses()
+    responses["/snapshot.json"] = (200, json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="HOPE_UPGRADE_PAPER_RECOVERY"):
+        verify_dashboard(opener=FakeOpener(responses))
+
+
+@pytest.mark.parametrize("recovery", [None, [], {}, "private"])
+def test_probe_rejects_partial_or_wrong_shape_recovery_http_response(recovery):
+    payload = valid_paper()
+    payload["paper"]["recovery"] = recovery
+    responses = fixture_responses()
+    responses["/snapshot.json"] = (200, json.dumps(payload).encode())
+    with pytest.raises(ValueError, match="HOPE_UPGRADE_PAPER_RECOVERY_INVALID"):
+        verify_dashboard(opener=FakeOpener(responses))

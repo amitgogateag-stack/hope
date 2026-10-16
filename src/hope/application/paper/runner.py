@@ -42,6 +42,10 @@ class PaperJobRunRepository(Protocol):
     def get_record(self, job_run_id) -> JobRunRecord | None:
         ...
 
+    def quarantine_empty_claim(self, completion: JobRunRecord) -> bool:
+        """Atomically authenticate and quarantine only a claim without effects."""
+        ...
+
 
 @dataclass(frozen=True)
 class PaperRuntimeContext:
@@ -323,19 +327,18 @@ class PaperCycleRunner:
         )
 
     def quarantine_incomplete_claim(self, job_run: ScheduledJobRun) -> PaperCycleOutcome:
-        """Explicitly terminalize a stranded claim after the caller proves its worker is gone."""
-        record = self._repository.get_record(job_run.job_run_id)
-        if record is None:
-            raise RuntimeError("PAPER_JOB_CLAIM_STATE_MISSING")
-        if record.status is not JobRunStatus.CLAIMED:
-            return PaperCycleOutcome.SKIPPED_TERMINAL
+        """Quarantine an empty claim after the caller proves its worker is gone.
 
+        Durable effects require reconciliation, even when partial: changing their
+        owner to FAILED would destroy their eligibility as recovery evidence.
+        The repository owns the atomic lock/check/transition boundary.
+        """
         completion = create_job_run_completion(
             job_run,
             JobRunStatus.FAILED,
             self._now(),
             failure_code="PAPER_JOB_INCOMPLETE_PRIOR_CLAIM",
         )
-        if not self._repository.complete(completion):
-            raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
+        if not self._repository.quarantine_empty_claim(completion):
+            return PaperCycleOutcome.SKIPPED_TERMINAL
         return PaperCycleOutcome.QUARANTINED_INCOMPLETE
