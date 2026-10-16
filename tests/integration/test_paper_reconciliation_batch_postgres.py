@@ -9,6 +9,7 @@ from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import DBAPIError
 
 from hope.application.jobs import JobRunStatus, create_job_run_completion, create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
@@ -19,7 +20,7 @@ from hope.infrastructure.repositories.paper_no_trade import SqlAlchemyPaperNoTra
 from hope.infrastructure.scheduling import paper_reconciliation_batch as batch
 
 
-NOW = datetime(2026, 10, 16, 15, tzinfo=UTC)
+NOW = datetime(2026, 10, 1, 15, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -143,7 +144,12 @@ def test_backend_death_before_commit_leaves_no_partial_success(durable_batch, mo
             assert len(batch.reconcile_completed_paper_batch(connection, runs, current=NOW).reconciled_run_ids) == 2
             kill_backend()
     finally:
-        transaction.rollback()
+        try:
+            transaction.rollback()
+        except DBAPIError as exc:
+            # The server, rather than the client, aborted this transaction.
+            # Assert disconnect classification instead of hiding cleanup errors.
+            assert exc.connection_invalidated
         connection.close()
 
     with engine.begin() as restarted:
