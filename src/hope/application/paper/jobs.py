@@ -21,7 +21,9 @@ from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.domain.trading.kernel import create_order_intent, materialize_order
 
 
-_DURABLE_PAPER_STRATEGY_BINDING = object()
+@dataclass(frozen=True)
+class _DurablePaperStrategyBinding:
+    inputs_hash: str
 
 
 def assert_paper_market_data_fresh(
@@ -73,8 +75,9 @@ class PaperStrategyDecisionJob:
     parameters: ParameterSnapshot
     market_data_max_age: timedelta
     dataset_version_id: UUID | None = None
-    _durable_binding: object | None = field(
+    _durable_binding: _DurablePaperStrategyBinding | None = field(
         default=None,
+        init=False,
         repr=False,
         compare=False,
     )
@@ -90,15 +93,29 @@ class PaperStrategyDecisionJob:
         dataset_version_id: UUID,
     ) -> PaperStrategyDecisionJob:
         """Construct executable strategy work only after durable input binding."""
-        return cls(
+        job = cls(
             strategy,
             market_context,
             universe,
             parameters,
             market_data_max_age,
             dataset_version_id,
-            _durable_binding=_DURABLE_PAPER_STRATEGY_BINDING,
         )
+        object.__setattr__(
+            job,
+            "_durable_binding",
+            _DurablePaperStrategyBinding(
+                paper_decision_inputs_hash(
+                    strategy,
+                    market_context,
+                    universe,
+                    parameters,
+                    dataset_version_id=dataset_version_id,
+                    market_data_max_age=market_data_max_age,
+                )
+            ),
+        )
+        return job
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -122,7 +139,18 @@ class PaperStrategyDecisionJob:
         # Registry type checks can be hidden behind a plain callable.  Enforce
         # durable market-data binding at the execution boundary as well, where
         # wrappers can no longer disguise an in-memory strategy decision.
-        if self._durable_binding is not _DURABLE_PAPER_STRATEGY_BINDING:
+        expected_inputs_hash = paper_decision_inputs_hash(
+            self.strategy,
+            self.market_context,
+            self.universe,
+            self.parameters,
+            dataset_version_id=self.dataset_version_id,
+            market_data_max_age=self.market_data_max_age,
+        )
+        if (
+            self._durable_binding is None
+            or self._durable_binding.inputs_hash != expected_inputs_hash
+        ):
             raise RuntimeError("PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING")
         as_of = self.market_context.as_of
         if as_of.tzinfo is None or as_of.utcoffset() is None:
@@ -139,14 +167,6 @@ class PaperStrategyDecisionJob:
             self.market_context,
             tuple(member.instrument_id for member in active_members),
             self.market_data_max_age,
-        )
-        expected_inputs_hash = paper_decision_inputs_hash(
-            self.strategy,
-            self.market_context,
-            self.universe,
-            self.parameters,
-            dataset_version_id=self.dataset_version_id,
-            market_data_max_age=self.market_data_max_age,
         )
         signals = self.strategy.generate_signals(
             self.market_context,

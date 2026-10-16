@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from uuid import UUID, uuid4
@@ -383,6 +384,30 @@ def test_runtime_proxy_cannot_bypass_durable_binding() -> None:
         match="PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING",
     ):
         definition.work(runtime)
+
+    assert strategy.calls == []
+    assert runtime.recorded == []
+    assert runtime.no_trade == []
+
+
+def test_replaced_strategy_inputs_cannot_reuse_durable_binding() -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    universe = _snapshot()
+    strategy = _Strategy(())
+    decision = _durably_bound_decision(
+        strategy,
+        _context(decision_time, universe),
+        universe,
+        _Parameters(),
+    )
+    substituted = replace(decision, dataset_version_id=uuid4())
+    runtime = _runtime(decision_time)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING",
+    ):
+        substituted(runtime)
 
     assert strategy.calls == []
     assert runtime.recorded == []
