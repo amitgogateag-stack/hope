@@ -1,4 +1,4 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
@@ -167,6 +167,100 @@ def test_pnl_persist_rejects_wrong_source_fill_effect_type(wrong_type):
     )
     with pytest.raises(ValueError, match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED"):
         repository.persist(effect, event)
+
+
+@pytest.mark.parametrize("mismatch", ["instrument", "event_time", "commission"])
+def test_pnl_persist_rejects_event_not_derived_from_durable_fill(mismatch):
+    event = _event()
+    run = create_scheduled_job_run(
+        "pnl-persist-source-material", datetime(2026, 10, 8, tzinfo=UTC),
+    )
+    pnl_effect = create_paper_effect(
+        run,
+        PaperEffectType.PNL,
+        event.pnl_event_id,
+        paper_portfolio_pnl_payload_hash(event),
+    )
+    fill_effect = create_paper_effect(
+        run, PaperEffectType.FILL, event.fill_id, "a" * 64,
+    )
+    source = {
+        "instrument_id": event.instrument_id,
+        "filled_at": event.event_time,
+        "transaction_cost": event.commission_delta,
+    }
+    if mismatch == "instrument":
+        source["instrument_id"] = uuid4()
+    elif mismatch == "event_time":
+        source["filled_at"] = event.event_time - timedelta(seconds=1)
+    else:
+        source["transaction_cost"] = event.commission_delta + Decimal("0.01")
+
+    class _Result:
+        def __init__(self, *, scalar=None, mapping=None):
+            self._scalar = scalar
+            self._mapping = mapping
+
+        def scalar_one_or_none(self):
+            return self._scalar
+
+        def mappings(self):
+            return self
+
+        def one_or_none(self):
+            return self._mapping
+
+    class _Connection:
+        def __init__(self):
+            self.calls = 0
+
+        def begin_nested(self):
+            from contextlib import nullcontext
+            return nullcontext()
+
+        def execute(self, statement):
+            self.calls += 1
+            if self.calls == 1:
+                return _Result(scalar=event.fill_id)
+            return _Result(mapping=source)
+
+    class _Effects:
+        def get_reusable_for_job(self, *args):
+            return fill_effect
+
+        def get(self, *args):
+            return None
+
+        def record(self, effect):
+            pytest.fail("forged PNL event reached effect persistence")
+
+    from sqlalchemy import Column, DateTime, MetaData, Numeric, Table, Uuid
+
+    metadata = MetaData()
+    repository = object.__new__(SqlAlchemyPaperPortfolioPnLRepository)
+    repository._connection = _Connection()
+    repository._effects = _Effects()
+    repository._applications = Table(
+        "paper_portfolio_fill_applications", metadata,
+        Column("portfolio_id", Uuid), Column("fill_id", Uuid),
+    )
+    repository._fills = Table(
+        "fills", metadata,
+        Column("fill_id", Uuid), Column("order_id", Uuid),
+        Column("filled_at", DateTime(timezone=True)),
+        Column("transaction_cost", Numeric),
+    )
+    repository._orders = Table(
+        "orders", metadata,
+        Column("order_id", Uuid), Column("instrument_id", Uuid),
+    )
+    repository._get_row = lambda event_id: None
+
+    with pytest.raises(
+        ValueError,
+        match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_MATERIAL_MISMATCH",
+    ):
+        repository.persist(pnl_effect, event)
 
 
 @pytest.mark.parametrize("mismatch", ["portfolio", "fill", "event_id"])

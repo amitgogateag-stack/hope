@@ -37,6 +37,18 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             Column("portfolio_id", Uuid, primary_key=True),
             Column("fill_id", Uuid, primary_key=True),
         )
+        self._fills = Table(
+            "fills", metadata,
+            Column("fill_id", Uuid, primary_key=True),
+            Column("order_id", Uuid, nullable=False),
+            Column("transaction_cost", Numeric, nullable=False),
+            Column("filled_at", DateTime(timezone=True), nullable=False),
+        )
+        self._orders = Table(
+            "orders", metadata,
+            Column("order_id", Uuid, primary_key=True),
+            Column("instrument_id", Uuid, nullable=False),
+        )
         self._effects = SqlAlchemyPaperEffectRepository(connection)
 
     def _get_row(self, pnl_event_id: UUID):
@@ -68,6 +80,33 @@ class SqlAlchemyPaperPortfolioPnLRepository:
             or row["event_time"] != event.event_time
         ):
             raise ValueError("PAPER_PORTFOLIO_PNL_IDENTITY_CONFLICT")
+
+    def _assert_source_fill_material(
+        self,
+        event: PaperPortfolioPnLEvent,
+    ) -> None:
+        source = self._connection.execute(
+            select(
+                self._orders.c.instrument_id,
+                self._fills.c.filled_at,
+                self._fills.c.transaction_cost,
+            )
+            .select_from(
+                self._fills.join(
+                    self._orders,
+                    self._fills.c.order_id == self._orders.c.order_id,
+                )
+            )
+            .where(self._fills.c.fill_id == event.fill_id)
+        ).mappings().one_or_none()
+        if source is None:
+            raise RuntimeError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_MATERIAL_MISSING")
+        if (
+            source["instrument_id"] != event.instrument_id
+            or source["filled_at"] != event.event_time
+            or source["transaction_cost"] != event.commission_delta
+        ):
+            raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_MATERIAL_MISMATCH")
 
     def get(
         self, portfolio_id: UUID, fill_id: UUID, *,
@@ -185,6 +224,7 @@ class SqlAlchemyPaperPortfolioPnLRepository:
                 )
             ):
                 raise ValueError("PAPER_PORTFOLIO_PNL_SOURCE_FILL_UNTRACKED")
+            self._assert_source_fill_material(event)
 
             existing_effect = self._effects.get(PaperEffectType.PNL, event.pnl_event_id)
             existing_event = self._get_row(event.pnl_event_id)

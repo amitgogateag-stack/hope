@@ -20,11 +20,16 @@ from hope.application.paper import (
     PaperRiskWriter,
     PaperSignalWriter,
 )
-from hope.application.paper.effects import PaperEffectType
+from hope.application.paper.effects import (
+    PaperEffectType,
+    create_paper_effect,
+)
 from hope.application.paper.fills import PaperFillWriter
 from hope.application.paper.portfolio_pnl import (
+    PaperPortfolioPnLEvent,
     PaperPortfolioPnLWriter,
     paper_portfolio_pnl_event_id,
+    paper_portfolio_pnl_payload_hash,
 )
 from hope.domain.execution import Environment, Fill, Order, OrderSide
 from hope.domain.risk.models import RiskAssessment, RiskDecision
@@ -96,6 +101,84 @@ def persist_fill(connection, context, instrument_id, side, price, decision_minut
     )
     PaperFillWriter(SqlAlchemyPaperFillRepository(connection)).record(context, fill, sequence=0)
     return fill
+
+
+@pytest.mark.integration
+def test_paper_portfolio_pnl_rejects_commission_not_derived_from_source_fill() -> None:
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+
+    engine = create_engine(url)
+    migrations_dir = Path(__file__).parents[2] / "migrations"
+    instrument_id, portfolio_id = uuid4(), uuid4()
+    run = create_scheduled_job_run(
+        "paper-portfolio-pnl-source-material",
+        datetime(2026, 9, 10, 0, 1, tzinfo=UTC),
+    )
+    context = PaperCycleContext(run)
+
+    with engine.begin() as connection:
+        apply_migrations(connection, migrations_dir)
+        connection.execute(
+            text(
+                "INSERT INTO instruments("
+                "instrument_id, canonical_symbol, exchange, status"
+                ") VALUES (:id, 'PAPER-PNL-SOURCE-MATERIAL', 'TEST', 'ACTIVE')"
+            ),
+            {"id": instrument_id},
+        )
+        assert SqlAlchemyJobRunRepository(connection).claim(run)
+        fill = persist_fill(
+            connection, context, instrument_id, OrderSide.BUY, "100", 1,
+        )
+        transition = SqlAlchemyPaperPortfolioRepository(
+            connection
+        ).apply_fill_with_transition(
+            portfolio_id,
+            Decimal("1000"),
+            fill,
+            job_run_id=run.job_run_id,
+        )
+        assert transition is not None
+        event = PaperPortfolioPnLEvent(
+            pnl_event_id=paper_portfolio_pnl_event_id(portfolio_id, fill.fill_id),
+            portfolio_id=portfolio_id,
+            fill_id=fill.fill_id,
+            instrument_id=fill.instrument_id,
+            realized_pnl_delta=transition.realized_pnl_delta,
+            commission_delta=fill.commission + Decimal("0.01"),
+            event_time=fill.fill_time,
+        )
+        effect = create_paper_effect(
+            run,
+            PaperEffectType.PNL,
+            event.pnl_event_id,
+            paper_portfolio_pnl_payload_hash(event),
+        )
+
+        with pytest.raises(
+            ValueError,
+            match="PAPER_PORTFOLIO_PNL_SOURCE_FILL_MATERIAL_MISMATCH",
+        ):
+            SqlAlchemyPaperPortfolioPnLRepository(connection).persist(effect, event)
+
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_portfolio_pnl_events "
+                "WHERE pnl_event_id=:event_id"
+            ),
+            {"event_id": event.pnl_event_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT count(*) FROM paper_effects "
+                "WHERE effect_type='PNL' AND entity_id=:event_id"
+            ),
+            {"event_id": event.pnl_event_id},
+        ).scalar_one() == 0
+        connection.rollback()
+    engine.dispose()
 
 
 @pytest.mark.integration
