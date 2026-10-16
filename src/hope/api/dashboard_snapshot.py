@@ -12,6 +12,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import Connection, create_engine, text
+from sqlalchemy.exc import DBAPIError
+
+from hope.api.dashboard_projection import EXPERIMENT_STATES, VERDICTS, verified_projections
 
 
 def _count(connection: Connection, query: str) -> int:
@@ -25,6 +28,63 @@ def _validate_read_budget(statement_timeout_ms: int, lock_timeout_ms: int) -> No
     if (type(statement_timeout_ms) is not int or not 1 <= statement_timeout_ms <= 120000
             or type(lock_timeout_ms) is not int or not 1 <= lock_timeout_ms <= statement_timeout_ms):
         raise ValueError("HOPE_DASHBOARD_READ_TIMEOUT_INVALID")
+
+
+def _optional_projections(connection: Connection, generated: datetime) -> dict:
+    def scalar(query):
+        return connection.execute(text(query)).scalar_one()
+    def grouped(table, column, fields):
+        # Field vocabularies are constants; unknown experiment labels collapse
+        # into OTHER rather than exposing arbitrary text stored in the database.
+        expression = column
+        if table == "experiments":
+            allowed = ",".join(f"'{key}'" for key in fields if key != "OTHER")
+            expression = f"CASE WHEN status IN ({allowed}) THEN status ELSE 'OTHER' END"
+        rows = dict(connection.execute(text(f"SELECT {expression}, count(*) FROM {table} GROUP BY 1")).all())
+        if any(key not in fields for key in rows):
+            raise ValueError("HOPE_DASHBOARD_PROJECTION_UNKNOWN_VERDICT")
+        return {key: rows.get(key, 0) for key in fields}
+    def research_experiments():
+        counts = grouped("experiments", "status", EXPERIMENT_STATES)
+        return {"total": sum(counts.values()), "by_status": counts}
+    def decisions():
+        counts = grouped("research_decisions", "decision", VERDICTS)
+        return {"total": sum(counts.values()), "by_verdict": counts}
+    def paper_activity():
+        last = scalar("SELECT max(completed_at) FROM job_runs WHERE left(job_key,6)='paper:' AND status='SUCCEEDED'")
+        no_trade = scalar("SELECT count(*) FROM paper_no_trade_decisions n JOIN job_runs j ON j.job_run_id=n.job_run_id "
+                          "WHERE left(j.job_key,6)='paper:' AND j.status='SUCCEEDED'")
+        return {"last_completed_at": last.isoformat() if last is not None else None, "succeeded_no_trade": no_trade}
+    def market_data():
+        total, event, available = connection.execute(text(
+            "SELECT count(*), max(event_time), max(available_time) FROM market_bars"
+        )).one()
+        if any(value is not None and isinstance(value, datetime) and value.tzinfo is not None and value > generated
+               for value in (event, available)):
+            # Future-known source records cannot establish current market data
+            # freshness. Keep other authenticated sections, infer no zero bars.
+            return {"status": "UNAVAILABLE"}
+        return {"bar_count": total, "latest_event_at": event.isoformat() if event else None,
+                "latest_available_at": available.isoformat() if available else None, "freshness_policy": "UNKNOWN"}
+    readers = {
+        "datasets": lambda: {"registered": scalar("SELECT count(*) FROM datasets"),
+                              "pit_certified": scalar("SELECT count(*) FROM datasets WHERE pit_certified IS TRUE")},
+        "strategies": lambda: {"versions": scalar("SELECT count(*) FROM strategy_versions")},
+        "experiments": research_experiments, "decisions": decisions,
+        "paper_activity": paper_activity, "market_data": market_data,
+    }
+    result = {"portfolio": {"status": "UNAVAILABLE"}}
+    for name, reader in readers.items():
+        try:
+            with connection.begin_nested():
+                result[name] = {"status": "AVAILABLE", **reader()}
+        except DBAPIError as error:
+            if getattr(error.orig, "sqlstate", None) not in {"42501", "42P01", "42703"}:
+                raise
+            # Optional schema/privilege gaps never manufacture zero activity and
+            # never poison the read-only transaction's other verified sections.
+            result[name] = {"status": "UNAVAILABLE"}
+    return verified_projections(result, generated)
 
 
 def build_dashboard_snapshot(
@@ -80,6 +140,7 @@ def build_dashboard_snapshot(
         "source": "hope_postgresql",
         "generated_at": timestamp.astimezone(timezone.utc).isoformat(),
         "research": {"run_count": research_runs},
+        "projections": _optional_projections(connection, timestamp),
         "paper": {
             "environment_state": state,
             "recovery": {

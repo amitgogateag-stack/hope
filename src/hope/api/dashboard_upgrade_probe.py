@@ -9,6 +9,7 @@ import argparse
 import json
 import time
 from datetime import datetime, timezone
+from hope.api.dashboard_projection import verified_projections
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -91,7 +92,8 @@ def _validate_paper(value: dict) -> None:
     # response shape remains part of the no-private-fields acceptance boundary.
     valid_paper_keys = (isinstance(paper, dict)
                         and set(paper) in (paper_keys, paper_keys | {"recovery"}))
-    if (not _exact_keys(value, {"schema_version", "source", "generated_at", "research", "paper"})
+    outer = {"schema_version", "source", "generated_at", "research", "paper"}
+    if (set(value) not in (outer, outer | {"projections"})
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["source"] != "hope_postgresql"
             or not _timestamp(value["generated_at"])
@@ -118,6 +120,13 @@ def _validate_paper(value: dict) -> None:
                 or recovery["claims_older_than_one_hour"] > counts["claimed"]
                 or recovery["reconciliation_receipts"] > counts["succeeded"]):
             raise ValueError("HOPE_UPGRADE_PAPER_RECOVERY_INCONSISTENT")
+    if "projections" in value:
+        try:
+            generated = datetime.fromisoformat(value["generated_at"].replace("Z", "+00:00"))
+            if verified_projections(value["projections"], generated) != value["projections"]:
+                raise ValueError("unsanitized projection")
+        except (TypeError, ValueError) as error:
+            raise ValueError("HOPE_UPGRADE_PAPER_PROJECTIONS_INVALID") from error
 
 
 def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dict[str, str]:

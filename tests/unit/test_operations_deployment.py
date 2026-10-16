@@ -1,0 +1,134 @@
+import os
+from pathlib import Path
+import subprocess
+
+import pytest
+
+from hope.api import operations_deployment as module
+
+
+@pytest.fixture
+def prepared_release(tmp_path):
+    release = tmp_path / "release"
+    release.mkdir()
+    for file in ("src/hope/api/paper_service.py", "src/hope/api/dashboard_server.py",
+                 "src/hope/api/dashboard_snapshot.py", "docs/dashboard/preview.html",
+                 "deploy/operations/hope-paper.service", "migrations/001.sql"):
+        path = release / file
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("reviewed code\n")
+    def git(*args):
+        return subprocess.run(["git", "-C", str(release), *args], check=True,
+                              capture_output=True, text=True).stdout.strip()
+    git("init")
+    git("config", "user.name", "HOPE Test")
+    git("config", "user.email", "local-fixture@example.invalid")
+    git("remote", "add", "origin", "https://github.com/amitgogateag-stack/hope.git")
+    git("add", ".")
+    git("commit", "-m", "synthetic deployment fixture")
+    return release, git("rev-parse", "HEAD"), git
+
+
+def test_preflight_accepts_exact_clean_release_without_mutation(prepared_release):
+    release, sha, git = prepared_release
+    before = git("status", "--porcelain")
+    assert module.inspect_release(release, sha)["status"] == "COMPATIBLE_CODE"
+    assert git("status", "--porcelain") == before == ""
+    assert git("rev-parse", "HEAD") == sha
+
+
+@pytest.mark.parametrize("failure", ["sha", "dirty", "origin", "nested", "missing"])
+def test_preflight_blocks_mismatched_installation(prepared_release, failure):
+    release, sha, git = prepared_release
+    if failure == "sha":
+        sha = "0" * 40
+    elif failure == "dirty":
+        (release / "unreviewed").write_text("not approved")
+    elif failure == "origin":
+        git("remote", "set-url", "origin", "https://example.invalid/wrong")
+    elif failure == "nested":
+        release = release / "src"
+    else:
+        (release / "src/hope/api/paper_service.py").unlink()
+        git("add", "-u")
+        git("commit", "-m", "incomplete fixture")
+        sha = git("rev-parse", "HEAD")
+    with pytest.raises(module.DeploymentError):
+        module.inspect_release(release, sha)
+
+
+@pytest.mark.parametrize("sha", ["", "abc", "A" * 40, "x; echo secret", "1" * 41])
+def test_bad_release_identity_never_executes_git(tmp_path, monkeypatch, sha):
+    monkeypatch.setattr(module, "_git", lambda *a: pytest.fail("must validate first"))
+    with pytest.raises(module.DeploymentError, match="COMMIT_INVALID"):
+        module.inspect_release(tmp_path, sha)
+
+
+@pytest.mark.parametrize("accepted", [True, False])
+def test_atomic_release_switch_restores_previous_on_acceptance_failure(tmp_path, monkeypatch, accepted):
+    root = tmp_path / "operations"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    try:
+        os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not grant symlink creation; exercised on Linux CI")
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+    def accept():
+        assert (root / "current").resolve().name == new
+        if not accepted:
+            raise RuntimeError("synthetic health failure")
+    if accepted:
+        module.switch_release(root, new, expected_current=old, accept=accept)
+    else:
+        with pytest.raises(RuntimeError, match="health failure"):
+            module.switch_release(root, new, expected_current=old, accept=accept)
+    assert (root / "current").resolve().name == (new if accepted else old)
+    assert not (root / ".current.next").exists()
+    assert (root / "releases" / old).is_dir() and (root / "releases" / new).is_dir()
+    with pytest.raises(module.DeploymentError, match="LEASE_MISMATCH"):
+        module.switch_release(root, new, expected_current="3" * 40, accept=lambda: pytest.fail("no activation"))
+
+
+def test_systemd_units_bound_resources_and_enable_reboot_ordering():
+    root = Path(__file__).parents[2] / "deploy/operations"
+    paper = (root / "hope-paper.service").read_text()
+    for required in ("User=hope-paper", "Restart=on-failure", "KillSignal=SIGTERM",
+                     "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
+                     "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
+        assert required in paper
+    web = (root / "hope-ops-dashboard-web.service").read_text()
+    assert "--port 8788" in web and "--operations-status-file" in web
+    assert "EnvironmentFile" not in web
+    timer = (root / "hope-ops-dashboard-export.timer").read_text()
+    assert "OnBootSec=30s" in timer and "OnUnitInactiveSec=60s" in timer
+
+
+def test_cli_preflight_sanitizes_repository_and_database_failure(tmp_path, monkeypatch, capsys):
+    import sys
+    monkeypatch.setattr(sys, "argv", ["preflight", "--release", str(tmp_path), "--expected-sha", "a" * 40,
+                                     "--database-component", "paper"])
+    monkeypatch.setattr(module, "inspect_release", lambda *args: {"status": "COMPATIBLE_CODE"})
+    monkeypatch.delenv("HOPE_DATABASE_URL", raising=False)
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert exc.value.code == 2
+    assert '"reason": "OPERATIONS_PREFLIGHT_FAILED"' in capsys.readouterr().out
+    monkeypatch.setenv("HOPE_DATABASE_URL", "secret-do-not-echo")
+    with pytest.raises(SystemExit):
+        module.main()
+    assert "secret" not in capsys.readouterr().out
+
+
+def test_activation_lock_serializes_complete_operation_and_cleans_after_failure(tmp_path):
+    with module.activation_lock(tmp_path):
+        with pytest.raises(module.DeploymentError, match="ACTIVATION_LOCKED"):
+            with module.activation_lock(tmp_path):
+                pytest.fail("concurrent activation admitted")
+        assert (tmp_path / ".activation.lock").is_file()
+    assert not (tmp_path / ".activation.lock").exists()
+    with pytest.raises(RuntimeError):
+        with module.activation_lock(tmp_path):
+            raise RuntimeError("acceptance failed")
+    assert not (tmp_path / ".activation.lock").exists()

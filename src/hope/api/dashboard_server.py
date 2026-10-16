@@ -6,9 +6,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from re import fullmatch
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from hope.api.dashboard_projection import verified_projections
 
 
 def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
@@ -76,6 +79,8 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     }
     if recovery is not None:
         safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
+    if "projections" in data:
+        safe["projections"] = verified_projections(data["projections"], generated)
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 
 
@@ -117,16 +122,74 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 
 
+def _verified_operations(path: Path) -> bytes:
+    """Sanitize an optional local service heartbeat, never expose exception text."""
+    if path.stat().st_size > 8192:
+        raise ValueError("HOPE_OPERATIONS_STATUS_TOO_LARGE")
+    raw = path.read_bytes()
+    if len(raw) > 8192:
+        raise ValueError("HOPE_OPERATIONS_STATUS_TOO_LARGE")
+    data = json.loads(raw)
+    if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
+            or data["schema_version"] != 1 or data.get("paper_only") is not True
+            or data.get("live_enabled") is not False
+            or data.get("state") not in {"STARTING", "CURRENT", "HALTED", "UNAVAILABLE", "STOPPED"}):
+        raise ValueError("HOPE_OPERATIONS_STATUS_INVALID")
+    fields = ("cycles_succeeded", "cycles_failed", "jobs_executed", "jobs_skipped")
+    if not all(type(data.get(k)) is int and 0 <= data[k] <= 9007199254740991 for k in fields):
+        raise ValueError("HOPE_OPERATIONS_STATUS_COUNTS_INVALID")
+    def stamp(value):
+        if not isinstance(value, str):
+            raise ValueError("HOPE_OPERATIONS_STATUS_TIME_INVALID")
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or (parsed - datetime.now(timezone.utc)).total_seconds() > 300:
+            raise ValueError("HOPE_OPERATIONS_STATUS_TIME_INVALID")
+        return parsed
+    generated = stamp(data.get("generated_at"))
+    success = None if data.get("last_success_at") is None else stamp(data["last_success_at"])
+    if success is not None and success > generated:
+        raise ValueError("HOPE_OPERATIONS_STATUS_TIME_INVALID")
+    if data["state"] == "CURRENT" and success is None:
+        raise ValueError("HOPE_OPERATIONS_STATUS_TIME_INVALID")
+    commit = data.get("deployed_commit")
+    compatibility = data.get("schema_compatibility", "UNKNOWN")
+    if (commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None)):
+        raise ValueError("HOPE_OPERATIONS_COMMIT_INVALID")
+    if compatibility not in {"UNKNOWN", "COMPATIBLE", "INCOMPATIBLE"}:
+        raise ValueError("HOPE_OPERATIONS_SCHEMA_INVALID")
+    # A closed vocabulary prevents a valid-looking file from leaking arbitrary
+    # identifiers through a nominally sanitized error-code field.
+    error = data.get("error_code")
+    if error not in {
+        None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
+        "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
+        "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
+        "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
+        "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
+        "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
+    }:
+        error = "PAPER_SERVICE_CYCLE_FAILED"
+    safe = {
+        "schema_version": 1, "generated_at": generated.isoformat(),
+        "state": data["state"], "last_success_at": success.isoformat() if success else None,
+        "paper_only": True, "live_enabled": False, "error_code": error,
+        "deployed_commit": commit, "schema_compatibility": compatibility,
+        **{key: data[key] for key in fields},
+    }
+    return json.dumps(safe, separators=(",", ":")).encode("utf-8")
+
+
 class DashboardHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int, preview: Path, snapshot: Path):
+    def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
+        self.operations = Path(operations) if operations is not None else self.snapshot.parent / 'operations.json'
         super().__init__(("127.0.0.1", port), DashboardHandler)
 
 
@@ -205,6 +268,14 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             self._respond(200, payload, "application/json; charset=utf-8")
             return
+        if self.path == "/operations.json":
+            try:
+                payload = _verified_operations(self.server.operations)
+            except (OSError, ValueError, TypeError, UnicodeError):
+                self._respond(503, b"Verified operations status unavailable")
+                return
+            self._respond(200, payload, "application/json; charset=utf-8")
+            return
         if self.path == "/snapshot.json":
             try:
                 payload, _ = _verified_snapshot(self.server.snapshot)
@@ -237,8 +308,9 @@ def main() -> None:
     parser.add_argument("--port", type=int, default=8787)
     parser.add_argument("--preview", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
+    parser.add_argument("--operations-status-file", type=Path)
     args = parser.parse_args()
-    with DashboardHTTPServer(args.port, args.preview, args.snapshot) as server:
+    with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file) as server:
         server.serve_forever(poll_interval=0.5)
 
 

@@ -6,7 +6,7 @@
 <meta name="color-scheme" content="dark">
 <title>HOPE | Research OS — Dashboard Preview</title>
 <style>
-:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;color:#e9eff8;background:#09111e}*{box-sizing:border-box}body{margin:0;min-height:100vh}button{font:inherit}header{border-bottom:1px solid #263248;background:#0d1727;padding:17px 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.brand{display:flex;align-items:center;gap:13px}.mark{background:#266eeb;border-radius:11px;width:42px;height:42px;display:grid;place-items:center;font-size:20px;font-weight:850}.brand strong{font-size:19px;letter-spacing:1.5px}.brand small{display:block;color:#8c9cb4;font-size:11px;letter-spacing:.5px}.pill{border:1px solid #2d435c;background:#17283b;color:#b9d5ed;border-radius:999px;padding:7px 12px;font-size:12px}.pill.green{border-color:#235c4b;background:#102f2c;color:#84dfbb}.pill.amber{border-color:#65502c;background:#302619;color:#e8c07c}.shell{display:grid;grid-template-columns:205px minmax(0,1fr);min-height:calc(100vh - 80px)}aside{border-right:1px solid #263248;background:#0b1524;padding:25px 14px}aside .section{color:#6e849f;font-size:11px;letter-spacing:1.5px;margin:0 12px 13px}nav{display:grid;gap:5px}nav button{cursor:pointer;border:0;background:transparent;text-align:left;padding:13px;border-radius:9px;color:#9fb0c9}nav button.active,nav button:hover{background:#172d48;color:#f4f8ff}.aside-note{border-top:1px solid #263248;margin-top:30px;padding:22px 12px;color:#7e92ae;font-size:12px;line-height:1.7}main{padding:29px;max-width:1350px;width:100%;margin:auto}.eyebrow{font-size:12px;letter-spacing:1.6px;color:#66b5f6;text-transform:uppercase}.heading{display:flex;justify-content:space-between;align-items:end;gap:15px;flex-wrap:wrap;margin-bottom:23px}h1{font-size:30px;letter-spacing:-1px;margin:6px 0 7px}p{color:#93a5bf;line-height:1.6;margin:0}.notice{border:1px solid #65502c;background:#2b251c;border-radius:10px;padding:13px 16px;color:#ebce9c;font-size:13px;margin:0 0 23px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:21px}.card{background:#111f32;border:1px solid #273a53;border-radius:14px;padding:20px;min-width:0}.card .kicker{color:#8da2bf;font-size:12px}.card .value{font-size:24px;font-weight:750;margin:10px 0 6px;overflow-wrap:anywhere}.card .value.unknown{font-size:19px;color:#c7d2e2}.card .detail{color:#7188a6;font-size:12px;line-height:1.5}.layout{display:grid;grid-template-columns:1.3fr 1fr;gap:17px}.panel{background:#111f32;border:1px solid #273a53;border-radius:14px;padding:22px;margin-bottom:17px}h2{font-size:17px;margin:0 0 17px}h3{font-size:14px;margin:0 0 9px}.steps{display:grid;gap:11px}.step{display:flex;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid #263750}.step:last-child{border:0}.dot{height:11px;width:11px;flex:0 0 11px;border-radius:50%;background:#7285a1}.dot.done{background:#41bb8e}.dot.pending{background:#dfb36c}.step b{display:block;font-size:13px}.step span{font-size:12px;color:#8a9bb4}.status-row{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #263750;padding:13px 0;gap:15px;font-size:13px}.status-row:last-child{border:0}.status-row .muted{color:#95a6be}.tag{color:#9bdbbe;background:#16352f;border:1px solid #285a4b;padding:4px 8px;border-radius:7px;font-size:11px;white-space:nowrap}.tag.off{background:#30271d;color:#e5be7e;border-color:#574329}.tag.neutral{background:#1a2c42;color:#afc5df;border-color:#304a67}.empty{border:1px dashed #3a4d66;border-radius:12px;text-align:center;padding:38px 20px;margin-top:12px}.empty strong{display:block;margin-bottom:7px}.empty p{font-size:13px}.view{display:none}.view.active{display:block}.footer{font-size:11px;color:#7387a2;margin-top:10px}.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}@media(max-width:920px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.shell{grid-template-columns:1fr}aside{padding:9px 15px;border-right:0;border-bottom:1px solid #263248}aside .section,.aside-note{display:none}nav{display:flex;overflow-x:auto}nav button{white-space:nowrap}main{padding:20px}}@media(max-width:520px){.metrics{grid-template-columns:1fr}header{padding:14px}h1{font-size:25px}}
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,sans-serif;color:#e9eff8;background:#09111e}*{box-sizing:border-box}body{margin:0;min-height:100vh}button{font:inherit}header{border-bottom:1px solid #263248;background:#0d1727;padding:17px 28px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}.brand{display:flex;align-items:center;gap:13px}.mark{background:#266eeb;border-radius:11px;width:42px;height:42px;display:grid;place-items:center;font-size:20px;font-weight:850}.brand strong{font-size:19px;letter-spacing:1.5px}.brand small{display:block;color:#8c9cb4;font-size:11px;letter-spacing:.5px}.pill{border:1px solid #2d435c;background:#17283b;color:#b9d5ed;border-radius:999px;padding:7px 12px;font-size:12px}.pill.green{border-color:#235c4b;background:#102f2c;color:#84dfbb}.pill.amber{border-color:#65502c;background:#302619;color:#e8c07c}.shell{display:grid;grid-template-columns:205px minmax(0,1fr);min-height:calc(100vh - 80px)}aside{border-right:1px solid #263248;background:#0b1524;padding:25px 14px}aside .section{color:#6e849f;font-size:11px;letter-spacing:1.5px;margin:0 12px 13px}nav{display:grid;gap:5px}nav button{cursor:pointer;border:0;background:transparent;text-align:left;padding:13px;border-radius:9px;color:#9fb0c9}nav button.active,nav button:hover{background:#172d48;color:#f4f8ff}.aside-note{border-top:1px solid #263248;margin-top:30px;padding:22px 12px;color:#7e92ae;font-size:12px;line-height:1.7}main{padding:29px;max-width:1350px;width:100%;margin:auto}.eyebrow{font-size:12px;letter-spacing:1.6px;color:#66b5f6;text-transform:uppercase}.heading{display:flex;justify-content:space-between;align-items:end;gap:15px;flex-wrap:wrap;margin-bottom:23px}h1{font-size:30px;letter-spacing:-1px;margin:6px 0 7px}p{color:#93a5bf;line-height:1.6;margin:0}.notice{border:1px solid #65502c;background:#2b251c;border-radius:10px;padding:13px 16px;color:#ebce9c;font-size:13px;margin:0 0 23px}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:21px}.card{background:#111f32;border:1px solid #273a53;border-radius:14px;padding:20px;min-width:0}.card .kicker{color:#8da2bf;font-size:12px}.card .value{font-size:24px;font-weight:750;margin:10px 0 6px;overflow-wrap:anywhere}.card .value.unknown{font-size:19px;color:#c7d2e2}.card .detail{color:#7188a6;font-size:12px;line-height:1.5}.layout{display:grid;grid-template-columns:1.3fr 1fr;gap:17px}.panel{background:#111f32;border:1px solid #273a53;border-radius:14px;padding:22px;margin-bottom:17px}h2{font-size:17px;margin:0 0 17px}h3{font-size:14px;margin:0 0 9px}.status-row{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #263750;padding:13px 0;gap:15px;font-size:13px}.status-row:last-child{border:0}.status-row .muted{color:#95a6be}.tag{color:#9bdbbe;background:#16352f;border:1px solid #285a4b;padding:4px 8px;border-radius:7px;font-size:11px;white-space:nowrap}.tag.off{background:#30271d;color:#e5be7e;border-color:#574329}.tag.neutral{background:#1a2c42;color:#afc5df;border-color:#304a67}.empty{border:1px dashed #3a4d66;border-radius:12px;text-align:center;padding:38px 20px;margin-top:12px}.empty strong{display:block;margin-bottom:7px}.empty p{font-size:13px}.view{display:none}.view.active{display:block}.footer{font-size:11px;color:#7387a2;margin-top:10px}.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px;overflow-wrap:anywhere}@media(max-width:920px){.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}.shell{grid-template-columns:1fr}aside{padding:9px 15px;border-right:0;border-bottom:1px solid #263248}aside .section,.aside-note{display:none}nav{display:flex;overflow-x:auto}nav button{white-space:nowrap}main{padding:20px}}@media(max-width:520px){.metrics{grid-template-columns:1fr}header{padding:14px}h1{font-size:25px}}
 </style>
 </head>
 <body>
@@ -15,234 +15,255 @@
 <aside><div class="section">WORKSPACE</div><nav aria-label="Dashboard sections"><button type="button" class="active" data-view="overview" aria-current="page">◫ &nbsp; Overview</button><button type="button" data-view="research">◇ &nbsp; Research Lab</button><button type="button" data-view="paper">▤ &nbsp; PAPER Operations</button><button type="button" data-view="safety">◈ &nbsp; Safety &amp; Engineering</button></nav><div class="aside-note">HOPE is independent of ATC.<br>India + USA target scope.<br><br>Read-only interface concept.<br>No broker actions available.</div></aside>
 <main>
 <div class="notice"><strong>Private read-only dashboard interface — not a trading control surface.</strong> Verified aggregate database metrics can be loaded from a private JSON snapshot. All other figures remain “Not connected”. Engineering CI is not fetched by this dashboard.</div><div class="panel" style="margin-bottom:20px"><h2>Connect a verified read-only snapshot</h2><p>When hosted privately on EC2, verified aggregate snapshots refresh automatically every minute. Offline preview: select a JSON file below. No data is uploaded to ChatGPT.</p><p style="margin-top:12px"><label for="snapshot-file" class="pill" style="display:inline-block;cursor:pointer">Choose local snapshot JSON</label> <input id="snapshot-file" type="file" accept=".json,application/json" aria-label="Select HOPE read-only snapshot JSON" style="max-width:250px"> <span id="snapshot-status" role="status" style="font-size:12px;color:#a3b5ce">No snapshot loaded</span></p></div>
-<section id="overview" class="view active"><div class="heading"><div><div class="eyebrow">Command center</div><h1>HOPE Overview</h1><p>One place to see evidence, PAPER operations, risk and system health.</p></div><span class="pill">India + USA · target markets</span></div>
-<div class="metrics"><div class="card"><div class="kicker">Recorded research runs</div><div id="research-runs" class="value unknown">Not connected</div><div class="detail">No verified research count loaded</div></div><div class="card"><div class="kicker">Validated strategies</div><div class="value unknown">Not connected</div><div class="detail">No proven edge asserted</div></div><div class="card"><div class="kicker">PAPER P&amp;L</div><div class="value unknown">Not connected</div><div class="detail">No invented performance metrics</div></div><div class="card"><div class="kicker">Latest verified CI</div><div class="value unknown">Check GitHub</div><div class="detail">No live CI connection</div></div></div>
-<div class="layout"><div class="panel"><h2>Engineering roadmap</h2><div class="steps"><div class="step"><i class="dot done"></i><div><b>Foundation &amp; data integrity</b><span>Schema, provenance and migration safeguards</span></div></div><div class="step"><i class="dot done"></i><div><b>Research and backtest foundations</b><span>Evidence, reproducibility and validation components</span></div></div><div class="step"><i class="dot done"></i><div><b>PAPER lifecycle safety</b><span>Durable records, idempotency and recovery guards</span></div></div><div class="step"><i class="dot pending"></i><div><b>Dashboard read models</b><span>Connect authenticated, read-only operational data</span></div></div><div class="step"><i class="dot"></i><div><b>End-to-end operational acceptance</b><span>Requires deployment, observability and validation</span></div></div></div></div><div class="panel"><h2>Operating posture</h2><div class="status-row"><span>PAPER-only safety boundary</span><span class="tag">ENFORCED IN CODE</span></div><div class="status-row"><span>LIVE broker submission</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Research performance</span><span class="tag neutral">NOT LOADED</span></div><div class="status-row"><span>Operational runtime health</span><span class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Latest CI</span><span class="tag neutral">CHECK GITHUB ACTIONS</span></div></div></div></section>
-<section id="research" class="view"><div class="panel"><h2>Legacy research registrations · not performance</h2><p>Independent, read-only counts from the original HOPE schema. Registrations are not completed backtests, validated strategies or profitable results.</p><div class="metrics" style="margin-top:16px"><div class="card"><div class="kicker">Registered experiments</div><div id="legacy-experiments" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Registered strategy versions</div><div id="legacy-strategies" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Registered datasets</div><div id="legacy-datasets" class="value unknown">Not connected</div></div></div><p id="legacy-status" role="status" style="font-size:12px">Legacy inventory not connected</p></div><div class="heading"><div><div class="eyebrow">Scientific evidence</div><h1>Research Lab</h1><p>Strategy families, reproducible experiments and out-of-sample evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">Hypotheses evaluated</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">OOS evidence</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Cost stress</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Promotion eligibility</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Research evidence table</h2><div class="empty"><strong>No authenticated experiment feed</strong><p>Once connected, each row will show strategy family, dataset/version, sample size, out-of-sample result, friction, uncertainty and evidence verdict. No strategy will be marked “proven” without supporting records.</p></div></div></section>
-<section id="paper" class="view"><div class="heading"><div><div class="eyebrow">Simulated execution</div><h1>PAPER Operations</h1><p>Trade lifecycle, job recovery, fills and reconciliation evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">PAPER orders</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Open PAPER positions</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER job runs</div><div id="paper-jobs" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER realized P&amp;L</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Recovery observations</h2><p>Aggregate stored evidence only. An effect count does not establish reconciliation safety. Stale claims are older than one hour at the database snapshot time.</p><div class="status-row"><span>Claims with durable effects</span><span id="recovery-with-effects" class="mono">Not connected</span></div><div class="status-row"><span>Claims without durable effects</span><span id="recovery-without-effects" class="mono">Not connected</span></div><div class="status-row"><span>Claims older than one hour</span><span id="recovery-stale" class="mono">Not connected</span></div><div class="status-row"><span>Stored reconciliation receipts</span><span id="recovery-receipts" class="mono">Not connected</span></div><p id="recovery-status" class="footer">Recovery observations unavailable</p></div><div class="panel"><h2>Execution ledger</h2><div class="empty"><strong>No runtime records loaded</strong><p>Future read-only table: decision → risk verdict → order → fill / cancellation → portfolio effect → reconciliation. Missing data will remain visibly unknown rather than appearing as zero.</p></div></div></section>
-<section id="safety" class="view"><div class="heading"><div><div class="eyebrow">Control plane</div><h1>Safety &amp; Engineering</h1><p>Fail-closed policies and traceable software changes.</p></div></div><div class="layout"><div class="panel"><h2>Safety contracts</h2><div class="status-row"><span>LIVE broker adapter</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Durable job identity</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Recovery / reconciliation guards</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Web service (loopback)</span><span id="web-service" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Database feed health</span><span id="feed-health" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Last verified snapshot</span><span id="feed-time" class="mono">Not connected</span></div><div class="status-row"><span>PAPER environment (snapshot)</span><span id="paper-state" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Risk limits in runtime</span><span class="tag neutral">NOT CONNECTED</span></div></div><div class="panel"><h2>Verified engineering snapshot</h2><div class="status-row"><span>Workflow</span><span class="tag neutral">CHECK GITHUB ACTIONS</span></div><div class="status-row"><span>Branch</span><span class="mono">p0-pit-context</span></div><div class="status-row"><span>Commit</span><span class="mono">Not connected</span></div><div class="status-row"><span>Snapshot date</span><span>Not connected</span></div><p class="footer">CI and commit are not fetched by the dashboard; check GitHub Actions for authoritative results.</p></div></div></section>
-<p class="footer">HOPE dashboard v0.5 · Verified server health and data freshness · No trading buttons · No external network requests · No invented market or account data</p>
+<section id="overview" class="view active"><div class="panel"><h2>Stored market-data observations</h2><div id="projection-market" class="mono">UNAVAILABLE</div><p>Latest timestamps are aggregate observations. Active universe coverage, exchange session and freshness policy are UNKNOWN unless independently configured; this view cannot authorize a PAPER run.</p></div><div class="heading"><div><div class="eyebrow">Command center</div><h1>HOPE Overview</h1><p>One place to see evidence, PAPER operations, risk and system health.</p></div><span class="pill">India + USA · target markets</span></div>
+<div class="metrics"><div class="card"><div class="kicker">Recorded research runs</div><div id="research-runs" class="value unknown">Not connected</div><div class="detail">No verified research count loaded</div></div><div class="card"><div class="kicker">PAPER claimed jobs</div><div id="overview-claimed" class="value unknown">Not connected</div><div class="detail">Stored claims. No proven edge asserted</div></div><div class="card"><div class="kicker">PAPER portfolio / P&amp;L</div><div class="value unknown">UNAVAILABLE</div><div class="detail">No invented performance metrics</div></div><div class="card"><div class="kicker">PAPER failed jobs</div><div id="overview-failed" class="value unknown">Not connected</div><div class="detail">Stored terminal failures; no action inferred</div></div></div>
+<div class="layout"><div class="panel"><h2>Operating posture</h2><div class="status-row"><span>PAPER-only safety boundary</span><span class="tag">ENFORCED IN CODE</span></div><div class="status-row"><span>LIVE broker submission</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Research performance</span><span class="tag neutral">NOT LOADED</span></div><div class="status-row"><span>Operational runtime health</span><span id="overview-operations" class="tag neutral">UNKNOWN</span></div><div class="status-row"><span>Latest CI</span><span class="tag neutral">CHECK GITHUB ACTIONS</span></div></div></div></section>
+<section id="research" class="view"><div class="panel"><h2>Stored research aggregates</h2><p>Recorded metadata and evidence decisions; registrations and SUPPORTED verdicts do not establish a profitable strategy or promotion eligibility.</p><div class="status-row"><span>Datasets / PIT-certified metadata</span><span id="projection-datasets" class="mono">UNAVAILABLE</span></div><div class="status-row"><span>Registered strategy versions</span><span id="projection-strategies" class="mono">UNAVAILABLE</span></div><div class="status-row"><span>Experiments by stored status</span><span id="projection-experiments" class="mono">UNAVAILABLE</span></div><div class="status-row"><span>Evidence decisions by verdict</span><span id="projection-decisions" class="mono">UNAVAILABLE</span></div></div><div class="panel"><h2>Legacy research registrations · not performance</h2><p>Independent, read-only counts from the original HOPE schema. Registrations are not completed backtests, validated strategies or profitable results.</p><div class="metrics" style="margin-top:16px"><div class="card"><div class="kicker">Registered experiments</div><div id="legacy-experiments" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Registered strategy versions</div><div id="legacy-strategies" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Registered datasets</div><div id="legacy-datasets" class="value unknown">Not connected</div></div></div><p id="legacy-status" role="status" style="font-size:12px">Legacy inventory not connected</p></div><div class="heading"><div><div class="eyebrow">Scientific evidence</div><h1>Research Lab</h1><p>Strategy families, reproducible experiments and out-of-sample evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">Recorded research runs</div><div id="research-count" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">OOS evidence</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Cost stress</div><div class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Promotion eligibility</div><div class="value unknown">Not connected</div></div></div><div class="panel"><h2>Research evidence table</h2><div class="empty"><strong>No authenticated experiment feed</strong><p>Once connected, each row will show strategy family, dataset/version, sample size, out-of-sample result, friction, uncertainty and evidence verdict. No strategy will be marked “proven” without supporting records.</p></div></div></section>
+<section id="paper" class="view"><div class="heading"><div><div class="eyebrow">Simulated execution</div><h1>PAPER Operations</h1><p>Trade lifecycle, job recovery, fills and reconciliation evidence.</p></div></div><div class="metrics"><div class="card"><div class="kicker">Claimed PAPER jobs</div><div id="paper-claimed" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Succeeded PAPER jobs</div><div id="paper-succeeded" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">PAPER job runs</div><div id="paper-jobs" class="value unknown">Not connected</div></div><div class="card"><div class="kicker">Failed PAPER jobs</div><div id="paper-failed" class="value unknown">Not connected</div></div></div><div class="panel"><h2>Recovery observations</h2><p>Future scheduled work: UNKNOWN; job counts describe stored claims and completions.</p><div class="status-row"><span>Latest completed PAPER job (logical time)</span><span id="projection-last-paper" class="mono">UNAVAILABLE</span></div><div class="status-row"><span>Successful stored NO_TRADE decisions</span><span id="projection-no-trade" class="mono">UNAVAILABLE</span></div><p>Aggregate stored evidence only. An effect count does not establish reconciliation safety. Stale claims are older than one hour at the database snapshot time.</p><div class="status-row"><span>Claims with durable effects</span><span id="recovery-with-effects" class="mono">Not connected</span></div><div class="status-row"><span>Claims without durable effects</span><span id="recovery-without-effects" class="mono">Not connected</span></div><div class="status-row"><span>Claims older than one hour</span><span id="recovery-stale" class="mono">Not connected</span></div><div class="status-row"><span>Stored reconciliation receipts</span><span id="recovery-receipts" class="mono">Not connected</span></div><p id="recovery-status" class="footer">Recovery observations unavailable</p></div><div class="panel"><h2>Portfolio and accounting</h2><div class="status-row"><span>Positions / equity / realized P&amp;L</span><span id="portfolio-state" class="tag neutral">UNAVAILABLE</span></div><p>No independently verified accounting projection is connected. Job successes and effect counts do not establish portfolio value, risk exposure or performance.</p></div><div class="panel"><h2>Execution ledger</h2><div class="empty"><strong>No runtime records loaded</strong><p>Future read-only table: decision → risk verdict → order → fill / cancellation → portfolio effect → reconciliation. Missing data will remain visibly unknown rather than appearing as zero.</p></div></div></section>
+<section id="safety" class="view"><div class="panel"><h2>PAPER service observations</h2><p>Independent local service heartbeat; a successful cycle can execute zero jobs. These counters do not certify trading readiness or portfolio truth.</p><div class="status-row"><span>Service observation</span><span id="operations-state" class="tag neutral">UNKNOWN</span></div><div class="status-row"><span>Heartbeat as of</span><span id="operations-time" class="mono">Not connected</span></div><div class="status-row"><span>Last successful service poll</span><span id="operations-success" class="mono">Not connected</span></div><div class="status-row"><span>Successful / failed polls (this process)</span><span id="operations-cycles" class="mono">Not connected</span></div><div class="status-row"><span>Executed / skipped jobs (this process)</span><span id="operations-jobs" class="mono">Not connected</span></div><p id="operations-note" class="footer">Service observations unavailable; no counts inferred.</p></div><div class="heading"><div><div class="eyebrow">Control plane</div><h1>Safety &amp; Engineering</h1><p>Fail-closed policies and traceable software changes.</p></div></div><div class="layout"><div class="panel"><h2>Safety contracts</h2><div class="status-row"><span>LIVE broker adapter</span><span class="tag off">NOT ENABLED</span></div><div class="status-row"><span>Durable job identity</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Recovery / reconciliation guards</span><span class="tag">IMPLEMENTED</span></div><div class="status-row"><span>Web service (loopback)</span><span id="web-service" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Database feed health</span><span id="feed-health" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Last verified snapshot</span><span id="feed-time" class="mono">Not connected</span></div><div class="status-row"><span>PAPER environment (snapshot)</span><span id="paper-state" class="tag neutral">NOT CONNECTED</span></div><div class="status-row"><span>Risk limits in runtime</span><span class="tag neutral">NOT CONNECTED</span></div></div><div class="panel"><h2>Verified engineering snapshot</h2><div class="status-row"><span>Workflow</span><span class="tag neutral">CHECK GITHUB ACTIONS</span></div><div class="status-row"><span>Branch</span><span class="mono">p0-pit-context</span></div><div class="status-row"><span>Deployed source (service observation)</span><span id="deployed-commit" class="mono">Not connected</span></div><div class="status-row"><span>Schema compatibility (last poll)</span><span id="schema-compatibility" class="tag neutral">UNKNOWN</span></div><p class="footer">CI and commit are not fetched by the dashboard; check GitHub Actions for authoritative results.</p></div></div></section>
+<p class="footer">HOPE dashboard v0.5 · Integrated read-only operations · Verified server health and data freshness · No trading buttons · No external network requests · No invented market or account data</p>
 </main></div>
 <script>
-document.querySelectorAll('nav button[data-view]').forEach(button=>{
- button.addEventListener('click',()=>{
-  document.querySelectorAll('nav button[data-view]').forEach(b=>{b.classList.toggle('active',b===button);b.removeAttribute('aria-current')});
-  button.setAttribute('aria-current','page');
-  document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===button.dataset.view));
- });
-});
-const fileInput = document.getElementById('snapshot-file');
-const snapshotStatus = document.getElementById('snapshot-status');
-const snapshotState = {data: null, source: null};
-const refreshesInFlight = new Set();
+const STALE_MS = 3600000;
+const HEARTBEAT_STALE_MS = 300000;
+const REQUEST_MS = 10000;
+const integer = n => Number.isSafeInteger(n) && n >= 0;
+const el = id => document.getElementById(id);
+const stamp = value => {
+ if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/.test(value)) throw Error('Invalid timestamp');
+ const parsed = Date.parse(value);
+ if (!Number.isFinite(parsed) || parsed - Date.now() > 300000) throw Error('Invalid timestamp');
+ return parsed;
+};
+const metric = (id, value) => {
+ el(id).textContent = value;
+ el(id).classList.toggle('unknown', value === 'Not connected');
+};
+const tag = (id, value, tone='neutral') => { el(id).textContent = value; el(id).className = 'tag ' + tone; };
 const recoveryMetrics = [
- ['recovery-with-effects', 'claimed_with_effects'],
- ['recovery-without-effects', 'claimed_without_effects'],
- ['recovery-stale', 'claims_older_than_one_hour'],
- ['recovery-receipts', 'reconciliation_receipts']
+ ['recovery-with-effects', 'claimed_with_effects'], ['recovery-without-effects', 'claimed_without_effects'],
+ ['recovery-stale', 'claims_older_than_one_hour'], ['recovery-receipts', 'reconciliation_receipts']
 ];
+const snapshotMetrics = ['research-runs','research-count','paper-jobs','paper-claimed','paper-succeeded','paper-failed','overview-claimed','overview-failed'];
+const legacyMetrics = [['legacy-experiments','registered_experiments'],['legacy-strategies','registered_strategy_versions'],['legacy-datasets','registered_datasets']];
+let snapshotCache = null, legacyCache = null, healthCache = null, operationsCache = null;
+let snapshotEpoch = 0;
+const projectionIds = ['datasets','strategies','experiments','decisions','market','last-paper','no-trade'];
+const experimentStates = ['CREATED','RUNNING','COMPLETED','FAILED','INVALIDATED','OTHER'];
+const verdicts = ['SUPPORTED','WEAK_EVIDENCE','INCONCLUSIVE','REJECTED','INVALIDATED','REQUIRES_MORE_DATA'];
+const validateProjections = (projections,generated) => {
+ if (projections === undefined) return;
+ if (!projections || typeof projections !== 'object' || Array.isArray(projections)) throw Error('Invalid projections');
+ for (const [name,item] of Object.entries(projections)) {
+  if (!['datasets','strategies','experiments','decisions','paper_activity','market_data','portfolio'].includes(name)) continue;
+  if (!item || !['AVAILABLE','UNAVAILABLE'].includes(item.status)) throw Error('Invalid projection status');
+  if (item.status === 'UNAVAILABLE') continue;
+  const checked = n => {if (!integer(n)) throw Error('Invalid projection count');};
+  const time = value => {if (value !== null && stamp(value) > generated) throw Error('Invalid projection time');};
+  if (name === 'datasets') {checked(item.registered);checked(item.pit_certified);if(item.pit_certified>item.registered) throw Error('Invalid certified count');}
+  else if (name === 'strategies') checked(item.versions);
+  else if (name === 'experiments' || name === 'decisions') {
+   const fields=name==='experiments'?experimentStates:verdicts, buckets=item[name==='experiments'?'by_status':'by_verdict'];
+   checked(item.total);if(!buckets || !fields.every(k=>integer(buckets[k])) || fields.reduce((n,k)=>n+buckets[k],0)!==item.total) throw Error('Invalid projection buckets');
+  } else if (name==='paper_activity') {checked(item.succeeded_no_trade);time(item.last_completed_at);}
+  else if(name==='market_data') {
+   checked(item.bar_count);time(item.latest_event_at);time(item.latest_available_at);
+   if(item.freshness_policy!=='UNKNOWN' || (item.bar_count===0 && (item.latest_event_at!==null || item.latest_available_at!==null)) || (item.bar_count>0 && (item.latest_event_at===null || item.latest_available_at===null))) throw Error('Unverified market policy');
+  if(item.bar_count>0 && stamp(item.latest_event_at)>stamp(item.latest_available_at)) throw Error('Invalid market time');
+  } else throw Error('Unverified portfolio projection');
+ }
+};
+const renderProjections = (projections,stale) => {
+ for(const id of projectionIds) metric('projection-'+id,'UNAVAILABLE');
+ if(!projections) return;
+ const suffix=stale?' · STALE':'';
+ const show=(section,id,text)=>{if(projections[section]?.status==='AVAILABLE') metric('projection-'+id,text(projections[section])+suffix);};
+ show('datasets','datasets',d=>d.registered+' registered / '+d.pit_certified+' PIT-certified');
+ show('strategies','strategies',d=>d.versions.toLocaleString());
+ show('experiments','experiments',d=>experimentStates.map(k=>k+': '+d.by_status[k]).join(' · '));
+ show('decisions','decisions',d=>verdicts.map(k=>k+': '+d.by_verdict[k]).join(' · '));
+ show('paper_activity','last-paper',d=>d.last_completed_at||'No successful PAPER completion recorded');
+ show('paper_activity','no-trade',d=>d.succeeded_no_trade.toLocaleString());
+ show('market_data','market',d=>d.bar_count+' bars · latest event '+(d.latest_event_at||'none recorded')+' · latest available '+(d.latest_available_at||'none recorded')+' · freshness policy UNKNOWN');
+};
 const clearRecovery = () => {
- for (const [id] of recoveryMetrics) document.getElementById(id).textContent = 'Not connected';
- document.getElementById('recovery-status').textContent = 'Recovery observations unavailable';
+ for (const [id] of recoveryMetrics) metric(id, 'Not connected');
+ el('recovery-status').textContent = 'Recovery observations unavailable';
 };
-const clearSnapshot = (message) => {
+const clearSnapshot = message => {
+ snapshotCache = null;
+ renderProjections(null,false);
  clearRecovery();
- for (const id of ['research-runs', 'paper-jobs']) {
-  const metric = document.getElementById(id);
-  metric.textContent = 'Not connected';
-  metric.classList.add('unknown');
- }
- const state = document.getElementById('paper-state');
- state.textContent = 'NOT CONNECTED';
- state.className = 'tag neutral';
- snapshotStatus.textContent = message;
- snapshotStatus.style.color = '#f2a2a2';
+ for (const id of snapshotMetrics) metric(id, 'Not connected');
+ tag('paper-state','NOT CONNECTED');
+ el('snapshot-status').textContent = message;
+ el('snapshot-status').style.color = '#f2a2a2';
 };
-const renderSnapshot = (data, source) => {
- const counts = data?.paper?.job_runs;
- const integer = x => Number.isSafeInteger(x) && x >= 0;
- if (data.schema_version !== 1 || data.source !== 'hope_postgresql' ||
-     !integer(data?.research?.run_count) ||
-     !['RUNNING','HALTED'].includes(data?.paper?.environment_state) ||
-     !counts || !['total','claimed','succeeded','failed'].every(k=>integer(counts[k])) ||
-     counts.total !== counts.claimed + counts.succeeded + counts.failed ||
-     typeof data.generated_at !== 'string' ||
-     !/[0-9]{4}-[0-9]{2}-[0-9]{2}T/.test(data.generated_at)) {
-  throw Error('Invalid or incomplete HOPE snapshot');
- }
- const recovery = data.paper.recovery;
- if ('recovery' in data.paper && (!recovery ||
-     !recoveryMetrics.every(([, key]) => integer(recovery[key])) ||
-     recovery.claimed_with_effects + recovery.claimed_without_effects !== counts.claimed ||
-     recovery.claims_older_than_one_hour > counts.claimed ||
-     recovery.reconciliation_receipts > counts.succeeded)) {
-  throw Error('Invalid recovery observations');
- }
- const timestamp = Date.parse(data.generated_at);
- const age = Date.now() - timestamp;
- if (!Number.isFinite(timestamp) || age < -300000) throw Error('Invalid snapshot timestamp');
- const stale = age > 3600000;
+const renderSnapshot = () => {
+ if (!snapshotCache) return;
+ const {data, source, time} = snapshotCache;
+ const stale = Date.now() - time > STALE_MS;
+ renderProjections(data.projections,stale);
+ const counts = data.paper.job_runs;
+ for (const id of ['research-runs','research-count']) metric(id, data.research.run_count.toLocaleString());
+ const values = {'paper-jobs':counts.total,'paper-claimed':counts.claimed,'paper-succeeded':counts.succeeded,'paper-failed':counts.failed,'overview-claimed':counts.claimed,'overview-failed':counts.failed};
+ for (const [id,value] of Object.entries(values)) metric(id,value.toLocaleString());
+ tag('paper-state',data.paper.environment_state + (stale ? ' · STALE' : ''),stale || data.paper.environment_state === 'HALTED' ? 'off' : '');
  clearRecovery();
- if (recovery) {
-  for (const [id, key] of recoveryMetrics) {
-   document.getElementById(id).textContent = recovery[key].toLocaleString();
-  }
-  document.getElementById('recovery-status').textContent =
-    (stale ? 'STALE · ' : 'Verified · ') + data.generated_at + ' · observation only; no recovery actions';
+ if (data.paper.recovery) {
+  for (const [id,key] of recoveryMetrics) metric(id,data.paper.recovery[key].toLocaleString());
+  el('recovery-status').textContent = (stale ? 'STALE · ' : 'Verified · ') + data.generated_at + ' · observation only; no recovery actions';
  }
- const research = document.getElementById('research-runs');
- const paper = document.getElementById('paper-jobs');
- const state = document.getElementById('paper-state');
- research.textContent = data.research.run_count.toLocaleString();
- paper.textContent = counts.total.toLocaleString();
- research.classList.remove('unknown');
- paper.classList.remove('unknown');
- state.textContent = data.paper.environment_state + (stale ? ' · STALE' : '');
- state.className = 'tag ' + (stale || data.paper.environment_state === 'HALTED' ? 'off' : '');
- snapshotStatus.textContent = (stale ? 'STALE · ' : 'Loaded · ') + data.generated_at +
-     ' · ' + source + ' · PAPER claimed ' + counts.claimed +
-     ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
- snapshotStatus.style.color = stale ? '#e8c07c' : '#84dfbb';
+ el('snapshot-status').textContent = (stale ? 'STALE · ' : '') + (snapshotCache.failure ? 'Refresh unavailable · retaining last verified snapshot · ' : 'Loaded · ') + data.generated_at + ' · ' + source + ' · PAPER claimed ' + counts.claimed + ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
+ el('snapshot-status').style.color = stale || snapshotCache.failure ? '#e8c07c' : '#84dfbb';
+};
+const retainSnapshotAfterFailure = () => {
+ if (!snapshotCache) { clearSnapshot('Dashboard data unavailable'); return; }
+ snapshotCache.failure = true;
+ renderSnapshot();
 };
 const applySnapshot = (data, source) => {
- renderSnapshot(data, source);
- snapshotState.data = data;
- snapshotState.source = source;
+ const counts = data?.paper?.job_runs;
+ if (data?.schema_version !== 1 || data.source !== 'hope_postgresql' || !integer(data?.research?.run_count) ||
+     !['RUNNING','HALTED'].includes(data?.paper?.environment_state) || !counts ||
+     !['total','claimed','succeeded','failed'].every(k=>integer(counts[k])) ||
+     counts.total !== counts.claimed + counts.succeeded + counts.failed) throw Error('Invalid or incomplete HOPE snapshot');
+ const recovery = data.paper.recovery;
+ if ('recovery' in data.paper && (!recovery || !recoveryMetrics.every(([,key])=>integer(recovery[key])) ||
+     recovery.claimed_with_effects + recovery.claimed_without_effects !== counts.claimed ||
+     recovery.claims_older_than_one_hour > counts.claimed || recovery.reconciliation_receipts > counts.succeeded)) throw Error('Invalid recovery observations');
+ const time = stamp(data.generated_at);
+ validateProjections(data.projections,time);
+ if (source === 'automatic refresh' && snapshotCache && time < snapshotCache.time) return;
+ snapshotCache = {data, source, time};
+ renderSnapshot();
 };
-const refreshSnapshotAge = () => {
- if (!snapshotState.data) return;
- try {
-  renderSnapshot(snapshotState.data, snapshotState.source);
- } catch (error) {
-  snapshotState.data = null;
-  snapshotState.source = null;
-  clearSnapshot('Snapshot rejected while aging: ' + error.message);
- }
+const clearLegacy = message => {
+ legacyCache = null;
+ for (const [id] of legacyMetrics) metric(id,'Not connected');
+ el('legacy-status').textContent = message;
 };
-const retainSnapshotAfterFailure = (message) => {
- if (!snapshotState.data) {
-  clearSnapshot(message);
-  return;
- }
- refreshSnapshotAge();
- snapshotStatus.textContent = message + ' · retaining last verified snapshot · ' +
-   snapshotState.data.generated_at;
- snapshotStatus.style.color = '#e8c07c';
+const renderLegacy = () => {
+ if (!legacyCache) return;
+ const {data,time} = legacyCache;
+ for (const [id,key] of legacyMetrics) metric(id,data.research[key].toLocaleString());
+ el('legacy-status').textContent = (Date.now()-time > STALE_MS ? 'STALE · ' : 'Verified · ') + data.generated_at + ' · registrations only · no PAPER or performance claims';
 };
-const runSingleFlight = async (name, task) => {
- if (refreshesInFlight.has(name)) return;
- refreshesInFlight.add(name);
- try {
-  await task();
- } finally {
-  refreshesInFlight.delete(name);
- }
+const applyLegacy = data => {
+ if (data?.schema_version !== 1 || data.source !== 'hope_legacy_research_inventory' || data.schema_compatible !== true ||
+     data.paper !== null || !data.research || !legacyMetrics.every(([,key])=>integer(data.research[key]))) throw Error('Invalid legacy inventory');
+ const time = stamp(data.generated_at);
+ if (legacyCache && time < legacyCache.time) return;
+ legacyCache = {data,time}; renderLegacy();
 };
-const boundedJsonFetch = async (path, maxBytes, timeoutMs = 10000) => {
+const clearHealth = () => {
+ healthCache = null;
+ tag('web-service','UNKNOWN'); tag('feed-health','UNKNOWN'); el('feed-time').textContent = 'Not connected';
+};
+const renderHealth = () => {
+ if (!healthCache) return;
+ const {data,received,time} = healthCache;
+ if (Date.now()-received > 90000) { clearHealth(); return; }
+ tag('web-service','RUNNING','');
+ const feed = data.data_feed === 'UNAVAILABLE' ? 'UNAVAILABLE' : (Date.now()-time > STALE_MS ? 'STALE' : data.data_feed);
+ tag('feed-health',feed,feed === 'CURRENT' ? '' : 'off');
+ el('feed-time').textContent = data.snapshot_generated_at || 'Not connected';
+};
+const applyHealth = data => {
+ if (data?.schema_version !== 1 || data.service !== 'RUNNING' || !['CURRENT','STALE','UNAVAILABLE'].includes(data.data_feed) ||
+     (data.data_feed === 'UNAVAILABLE' && data.snapshot_generated_at !== null)) throw Error('Invalid service status');
+ const time = data.data_feed === 'UNAVAILABLE' ? null : stamp(data.snapshot_generated_at);
+ healthCache = {data,time,received:Date.now()}; renderHealth();
+};
+const clearOperations = () => {
+ operationsCache = null;
+ tag('operations-state','UNKNOWN'); tag('overview-operations','UNKNOWN'); tag('schema-compatibility','UNKNOWN'); metric('deployed-commit','Not connected');
+ for (const id of ['operations-time','operations-success','operations-cycles','operations-jobs']) metric(id,'Not connected');
+ el('operations-note').textContent = 'Service observations unavailable; no counts inferred.';
+};
+const renderOperations = () => {
+ if (!operationsCache) return;
+ const {data,time} = operationsCache;
+ const stale = Date.now()-time > HEARTBEAT_STALE_MS;
+ const state = stale ? 'STALE' : data.state;
+ tag('operations-state',state,state === 'CURRENT' ? '' : 'off');
+ tag('overview-operations',state,state === 'CURRENT' ? '' : 'off');
+ metric('deployed-commit',data.deployed_commit || 'Not connected');
+ tag('schema-compatibility',(data.schema_compatibility || 'UNKNOWN') + (stale ? ' · STALE' : ''),'neutral');
+ metric('operations-time',data.generated_at);
+ metric('operations-success',data.last_success_at || 'No successful cycle observed');
+ metric('operations-cycles',data.cycles_succeeded.toLocaleString() + ' / ' + data.cycles_failed.toLocaleString());
+ metric('operations-jobs',data.jobs_executed.toLocaleString() + ' / ' + data.jobs_skipped.toLocaleString());
+ el('operations-note').textContent = (stale ? 'STALE · ' : '') + 'PAPER-only; LIVE disabled. Counters reset on restart. No portfolio or CI claims.';
+};
+const applyOperations = data => {
+ if (data?.schema_version !== 1 || data.paper_only !== true || data.live_enabled !== false ||
+     !['STARTING','CURRENT','HALTED','UNAVAILABLE','STOPPED'].includes(data.state) ||
+     !['cycles_succeeded','cycles_failed','jobs_executed','jobs_skipped'].every(k=>integer(data[k]))) throw Error('Invalid operations status');
+ if (data.deployed_commit != null && (typeof data.deployed_commit !== 'string' || !/^[0-9a-f]{40}$/.test(data.deployed_commit))) throw Error('Invalid deployed source');
+ if (data.schema_compatibility !== undefined && !['UNKNOWN','COMPATIBLE','INCOMPATIBLE'].includes(data.schema_compatibility)) throw Error('Invalid schema observation');
+ const time = stamp(data.generated_at);
+ const success = data.last_success_at === null ? null : stamp(data.last_success_at);
+ if ((success !== null && success > time) || (data.state === 'CURRENT' && success === null)) throw Error('Invalid operations time');
+ if (operationsCache && time < operationsCache.time) return;
+ operationsCache = {data,time}; renderOperations();
+};
+// Freshness ages even for offline files or when a network request never finishes.
+const ageViews = () => { renderSnapshot(); renderLegacy(); renderHealth(); renderOperations(); };
+setInterval(ageViews,1000);
+const pendingRequests = new Map();
+const requestJSON = (path, limit) => {
+ if (pendingRequests.has(path)) return pendingRequests.get(path);
  const controller = new AbortController();
- const timeout = setTimeout(() => controller.abort(), timeoutMs);
- try {
-  const response = await fetch(path, {cache:'no-store', signal:controller.signal});
-  if (!response.ok) throw Error('Unavailable (' + response.status + ')');
-  if (Number(response.headers.get('Content-Length')) > maxBytes) throw Error('Response too large');
+ let timer;
+ const deadline = new Promise((_, reject) => { timer = setTimeout(()=>{controller.abort(); reject(Error('Read timeout'));},REQUEST_MS); });
+ const work = (async()=>{
+  const response = await fetch(path,{cache:'no-store',signal:controller.signal});
+  if (!response.ok) throw Error('Read unavailable');
+  if (Number(response.headers.get('Content-Length')) > limit) throw Error('Response too large');
   const body = await response.text();
-  if (body.length > maxBytes) throw Error('Response too large');
+  if (body.length > limit) throw Error('Response too large');
   return JSON.parse(body);
- } catch (error) {
-  if (error.name === 'AbortError') throw Error('Refresh timed out');
-  throw error;
- } finally {
-  clearTimeout(timeout);
- }
+ })();
+ const request = Promise.race([work,deadline]).finally(()=>{clearTimeout(timer);pendingRequests.delete(path);});
+ pendingRequests.set(path,request);
+ return request;
 };
-fileInput.addEventListener('change', async () => {
- const file = fileInput.files && fileInput.files[0];
+// Serialize each endpoint's entire read/apply cycle, not just its HTTP promise.
+const activeRefreshes = new Set();
+const refreshFeed = async (path,limit,apply,clear) => {
+ if (activeRefreshes.has(path)) return;
+ activeRefreshes.add(path);
+ const epoch = snapshotEpoch;
+ try {
+  const data = await requestJSON(path,limit);
+  if (path !== '/snapshot.json' || epoch === snapshotEpoch) apply(data);
+ } catch (_) {
+  if (path !== '/snapshot.json' || epoch === snapshotEpoch) clear();
+ } finally { activeRefreshes.delete(path); }
+};
+document.querySelectorAll('nav button[data-view]').forEach(button=>button.addEventListener('click',()=>{
+ document.querySelectorAll('nav button[data-view]').forEach(b=>{b.classList.toggle('active',b===button);b.removeAttribute('aria-current');});
+ button.setAttribute('aria-current','page');
+ document.querySelectorAll('.view').forEach(v=>v.classList.toggle('active',v.id===button.dataset.view));
+}));
+el('snapshot-file').addEventListener('change',async()=>{
+ const epoch = ++snapshotEpoch;
+ const file = el('snapshot-file').files && el('snapshot-file').files[0];
  if (!file) return;
  try {
   if (file.size > 32768) throw Error('Snapshot too large');
-  applySnapshot(JSON.parse(await file.text()), 'local file');
- } catch (error) {
-  clearSnapshot('Snapshot rejected: ' + error.message);
- }
+  const data = JSON.parse(await file.text());
+  if (epoch === snapshotEpoch) applySnapshot(data,'local file');
+ } catch (_) { if (epoch === snapshotEpoch) clearSnapshot('Snapshot rejected'); }
 });
-if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(location.hostname)) {
- const clearLegacy = (message) => {
-  for (const id of ['legacy-experiments', 'legacy-strategies', 'legacy-datasets']) {
-   const el = document.getElementById(id);
-   el.textContent = 'Not connected';
-   el.classList.add('unknown');
-  }
-  document.getElementById('legacy-status').textContent = message;
- };
- const refreshLegacy = async () => {
-  try {
-   const data = await boundedJsonFetch('/legacy-research.json', 8192);
-   const counts = data?.research;
-   const valid = n => Number.isSafeInteger(n) && n >= 0;
-   if (data.schema_version !== 1 || data.source !== 'hope_legacy_research_inventory' ||
-       data.schema_compatible !== true || data.paper !== null ||
-       !counts || !['registered_experiments','registered_strategy_versions','registered_datasets']
-         .every(k => valid(counts[k]))) throw Error('Invalid legacy inventory');
-   const stamp = Date.parse(data.generated_at);
-   if (!Number.isFinite(stamp) || stamp - Date.now() > 300000) throw Error('Invalid timestamp');
-   const stale = Date.now() - stamp > 3600000;
-   const mapping = [
-    ['legacy-experiments', 'registered_experiments'],
-    ['legacy-strategies', 'registered_strategy_versions'],
-    ['legacy-datasets', 'registered_datasets']
-   ];
-   for (const [id, key] of mapping) {
-    const el = document.getElementById(id);
-    el.textContent = counts[key].toLocaleString();
-    el.classList.remove('unknown');
-   }
-   document.getElementById('legacy-status').textContent =
-     (stale ? 'STALE · ' : 'Verified · ') + data.generated_at +
-     ' · registrations only · no PAPER or performance claims';
-  } catch (_) {
-   clearLegacy('Legacy research inventory unavailable · no counts inferred');
-  }
- };
- const refreshHealth = async () => {
-  const service = document.getElementById('web-service');
-  const feed = document.getElementById('feed-health');
-  const feedTime = document.getElementById('feed-time');
-  try {
-   const status = await boundedJsonFetch('/status.json', 4096);
-   if (status.schema_version !== 1 || status.service !== 'RUNNING' ||
-       !['CURRENT', 'STALE', 'UNAVAILABLE'].includes(status.data_feed)) {
-    throw Error('Invalid service status');
-   }
-   service.textContent = 'RUNNING';
-   service.className = 'tag';
-   feed.textContent = status.data_feed;
-   feed.className = status.data_feed === 'CURRENT' ? 'tag' : 'tag off';
-   feedTime.textContent = typeof status.snapshot_generated_at === 'string' ?
-      status.snapshot_generated_at : 'Not connected';
-  } catch (_) {
-   service.textContent = 'UNKNOWN';
-   service.className = 'tag neutral';
-   feed.textContent = 'NOT CONNECTED';
-   feed.className = 'tag neutral';
-   feedTime.textContent = 'Not connected';
-  }
- };
- const refresh = async () => {
-  try {
-   applySnapshot(await boundedJsonFetch('/snapshot.json', 32768), 'automatic refresh');
-  } catch (error) {
-   retainSnapshotAfterFailure('Dashboard refresh unavailable: ' + error.message);
-  }
- };
- const scheduleRefresh = (name, task) => {
-  const run = () => runSingleFlight(name, task);
-  run();
-  setInterval(run, 60000);
- };
- scheduleRefresh('legacy', refreshLegacy);
- scheduleRefresh('health', refreshHealth);
- scheduleRefresh('snapshot', refresh);
- setInterval(refreshSnapshotAge, 30000);
+if (location.protocol === 'http:' && ['127.0.0.1','localhost'].includes(location.hostname)) {
+ const refresh = () => refreshFeed('/snapshot.json',32768,data=>applySnapshot(data,'automatic refresh'),retainSnapshotAfterFailure);
+ const refreshLegacy = () => refreshFeed('/legacy-research.json',8192,applyLegacy,()=>clearLegacy('Legacy research inventory unavailable · no counts inferred'));
+ const refreshHealth = () => refreshFeed('/status.json',4096,applyHealth,clearHealth);
+ const refreshOperations = () => refreshFeed('/operations.json',8192,applyOperations,clearOperations);
+ refresh(); refreshLegacy(); refreshHealth(); refreshOperations();
+ setInterval(refresh, 60000); setInterval(refreshLegacy, 60000); setInterval(refreshHealth, 60000); setInterval(refreshOperations, 60000);
 }
 </script>
 </body></html>

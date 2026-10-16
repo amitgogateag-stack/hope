@@ -1,8 +1,10 @@
 """Dashboard snapshot is read-only, aggregate-only and fail-closed."""
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import nullcontext
 
 import pytest
+from sqlalchemy.exc import DBAPIError
 
 from hope.api.dashboard_snapshot import build_dashboard_snapshot, export_dashboard_snapshot
 
@@ -23,6 +25,8 @@ class _Result:
 
 
 class _Connection:
+    def begin_nested(self):
+        return nullcontext()
     def __init__(self, state="RUNNING", counts=None, recovery=(1, 0, 1)):
         self.statements = []
         self.state = state
@@ -40,6 +44,12 @@ class _Connection:
             return _Result(scalar=self.state)
         if "FROM research_runs" in sql:
             return _Result(scalar=3)
+        if any(f"FROM {table}" in sql for table in (
+            "datasets", "strategy_versions", "experiments", "research_decisions", "paper_no_trade_decisions", "market_bars",
+        )):
+            class MissingOptionalTable(Exception):
+                sqlstate = "42P01"
+            raise DBAPIError(sql, None, MissingOptionalTable())
         if "FROM paper_effects" in sql:
             return _Result(scalar=self.recovery[0])
         if "INTERVAL '1 hour'" in sql:

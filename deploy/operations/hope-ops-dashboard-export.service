@@ -1,0 +1,27 @@
+[Unit]
+Description=HOPE M1 private read-only health export
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=hope-dashboard
+Group=hope-operations
+WorkingDirectory=/opt/hope-operations/current
+Environment=PYTHONPATH=/opt/hope-operations/current/src
+EnvironmentFile=/etc/hope-dashboard-ops.env
+ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.dashboard_snapshot --output /var/lib/hope-dashboard-ops/snapshot.json
+TimeoutStartSec=120s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hope-dashboard-ops
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+MemoryMax=256M
+TasksMax=16
+LimitNOFILE=256

@@ -145,6 +145,19 @@ def test_verified_source_resolver_returns_only_fully_verified_durable_evidence()
     ]
 
 
+@pytest.mark.parametrize("schema", [None, "invented.schema.v99", "hope.backtest-result.v1"])
+def test_verified_source_requires_positive_certification_even_with_matching_hashes(schema):
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+    payload = {"research_provenance": evidence.canonical_result["research_provenance"]}
+    if schema is not None:
+        payload["schema"] = schema
+    # Synthetic negative evidence only: a correct content hash does not certify
+    # execution provenance. No production evidence or research result is written.
+    evidence.canonical_result, evidence.result_fingerprint = research_result_fingerprint(payload)
+    with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_CERTIFIED_EVIDENCE_REQUIRED"):
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
+
+
 def test_verified_source_resolver_rejects_tampered_durable_result_fingerprint():
     run_id, experiment, run, evidence, plan, universe, markets = _fixture()
     evidence.result_fingerprint = "f" * 64

@@ -5,6 +5,7 @@ import json
 from typing import Any
 from uuid import UUID
 
+from hope.application.backtests.certified_evidence import is_certified_backtest_evidence
 from hope.application.experiments.research_runs import verify_research_result_evidence
 
 
@@ -124,6 +125,11 @@ class VerifiedCertifiedResearchSourceResolver:
         ):
             raise ValueError("VERIFIED_RESEARCH_SOURCE_RUN_FINGERPRINT_MISMATCH")
 
+        # The generic result verifier intentionally supports non-backtest
+        # research payloads. This resolver is a stricter admission boundary:
+        # matching hashes alone cannot turn an unknown schema into certification.
+        if not is_certified_backtest_evidence(canonical):
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_CERTIFIED_EVIDENCE_REQUIRED")
         execution_plan = self._execution_plans.resolve(experiment)
         verified = verify_research_result_evidence(
             canonical,

@@ -85,9 +85,60 @@ wall-clock deadline for all network failures. Multiple statements can each use
 their own budget, and multi-host connection strings can try multiple targets.
 The existing one-hour stale threshold still applies to the retained snapshot.
 Local PostgreSQL contention and slow-read tests validate rollback, preservation
-and recovery; they do not certify AWS connectivity or deployment. The independent
-browser refresh boundary is also bounded: each loopback request is aborted after
-10 seconds and each endpoint permits only one request in flight. The last verified
-snapshot remains visible after a refresh failure and is re-aged every 30 seconds,
-so it transitions to STALE without waiting for a successful network response.
-Missing data still fails closed and no background request can overlap itself.
+and recovery; they do not certify AWS connectivity or deployment. Independent browser freshness and overlapping reads are handled by the M1
+watchdog and serialized refresh boundary below.
+
+## Integrated operational read model (M1, source only)
+
+Snapshot schema v1 remains compatible with old files. Its optional `projections`
+object provides separately verified AVAILABLE or UNAVAILABLE sections for:
+
+- datasets: registered count and stored PIT-certified metadata count;
+- strategies: registered strategy-version count;
+- experiments: fixed status buckets, including OTHER for unknown stored labels;
+- decisions: the six stored research-decision verdict counts;
+- PAPER activity: latest successful job completion's logical time and successful
+  stored NO_TRADE decisions, distinct from the service's last successful poll;
+- market data: stored bar count and latest event/available timestamps, with
+  freshness policy explicitly UNKNOWN;
+- portfolio: UNAVAILABLE until an independent accounting projection is verified.
+
+Optional table, column or SELECT-permission gaps roll back a read-only savepoint
+and leave that section UNAVAILABLE. They never manufacture zero or invalidate
+other available sections. Permission to the five required base tables remains
+necessary for the original snapshot. Optional SELECT sources are `datasets`,
+`strategy_versions`, `experiments`, `research_decisions`,
+`paper_no_trade_decisions` and `market_bars`; operators must review grants
+separately. Neither this code nor its tests grant access on AWS. Timeout errors
+continue to abort export and preserve the previous complete file. Future source
+market timestamps make the market-data section UNAVAILABLE while retaining
+other verified sections. Latest timestamps do not prove active-instrument
+coverage, calendar/session eligibility or a configured freshness policy.
+
+The optional server argument `--operations-status-file PATH` projects the local
+service health file through `GET /operations.json`; its default is `operations.json`
+beside the database snapshot. Missing, partial or invalid health returns 503 with
+a generic body, independently of web liveness and database feed health. The
+projection whitelists timestamps, process counters, PAPER-only/LIVE-disabled
+flags, fixed error codes, an optional exact deployed commit and schema
+compatibility. A deployed SHA and successful service poll are not CI success or
+proof of a completed PAPER job. Process counters reset on restart.
+
+The browser ages all loaded data every second, including offline snapshots:
+database/legacy aggregates become STALE after one hour; service heartbeats after
+five minutes; web health becomes UNKNOWN after 90 seconds without confirmation.
+Each endpoint has a 10-second AbortController deadline and one complete
+read/apply cycle at a time. Late reads cannot overwrite a newly selected local
+file or a newer accepted generation. A failed database-snapshot refresh retains the last verified snapshot, explicitly
+labels the refresh unavailable and keeps re-aging it into STALE without a
+successful network response. A later successful refresh clears the failure
+notice. Without a prior verified snapshot, failure remains unavailable. Other
+failed feeds clear their independent observations; none infer zero or CURRENT.
+
+Behavior tests execute the exact shipped JavaScript in Node with deterministic
+clock/network surfaces. CI explicitly installs Node 22; a local alternative can
+be selected through `HOPE_NODE`. PostgreSQL tests use isolated migrated schemas
+and a real restricted role to verify zero, stored counts, denied permissions,
+timeouts and recovery. This validates source behavior, not an AWS deployment or
+authenticated production data. No credentials, raw rows or identifiers are
+projected. Broker actions and LIVE execution remain unavailable.

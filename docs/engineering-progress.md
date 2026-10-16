@@ -300,3 +300,84 @@ Local validation passed 127 focused dashboard/deployment checks and 1,988 unit
 tests. The inline script passed Node syntax validation and git diff --check is
 clean, including removal of a pre-existing extra test-file newline. No database,
 AWS, credential, strategy, risk, PAPER execution or LIVE setting was changed.
+
+## M1 integrated autonomous PAPER operations and private dashboard
+
+Starting authoritative SHA 580bcb56995adb02d3154890e527c43044ae2ddd, successful
+exact-head Actions run 38955744006 and matching issue #5 marker were checked
+before implementation and rechecked during the milestone. Frozen baseline is
+preserved. See m1-operations-milestone.md for architecture inspection, integrated
+implementation plan, the required adversarial validation map and acceptance
+boundaries. November 15 readiness depends on actual operator/data prerequisites.
+
+Implemented an opt-in bounded service and CLI over existing operational registry,
+calendar, ownership and scheduler contracts. Every poll checks exact schema
+inventory/checksums and RUNNING authorization before reviewed real-data factory
+resolution. SIGTERM, reconnection, sanitized atomic health, deployed commit and
+schema observations are integrated. No production synthetic factory or candidate
+promotion is supplied. Existing reconciliation/accounting protections remain
+authoritative; partial evidence blocks replay.
+
+The private dashboard now has independently aging observations, request deadlines,
+serialized refreshes and generation/file fencing. Strict optional aggregate
+projections cover research registration/verdicts, stored PAPER outcomes,
+NO_TRADE, last completed job and market observations. Missing optional SELECT
+permissions remain UNAVAILABLE through savepoint isolation. Portfolio and
+unverified freshness/CI information never become fabricated zero/green values.
+The service heartbeat is served through a separate sanitized read-only endpoint.
+
+A new deploy/operations package provides isolated systemd services, disabled
+installation, private SSH-tunnel access, role/release/schema preflight, resource
+limits and expected-pointer code activation/rollback. Existing deployments,
+roles, AWS infrastructure and historical data were not modified. The operator
+acceptance checklist includes protected backup restore, real-data factory
+review, HALT/restart/outage/reboot and independent accounting verification.
+
+Closed the previously recorded positive-certified-schema admission gap. Two
+synthetic unknown-schema payloads with valid hashes were reproduced as accepted;
+the resolver now positively requires supported certification before independent
+execution evidence verification. No research evidence was manufactured or stored.
+
+Focused validation: service 37 tests including nine genuine PostgreSQL cases;
+dashboard 206 tests with restricted roles, full-schema projections and actual
+shipped JavaScript; deployment/admission 30 passed plus two Windows-unavailable
+symlink cases reserved for Linux CI. Added an actual child-process CLI restart
+test asserting one durable NO_TRADE/effect across termination and a fresh process.
+
+Initial full regression found one collection-time clock-fixture defect after
+2,591 passed tests. A future timestamp calculated during collection had become
+past before its test executed. The fixture now calculates the relative time
+inside the test; the production rejection assertion remains intact. Focused
+rerun passed 26 checks. Fresh-database final regression and exact pushed-head
+CI/issue marker verification must complete before M1 is called code complete.
+
+Independent deployment review found and corrected three integration gaps before
+publication: activation now holds an exclusive operation lease through stop,
+switch, acceptance and rollback; acceptance requires a fresh successful
+compatible PAPER-only heartbeat from the newly started process; host preflight
+checks root/venv/parent ownership before executing its interpreter. Negative
+heartbeat and concurrent-lock regressions were added. Stale deployment locks
+after a killed operator process intentionally require explicit incident review.
+
+Final frozen-source fresh-database acceptance passed 2,601 tests in 210.48
+seconds with 89.40% coverage on local Python 3.12/PostgreSQL 17.11. Two new
+symlink rollback cases cannot run on this Windows host and are exercised in
+Linux CI. The existing three Bash-dependent dashboard contract files are also
+CI-only locally. The actual child-process CLI termination/restart test passed.
+Complete implementation/diff review and independent cross-component review are
+complete; no coverage threshold or safety assertion was relaxed. Exact pushed
+HEAD CI and its issue #5 marker remain the final publication gate. No AWS
+deployment or operator acceptance is claimed by this local result.
+
+Publication lease check detected concurrent authoritative commit
+564e02d7c181928868884b4e6730206dbaa0ce0f before any ref update. Its exact-head
+CI 38967678505 and issue #5 marker were verified green. That dashboard freshness
+work and engineering record were integrated, including retained snapshots after
+transient failures and the remote regression intent. The M1 generation fencing,
+worker health and projections remain intact; merged focused browser/preview/
+probe checks passed 70 tests. A fresh complete merged regression precedes the
+new expected-SHA update; no concurrent GitHub work is overwritten.
+
+Complete merged acceptance passed 2,602 tests in 250.24 seconds with 89.40%
+coverage; the same two Windows symlink cases are reserved for Linux CI. The
+final publication parent is the preserved concurrent green commit 564e02d.

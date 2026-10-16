@@ -1,0 +1,46 @@
+[Unit]
+Description=HOPE autonomous PAPER operations (LIVE disabled)
+After=network-online.target postgresql.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hope-paper
+Group=hope-operations
+WorkingDirectory=/opt/hope-operations/current
+Environment=PYTHONPATH=/opt/hope-operations/current/src:/opt/hope-operations/config
+EnvironmentFile=/etc/hope-paper.env
+EnvironmentFile=/opt/hope-operations/deployed.env
+ExecStartPre=/opt/hope-operations/venv/bin/python -m hope.api.operations_deployment --release /opt/hope-operations/current --expected-sha ${HOPE_DEPLOYED_COMMIT} --database-component paper
+ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.paper_service --factory ${HOPE_PAPER_FACTORY} --migrations-dir /opt/hope-operations/current/migrations --status-file /var/lib/hope-paper/health.json --poll-seconds 30
+Restart=on-failure
+RestartSec=15s
+TimeoutStartSec=90s
+TimeoutStopSec=60s
+KillSignal=SIGTERM
+KillMode=control-group
+UMask=0027
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hope-paper
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+LockPersonality=yes
+MemoryMax=1G
+TasksMax=64
+LimitNOFILE=1024
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hope-paper
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=100
+
+[Install]
+WantedBy=multi-user.target

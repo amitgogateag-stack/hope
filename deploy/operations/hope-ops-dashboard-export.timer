@@ -1,0 +1,12 @@
+[Unit]
+Description=Refresh HOPE private operational snapshot
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=60s
+AccuracySec=5s
+Persistent=true
+Unit=hope-ops-dashboard-export.service
+
+[Install]
+WantedBy=timers.target
