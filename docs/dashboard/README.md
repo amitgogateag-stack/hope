@@ -62,3 +62,28 @@ No deployment, role grant, migration or AWS configuration change is performed by
 this development batch; use the existing authenticated SSH tunnel only after
 operator approval. Authenticated stored AWS data has not been exercised unless
 an explicitly configured database connection is available.
+
+## Bounded database reads
+
+The exporter uses a libpq connection timeout of 10 seconds per connection target,
+a PostgreSQL statement timeout of 15 seconds and a lock timeout of 3 seconds.
+Statement and lock settings are transaction-local; they do not change the
+authenticated database role, role grants or subsequent pooled transactions.
+An interrupted or timed-out read leaves the last complete snapshot byte-for-byte
+intact, and creates no partial publication. A later successful export can recover
+without replaying PAPER work.
+
+For focused tests or trusted application callers, the Python export function
+accepts `connect_timeout_seconds` (integer 1 through 60), `statement_timeout_ms`
+(integer 1 through 120000), and `lock_timeout_ms` (integer 1 through the statement
+timeout). Snapshot construction accepts the two transaction settings. Zero,
+booleans, strings and non-integers are rejected before connecting or issuing SQL.
+The CLI uses the documented defaults and accepts no arbitrary database settings.
+
+These are database-operation budgets, not an end-to-end freshness guarantee or a
+wall-clock deadline for all network failures. Multiple statements can each use
+their own budget, and multi-host connection strings can try multiple targets.
+The existing one-hour stale threshold still applies to the retained snapshot.
+Local PostgreSQL contention and slow-read tests validate rollback, preservation
+and recovery; they do not certify AWS connectivity or deployment. The independent
+browser freshness/overlapping-refresh issue remains a separate development gap.

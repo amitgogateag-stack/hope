@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -26,18 +26,13 @@ class PITMarketContext(BaseModel):
             raise ValueError("PIT context timestamp must be timezone-aware")
         for bar in self.bars:
             if (
-                bar.event_time > self.as_of
-                or bar.available_time > self.as_of
-                or bar.ingestion_time > self.as_of
-                or (bar.effective_time is not None and bar.effective_time > self.as_of)
+                any(t.astimezone(UTC) > self.as_of.astimezone(UTC)
+                    for t in (bar.event_time, bar.available_time, bar.ingestion_time, bar.effective_time)
+                    if t is not None)
             ):
                 raise ValueError("PIT_CONTEXT_CONTAINS_UNAVAILABLE_INFORMATION")
-        if tuple(self.bars) != tuple(
-            sorted(
-                self.bars,
-                key=lambda b: (b.event_time, b.available_time, b.ingestion_time, b.instrument_id),
-            )
-        ):
+        keys = tuple(_bar_key(bar) for bar in self.bars)
+        if keys != tuple(sorted(keys)):
             raise ValueError("PIT_CONTEXT_BARS_MUST_BE_DETERMINISTICALLY_ORDERED")
         return self
 
@@ -57,16 +52,20 @@ def build_pit_market_context(bars: tuple[MarketBar, ...] | list[MarketBar], as_o
         bar
         for bar in bars
         if (
-            bar.event_time <= as_of
-            and bar.available_time <= as_of
-            and bar.ingestion_time <= as_of
-            and (bar.effective_time is None or bar.effective_time <= as_of)
+            all(t.astimezone(UTC) <= as_of.astimezone(UTC)
+                for t in (bar.event_time, bar.available_time, bar.ingestion_time, bar.effective_time)
+                if t is not None)
         )
     )
     visible = tuple(
         sorted(
             visible,
-            key=lambda b: (b.event_time, b.available_time, b.ingestion_time, b.instrument_id),
+            key=_bar_key,
         )
     )
     return PITMarketContext(as_of=as_of, bars=visible)
+
+
+def _bar_key(bar: MarketBar) -> tuple[datetime, datetime, datetime, str]:
+    return (bar.event_time.astimezone(UTC), bar.available_time.astimezone(UTC),
+            bar.ingestion_time.astimezone(UTC), bar.instrument_id)

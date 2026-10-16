@@ -234,3 +234,44 @@ reproduction found generic payloads with matching research identity and a
 recomputed fingerprint could pass this boundary without certified execution
 provenance. That separate defect is recorded for a subsequent green-head batch;
 no production evidence or data was created or changed during the reproduction.
+
+## October 16 continuation — recovered data, PAPER timing and bounded health reads
+
+Starting live HEAD c644809f93137270362b45928a4b1034648b14bf was verified against
+successful exact-head CI 38950466595 and matching issue #5 marker. User priorities
+directed this batch to recovered data at the PAPER decision/execution boundary,
+durable restart behavior and read-only operational visibility.
+
+An isolated archived-head run failed 14 of the first 17 new timing unit cases.
+PIT visibility, freshness and execution timing used wall-clock comparisons that
+could admit future-fold information or undercount elapsed age/latency. Genuine
+PostgreSQL tests additionally found sealed coverage rejection and successful
+NO_TRADE restart failing identity checks under a non-UTC client timezone.
+
+The coordinated correction uses UTC instants for PIT visibility/order/coverage,
+unchanged PAPER freshness age, execution timeline arithmetic and quote bounds,
+and durable schedule authentication. Future quote events cannot price a past
+explicit fill. Original serialization, execution costs and strategy/risk rules
+are preserved. See paper-recovered-data-timing.md.
+
+Parallel dashboard work adds validated connection/statement/lock budgets with
+transaction-local read-only settings. Real PostgreSQL tests force lock and
+statement timeouts, prove prior snapshot bytes remain untouched, and verify a
+later export recovers without leaking timeout settings to subsequent work.
+No deployment or authenticated AWS data access was attempted. Browser freshness
+aging and overlapping-refresh protection remain a documented next deliverable.
+
+Focused checks passed 53 PAPER/execution tests including three PostgreSQL
+recovered-data cases, plus 34 dashboard checks including three PostgreSQL cases.
+The PAPER cases prove delayed visibility, stale rejection before side effects,
+one NO_TRADE through concurrent execution and restart, and rejection of a forged
+other-fold schedule. Complete fresh-database validation and exact-head CI must
+pass before closing the batch. The research-schema admission investigation
+remains recorded for a later bounded batch.
+
+Fresh-database local full-suite validation passed 2,485 tests in 227.95 seconds
+with 89.45% coverage against the unchanged 89% minimum, on Python 3.12 and
+PostgreSQL 17.11. All PostgreSQL tests executed. The three Bash-dependent
+dashboard contract files remain excluded on Windows and run in exact-head
+Linux CI. Complete diff review and git diff --check passed. No production
+data, credential, deployment, strategy/risk threshold or baseline was changed.

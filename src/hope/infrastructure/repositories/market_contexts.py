@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Mapping
 from uuid import UUID
 
@@ -80,7 +80,7 @@ def _verify_read_side_coverage(
     expected_keys: set[tuple[UUID, datetime]],
     persisted_keys: tuple[tuple[UUID, datetime], ...],
 ) -> None:
-    persisted_key_set = set(persisted_keys)
+    persisted_key_set = {(instrument, event.astimezone(UTC)) for instrument, event in persisted_keys}
     if (
         len(persisted_key_set) != len(persisted_keys)
         or persisted_key_set != expected_keys

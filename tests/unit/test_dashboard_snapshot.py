@@ -32,7 +32,7 @@ class _Connection:
     def execute(self, statement):
         sql = str(statement)
         self.statements.append(sql)
-        if sql.startswith("SET TRANSACTION"):
+        if sql.startswith(("SET TRANSACTION", "SET LOCAL")):
             return _Result()
         if sql.startswith("SELECT CURRENT_TIMESTAMP"):
             return _Result(scalar=datetime(2026, 10, 12, tzinfo=timezone.utc))
@@ -57,6 +57,9 @@ def test_dashboard_snapshot_counts_and_transaction_is_read_only():
     assert connection.statements[0] == (
         "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
     )
+    assert connection.statements[1:3] == [
+        "SET LOCAL statement_timeout = 15000", "SET LOCAL lock_timeout = 3000",
+    ]
     assert snapshot["paper"]["environment_state"] == "RUNNING"
     assert snapshot["paper"]["job_runs"] == {
         "total": 3, "claimed": 1, "succeeded": 2, "failed": 0,
@@ -133,11 +136,50 @@ def test_failed_recovery_read_preserves_last_complete_export(tmp_path, monkeypat
             self.disposed = True
 
     engine = Engine()
-    monkeypatch.setattr(module, "create_engine", lambda _: engine)
+    engine_options = {}
+    def create_test_engine(_, **kwargs):
+        engine_options.update(kwargs)
+        return engine
+    monkeypatch.setattr(module, "create_engine", create_test_engine)
     target = tmp_path / "snapshot.json"
     target.write_bytes(b"last complete private snapshot")
     with pytest.raises(RuntimeError, match="interrupted recovery read"):
         export_dashboard_snapshot(target, "configured-private-database")
     assert target.read_bytes() == b"last complete private snapshot"
     assert engine.disposed
+    assert engine_options == {"connect_args": {"connect_timeout": 10}}
     assert list(tmp_path.iterdir()) == [target]
+
+
+@pytest.mark.parametrize("settings", [
+    {"statement_timeout_ms": 0}, {"statement_timeout_ms": True},
+    {"statement_timeout_ms": 120001}, {"statement_timeout_ms": "10; SELECT 1"},
+    {"lock_timeout_ms": 0}, {"lock_timeout_ms": False},
+    {"lock_timeout_ms": 15001}, {"lock_timeout_ms": 1.5},
+])
+def test_invalid_read_budget_fails_before_any_sql_or_connection(tmp_path, monkeypatch, settings):
+    from hope.api import dashboard_snapshot as module
+    connection = _Connection()
+    with pytest.raises(ValueError, match="READ_TIMEOUT_INVALID"):
+        build_dashboard_snapshot(connection, **settings)
+    assert not connection.statements
+    monkeypatch.setattr(module, "create_engine", lambda *a, **kw: pytest.fail("must not connect"))
+    with pytest.raises(ValueError, match="READ_TIMEOUT_INVALID"):
+        export_dashboard_snapshot(tmp_path / "snapshot.json", "configured", **settings)
+    assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize("timeout", [0, 61, True, 1.5, "10"])
+def test_invalid_connect_budget_rejected_before_engine_creation(tmp_path, monkeypatch, timeout):
+    from hope.api import dashboard_snapshot as module
+    monkeypatch.setattr(module, "create_engine", lambda *a, **kw: pytest.fail("must not connect"))
+    with pytest.raises(ValueError, match="CONNECT_TIMEOUT_INVALID"):
+        export_dashboard_snapshot(tmp_path / "snapshot.json", "configured", connect_timeout_seconds=timeout)
+
+
+def test_custom_read_budget_uses_only_transaction_local_settings():
+    connection = _Connection()
+    build_dashboard_snapshot(connection, statement_timeout_ms=800, lock_timeout_ms=200)
+    assert connection.statements[1:3] == [
+        "SET LOCAL statement_timeout = 800", "SET LOCAL lock_timeout = 200",
+    ]

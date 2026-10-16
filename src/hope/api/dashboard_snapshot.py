@@ -21,11 +21,25 @@ def _count(connection: Connection, query: str) -> int:
     return result
 
 
-def build_dashboard_snapshot(connection: Connection) -> dict[str, object]:
+def _validate_read_budget(statement_timeout_ms: int, lock_timeout_ms: int) -> None:
+    if (type(statement_timeout_ms) is not int or not 1 <= statement_timeout_ms <= 120000
+            or type(lock_timeout_ms) is not int or not 1 <= lock_timeout_ms <= statement_timeout_ms):
+        raise ValueError("HOPE_DASHBOARD_READ_TIMEOUT_INVALID")
+
+
+def build_dashboard_snapshot(
+    connection: Connection, *, statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
+) -> dict[str, object]:
     """Read a transactionally consistent snapshot; fail closed on missing state."""
     # The first SQL statement establishes a read-only repeatable-read snapshot.
     # No lock, broker credential or mutation is required by the dashboard.
+    _validate_read_budget(statement_timeout_ms, lock_timeout_ms)
     connection.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
+    # Transaction-local limits protect the exporter from DDL locks and expensive
+    # reads without modifying the authenticated role or leaking settings into a
+    # pooled connection. Values are validated integers, never SQL input strings.
+    connection.execute(text(f"SET LOCAL statement_timeout = {statement_timeout_ms}"))
+    connection.execute(text(f"SET LOCAL lock_timeout = {lock_timeout_ms}"))
     timestamp = connection.execute(text("SELECT CURRENT_TIMESTAMP")).scalar_one()
     if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_DATABASE_TIME_INVALID")
@@ -84,14 +98,22 @@ def build_dashboard_snapshot(connection: Connection) -> dict[str, object]:
     }
 
 
-def export_dashboard_snapshot(output: Path, database_url: str) -> Path:
+def export_dashboard_snapshot(
+    output: Path, database_url: str, *, connect_timeout_seconds: int = 10,
+    statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
+) -> Path:
     """Atomically publish only a complete snapshot; never publish partial reads."""
     if not database_url:
         raise ValueError("HOPE_DATABASE_URL_REQUIRED")
-    engine = create_engine(database_url)
+    _validate_read_budget(statement_timeout_ms, lock_timeout_ms)
+    if type(connect_timeout_seconds) is not int or not 1 <= connect_timeout_seconds <= 60:
+        raise ValueError("HOPE_DASHBOARD_CONNECT_TIMEOUT_INVALID")
+    engine = create_engine(database_url, connect_args={"connect_timeout": connect_timeout_seconds})
     try:
         with engine.connect() as connection:
-            snapshot = build_dashboard_snapshot(connection)
+            snapshot = build_dashboard_snapshot(
+                connection, statement_timeout_ms=statement_timeout_ms, lock_timeout_ms=lock_timeout_ms,
+            )
             connection.rollback()
     finally:
         engine.dispose()

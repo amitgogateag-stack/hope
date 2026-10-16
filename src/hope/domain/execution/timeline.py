@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 
 class ExecutionTimelineError(ValueError):
@@ -34,12 +34,12 @@ class ExecutionTimeline:
             _aware(self.fill_time, "FILL_TIME")
         if self.latency < timedelta(0):
             raise ExecutionTimelineError("LATENCY_MUST_BE_NON_NEGATIVE")
-        if self.order_time < self.decision_time:
+        if self.order_time.astimezone(UTC) < self.decision_time.astimezone(UTC):
             raise ExecutionTimelineError("ORDER_TIME_PRECEDES_DECISION_TIME")
-        expected = self.order_time + self.latency
-        if self.fill_eligible_time != expected:
+        expected = self.order_time.astimezone(UTC) + self.latency
+        if self.fill_eligible_time.astimezone(UTC) != expected:
             raise ExecutionTimelineError("FILL_ELIGIBILITY_MUST_EQUAL_ORDER_TIME_PLUS_LATENCY")
-        if self.fill_time is not None and self.fill_time < self.fill_eligible_time:
+        if self.fill_time is not None and self.fill_time.astimezone(UTC) < expected:
             raise ExecutionTimelineError("FILL_TIME_PRECEDES_ELIGIBILITY")
 
     @classmethod
@@ -55,8 +55,10 @@ class ExecutionTimeline:
             raise ExecutionTimelineError("LATENCY_MUST_BE_NON_NEGATIVE")
         if order_submission_delay < timedelta(0):
             raise ExecutionTimelineError("ORDER_SUBMISSION_DELAY_MUST_BE_NON_NEGATIVE")
-        order_time = decision_time + order_submission_delay
-        return cls(decision_time, order_time, latency, order_time + latency)
+        order_utc = decision_time.astimezone(UTC) + order_submission_delay
+        order_time = order_utc.astimezone(decision_time.tzinfo)
+        eligible = (order_utc + latency).astimezone(decision_time.tzinfo)
+        return cls(decision_time, order_time, latency, eligible)
 
     def with_fill_time(self, fill_time: datetime) -> "ExecutionTimeline":
         return ExecutionTimeline(
@@ -69,5 +71,5 @@ class ExecutionTimeline:
 
     def assert_quote_eligible(self, quote_time: datetime) -> None:
         _aware(quote_time, "QUOTE_TIME")
-        if quote_time < self.fill_eligible_time:
+        if quote_time.astimezone(UTC) < self.fill_eligible_time.astimezone(UTC):
             raise ExecutionTimelineError("QUOTE_PRECEDES_FILL_ELIGIBILITY")

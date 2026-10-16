@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC
+
 from uuid import UUID
 
 from sqlalchemy import Column, Connection, DateTime, MetaData, String, Table, Uuid, select, text, update
@@ -66,7 +68,7 @@ class SqlAlchemyJobRunRepository:
         ).mappings().one_or_none()
         if row is None:
             return False
-        if row["job_key"] != job_run.job_key or row["scheduled_for"] != job_run.scheduled_for:
+        if row["job_key"] != job_run.job_key or row["scheduled_for"].astimezone(UTC) != job_run.scheduled_for.astimezone(UTC):
             raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
         return row["status"] == JobRunStatus.CLAIMED.value
 
@@ -106,7 +108,7 @@ class SqlAlchemyJobRunRepository:
         if existing_by_id is not None:
             if (
                 existing_by_id["job_key"] != completion.run.job_key
-                or existing_by_id["scheduled_for"] != completion.run.scheduled_for
+                or existing_by_id["scheduled_for"].astimezone(UTC) != completion.run.scheduled_for.astimezone(UTC)
             ):
                 raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
             return False
@@ -168,7 +170,7 @@ class SqlAlchemyJobRunRepository:
         if existing_by_id is not None:
             if (
                 existing_by_id["job_key"] != job_run.job_key
-                or existing_by_id["scheduled_for"] != job_run.scheduled_for
+                or existing_by_id["scheduled_for"].astimezone(UTC) != job_run.scheduled_for.astimezone(UTC)
             ):
                 raise ValueError("JOB_RUN_IDENTITY_CONFLICT")
             return self.get_record(job_run.job_run_id)

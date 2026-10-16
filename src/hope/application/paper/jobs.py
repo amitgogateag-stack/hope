@@ -41,8 +41,8 @@ def assert_paper_market_data_fresh(
         bars = market_context.for_instrument(str(instrument_id))
         if not bars:
             raise RuntimeError("PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT")
-        latest_event_time = max(bar.event_time for bar in bars)
-        if market_context.as_of - latest_event_time > max_age:
+        latest_event_time = max(bar.event_time.astimezone(timezone.utc) for bar in bars)
+        if market_context.as_of.astimezone(timezone.utc) - latest_event_time > max_age:
             raise RuntimeError("PAPER_MARKET_DATA_STALE")
 
 
