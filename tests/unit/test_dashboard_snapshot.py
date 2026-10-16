@@ -23,10 +23,11 @@ class _Result:
 
 
 class _Connection:
-    def __init__(self, state="RUNNING", counts=None):
+    def __init__(self, state="RUNNING", counts=None, recovery=(1, 0, 1)):
         self.statements = []
         self.state = state
         self.counts = counts if counts is not None else [("CLAIMED", 1), ("SUCCEEDED", 2)]
+        self.recovery = recovery
 
     def execute(self, statement):
         sql = str(statement)
@@ -39,6 +40,12 @@ class _Connection:
             return _Result(scalar=self.state)
         if "FROM research_runs" in sql:
             return _Result(scalar=3)
+        if "FROM paper_effects" in sql:
+            return _Result(scalar=self.recovery[0])
+        if "INTERVAL '1 hour'" in sql:
+            return _Result(scalar=self.recovery[1])
+        if "FROM audit_events" in sql:
+            return _Result(scalar=self.recovery[2])
         if "FROM job_runs" in sql:
             return _Result(rows=self.counts)
         raise AssertionError(f"Unexpected dashboard SQL: {sql}")
@@ -56,6 +63,10 @@ def test_dashboard_snapshot_counts_and_transaction_is_read_only():
     }
     assert snapshot["research"]["run_count"] == 3
     assert snapshot["generated_at"] == "2026-10-12T00:00:00+00:00"
+    assert snapshot["paper"]["recovery"] == {
+        "claimed_with_effects": 1, "claimed_without_effects": 0,
+        "claims_older_than_one_hour": 0, "reconciliation_receipts": 1,
+    }
     assert not any(
         stmt.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE"))
         for stmt in connection.statements
@@ -81,3 +92,52 @@ def test_export_rejects_missing_database_url_without_creating_file(tmp_path: Pat
     with pytest.raises(ValueError, match="HOPE_DATABASE_URL_REQUIRED"):
         export_dashboard_snapshot(target, "")
     assert not target.exists()
+
+
+@pytest.mark.parametrize("recovery", [
+    (2, 0, 0), (0, 2, 0), (0, 0, 3), (-1, 0, 0),
+    (True, 0, 0), (0, 0.5, 0),
+])
+def test_dashboard_rejects_invalid_or_inconsistent_recovery_counts(recovery):
+    with pytest.raises(ValueError):
+        build_dashboard_snapshot(_Connection(recovery=recovery))
+
+
+def test_dashboard_empty_database_has_zero_backlog_without_inventing_claims():
+    snapshot = build_dashboard_snapshot(_Connection(counts=[], recovery=(0, 0, 0)))
+    assert set(snapshot["paper"]["recovery"].values()) == {0}
+
+
+def test_failed_recovery_read_preserves_last_complete_export(tmp_path, monkeypatch):
+    from hope.api import dashboard_snapshot as module
+
+    class BrokenConnection(_Connection):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, statement):
+            if "FROM paper_effects" in str(statement):
+                raise RuntimeError("simulated interrupted recovery read")
+            return super().execute(statement)
+
+    class Engine:
+        disposed = False
+
+        def connect(self):
+            return BrokenConnection()
+
+        def dispose(self):
+            self.disposed = True
+
+    engine = Engine()
+    monkeypatch.setattr(module, "create_engine", lambda _: engine)
+    target = tmp_path / "snapshot.json"
+    target.write_bytes(b"last complete private snapshot")
+    with pytest.raises(RuntimeError, match="interrupted recovery read"):
+        export_dashboard_snapshot(target, "configured-private-database")
+    assert target.read_bytes() == b"last complete private snapshot"
+    assert engine.disposed
+    assert list(tmp_path.iterdir()) == [target]

@@ -35,6 +35,18 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
     if counts["total"] != counts["claimed"] + counts["succeeded"] + counts["failed"]:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCONSISTENT")
+    recovery = paper.get("recovery")
+    recovery_fields = (
+        "claimed_with_effects", "claimed_without_effects",
+        "claims_older_than_one_hour", "reconciliation_receipts",
+    )
+    if "recovery" in paper:
+        if not isinstance(recovery, dict) or not all(valid_count(recovery.get(k)) for k in recovery_fields):
+            raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INVALID")
+        if (recovery["claimed_with_effects"] + recovery["claimed_without_effects"] != counts["claimed"]
+                or recovery["claims_older_than_one_hour"] > counts["claimed"]
+                or recovery["reconciliation_receipts"] > counts["succeeded"]):
+            raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INCONSISTENT")
     stamp = data.get("generated_at")
     if not isinstance(stamp, str):
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
@@ -62,6 +74,8 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
             },
         },
     }
+    if recovery is not None:
+        safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 
 

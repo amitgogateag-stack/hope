@@ -44,6 +44,23 @@ def build_dashboard_snapshot(connection: Connection) -> dict[str, object]:
         raise RuntimeError("HOPE_DASHBOARD_UNKNOWN_JOB_STATUS")
     if any(type(v) is not int or v < 0 for v in jobs.values()):
         raise ValueError("HOPE_DASHBOARD_INVALID_COUNT")
+    # EXISTS avoids multiplying claims by ledger cardinality. These counts are
+    # observations only: effects do not prove that a run is safe to reconcile.
+    claims_with_effects = _count(connection,
+        "SELECT count(*) FROM job_runs j WHERE left(j.job_key, 6) = 'paper:' "
+        "AND j.status = 'CLAIMED' AND EXISTS "
+        "(SELECT 1 FROM paper_effects e WHERE e.job_run_id = j.job_run_id)")
+    stale_claims = _count(connection,
+        "SELECT count(*) FROM job_runs WHERE left(job_key, 6) = 'paper:' "
+        "AND status = 'CLAIMED' AND created_at < CURRENT_TIMESTAMP - INTERVAL '1 hour'")
+    receipts = _count(connection,
+        "SELECT count(*) FROM audit_events a JOIN job_runs j "
+        "ON a.entity_id = CAST(j.job_run_id AS text) "
+        "WHERE a.event_type = 'PAPER_RUN_RECONCILED' AND a.entity_type = 'JOB_RUN' "
+        "AND left(j.job_key, 6) = 'paper:' AND j.status = 'SUCCEEDED'")
+    claimed = jobs.get("CLAIMED", 0)
+    if claims_with_effects > claimed or stale_claims > claimed or receipts > jobs.get("SUCCEEDED", 0):
+        raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INCONSISTENT")
     return {
         "schema_version": 1,
         "source": "hope_postgresql",
@@ -51,6 +68,12 @@ def build_dashboard_snapshot(connection: Connection) -> dict[str, object]:
         "research": {"run_count": research_runs},
         "paper": {
             "environment_state": state,
+            "recovery": {
+                "claimed_with_effects": claims_with_effects,
+                "claimed_without_effects": claimed - claims_with_effects,
+                "claims_older_than_one_hour": stale_claims,
+                "reconciliation_receipts": receipts,
+            },
             "job_runs": {
                 "total": sum(jobs.values()),
                 "claimed": jobs.get("CLAIMED", 0),

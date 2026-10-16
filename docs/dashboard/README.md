@@ -43,3 +43,22 @@ The repository contains deployment instructions and service definitions, not a d
 The private web service now serves `GET /status.json` with separate `service: RUNNING` and `data_feed: CURRENT|STALE|UNAVAILABLE` indicators. This endpoint reports **only** the web service liveness and the availability/freshness of a structurally verified local snapshot; it is not proof that the trading engine is running. The UI checks it every minute through the existing loopback-only connection. It never reports missing tables as zero activity. If the database schema is older than required, `UNAVAILABLE` is expected until a separately approved migration or compatible read model exists.
 
 The dashboard no longer displays a hard-coded old CI success as if it were current. GitHub Actions remains authoritative for release CI.
+
+## Recovery observations (v0.6, development only)
+
+The same read-only PostgreSQL transaction now exports aggregate claims with and
+without durable effects, claims created more than one hour before the database
+snapshot time, and stored reconciliation receipts for successful PAPER jobs.
+The recovery panel includes the snapshot timestamp and stale indicator. Older
+snapshots without this extension show unavailable recovery observations rather
+than inferred zeros. These are observations, never authorization to replay or
+reconcile a job: ledger presence alone does not verify topology or lineage.
+
+The HTTP server validates cross-count bounds and whitelists each recovery field.
+Extra file fields, identifiers, payloads and credentials cannot pass through the
+snapshot endpoint. The existing dedicated SELECT-only role needs SELECT on
+`paper_effects` and `audit_events` as well as the previous dashboard tables.
+No deployment, role grant, migration or AWS configuration change is performed by
+this development batch; use the existing authenticated SSH tunnel only after
+operator approval. Authenticated stored AWS data has not been exercised unless
+an explicitly configured database connection is available.

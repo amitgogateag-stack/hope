@@ -85,13 +85,58 @@ def valid_snapshot(*, generated_at=None):
     }).encode("utf-8")
 
 
+def recovery_snapshot(**updates):
+    data = json.loads(valid_snapshot())
+    data["paper"]["job_runs"] = {"total": 4, "claimed": 2, "succeeded": 1, "failed": 1}
+    data["paper"]["recovery"] = {
+        "claimed_with_effects": 1, "claimed_without_effects": 1,
+        "claims_older_than_one_hour": 2, "reconciliation_receipts": 1,
+        **updates,
+    }
+    return json.dumps(data).encode()
+
+
+def test_server_serves_whitelisted_recovery_observations_only(tmp_path):
+    with dashboard(tmp_path, recovery_snapshot(credentials="DO_NOT_SERVE", job_ids=["private"])) as server:
+        status, _, body = request(server, "/snapshot.json")
+        assert status == 200
+        recovery = json.loads(body)["paper"]["recovery"]
+        assert recovery == {
+            "claimed_with_effects": 1, "claimed_without_effects": 1,
+            "claims_older_than_one_hour": 2, "reconciliation_receipts": 1,
+        }
+        assert b"DO_NOT_SERVE" not in body and b"private" not in body
+
+
+@pytest.mark.parametrize("updates", [
+    {"claimed_with_effects": 3}, {"claimed_without_effects": -1},
+    {"claims_older_than_one_hour": 3}, {"reconciliation_receipts": 2},
+    {"claimed_with_effects": True}, {"claimed_without_effects": None},
+    {"reconciliation_receipts": 9007199254740992},
+])
+def test_server_refuses_corrupt_recovery_observations(tmp_path, updates):
+    with dashboard(tmp_path, recovery_snapshot(**updates)) as server:
+        status, _, body = request(server, "/snapshot.json")
+        assert status == 503 and body == b"Verified snapshot unavailable"
+        _, _, status_body = request(server, "/status.json")
+        assert json.loads(status_body)["data_feed"] == "UNAVAILABLE"
+
+
+@pytest.mark.parametrize("invalid", [None, [], "private"])
+def test_server_rejects_recovery_field_with_wrong_shape(tmp_path, invalid):
+    data = json.loads(valid_snapshot())
+    data["paper"]["recovery"] = invalid
+    with dashboard(tmp_path, json.dumps(data).encode()) as server:
+        assert request(server, "/snapshot.json")[0] == 503
+
+
 @pytest.mark.parametrize("snapshot,expected", [
     (b"not json", 503),
     (b'{"schema_version":1,"source":"unknown"}', 503),
     (b"x" * 32769, 503),
     (b'{"schema_version":1,"source":"hope_postgresql"}', 503),
     (valid_snapshot(), 200),
-])
+], ids=["malformed", "wrong-source", "oversized", "incomplete", "valid"])
 def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
     with dashboard(tmp_path, snapshot) as server:
         status, headers, body = request(server, "/snapshot.json")
