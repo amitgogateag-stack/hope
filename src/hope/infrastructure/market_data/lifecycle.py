@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC
 from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -81,9 +82,9 @@ def ingest_and_seal_market_data_windows(
                 raise ValueError("MARKET_DATA_LIFECYCLE_WINDOW_OUTSIDE_SESSION")
 
     for previous, current in zip(requests, requests[1:]):
-        if current.start < previous.end:
+        if current.start.astimezone(UTC) < previous.end.astimezone(UTC):
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_OVERLAP_OR_OUT_OF_ORDER")
-        if current.start == previous.end:
+        if current.start.astimezone(UTC) == previous.end.astimezone(UTC):
             continue
         if session_calendar is None:
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_NOT_CONTIGUOUS")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Mapping
 from uuid import UUID
 
@@ -303,8 +303,11 @@ def manifest_evidence(
         ):
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
-        cursor = start
-        while cursor < end:
+        # Interpret immutable window strings as instants without rewriting their
+        # original offsets or changing the manifest's content hash.
+        cursor = start.astimezone(UTC)
+        end_utc = end.astimezone(UTC)
+        while cursor < end_utc:
             window_keys = {(instrument_id, cursor) for instrument_id in instrument_ids}
             if expected.intersection(window_keys):
                 raise ValueError("MARKET_DATA_MANIFEST_DUPLICATE_LOGICAL_KEY")

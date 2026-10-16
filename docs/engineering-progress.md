@@ -189,3 +189,48 @@ minimum. All PostgreSQL integration tests executed. The three Bash-dependent
 contract files remain excluded on this Windows host and run in exact-head Linux
 CI. Focused control checks passed 28 tests. No test assertion or coverage minimum
 was weakened, and the explicit migration inventory now includes 230.
+
+## October 16 continuation — elapsed-time market-data recovery integrity
+
+Starting live HEAD 2cedb5289e1bbda380d9b06a452400fc896f7cf9 was verified against
+successful exact-head CI run 38932193248 and the matching issue #5
+HOPE_CI_STATUS_V1 marker. Frozen day29-green-baseline remains
+7e9d341742818a97accce3e2301b1c7f96596795.
+
+Independent regression execution against an archived copy of the starting HEAD
+failed 16 of 17 new unit cases. Demonstrated defects include incorrect DST grid
+counts, fold aliases bypassing duplicates or request echoes, reversed UTC
+chronology accepted by MarketBar, and lifecycle gaps/overlaps judged by wall
+clock. PostgreSQL tests additionally reproduced persisted coverage collapsing
+distinct fold hours in a non-UTC client session.
+
+The coordinated correction measures request duration, interval grids, provider
+boundaries, echo identity, normalization keys/sorting, bar chronology and window
+adjacency in UTC. Manifest strings and hashes remain byte-compatible. Persisted
+coverage and sink effective-time retry comparisons also use UTC instants.
+See market-data-instant-integrity.md for the boundary and compatibility contract.
+
+Focused validation passed 47 unit checks and seven genuine PostgreSQL tests.
+The latter independently generate both DST transition grids and exercise fresh
+connection recovery, concurrent duplicate producers, exact persisted counts,
+killed-backend rollback before sealing commit, sealing retries, immutable
+manifest evidence and effective-time alias/conflict handling. Complete local
+suite validation and exact pushed-head CI must pass before this batch is closed.
+
+Fresh-database local full-suite validation passed 2,447 tests in 223.73 seconds
+with 89.23% coverage, above the unchanged 89% minimum, on Python 3.12 and
+PostgreSQL 17.11. All PostgreSQL tests executed. Three Bash-dependent dashboard
+contract files are excluded only on this Windows host; exact-head Linux CI
+executes them. No assertion, coverage threshold or authorization guard was
+weakened. Complete source and new-test diff review and git diff --check passed.
+
+No strategy/risk rule, NO_TRADE behavior, PAPER-only operation, LIVE-disabled
+policy, frozen baseline or AWS deployment changes. Authenticated AWS stored-data
+validation remains blocked by the missing configured read-only session.
+
+Next bounded investigation: positively require a supported certified evidence
+schema at the certified research-source resolver boundary. An isolated synthetic
+reproduction found generic payloads with matching research identity and a
+recomputed fingerprint could pass this boundary without certified execution
+provenance. That separate defect is recorded for a subsequent green-head batch;
+no production evidence or data was created or changed during the reproduction.

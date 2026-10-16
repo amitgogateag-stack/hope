@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Mapping
 from uuid import UUID
 
@@ -225,7 +225,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 ),
                 {"version_id": dataset_version_id},
             ).all()
-            actual = tuple((row[0], row[1]) for row in rows)
+            actual = tuple((row[0], row[1].astimezone(UTC)) for row in rows)
             actual_set = set(actual)
             if len(actual_set) != len(actual):
                 raise ValueError("MARKET_DATA_PERSISTED_COVERAGE_DUPLICATE_LOGICAL_KEY")

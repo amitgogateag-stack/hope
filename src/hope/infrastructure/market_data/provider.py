@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
@@ -39,11 +39,12 @@ class MarketDataRequest:
             for value in (self.start, self.end)
         ):
             raise ValueError("MARKET_DATA_WINDOW_MUST_BE_TIMEZONE_AWARE")
-        if self.end <= self.start:
+        start, end = self.start.astimezone(UTC), self.end.astimezone(UTC)
+        if end <= start:
             raise ValueError("MARKET_DATA_WINDOW_INVALID")
         if self.interval <= timedelta(0):
             raise ValueError("MARKET_DATA_INTERVAL_MUST_BE_POSITIVE")
-        if (self.end - self.start) % self.interval != timedelta(0):
+        if (end - start) % self.interval != timedelta(0):
             raise ValueError("MARKET_DATA_WINDOW_NOT_ALIGNED_TO_INTERVAL")
 
     @property
@@ -51,8 +52,9 @@ class MarketDataRequest:
         """Exact source-symbol/event-time grid required for a complete response."""
 
         keys: list[tuple[str, datetime]] = []
-        event_time = self.start
-        while event_time < self.end:
+        event_time = self.start.astimezone(UTC)
+        end = self.end.astimezone(UTC)
+        while event_time < end:
             keys.extend((symbol, event_time) for symbol in self.source_symbols)
             event_time += self.interval
         return tuple(keys)
@@ -70,7 +72,8 @@ class ProviderMarketDataBatch:
             raise ValueError("PROVIDER_BATCH_SOURCE_MISMATCH")
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() is None:
             raise ValueError("PROVIDER_FETCH_TIME_MUST_BE_TIMEZONE_AWARE")
-        if self.fetched_at < self.request.end:
+        start, end = self.request.start.astimezone(UTC), self.request.end.astimezone(UTC)
+        if self.fetched_at.astimezone(UTC) < end:
             raise ValueError("PROVIDER_FETCH_PRECEDES_CLOSED_WINDOW")
         if any(bar.source != self.source for bar in self.bars):
             raise ValueError("PROVIDER_BAR_SOURCE_MISMATCH")
@@ -83,18 +86,18 @@ class ProviderMarketDataBatch:
         ):
             raise ValueError("PROVIDER_BAR_EVENT_TIME_MUST_BE_TIMEZONE_AWARE")
         if any(
-            bar.event_time < self.request.start or bar.event_time >= self.request.end
+            bar.event_time.astimezone(UTC) < start or bar.event_time.astimezone(UTC) >= end
             for bar in self.bars
         ):
             raise ValueError("PROVIDER_RETURNED_BAR_OUTSIDE_REQUEST_WINDOW")
         if any(
-            (bar.event_time - self.request.start) % self.request.interval
+            (bar.event_time.astimezone(UTC) - start) % self.request.interval
             != timedelta(0)
             for bar in self.bars
         ):
             raise ValueError("PROVIDER_RETURNED_BAR_OFF_INTERVAL_GRID")
 
-        actual_keys = tuple((bar.source_symbol, bar.event_time) for bar in self.bars)
+        actual_keys = tuple((bar.source_symbol, bar.event_time.astimezone(UTC)) for bar in self.bars)
         if len(set(actual_keys)) != len(actual_keys):
             raise ValueError("PROVIDER_RETURNED_DUPLICATE_BAR_KEY")
         if set(actual_keys) != set(self.request.expected_keys):
@@ -122,7 +125,13 @@ def fetch_and_normalize_bars(
     if provider.source != request.source:
         raise ValueError("PROVIDER_REQUEST_SOURCE_MISMATCH")
     batch = provider.fetch_bars(request)
-    if batch.request != request:
+    if (
+        batch.request.source != request.source
+        or batch.request.source_symbols != request.source_symbols
+        or batch.request.start.astimezone(UTC) != request.start.astimezone(UTC)
+        or batch.request.end.astimezone(UTC) != request.end.astimezone(UTC)
+        or batch.request.interval != request.interval
+    ):
         raise ValueError("PROVIDER_REQUEST_ECHO_MISMATCH")
     if batch.source != provider.source:
         raise ValueError("PROVIDER_RESPONSE_SOURCE_MISMATCH")

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
 from typing import Mapping
@@ -58,7 +58,7 @@ class NormalizedMarketBarBatch:
     @property
     def safe_to_persist(self) -> bool:
         logical_keys = {
-            (bar.instrument_id, bar.event_time)
+            (bar.instrument_id, bar.event_time.astimezone(UTC))
             for bar in self.bars
         }
         return (
@@ -82,7 +82,7 @@ def normalize_source_bars(
     """
 
     items = tuple(raw_bars)
-    keys = tuple((bar.source, bar.source_symbol, bar.event_time) for bar in items)
+    keys = tuple(_source_key(bar) for bar in items)
     counts = Counter(keys)
     accepted: list[MarketBar] = []
     rejected: list[IngestionRejection] = []
@@ -126,9 +126,9 @@ def normalize_source_bars(
 
     accepted.sort(
         key=lambda bar: (
-            bar.event_time,
-            bar.available_time,
-            bar.ingestion_time,
+            bar.event_time.astimezone(UTC),
+            bar.available_time.astimezone(UTC),
+            bar.ingestion_time.astimezone(UTC),
             bar.instrument_id,
         )
     )
@@ -137,6 +137,14 @@ def normalize_source_bars(
         rejections=tuple(rejected),
         input_count=len(items),
     )
+
+
+def _source_key(raw: RawMarketBar) -> tuple[str, str, datetime]:
+    # Keep naive values for the existing invalid-timestamp rejection path.
+    event = raw.event_time
+    if event.tzinfo is not None and event.utcoffset() is not None:
+        event = event.astimezone(UTC)
+    return raw.source, raw.source_symbol, event
 
 
 def _preflight_rejection(
@@ -152,7 +160,7 @@ def _preflight_rejection(
         or raw.source_symbol != raw.source_symbol.strip()
     ):
         return IngestionRejectionReason.INVALID_SOURCE_IDENTITY
-    if counts[(raw.source, raw.source_symbol, raw.event_time)] > 1:
+    if counts[_source_key(raw)] > 1:
         return IngestionRejectionReason.DUPLICATE_SOURCE_BAR
     identity_key = (raw.source, raw.source_symbol)
     if identity_key not in identity_map:

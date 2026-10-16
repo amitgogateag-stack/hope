@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID
 
 from sqlalchemy import Column, Connection, DateTime, MetaData, Numeric, Table, Uuid, select, text
@@ -111,5 +112,9 @@ class SqlAlchemyMarketBarSink:
             "close": bar.close,
             "volume": bar.volume,
         }
-        if any(existing[name] != value for name, value in expected_payload.items()):
+
+        def instant(value: object) -> object:
+            return value.astimezone(UTC) if isinstance(value, datetime) else value
+
+        if any(instant(existing[name]) != instant(value) for name, value in expected_payload.items()):
             raise ValueError("MARKET_BAR_IDENTITY_CONFLICT")

@@ -47,9 +47,9 @@ class MarketBar(BaseModel):
             for t in timestamps
         ):
             raise ValueError("HOPE timestamps must be timezone-aware")
-        if self.available_time < self.event_time:
+        if self.available_time.astimezone(timezone.utc) < self.event_time.astimezone(timezone.utc):
             raise ValueError("available_time cannot precede event_time")
-        if self.ingestion_time < self.available_time:
+        if self.ingestion_time.astimezone(timezone.utc) < self.available_time.astimezone(timezone.utc):
             raise ValueError("ingestion_time cannot precede available_time")
         if self.high < max(self.open, self.close) or self.low > min(self.open, self.close) or self.high < self.low:
             raise ValueError("invalid OHLC relationship")
