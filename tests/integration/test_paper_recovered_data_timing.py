@@ -149,5 +149,3 @@ def test_recovered_second_fold_decision_is_visible_once_and_restart_skips(recove
         assert SqlAlchemyJobRunRepository(connection).get_record_for_run(run).status.value == "SUCCEEDED"
         assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"), {"id": run.job_run_id}).scalar_one() == 1
         assert connection.execute(text("SELECT count(*) FROM paper_no_trade_decisions WHERE job_run_id=:id"), {"id": run.job_run_id}).scalar_one() == 1
-
-

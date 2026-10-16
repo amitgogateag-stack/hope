@@ -41,7 +41,7 @@ def test_preview_never_fabricates_runtime_metrics_or_exposes_execution_actions()
     assert "LIVE broker submission" in html
     assert "NOT ENABLED" in html
     assert "fetch(" in html
-    assert "setInterval(refresh, 60000)" in html
+    assert "scheduleRefresh('snapshot', refresh)" in html
     assert "XMLHttpRequest" not in html
     assert "<form" not in html.lower()
 
@@ -65,15 +65,15 @@ def test_preview_imports_local_aggregate_snapshot_without_network_calls():
     assert "Snapshot rejected" in html
     assert "STALE" in html
     assert "fetch(" in html
-    assert "setInterval(refresh, 60000)" in html
+    assert "scheduleRefresh('snapshot', refresh)" in html
 
 
 def test_preview_displays_independent_server_and_database_health():
     html = PREVIEW.read_text(encoding="utf-8")
     for marker in ('id="web-service"', 'id="feed-health"', 'id="feed-time"'):
         assert marker in html
-    assert "fetch('/status.json'" in html
-    assert "fetch('/snapshot.json'" in html
+    assert "boundedJsonFetch('/status.json', 4096)" in html
+    assert "boundedJsonFetch('/snapshot.json', 32768)" in html
     assert "CHECK GITHUB ACTIONS" in html
     assert "HOPE CI #1162 PASS" not in html
 
@@ -84,9 +84,24 @@ def test_preview_legacy_counts_are_separate_from_paper_and_performance():
     for marker in ('id="legacy-experiments"', 'id="legacy-strategies"',
                    'id="legacy-datasets"', 'id="legacy-status"'):
         assert marker in html
-    assert "fetch('/legacy-research.json'" in html
+    assert "boundedJsonFetch('/legacy-research.json', 8192)" in html
     assert "registrations only · no PAPER or performance claims" in html
     assert "data.paper !== null" in html
     assert "No proven edge asserted" in html
     assert "HOPE CI #1162" not in html
     assert "PASS #1162" not in html
+
+
+def test_preview_serializes_refreshes_times_out_requests_and_reages_retained_data():
+    html = PREVIEW.read_text(encoding="utf-8")
+    assert "const refreshesInFlight = new Set()" in html
+    assert "if (refreshesInFlight.has(name)) return" in html
+    assert "refreshesInFlight.delete(name)" in html
+    assert "new AbortController()" in html
+    assert "controller.abort()" in html
+    assert "signal:controller.signal" in html
+    assert "retainSnapshotAfterFailure" in html
+    assert "retaining last verified snapshot" in html
+    assert "setInterval(refreshSnapshotAge, 30000)" in html
+    for name in ("legacy", "health", "snapshot"):
+        assert f"scheduleRefresh('{name}'," in html

@@ -86,4 +86,8 @@ their own budget, and multi-host connection strings can try multiple targets.
 The existing one-hour stale threshold still applies to the retained snapshot.
 Local PostgreSQL contention and slow-read tests validate rollback, preservation
 and recovery; they do not certify AWS connectivity or deployment. The independent
-browser freshness/overlapping-refresh issue remains a separate development gap.
+browser refresh boundary is also bounded: each loopback request is aborted after
+10 seconds and each endpoint permits only one request in flight. The last verified
+snapshot remains visible after a refresh failure and is re-aged every 30 seconds,
+so it transitions to STALE without waiting for a successful network response.
+Missing data still fails closed and no background request can overlap itself.

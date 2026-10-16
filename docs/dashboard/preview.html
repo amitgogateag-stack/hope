@@ -33,6 +33,8 @@ document.querySelectorAll('nav button[data-view]').forEach(button=>{
 });
 const fileInput = document.getElementById('snapshot-file');
 const snapshotStatus = document.getElementById('snapshot-status');
+const snapshotState = {data: null, source: null};
+const refreshesInFlight = new Set();
 const recoveryMetrics = [
  ['recovery-with-effects', 'claimed_with_effects'],
  ['recovery-without-effects', 'claimed_without_effects'],
@@ -56,7 +58,7 @@ const clearSnapshot = (message) => {
  snapshotStatus.textContent = message;
  snapshotStatus.style.color = '#f2a2a2';
 };
-const applySnapshot = (data, source) => {
+const renderSnapshot = (data, source) => {
  const counts = data?.paper?.job_runs;
  const integer = x => Number.isSafeInteger(x) && x >= 0;
  if (data.schema_version !== 1 || data.source !== 'hope_postgresql' ||
@@ -102,6 +104,57 @@ const applySnapshot = (data, source) => {
      ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
  snapshotStatus.style.color = stale ? '#e8c07c' : '#84dfbb';
 };
+const applySnapshot = (data, source) => {
+ renderSnapshot(data, source);
+ snapshotState.data = data;
+ snapshotState.source = source;
+};
+const refreshSnapshotAge = () => {
+ if (!snapshotState.data) return;
+ try {
+  renderSnapshot(snapshotState.data, snapshotState.source);
+ } catch (error) {
+  snapshotState.data = null;
+  snapshotState.source = null;
+  clearSnapshot('Snapshot rejected while aging: ' + error.message);
+ }
+};
+const retainSnapshotAfterFailure = (message) => {
+ if (!snapshotState.data) {
+  clearSnapshot(message);
+  return;
+ }
+ refreshSnapshotAge();
+ snapshotStatus.textContent = message + ' · retaining last verified snapshot · ' +
+   snapshotState.data.generated_at;
+ snapshotStatus.style.color = '#e8c07c';
+};
+const runSingleFlight = async (name, task) => {
+ if (refreshesInFlight.has(name)) return;
+ refreshesInFlight.add(name);
+ try {
+  await task();
+ } finally {
+  refreshesInFlight.delete(name);
+ }
+};
+const boundedJsonFetch = async (path, maxBytes, timeoutMs = 10000) => {
+ const controller = new AbortController();
+ const timeout = setTimeout(() => controller.abort(), timeoutMs);
+ try {
+  const response = await fetch(path, {cache:'no-store', signal:controller.signal});
+  if (!response.ok) throw Error('Unavailable (' + response.status + ')');
+  if (Number(response.headers.get('Content-Length')) > maxBytes) throw Error('Response too large');
+  const body = await response.text();
+  if (body.length > maxBytes) throw Error('Response too large');
+  return JSON.parse(body);
+ } catch (error) {
+  if (error.name === 'AbortError') throw Error('Refresh timed out');
+  throw error;
+ } finally {
+  clearTimeout(timeout);
+ }
+};
 fileInput.addEventListener('change', async () => {
  const file = fileInput.files && fileInput.files[0];
  if (!file) return;
@@ -123,12 +176,7 @@ if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(locatio
  };
  const refreshLegacy = async () => {
   try {
-   const response = await fetch('/legacy-research.json', {cache:'no-store'});
-   if (!response.ok) throw Error('Legacy inventory unavailable');
-   if (Number(response.headers.get('Content-Length')) > 8192) throw Error('Legacy inventory too large');
-   const body = await response.text();
-   if (body.length > 8192) throw Error('Legacy inventory too large');
-   const data = JSON.parse(body);
+   const data = await boundedJsonFetch('/legacy-research.json', 8192);
    const counts = data?.research;
    const valid = n => Number.isSafeInteger(n) && n >= 0;
    if (data.schema_version !== 1 || data.source !== 'hope_legacy_research_inventory' ||
@@ -155,16 +203,12 @@ if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(locatio
    clearLegacy('Legacy research inventory unavailable · no counts inferred');
   }
  };
- refreshLegacy();
- setInterval(refreshLegacy, 60000);
  const refreshHealth = async () => {
   const service = document.getElementById('web-service');
   const feed = document.getElementById('feed-health');
   const feedTime = document.getElementById('feed-time');
   try {
-   const response = await fetch('/status.json', {cache:'no-store'});
-   if (!response.ok) throw Error('Service status unavailable');
-   const status = await response.json();
+   const status = await boundedJsonFetch('/status.json', 4096);
    if (status.schema_version !== 1 || status.service !== 'RUNNING' ||
        !['CURRENT', 'STALE', 'UNAVAILABLE'].includes(status.data_feed)) {
     throw Error('Invalid service status');
@@ -183,22 +227,22 @@ if (location.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(locatio
    feedTime.textContent = 'Not connected';
   }
  };
- refreshHealth();
- setInterval(refreshHealth, 60000);
  const refresh = async () => {
   try {
-   const response = await fetch('/snapshot.json', {cache:'no-store'});
-   if (!response.ok) throw Error('Snapshot unavailable (' + response.status + ')');
-   if (Number(response.headers.get('Content-Length')) > 32768) throw Error('Snapshot too large');
-   const body = await response.text();
-   if (body.length > 32768) throw Error('Snapshot too large');
-   applySnapshot(JSON.parse(body), 'automatic refresh');
+   applySnapshot(await boundedJsonFetch('/snapshot.json', 32768), 'automatic refresh');
   } catch (error) {
-   clearSnapshot('Dashboard data unavailable: ' + error.message);
+   retainSnapshotAfterFailure('Dashboard refresh unavailable: ' + error.message);
   }
  };
- refresh();
- setInterval(refresh, 60000);
+ const scheduleRefresh = (name, task) => {
+  const run = () => runSingleFlight(name, task);
+  run();
+  setInterval(run, 60000);
+ };
+ scheduleRefresh('legacy', refreshLegacy);
+ scheduleRefresh('health', refreshHealth);
+ scheduleRefresh('snapshot', refresh);
+ setInterval(refreshSnapshotAge, 30000);
 }
 </script>
 </body></html>

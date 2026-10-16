@@ -275,3 +275,28 @@ PostgreSQL 17.11. All PostgreSQL tests executed. The three Bash-dependent
 dashboard contract files remain excluded on Windows and run in exact-head
 Linux CI. Complete diff review and git diff --check passed. No production
 data, credential, deployment, strategy/risk threshold or baseline was changed.
+
+## October 16 continuation — honest browser freshness and serialized refresh
+
+Starting live HEAD 580bcb56995adb02d3154890e527c43044ae2ddd was
+verified against successful exact-head CI 38955744006 and the matching issue #5
+marker before implementation.
+
+The private dashboard previously computed snapshot age only when a response was
+loaded. A stalled request could overlap later interval callbacks and leave an
+old snapshot visually CURRENT until some request eventually completed. A failed
+automatic refresh also cleared already verified aggregate data even though the
+exporter deliberately preserves its last complete snapshot.
+
+The browser now bounds every loopback JSON request to ten seconds, permits only
+one in-flight refresh per endpoint, and re-evaluates the retained snapshot every
+thirty seconds. Failed refreshes preserve the last verified aggregates while
+showing the failure and original generation time; the existing one-hour age
+boundary still moves the retained view to STALE. Missing initial data continues
+to fail closed. Legacy research, health and PAPER feeds remain independently
+serialized, size-bounded and schema-validated.
+
+Local validation passed 127 focused dashboard/deployment checks and 1,988 unit
+tests. The inline script passed Node syntax validation and git diff --check is
+clean, including removal of a pre-existing extra test-file newline. No database,
+AWS, credential, strategy, risk, PAPER execution or LIVE setting was changed.
