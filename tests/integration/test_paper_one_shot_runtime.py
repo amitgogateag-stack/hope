@@ -530,9 +530,7 @@ def test_durable_strategy_decision_cannot_bypass_market_data_freshness() -> None
     assert strategy.calls == []
     with engine.connect() as connection:
         record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
-        assert record is not None
-        assert record.status is JobRunStatus.FAILED
-        assert record.failure_code == "RuntimeError"
+        assert record is None
         assert connection.execute(
             text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"),
             {"id": job_run.job_run_id},
