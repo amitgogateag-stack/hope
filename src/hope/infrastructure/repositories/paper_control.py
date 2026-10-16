@@ -21,6 +21,7 @@ class SqlAlchemyPaperEnvironmentControlRepository:
         )
 
     def current_state(self) -> str:
+        """Observe this transaction's snapshot; use assert_running to authorize work."""
         state = self._connection.execute(
             select(self._events.c.state)
             .order_by(self._events.c.control_sequence.desc())
@@ -57,6 +58,13 @@ class SqlAlchemyPaperEnvironmentControlRepository:
             )
 
     def _lock_control_state(self) -> None:
+        # Advisory locks serialize peers but cannot refresh a repeatable snapshot
+        # of append-only control history. Authorization needs statement snapshots.
+        isolation = self._connection.execute(
+            text("SELECT current_setting('transaction_isolation')")
+        ).scalar_one()
+        if isolation != "read committed":
+            raise RuntimeError("PAPER_ENVIRONMENT_CONTROL_REQUIRES_READ_COMMITTED")
         self._connection.execute(
             text(
                 "SELECT pg_advisory_xact_lock("

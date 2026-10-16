@@ -152,3 +152,40 @@ minimum), including all PostgreSQL tests. Three Bash-dependent contract files
 remain excluded locally because this Windows host lacks Bash; exact-head Linux
 CI executes them. The updated batch module has 100% statement coverage. No
 existing test assertion, owner authorization, strategy or risk rule was relaxed.
+
+## October 16 continuation — fresh PAPER control authorization
+
+Starting live HEAD e6c0f510b173feb783c6e7d7b0bb18d1de3ed7ad was verified against
+successful exact-head CI run 38923693777 and matching issue #5 before work.
+
+Eight executable PostgreSQL cases reproduced a stale-snapshot authorization
+defect: under REPEATABLE READ and SERIALIZABLE, a transaction observed RUNNING,
+a peer committed HALTED, and assertions, operational claims or control writes
+still used the old snapshot despite advisory serialization. The transactions
+were deliberately rolled back during reproduction; no production state was used.
+
+The control repository now requires READ COMMITTED before taking its control
+lock for assert_running or transition. Migration 230 adds independent insert
+isolation guards for operational paper: claims and control events, preserving
+all existing guard functions rather than replacing their contracts. Observational
+current_state reads remain available in repeatable/read-only transactions, and
+generic non-PAPER job claims remain unaffected. See paper-control-isolation.md.
+
+Focused validation passed 28 checks, including 16 real PostgreSQL cases covering
+stale API/direct SQL paths, single/batch reconciliation, READ COMMITTED lock-wait
+freshness, observational compatibility, generic jobs and killed-backend rollback
+of an uncommitted HALT. The original eight cases failed before the correction.
+Final review found no additional material issues in the bounded change. A fresh
+local full-suite run precedes the commit; exact-head CI and marker must then be
+verified before starting another batch.
+
+No strategy/risk rule, PAPER-only policy, LIVE-disabled control, frozen baseline
+or AWS deployment is changed. Authenticated AWS stored-data validation remains
+blocked by the missing configured read-only session; no credential is exposed.
+
+Fresh-database local validation completed: 2,423 passed in 228.52 seconds on
+Python 3.12 / PostgreSQL 17.11, with 89.27% coverage against the unchanged 89%
+minimum. All PostgreSQL integration tests executed. The three Bash-dependent
+contract files remain excluded on this Windows host and run in exact-head Linux
+CI. Focused control checks passed 28 tests. No test assertion or coverage minimum
+was weakened, and the explicit migration inventory now includes 230.
