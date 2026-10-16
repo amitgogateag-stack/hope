@@ -491,6 +491,70 @@ def test_direct_strategy_decision_cannot_substitute_dataset_identity_before_clai
 
 
 @pytest.mark.integration
+def test_wrapped_strategy_decision_cannot_bypass_durable_binding() -> None:
+    engine = _engine()
+    job_run = create_scheduled_job_run(
+        "paper-one-shot-wrapped-unbound-dataset",
+        datetime(2026, 10, 15, 14, 4, 30, tzinfo=UTC),
+    )
+    _prepare_job(engine, job_run)
+    _, universe_version_id, instrument_id, dataset_version_id = (
+        _insert_durable_decision_inputs(engine, job_run.scheduled_for)
+    )
+    with engine.connect() as connection:
+        universe = UniverseSnapshotRepository(connection).get(universe_version_id)
+        assert universe is not None
+        market_context = PITMarketContextRepository(connection).get(
+            dataset_version_id,
+            as_of=job_run.scheduled_for,
+            universe_version_id=universe_version_id,
+            instrument_ids=(instrument_id,),
+        )
+
+    strategy = _NoTradeStrategy()
+    decision = PaperStrategyDecisionJob(
+        strategy,
+        market_context,
+        universe,
+        _Parameters(),
+        timedelta(minutes=5),
+        dataset_version_id=uuid4(),
+    )
+    registry = PaperJobRegistry([
+        PaperJobDefinition(
+            job_run.job_key,
+            lambda runtime: decision(runtime),
+        )
+    ])
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING",
+    ):
+        run_paper_once(
+            engine,
+            job_run,
+            registry,
+            now=lambda: job_run.scheduled_for + timedelta(minutes=1),
+        )
+
+    assert strategy.calls == []
+    with engine.connect() as connection:
+        record = SqlAlchemyJobRunRepository(connection).get_record(job_run.job_run_id)
+        assert record is not None
+        assert record.status is JobRunStatus.FAILED
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_effects WHERE job_run_id=:job_run_id"),
+            {"job_run_id": job_run.job_run_id},
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM paper_no_trade_decisions WHERE job_run_id=:job_run_id"),
+            {"job_run_id": job_run.job_run_id},
+        ).scalar_one() == 0
+    engine.dispose()
+
+
+@pytest.mark.integration
 def test_durable_strategy_decision_cannot_bypass_market_data_freshness() -> None:
     engine = _engine()
     job_run = create_scheduled_job_run(

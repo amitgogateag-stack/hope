@@ -8,6 +8,7 @@ from hope.application.jobs import create_scheduled_job_run
 from hope.application.paper.context import PaperCycleContext
 from hope.application.paper.jobs import PaperStrategyDecisionJob
 from hope.application.paper.provenance import paper_decision_inputs_hash
+from hope.application.paper.runner import PaperRuntimeContext
 from hope.application.universe.snapshot import UniverseSnapshot
 from hope.domain.market_data.context import PITMarketContext
 from hope.domain.market_data.models import MarketBar
@@ -271,6 +272,50 @@ def test_registered_paper_strategy_decision_requires_durable_binding() -> None:
         match="PAPER_REGISTERED_STRATEGY_REQUIRES_DURABLE_BINDING",
     ):
         PaperJobDefinition("paper-strategy-decision", work)
+
+
+def test_wrapped_strategy_decision_cannot_bypass_durable_binding() -> None:
+    decision_time = datetime(2026, 9, 10, 14, 0, tzinfo=UTC)
+    universe = _snapshot()
+    strategy = _Strategy(())
+    decision = PaperStrategyDecisionJob(
+        strategy,
+        _context(decision_time, universe),
+        universe,
+        _Parameters(),
+        FRESHNESS_MAX_AGE,
+        dataset_version_id=uuid4(),
+    )
+
+    class _ProductionRuntime(PaperRuntimeContext):
+        def __init__(self):
+            object.__setattr__(self, "cycle", PaperCycleContext(
+                create_scheduled_job_run("paper-wrapped-decision", decision_time)
+            ))
+            object.__setattr__(self, "recorded", [])
+            object.__setattr__(self, "no_trade", [])
+
+        def record_signal(self, signal):
+            self.recorded.append(signal)
+            return True
+
+        def record_no_trade(self, **outcome):
+            self.no_trade.append(outcome)
+            return True
+
+    runtime = _ProductionRuntime()
+    wrapped = lambda active_runtime: decision(active_runtime)
+    definition = PaperJobDefinition("paper-wrapped-decision", wrapped)
+
+    with pytest.raises(
+        RuntimeError,
+        match="PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING",
+    ):
+        definition.work(runtime)
+
+    assert strategy.calls == []
+    assert runtime.recorded == []
+    assert runtime.no_trade == []
 
 
 @pytest.mark.parametrize(

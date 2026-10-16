@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta, timezone
 from decimal import Decimal
 from uuid import UUID
@@ -19,6 +19,9 @@ from hope.domain.risk.portfolio import PortfolioRiskEngine
 from hope.domain.signal.models import Signal
 from hope.domain.strategy.models import ParameterSnapshot, Strategy
 from hope.domain.trading.kernel import create_order_intent, materialize_order
+
+
+_DURABLE_PAPER_STRATEGY_BINDING = object()
 
 
 def assert_paper_market_data_fresh(
@@ -70,6 +73,32 @@ class PaperStrategyDecisionJob:
     parameters: ParameterSnapshot
     market_data_max_age: timedelta
     dataset_version_id: UUID | None = None
+    _durable_binding: object | None = field(
+        default=None,
+        repr=False,
+        compare=False,
+    )
+
+    @classmethod
+    def _from_durable_binding(
+        cls,
+        strategy: Strategy,
+        market_context: PITMarketContext,
+        universe: UniverseSnapshot,
+        parameters: ParameterSnapshot,
+        market_data_max_age: timedelta,
+        dataset_version_id: UUID,
+    ) -> PaperStrategyDecisionJob:
+        """Construct executable strategy work only after durable input binding."""
+        return cls(
+            strategy,
+            market_context,
+            universe,
+            parameters,
+            market_data_max_age,
+            dataset_version_id,
+            _durable_binding=_DURABLE_PAPER_STRATEGY_BINDING,
+        )
 
     def __post_init__(self) -> None:
         if not isinstance(self.strategy, Strategy):
@@ -90,6 +119,14 @@ class PaperStrategyDecisionJob:
             raise ValueError("PAPER_DECISION_JOB_REQUIRES_POSITIVE_FRESHNESS")
 
     def __call__(self, runtime: PaperRuntimeContext) -> None:
+        # Registry type checks can be hidden behind a plain callable.  Enforce
+        # durable market-data binding at the execution boundary as well, where
+        # wrappers can no longer disguise an in-memory strategy decision.
+        if (
+            isinstance(runtime, PaperRuntimeContext)
+            and self._durable_binding is not _DURABLE_PAPER_STRATEGY_BINDING
+        ):
+            raise RuntimeError("PAPER_STRATEGY_DECISION_REQUIRES_DURABLE_BINDING")
         as_of = self.market_context.as_of
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("PAPER_DECISION_TIME_MUST_BE_TIMEZONE_AWARE")

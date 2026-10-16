@@ -131,7 +131,7 @@ class DurableUniversePaperStrategyDecision:
             market_context,
             active_instrument_ids,
         )
-        return PaperStrategyDecisionJob(
+        return PaperStrategyDecisionJob._from_durable_binding(
             self.strategy,
             market_context,
             snapshot,
