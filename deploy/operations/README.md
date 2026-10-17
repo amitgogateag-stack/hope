@@ -156,8 +156,14 @@ of that snapshot through the private dashboard. A healthy worker cannot mask a
 failed observability path. An exclusive `.activation.lock` spans lease checking,
 service stop, switch, acceptance and rollback; competing activations fail closed.
 A killed deployment process can leave the lock behind deliberately. Do not
-remove it until an operator proves no deployment is active, stops the M1 units
-and reviews current pointer, metadata and database evidence. Root/code/venv
+remove it until an operator runs the read-only
+`python -m hope.api.activation_recovery` diagnosis. The lease authenticates the
+original Linux boot, process start identity, expected commit and target commit;
+PID reuse cannot masquerade as the original deployment. `recovery_safe=true`
+means only that the original pointer and metadata are intact, no pending pointer
+exists and the authenticated process is gone. Every target, mixed, unreadable or
+unknown state requires operator review with services stopped; the command never
+removes the lease, changes pointers or starts services. Root/code/venv
 ownership and write permissions are checked before executing the interpreter.
 On failed acceptance it restores the prior pointer
 and metadata and leaves services stopped for operator review. No historical

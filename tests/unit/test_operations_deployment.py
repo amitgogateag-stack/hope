@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
 import subprocess
+import json
 
 import pytest
 
@@ -122,13 +123,82 @@ def test_cli_preflight_sanitizes_repository_and_database_failure(tmp_path, monke
 
 
 def test_activation_lock_serializes_complete_operation_and_cleans_after_failure(tmp_path):
-    with module.activation_lock(tmp_path):
+    old, new = "1" * 40, "2" * 40
+    with module.activation_lock(tmp_path, expected_current=old, target_sha=new):
+        record = json.loads((tmp_path / ".activation.lock").read_text())
+        assert record["expected_current"] == old and record["target_sha"] == new
+        assert record["pid"] == os.getpid() and record["process_start_ticks"].isdigit()
         with pytest.raises(module.DeploymentError, match="ACTIVATION_LOCKED"):
-            with module.activation_lock(tmp_path):
+            with module.activation_lock(tmp_path, expected_current=old, target_sha=new):
                 pytest.fail("concurrent activation admitted")
         assert (tmp_path / ".activation.lock").is_file()
     assert not (tmp_path / ".activation.lock").exists()
     with pytest.raises(RuntimeError):
-        with module.activation_lock(tmp_path):
+        with module.activation_lock(tmp_path, expected_current=old, target_sha=new):
             raise RuntimeError("acceptance failed")
     assert not (tmp_path / ".activation.lock").exists()
+
+
+def _proc_fixture(root, pid, *, boot="11111111-1111-1111-1111-111111111111", started="42"):
+    (root / "sys/kernel/random").mkdir(parents=True)
+    (root / "sys/kernel/random/boot_id").write_text(boot)
+    (root / str(pid)).mkdir()
+    # starttime is field 22: after pid/comm, it is the twentieth token from state.
+    (root / str(pid) / "stat").write_text(f"{pid} (worker name) S " + "0 " * 18 + started + " 0\n")
+
+
+def _interrupted_activation(tmp_path, monkeypatch):
+    old, new, pid = "1" * 40, "2" * 40, 4321
+    releases = tmp_path / "releases"
+    (releases / old).mkdir(parents=True)
+    (releases / new).mkdir()
+    os.symlink(releases / old, tmp_path / "current", target_is_directory=True)
+    (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={old}\n")
+    proc = tmp_path / "proc"
+    _proc_fixture(proc, pid)
+    record = {"schema_version": 1, "pid": pid,
+              "boot_id": "11111111-1111-1111-1111-111111111111",
+              "process_start_ticks": "42", "expected_current": old, "target_sha": new}
+    (tmp_path / ".activation.lock").write_text(json.dumps(record))
+    monkeypatch.setattr(module.os, "geteuid", lambda: (tmp_path / ".activation.lock").stat().st_uid)
+    return old, new, pid, proc
+
+
+def test_recovery_inspection_authenticates_active_process_identity(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    result = module.inspect_activation_recovery(tmp_path, proc_root=proc)
+    assert result == {"schema_version": 1, "state": "ACTIVE", "expected_current": old,
+                      "target_sha": new, "current_pointer": "EXPECTED",
+                      "deployed_metadata": "EXPECTED", "pending_pointer": "ABSENT",
+                      "recovery_safe": False}
+    # PID reuse is stale because the immutable process-start identity changed.
+    (proc / str(pid) / "stat").write_text(f"{pid} (reused) S " + "0 " * 18 + "99 0\n")
+    result = module.inspect_activation_recovery(tmp_path, proc_root=proc)
+    assert result["state"] == "STALE" and result["recovery_safe"] is True
+
+
+@pytest.mark.parametrize("pointer,metadata,pending", [
+    ("TARGET", "EXPECTED", False), ("EXPECTED", "TARGET", False),
+    ("TARGET", "TARGET", False), ("EXPECTED", "EXPECTED", True),
+])
+def test_stale_activation_requires_review_for_every_ambiguous_state(
+    tmp_path, monkeypatch, pointer, metadata, pending,
+):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    (tmp_path / "current").unlink()
+    os.symlink(tmp_path / "releases" / (new if pointer == "TARGET" else old),
+               tmp_path / "current", target_is_directory=True)
+    (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={new if metadata == 'TARGET' else old}\n")
+    if pending:
+        os.symlink(tmp_path / "releases" / new, tmp_path / ".current.next", target_is_directory=True)
+    result = module.inspect_activation_recovery(tmp_path, proc_root=proc)
+    assert result["state"] == "STALE" and result["recovery_safe"] is False
+    assert result["current_pointer"] == pointer and result["deployed_metadata"] == metadata
+
+
+@pytest.mark.parametrize("payload", ["not-json", "{}", '{"schema_version":1}', "[]"])
+def test_recovery_inspection_rejects_untrusted_or_malformed_lock(tmp_path, payload):
+    (tmp_path / ".activation.lock").write_text(payload)
+    with pytest.raises(module.DeploymentError, match="LOCK_INVALID"):
+        module.inspect_activation_recovery(tmp_path)

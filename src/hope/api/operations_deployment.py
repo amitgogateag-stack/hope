@@ -9,6 +9,7 @@ from contextlib import contextmanager
 import json
 import os
 import re
+import stat
 import subprocess
 from pathlib import Path
 from typing import Callable
@@ -90,21 +91,95 @@ def verify_database_role(connection: Connection, *, component: str) -> None:
             raise DeploymentError("OPERATIONS_DASHBOARD_ROLE_CAN_WRITE")
 
 
+def _process_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, str]:
+    """Return Linux boot and process-start identities; PID alone is not a lease."""
+    boot_id = (proc_root / "sys/kernel/random/boot_id").read_text().strip()
+    process = "self" if proc_root == Path("/proc") and pid == os.getpid() else str(pid)
+    process_stat = (proc_root / process / "stat").read_text()
+    closing = process_stat.rfind(")")
+    fields = process_stat[closing + 2:].split() if closing >= 0 else []
+    if not re.fullmatch(r"[0-9a-f-]{36}", boot_id) or len(fields) < 20 or not fields[19].isdigit():
+        raise DeploymentError("OPERATIONS_PROCESS_IDENTITY_INVALID")
+    return boot_id, fields[19]
+
+
 @contextmanager
-def activation_lock(root: Path):
-    """Exclusive operation lease, retained after process death for safe review."""
+def activation_lock(root: Path, *, expected_current: str, target_sha: str):
+    """Exclusive authenticated operation lease, retained after process death."""
+    expected_current, target_sha = _sha(expected_current), _sha(target_sha)
     path = root.resolve(strict=True) / ".activation.lock"
+    boot_id, started = _process_identity(os.getpid())
+    record = json.dumps({
+        "schema_version": 1, "pid": os.getpid(), "boot_id": boot_id,
+        "process_start_ticks": started, "expected_current": expected_current,
+        "target_sha": target_sha,
+    }, sort_keys=True, separators=(",", ":")).encode("ascii")
     try:
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
     try:
-        os.write(descriptor, str(os.getpid()).encode("ascii"))
+        os.write(descriptor, record)
         os.fsync(descriptor)
         yield
     finally:
         os.close(descriptor)
         path.unlink()
+
+
+def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:
+    """Diagnose an interrupted activation without removing locks or changing services."""
+    root = root.resolve(strict=True)
+    path = root / ".activation.lock"
+    if not path.exists() and not path.is_symlink():
+        return {"schema_version": 1, "state": "ABSENT", "recovery_safe": True}
+    info = path.lstat()
+    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+            or info.st_mode & 0o022 or info.st_size > 4096):
+        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_UNTRUSTED")
+    try:
+        record = json.loads(path.read_text())
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_INVALID") from exc
+    fields = {"schema_version", "pid", "boot_id", "process_start_ticks", "expected_current", "target_sha"}
+    if (not isinstance(record, dict) or set(record) != fields or record["schema_version"] != 1
+            or type(record["pid"]) is not int or record["pid"] <= 0
+            or not isinstance(record["boot_id"], str)
+            or not re.fullmatch(r"[0-9a-f-]{36}", record["boot_id"])
+            or not isinstance(record["process_start_ticks"], str)
+            or not record["process_start_ticks"].isdigit()):
+        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_INVALID")
+    expected, target = _sha(record["expected_current"]), _sha(record["target_sha"])
+    try:
+        live_boot, live_started = _process_identity(record["pid"], proc_root)
+        lock_state = ("ACTIVE" if (live_boot, live_started) ==
+                      (record["boot_id"], record["process_start_ticks"]) else "STALE")
+    except FileNotFoundError:
+        lock_state = "STALE"
+    except OSError:
+        lock_state = "UNKNOWN"
+
+    releases = root / "releases"
+    current = root / "current"
+    try:
+        resolved = current.resolve(strict=True) if current.is_symlink() else None
+    except OSError:
+        resolved = None
+    pointer = "EXPECTED" if resolved == releases / expected else "TARGET" if resolved == releases / target else "OTHER"
+    deployed = root / "deployed.env"
+    try:
+        content = deployed.read_text() if deployed.is_file() and not deployed.is_symlink() else ""
+    except OSError:
+        content = ""
+    metadata = ("EXPECTED" if content == f"HOPE_DEPLOYED_COMMIT={expected}\n" else
+                "TARGET" if content == f"HOPE_DEPLOYED_COMMIT={target}\n" else "OTHER")
+    pending = "PRESENT" if (root / ".current.next").exists() or (root / ".current.next").is_symlink() else "ABSENT"
+    safe = lock_state == "STALE" and pointer == metadata == "EXPECTED" and pending == "ABSENT"
+    return {
+        "schema_version": 1, "state": lock_state, "expected_current": expected,
+        "target_sha": target, "current_pointer": pointer, "deployed_metadata": metadata,
+        "pending_pointer": pending, "recovery_safe": safe,
+    }
 
 
 def switch_release(
@@ -117,7 +192,7 @@ def switch_release(
     The acceptance callback must raise on failed checks. CLI does not expose this
     mutation; the approved deployment wrapper invokes it only after preflight.
     """
-    with activation_lock(root):
+    with activation_lock(root, expected_current=expected_current, target_sha=target_sha):
         _switch_release(root, target_sha, expected_current=expected_current,
                         accept=accept, before_switch=before_switch)
 
