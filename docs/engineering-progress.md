@@ -580,3 +580,42 @@ publication and exact pushed-head CI/issue #5 verification remain final gates.
 No AWS deployment, role/network changes, credentials, migrations or LIVE
 activation occurred. AWS operational acceptance remains pending. Frozen day29
 SHA `7e9d341742818a97accce3e2301b1c7f96596795` remains preserved.
+
+## 2026-10-17: recovered feed PAPER timing and restart validation
+
+Parent GitHub HEAD `2562e287d6b03416a1ee2b2a7aedd899eb010d7b`, exact-head
+Actions `39027230347` and matching issue #5 Bot HOPE_CI_STATUS_V1 were verified
+green before work. Recovery receipt inspection confirmed the existing writer
+already isolates insertion and authenticated reread in a savepoint; no redundant
+production repair was made.
+
+Added 23 genuine PostgreSQL integration cases for sealed recovered same-source
+feed vintages through certified PAPER admission, freshness, execution and restart.
+Paired exact-cutoff / one-microsecond-late availability, ingestion and effective
+timestamps exercise both decision and fill boundaries. Exact 120-second freshness
+and one-microsecond-stale cases prove freshness precedes strategy evaluation.
+NO_TRADE retains its existing independence from unavailable execution quotes.
+Terminal polls preserve exact durable payloads rather than reinterpret past data.
+
+Overlapping FILLED and NO_TRADE workers are held at the first transaction's
+uncommitted outcome. The observer proves the second worker is actually blocked
+by the first using pg_blocking_pids, then verifies one execution and one terminal
+skip. Backend termination after effects but before outcome insertion leaves zero
+job, authorization, effect, outcome or portfolio rows. Retry uses identical PIT
+inputs and commits once, with exact durable snapshots stable on restart. All
+existing PostgreSQL guards remain enabled; research vintages remain immutable.
+
+No production defect was reproduced by this matrix. This is a coordinated
+regression-validation batch, with no policy or strategy/risk implementation change.
+Focused suite: 23 passed in 12.79 seconds. Full frozen-source fresh-PostgreSQL
+regression: 2,838 passed, 13 skipped in 392.48 seconds; 89.33% coverage against the
+unchanged 89% gate. Existing Windows platform skips and three Bash contract files
+omitted locally remain exact-head Linux CI checks. Initial local server startup
+failed before the focused run; corrected startup/database creation and rerun
+completed successfully. No evidence from that failed setup is counted as a pass.
+
+Complete test/documentation diff reviewed. Expected-SHA non-force publication and
+exact pushed-head CI/issue #5 verification remain final gates. No deployment,
+credentials, role/network changes, migrations or LIVE activation. AWS operational
+acceptance remains pending. Frozen day29 SHA
+`7e9d341742818a97accce3e2301b1c7f96596795` is preserved.
