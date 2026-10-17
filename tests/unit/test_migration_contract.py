@@ -545,3 +545,14 @@ def test_no_trade_effect_is_exclusive_per_job_and_serialized() -> None:
     assert "FROM job_runs" in sql
     assert "FOR UPDATE" in sql
     assert "BEFORE INSERT ON paper_effects" in sql
+
+
+def test_candidate_promotion_requires_certified_control_and_variant_evidence() -> None:
+    sql = (
+        ROOT / "migrations/231_strategy_candidate_certified_evidence.sql"
+    ).read_text()
+    assert "hope.certified-backtest-result.v3" in sql
+    assert "STRATEGY_CANDIDATE_CERTIFIED_CONTROL_EVIDENCE_REQUIRED" in sql
+    assert "STRATEGY_CANDIDATE_CERTIFIED_VARIANT_EVIDENCE_REQUIRED" in sql
+    assert "STRATEGY_CANDIDATE_CERTIFIED_EVIDENCE_MIGRATION_REQUIRED" in sql
+    assert "current_strategy_candidate_classifications" in sql

@@ -237,8 +237,8 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
                 variant_run_id=variant_run_id,
                 comparison_id=comparison_id,
                 comparison_fingerprint=comparison_fingerprint,
-                decision=ResearchDecision.INCONCLUSIVE,
-                rationale="Evidence does not yet support a stronger conclusion",
+                decision=ResearchDecision.SUPPORTED,
+                rationale="Generic research evidence supports only a research conclusion",
             )
 
             with pytest.raises(
@@ -290,11 +290,34 @@ def test_research_decisions_require_comparable_evidence_and_are_immutable() -> N
             repository.create(definition)
             stored = repository.get(definition.decision_id)
             assert stored is not None
-            assert stored.decision == ResearchDecision.INCONCLUSIVE
+            assert stored.decision == ResearchDecision.SUPPORTED
             assert stored.control_run_id == control_run_id
             assert stored.variant_run_id == variant_run_id
             assert stored.comparison_id == comparison_id
             assert stored.comparison_fingerprint == comparison_fingerprint
+
+            # A SUPPORTED decision is valid research evidence, but generic
+            # evidence must not cross the stronger PAPER eligibility boundary.
+            with pytest.raises(
+                IntegrityError,
+                match="STRATEGY_CANDIDATE_CERTIFIED_CONTROL_EVIDENCE_REQUIRED",
+            ):
+                with connection.begin_nested():
+                    connection.execute(
+                        text(
+                            "INSERT INTO strategy_candidate_classifications("
+                            "classification_id,strategy_version_id,markets,state,"
+                            "research_decision_id,rationale"
+                            ") VALUES (:classification_id,:strategy_version_id,"
+                            "ARRAY['USA'],'BACKUP_CANDIDATE',:decision_id,"
+                            "'attempted generic-evidence promotion')"
+                        ),
+                        {
+                            "classification_id": uuid4(),
+                            "strategy_version_id": strategy_version_id,
+                            "decision_id": definition.decision_id,
+                        },
+                    )
 
             with pytest.raises(IntegrityError, match="RESEARCH_DECISION_IMMUTABLE"):
                 with connection.begin_nested():
