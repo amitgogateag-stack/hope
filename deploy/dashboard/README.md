@@ -82,6 +82,19 @@ With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.
 
 To inspect the installed web service and database compatibility before attempting any database exporter setup, run the **reviewed** `deploy/dashboard/inspect_ec2_readiness.sh` from a verified GitHub release on EC2. The diagnostic requires no credentials to be pasted into ChatGPT. It checks the local dashboard service, `/status.json`, presence of the snapshot file, the five required PostgreSQL tables and (if accessible) the separate `hope_dashboard` database role and effective table privileges. It displays **metadata only**, not table records or passwords.
 
+The diagnostic now inventories both the separately installed legacy dashboard and
+the M1 operations candidate. It reports exact unit installation/active/enabled
+state for the PAPER worker, exporter timer and private web service; loopback versus
+public listeners on 8787/8788; snapshot file metadata without content; migration
+ledger/required-table/role metadata; and memory, swap and root-disk capacity. Its
+final verdict intentionally classifies an HTTP-200 dashboard with no verified
+snapshot as `WEB_ONLY`, and the host remains `BLOCKED` when the autonomous PAPER
+worker or exporter pipeline is absent. It also requires an exact prepared-release
+symlink/metadata match and a conservative metadata resource floor: at least 2 GiB
+free root disk plus either 1 GiB reported physical memory or 1 GiB swap. Passing
+that floor is not a load test; failing it requires explicit capacity review.
+HTTP reachability is never operational acceptance.
+
 Missing any of `research_runs`, `job_runs`, `paper_environment_control_events`, `paper_effects` or `audit_events` means the current exporter is **not schema-compatible** with the EC2 database. The correct action is to leave the exporter disabled and investigate schema/migration state independently, not to invent metrics, grant elevated access or run a bulk migration without a reviewed plan.
 
 The script does not install anything, change service state, write to the database or modify the frozen Day 29 checkout. If noninteractive `sudo -u postgres` is unavailable, the script reports `NOT CHECKED` rather than attempting an alternate privileged connection.

@@ -690,3 +690,35 @@ gates. No PAPER strategy/risk/accounting change, database migration, credentials
 AWS/host deployment or service operation occurred. LIVE remains disabled. AWS
 operational acceptance remains pending. Frozen day29 SHA
 `7e9d341742818a97accce3e2301b1c7f96596795` remains preserved.
+
+## 2026-10-17: consolidated AWS host operational readiness verdict
+
+Starting GitHub HEAD `1c8564b158ccf83f6e2d7cd54d0fc452aefb3bcc`, exact-head
+Actions run `39043342388` and matching issue #5 status were green before work.
+Authenticated read-only EC2 inspection demonstrated a real acceptance gap: the
+legacy dashboard service returned HTTP 200 on private port 8787 while its snapshot
+was absent, the export timer and autonomous PAPER worker were not installed, and
+the checkout was older than current GitHub. PostgreSQL itself was accepting local
+connections. HTTP reachability alone was therefore not an operational dashboard.
+
+The metadata-only EC2 diagnostic now consolidates source identity, clean-state,
+legacy and M1 service installation/active/enabled state, snapshot metadata,
+loopback/public bindings, required database tables, migration ledger, dashboard
+role flags, memory, swap and root-disk capacity. It produces separate legacy and
+M1 verdicts and cannot report an operator-acceptance candidate unless the complete
+M1 service/feed/database/private-binding conjunction is proven. A hermetic shell
+simulation reproduces the observed HTTP-200/no-snapshot/no-worker state and proves
+the result is `WEB_ONLY`, `NOT_INSTALLED`, and globally `BLOCKED`.
+
+No AWS resource, service, role, credential, database row or checkout is changed by
+the diagnostic or tests. No deployment is claimed; host activation still requires
+an approved immutable release, backup/role review, real-data factory, resource
+decision and explicit operator acceptance.
+
+Validation: **7 readiness contract/behavior tests passed**, the broader private
+dashboard/deployment suite passed **187 tests**, and the complete local unit suite
+passed **2,247 tests** after installing the local package required by the existing
+Linux subprocess guard test. Its initial dependency-only run passed 2,246 tests
+and failed only that subprocess import; no production or assertion change was
+made. Shell syntax and `git diff --check` are final local gates. This diagnostic
+does not require PostgreSQL fixtures and no local PostgreSQL test is claimed.

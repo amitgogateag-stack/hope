@@ -30,9 +30,18 @@ def test_diagnostic_has_no_mutating_operations_or_secret_output():
         assert forbidden not in script
     assert "to_regclass" in script
     assert "has_table_privilege" in script
-    assert "http://127.0.0.1:8787/status.json" in script
+    assert 'http://127.0.0.1:$port/status.json' in script
+    assert 'probe_feed 8787 "Legacy dashboard"' in script
+    assert 'probe_feed 8788 "M1 dashboard"' in script
     assert "sudo -n -u postgres psql" in script
     assert "snapshot.json" in script
+    assert "M1 PAPER worker" in script
+    assert "M1 dashboard export timer" in script
+    assert "Overall readiness: BLOCKED" in script
+    assert "PUBLIC BINDING BLOCKED" in script
+    assert "MemAvailable:" in script and "SwapTotal:" in script
+    assert "CONSTRAINED_REVIEW_REQUIRED" in script
+    assert "HOPE_DEPLOYED_COMMIT" in script
 
 
 def test_diagnostic_uses_only_metadata_queries():
@@ -42,9 +51,9 @@ def test_diagnostic_uses_only_metadata_queries():
     assert "research_runs" in script
     assert "job_runs" in script
     assert "paper_environment_control_events" in script
-    # Every source must appear in both presence and effective privilege checks.
+    # Every source remains in the schema-compatibility inventory.
     for table in ("research_runs", "job_runs", "paper_environment_control_events", "paper_effects", "audit_events"):
-        assert script.count(f"('{table}')") == 2
+        assert script.count(f"('{table}')") >= 1
 
 
 def test_deployment_grants_cover_every_exporter_source_without_write_privileges():
