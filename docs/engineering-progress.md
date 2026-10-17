@@ -722,3 +722,50 @@ Linux subprocess guard test. Its initial dependency-only run passed 2,246 tests
 and failed only that subprocess import; no production or assertion change was
 made. Shell syntax and `git diff --check` are final local gates. This diagnostic
 does not require PostgreSQL fixtures and no local PostgreSQL test is claimed.
+
+## 2026-10-17: bounded read-only PAPER recovery inspection
+
+Live GitHub parent `f17a54929a8ecb7745a62c118893b55494aeb2f1`, exact-head
+Actions `39044411660` and matching issue #5 Bot HOPE_CI_STATUS_V1 were verified
+green before work. The previous recovery/control investigation executed 55
+PostgreSQL tests successfully and confirmed that HALTED recovery/resume restrictions
+are explicit policy, not a defect to bypass. This batch adds separate observation
+so operators can inspect selected incomplete runs without relaxing those guards.
+
+Added hope.api.paper_recovery_inspect and bounded inspection of up to 32 explicit
+canonical UUIDs. Both CLI and function require a READ ONLY, REPEATABLE READ
+PostgreSQL snapshot; the CLI also verifies exact schema compatibility and bounds
+connection/query/lock waits. Observations include recognized lifecycle, shared
+effect-topology classification, counts and authorization/outcome/reconciliation
+presence. MISSING, OUT_OF_SCOPE and INVALID identities are explicit. Every result
+retains proof=NOT_VERIFIED and recovery_authorized=false. Presence/COMPLETE topology
+never authenticate lineage, accounting, eligibility or receipt payloads. There is
+no discovery, claim, execution, reconciliation, quarantine, resume or writer path.
+Counts are not expanded unboundedly; overflow consumes at most 33 generator values.
+Job keys, payloads, input hashes, principals, free-text failure reasons and driver
+exceptions are not output. No dashboard CURRENT status is inferred.
+
+Genuine PostgreSQL tests cover HALTED observation; FILLED, NO_TRADE, RISK_BLOCKED;
+maximum selection and missing/out-of-scope IDs; actual read-only write rejection
+(SQLSTATE 25006); inappropriate transaction modes; and a peer transaction that
+terminalizes a job and HALTs control between observation queries. The peer commits
+without inspection lifecycle/control locks. One result remains a consistent prior
+snapshot and the next sees the new state. Durable row counts and strategy call
+counts remain unchanged by inspection. These are synthetic test fixtures, not
+production evidence. Unit tests cover bounded generators, canonical IDs, duplicate
+selection, missing configuration and sanitized driver failure.
+
+Focused: 22 passed in 3.80 seconds. Final fresh-PostgreSQL regression: 2,873 passed,
+24 platform skips, one Bash behavior case deselected in 242.80 seconds; 89.25%
+coverage against unchanged 89% gate. Three existing Bash contract files were
+omitted locally. The parent added a Bash behavior case unavailable on this Windows
+host; the initial full attempt was stopped and the final run used a fresh database
+with only that case additionally deselected. Linux CI runs all of these. An initial
+focused collection collision was fixed by giving the unit module a unique name.
+
+Complete production/test/documentation diff reviewed. Expected-SHA non-force
+publication and exact pushed-head CI/marker remain final gates. No database
+migration, role/grant change, credentials, AWS/host deployment or service operation.
+PAPER-only, LIVE disabled, risk/strategy rules, NO_TRADE and frozen day29 SHA
+`7e9d341742818a97accce3e2301b1c7f96596795` preserved. AWS operational acceptance
+remains pending. The new command is observational and is not recovery authorization.

@@ -15,6 +15,12 @@ current eligibility proof, and the ordinary service remains fail closed.
 
 ## Reviewed operator command
 
+For observation before any recovery decision, including while HALTED, use the
+separate [read-only inspection command](paper-recovery-inspection.md). Its bounded
+snapshot reports lifecycle, effect topology and receipt presence. It never proves
+accounting or grants recovery permission; this command's authentication and HALT
+requirements remain unchanged.
+
 From an approved installed release, using the existing protected environment:
 
 ```sh
