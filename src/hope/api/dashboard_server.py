@@ -13,6 +13,18 @@ from pathlib import Path
 
 from hope.api.dashboard_projection import verified_projections
 
+OPERATIONS_ERROR_CODES = {
+        None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
+        "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
+        "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
+        "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
+        "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
+        "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
+        "PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED",
+        "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID",
+        "PAPER_CERTIFIED_INPUT_UNAVAILABLE",
+}
+
 
 def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     """Reject malformed, partial, future-dated or oversized snapshot files."""
@@ -160,17 +172,7 @@ def _verified_operations(path: Path) -> bytes:
     # A closed vocabulary prevents a valid-looking file from leaking arbitrary
     # identifiers through a nominally sanitized error-code field.
     error = data.get("error_code")
-    if error not in {
-        None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
-        "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
-        "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
-        "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
-        "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
-        "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
-        "PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED",
-        "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID",
-        "PAPER_CERTIFIED_INPUT_UNAVAILABLE",
-    }:
+    if error not in OPERATIONS_ERROR_CODES:
         error = "PAPER_SERVICE_CYCLE_FAILED"
     safe = {
         "schema_version": 1, "generated_at": generated.isoformat(),
@@ -179,6 +181,17 @@ def _verified_operations(path: Path) -> bytes:
         "deployed_commit": commit, "schema_compatibility": compatibility,
         **{key: data[key] for key in fields},
     }
+    if "last_failure_at" in data or "last_failure_code" in data:
+        failed = None if data.get("last_failure_at") is None else stamp(data["last_failure_at"])
+        code = data.get("last_failure_code")
+        if failed is not None and failed > generated:
+            raise ValueError("HOPE_OPERATIONS_STATUS_TIME_INVALID")
+        # Reuse the same closed error vocabulary without exposing free text.
+        if code is not None:
+            code = code if isinstance(code,str) and code in OPERATIONS_ERROR_CODES else "PAPER_SERVICE_CYCLE_FAILED"
+        if (failed is None)!=(code is None):
+            raise ValueError("HOPE_OPERATIONS_STATUS_FAILURE_INVALID")
+        safe.update(last_failure_at=failed.isoformat() if failed else None,last_failure_code=code)
     return json.dumps(safe, separators=(",", ":")).encode("utf-8")
 
 
@@ -282,6 +295,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self._respond(503, b"Verified operations status unavailable")
                 return
             self._respond(200, payload, "application/json; charset=utf-8")
+            return
+        if self.path == "/readiness.json":
+            from hope.api.dashboard_readiness import dashboard_readiness
+            payload = json.dumps(dashboard_readiness(self.server.snapshot,self.server.operations),separators=(",",":")).encode("utf-8")
+            self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path == "/snapshot.json":
             try:

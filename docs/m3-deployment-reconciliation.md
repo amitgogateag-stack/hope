@@ -1,0 +1,85 @@
+# M3 deployment reconciliation record
+
+This report separates repository evidence from historical AWS observations. No
+AWS host change, PAPER execution, production DB change or deployment was performed
+by this engineering batch. AWS acceptance is not established.
+
+## Current verified repository baseline
+
+Work began after fetching live p0-pit-context. GitHub had advanced beyond the
+requested historical f17a549 release to c6aeb8a358f6ee450df2f6d93260e9b0a55c9e4c.
+An earlier 32fea974 commit failed CI; its correction was already at HEAD. No new
+engineering was stacked while CI was pending. Run 39061927000 completed success
+and the issue #5 Bot marker matched SHA/run/attempt 1 before modification. The
+clean local checkout was fast-forwarded to that exact verified parent.
+
+The parent already publishes truthful STOPPED health after successful one-shot
+acceptance. M3 reuses that service, scheduler, certified binding, risk, fills,
+accounting, authenticated historical recovery and release inspection; it does not
+create a parallel execution engine. There are 233 repository migrations; the
+existing compatibility verifier checks the exact filenames and checksums rather
+than accepting a count. No migration is added or applied to AWS by this batch.
+Frozen day29 SHA remains 7e9d341742818a97accce3e2301b1c7f96596795.
+
+## Historical AWS evidence supplied by the operator
+
+| Item | Historical observation | Current AWS status in this batch |
+| --- | --- | --- |
+| Release | f17a54929a8ecb7745a62c118893b55494aeb2f1 | Not rechecked on host |
+| PostgreSQL | 16, isolated hope_m3_restore_test | Not rechecked on host |
+| Schema | 233 applied migrations | Counts/checksums not rechecked on host |
+| Tests | 62 PostgreSQL integration passes | Not rerun on AWS |
+| Dashboard | Active and enabled at boot | Not rechecked on host |
+| HTTP | /, /status.json, /snapshot.json returned 200 | Not rechecked on host |
+| Operations | /operations.json returned 503 | Current cause not verified |
+| PAPER | Inactive | Not changed or rechecked on host |
+| Authentication | Scoped PostgreSQL authentication/export verified | Current grants/connectivity not rechecked |
+
+The operator confirmed AWS Console → EC2 Instance Connect as the approved access
+method. No SSH alias/autonomous terminal access was confirmed. Browser inventory
+in this session contained no authenticated AWS Console tab. No private key,
+credential file, environment contents, database dump or operational secret was
+read or committed. The actual PAPER factory has not been identified or approved;
+reviewed_module:factory is only a placeholder and must not be substituted.
+
+## Operations 503 diagnosis and resolution boundaries
+
+Source and local HTTP tests establish that /operations.json returns 503 when its
+configured health file is missing, unreadable or invalid. A valid STOPPED,
+HALTED or UNAVAILABLE heartbeat remains truthful; 200 alone is not health. The
+M1 unit reads /var/lib/hope-paper/health.json, while legacy/custom units may point
+elsewhere. An inactive worker with no health file is a plausible expected cause of
+the historical 503, not an observed AWS diagnosis. Permissions, malformed schema,
+incorrect path and stale health require host evidence before choosing a repair.
+
+The new read-only /readiness.json and Safety view explain missing/unreadable/
+invalid/stale health, snapshot state, reported worker state, observed database
+feed and unverified reconciliation separately from HTTP liveness. No synthetic
+healthy file is introduced and /operations.json's fail-closed contract remains.
+Last poll success differs from last persisted successful PAPER job. Failure
+timestamp/code is retained within the service process and sanitized. Browser
+observations age independently; READY never authorizes execution.
+
+The new m3_audit CLI is a reviewed read-only path for exact-release/CI, isolated
+DB schema/role/version/count, fixed systemd metadata and loopback HTTP observations.
+It makes no service/configuration changes. Use the existing host-readiness script
+to check bindings and install/export state. An actual AWS 503 resolution remains
+blocked until these diagnostics can be run through approved access and reviewed.
+
+## Pending operational gates
+
+1. Authenticated console/instance access and exact target confirmation.
+2. Read-only AWS reconciliation under scoped database environments; resolve
+   demonstrated drift through separately approved host changes only.
+3. Actual factory implementation/dependency review, real research/PIT/session/
+   authorization prerequisites and exact selected run ID.
+4. Separate authorization for one bounded cycle on hope_m3_restore_test.
+5. Actual outcome, no-replay restart and authenticated reconciliation evidence.
+6. Private dashboard result review and separately approved persistent startup.
+
+No local PostgreSQL 17 or synthetic fixture result substitutes for PostgreSQL 16
+AWS execution. Preserve the production DB and frozen baseline. See
+[operator runbook](m3-operator-runbook.md) for exact gated command, evidence,
+failure preservation, HALT and rollback procedures. Deadline remains November 15,
+2026. Until operational prerequisites are resolved, M3 CONTROLLED PAPER ACCEPTED
+must not be claimed.

@@ -800,3 +800,78 @@ expected a successful one-shot to leave CURRENT. Production behavior and the new
 unit contract produced STARTING, CURRENT, STOPPED as intended. The repair updates
 that integration contract to require STOPPED plus retained last-success evidence;
 no assertion or production safety gate is removed.
+
+## 2026-10-17: M3 isolated acceptance tooling and operational visibility
+
+The user supplied M3 and clarified that only AWS Console / EC2 Instance Connect
+is approved; there is no confirmed SSH alias, no approved real PAPER factory and
+no authorization for AWS execution, host changes or persistent startup. Those
+boundaries remain intact. Browser inventory had no authenticated AWS tab. No AWS
+command, broker action, host/service change or production DB mutation occurred.
+
+Live HEAD had advanced from the historical f17a549 to
+c6aeb8a358f6ee450df2f6d93260e9b0a55c9e4c. Earlier 32fea974 failed CI; its correction
+was already pending at HEAD. No changes were stacked while CI was pending. Exact
+run 39061927000 and the matching Bot issue #5 marker then succeeded; the clean
+checkout was fast-forwarded before implementation. Frozen day29 remains
+7e9d341742818a97accce3e2301b1c7f96596795. Repository migration count remains 233;
+no migration was added.
+
+M3 adds a fixed-repository HTTPS release attestation that checks live branch HEAD,
+frozen baseline, completed successful HOPE CI push run/attempt and the matching
+Bot marker. Reads are bounded and redirects refused. An isolated acceptance CLI
+requires explicit one-cycle approval, database hope_m3_restore_test, PAPER mode,
+LIVE=false, deployed SHA identity, a reviewed factory, one selected UUID and a NEW
+private evidence directory outside the release. It verifies clean exact release,
+scoped role and exact migration checksums before work; wrong DB/role/SHA/selection
+and multi-run plans fail closed. The wrapper has a 180-second budget plus 10-second
+forced-stop ceiling and never invokes systemd. It does not bundle a real or
+synthetic production factory.
+
+Acceptance reuses the existing certified scheduler/service/risk/fill/accounting
+path. It requires one executed job, truthful STOPPED health, a restart with one
+terminal skip and explicit authenticated historical reconciliation. NO_TRADE,
+RISK_BLOCKED and FILLED are supported without threshold changes. Fresh invocation
+cannot reuse a prior committed run. Concurrent invocations produce at most one
+execution; a loser remains blocked. A post-commit proof failure preserves durable
+history and produces no acceptance JSON; it never claims a rollback. Evidence
+retains dashboard_review=PENDING and operator_review_required=true, rather than
+claiming M3 acceptance.
+
+The read-only m3_audit CLI checks isolated DB/version/checksums/scoped role, fixed
+systemd metadata and loopback HTTP with sanitized bounded output. New
+/readiness.json and the Safety view distinguish HTTP liveness, snapshot freshness,
+missing/unreadable/invalid/stale health, reported worker state, last successful
+poll versus persisted PAPER job, and within-process last failure timestamp/code.
+Reconciliation and DB connectivity remain explicitly observational/unverified.
+The shared closed error vocabulary prevents free-text disclosure. Existing
+/operations.json keeps its 503 fail-closed behavior. No synthetic health is created.
+The historical AWS 503 cause remains unverified; inactive PAPER plus absent health
+is a hypothesis, not a confirmed diagnosis.
+
+New reconciliation report separates historical AWS PostgreSQL 16 / 233 migrations /
+62 test passes / endpoint observations from current repository and local evidence.
+The operator runbook and unset-by-default environment checklist define exact gated
+command syntax, factory/data/session prerequisites, private SSH-tunnel boundary,
+rollback/HALT procedures and separate persistent-start approval. Actual runnable
+factory/run selection and AWS actions remain blocked on human review/authorization.
+
+Focused final M3 suite: 122 passed, 2 Linux wrapper skips in 16.80 seconds. Genuine
+PostgreSQL tests execute as a non-superuser scoped writer, covering all three
+outcomes, no-replay restart/reconciliation, competing invocations, wrong target,
+privileged role, wrong release identity, wrong/multiple runs and postcommit proof
+failure. The initial isolated role fixture lacked SELECT on control sequences;
+that fixture was corrected (no AWS/production grant change). Full frozen-source
+fresh-PostgreSQL regression: 2,929 passed, 26 platform skips, one Bash case
+deselected in 388.79 seconds; 89.03% coverage against unchanged 89% gate. Existing
+three Bash contract files are omitted locally; Linux CI runs all omitted/skipped
+platform cases. The shipped JavaScript runs in Node behavioral tests, including
+readiness aging and fail-closed field validation. Local loopback browser Safety
+view verified HEALTH_MISSING with web RUNNING, feed UNAVAILABLE and no authorization.
+Local preview/server and PostgreSQL were stopped after validation.
+
+The complete source/test/template/documentation diff was reviewed. Expected-SHA
+non-force publication and exact pushed-head CI/marker are final gates. No local
+PostgreSQL 17/synthetic result establishes AWS PostgreSQL 16 acceptance. M3
+CONTROLLED PAPER ACCEPTED is not claimed. AWS audit, real factory review, one-cycle
+operational authorization and private dashboard evidence remain explicit blockers.

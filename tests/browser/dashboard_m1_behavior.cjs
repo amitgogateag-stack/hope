@@ -25,7 +25,7 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyOperations,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyOperations,applyReadiness,clearReadiness,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
@@ -178,6 +178,18 @@ async function main() {
   b.element('snapshot-file').files=[{size:100,text:async()=>JSON.stringify(newest)}];
   await b.element('snapshot-file').listeners.change();oldFile(JSON.stringify(sample()));await first;
   assert.equal(b.element('research-count').textContent,'12');
+ }
+ // M3 observations distinguish unreachable health from web liveness and age independently.
+ {
+  const b=browser();
+  const data={schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'UNAVAILABLE',reason:'HEALTH_MISSING',worker_report:'UNKNOWN',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:null,last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
+  b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/HEALTH_MISSING/);
+  b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT'});
+  assert.equal(b.element('readiness-state').textContent,'READY');
+  b.advance(300001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
+  assert.throws(()=>b.api.applyReadiness({...data,execution_authorized:true}));
+  assert.throws(()=>b.api.applyReadiness({...data,reason:'secret-payload'}));
+  b.api.clearReadiness();assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');
  }
  console.log('Dashboard M1: aging, unavailable/zero, compatibility, heartbeat, deadlines, serialization and generation fencing passed');
 }

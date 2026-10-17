@@ -208,7 +208,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
     commit = commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
     health = dict(deployed_commit=commit, schema_compatibility="UNKNOWN", schema_version=1, generated_at=None, state="STARTING", last_success_at=None,
                   cycles_succeeded=0, cycles_failed=0, jobs_executed=0, jobs_skipped=0,
-                  error_code=None, paper_only=True, live_enabled=False)
+                  error_code=None, last_failure_at=None, last_failure_code=None, paper_only=True, live_enabled=False)
     def publish():
         health["generated_at"] = datetime.now(UTC).isoformat()
         publish_service_status(status_file, health)
@@ -226,6 +226,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
             failed = False
         except Exception as exc:
             state, code = _failure_state(exc)
+            health.update(last_failure_at=datetime.now(UTC).isoformat(),last_failure_code=code)
             health.update(state=state, error_code=code, schema_compatibility=("INCOMPATIBLE" if code in {"PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE"} else "UNKNOWN"))
             health["cycles_failed"] += 1
             failed = True
