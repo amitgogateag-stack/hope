@@ -68,6 +68,27 @@ def test_once_health_redacts_failures(tmp_path, monkeypatch, exception, code):
     assert bool(disposed) is isinstance(exception, OperationalError)
 
 
+def test_successful_once_publishes_terminal_stopped_state(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(service, "run_service_cycle", lambda *args, **kwargs: (1, 2))
+    target = tmp_path / "health.json"
+    assert service.run_service(
+        SimpleNamespace(),
+        lambda *_: None,
+        migrations_dir=tmp_path,
+        status_file=target,
+        once=True,
+    ) == 0
+    value = json.loads(target.read_text())
+    assert value["state"] == "STOPPED"
+    assert value["last_success_at"] is not None
+    assert value["schema_compatibility"] == "COMPATIBLE"
+    assert (value["cycles_succeeded"], value["cycles_failed"]) == (1, 0)
+    assert (value["jobs_executed"], value["jobs_skipped"]) == (1, 2)
+    publications = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
+    assert [item["state"] for item in publications] == ["STARTING", "CURRENT", "STOPPED"]
+    assert publications[-1] == value
+
+
 def test_service_recovers_on_next_poll_and_stops_gracefully(tmp_path, monkeypatch):
     stop = Event()
     calls = []

@@ -75,8 +75,13 @@ INCOMPATIBLE for explicit schema mismatches, otherwise UNKNOWN. Counters are
 process-local observations, not authoritative global trading totals.
 
 `--once` returns 0 for a successful cycle and 1 for a failed cycle; startup
-configuration/import errors return 2 with a fixed sanitized message. There is no
-built-in strategy, market calendar, account, credential or synthetic price source.
+configuration/import errors return 2 with a fixed sanitized message. A successful
+one-shot publishes CURRENT while completing its cycle and then atomically publishes
+STOPPED before process exit. The final heartbeat retains its non-null
+`last_success_at`, COMPATIBLE schema result and counters. STOPPED proves only that
+the acceptance process exited cleanly; it is not autonomous-worker health. Failed
+and HALTED probes retain their fail-closed diagnostic state. There is no built-in
+strategy, market calendar, account, credential or synthetic price source.
 
 ## Validation scope
 

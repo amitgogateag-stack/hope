@@ -769,3 +769,26 @@ migration, role/grant change, credentials, AWS/host deployment or service operat
 PAPER-only, LIVE disabled, risk/strategy rules, NO_TRADE and frozen day29 SHA
 `7e9d341742818a97accce3e2301b1c7f96596795` preserved. AWS operational acceptance
 remains pending. The new command is observational and is not recovery authorization.
+
+
+## 2026-10-17: truthful terminal health for PAPER acceptance probes
+
+Exact live parent `c07fd9b75850ffafac9ef0be8adcfcaa37438d48`, Actions run
+`39060447033` (#1282) and the matching issue #5 HOPE_CI_STATUS_V1 marker
+were green before work. AWS operator evidence showed the private dashboard active
+and the PAPER worker inactive, while the M3 runbook requires one reviewed
+`--once` cycle before autonomous enablement.
+
+A successful one-shot previously published CURRENT and exited immediately, leaving
+a dead acceptance process represented as current worker health. The service now
+preserves the successful cycle's schema proof, timestamp and counters, then
+atomically publishes STOPPED before returning. Failed and HALTED probes retain
+their fail-closed diagnostic state. The operator runbook now pairs this truthful
+terminal heartbeat with explicit read-only recovery inspection and separately
+approved certified reconciliation; neither grants autonomous acceptance.
+
+Unit coverage asserts the complete STARTING/CURRENT/STOPPED publication order,
+terminal file contents, successful evidence retention and exact counters. No AWS
+operation, database write, migration, strategy/risk change or service activation
+is part of this source change. PAPER-only and LIVE-disabled markers and frozen
+day29 SHA `7e9d341742818a97accce3e2301b1c7f96596795` remain unchanged.

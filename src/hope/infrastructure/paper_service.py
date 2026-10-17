@@ -235,7 +235,15 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
                 engine.dispose()
         publish()
         if once:
-            return 1 if failed else 0
+            exit_code = 1 if failed else 0
+            # A successful one-shot is an acceptance probe, not a running
+            # autonomous worker. Preserve its counters and last-success proof,
+            # then atomically publish terminal service state before process exit.
+            # Failed/HALTED probes retain their fail-closed diagnostic state.
+            if not failed:
+                health.update(state="STOPPED", error_code=None)
+                publish()
+            return exit_code
         stop.wait(poll_seconds)
     health.update(state="STOPPED", error_code=None)
     publish()

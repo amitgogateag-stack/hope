@@ -92,7 +92,13 @@ change the database, enable PAPER or touch existing dashboard units.
 
 Before enabling, run an authorized PAPER `--once` with the reviewed factory,
 inspect the sanitized health and durable database outcome, and perform the
-operator acceptance checklist below. Only then enable the approved components:
+operator acceptance checklist below. A successful one-shot must finish with
+`state=STOPPED`, a non-null `last_success_at`, compatible schema and the expected
+counters; `CURRENT` after the process exits is not acceptable worker health.
+Use the explicit read-only recovery inspection for every reviewed run identity,
+then invoke certified recovery only for an independently approved incomplete
+selection. Neither observation nor recovery substitutes for autonomous service
+acceptance. Only then enable the approved components:
 
 ```
 sudo systemctl enable --now hope-ops-dashboard-export.timer hope-ops-dashboard-web.service
