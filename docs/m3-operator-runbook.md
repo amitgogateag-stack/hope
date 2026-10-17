@@ -62,6 +62,18 @@ stale worker health; STOPPED/STARTING/UNAVAILABLE; stale or unavailable snapshot
 unverified worker identity; durable HALT; and claimed effects needing review.
 READY means current compatible observations, never trading authorization.
 
+The M3 audit preserves this endpoint's closed diagnostic reason, reported worker
+state, snapshot/database/reconciliation observations, last successful poll/PAPER
+timestamps and sanitized failure history. It validates the versioned PAPER-only,
+LIVE-disabled, execution-unauthorized contract before including these fields.
+Unknown response fields and free-text failure details are never copied. HTTP
+status is reported separately: HTTP 200 with INVALID_RESPONSE means the body
+failed validation; STALE_RESPONSE means its generation time is over five minutes
+old and its health claims were discarded. Missing/invalid health still leaves
+/operations.json at 503 even when /readiness.json returns a useful diagnosis.
+Redirects are refused, responses are size/time bounded and only the four fixed
+loopback paths are queried. None of these observations constitutes AWS acceptance.
+
 The dashboard Safety view shows these distinctions, last successful service poll,
 last successful persisted PAPER job when its projection is available, and last
 failure timestamp/code from the current process. Database connectivity is observed

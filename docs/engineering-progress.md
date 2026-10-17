@@ -875,3 +875,47 @@ non-force publication and exact pushed-head CI/marker are final gates. No local
 PostgreSQL 17/synthetic result establishes AWS PostgreSQL 16 acceptance. M3
 CONTROLLED PAPER ACCEPTED is not claimed. AWS audit, real factory review, one-cycle
 operational authorization and private dashboard evidence remain explicit blockers.
+
+## 2026-10-17: preserve sanitized M3 audit diagnostics
+
+Before edits, GitHub live p0-pit-context HEAD was
+1c0bd9a0e28c78c2996ebd0f658a7dc24b385484, with exact-head HOPE CI
+39064093164 attempt 1 successful and matching issue #5 Bot HOPE_CI_STATUS_V1.
+The frozen day29-green-baseline remained
+7e9d341742818a97accce3e2301b1c7f96596795. The local checkout was clean.
+
+Demonstrated defect: feeding the actual missing-health readiness body to the old
+audit returned only http_status=200 and paper_health=UNAVAILABLE. It dropped
+HEALTH_MISSING, server liveness, reported worker state, snapshot/database and
+reconciliation observations, timestamps and failure history. An operator using
+the sanitized audit could not retain the cause already exposed by readiness.
+
+The audit now validates the versioned observational readiness contract, exact
+PAPER-only/LIVE-disabled/execution-unauthorized booleans, closed vocabularies,
+timezone-aware canonical timestamps, temporal ordering and failure-history pairs.
+It retains safe observations and normalizes unknown failure details to the shared
+generic code; arbitrary fields/strings are discarded. Contradictory READY,
+future-dated, malformed, oversized and invalid safety responses fail closed with
+INVALID_RESPONSE while preserving the actual HTTP status. Responses over five
+minutes old yield STALE_RESPONSE without replaying health claims. Queries are
+restricted to the four existing fixed loopback paths; redirects remain refused.
+The runbook explains HTTP liveness versus body validation and observations.
+
+Added 43 adversarial/HTTP cases. Focused audit/readiness/attestation/acceptance-CLI
+suite: 87 passed in 6.83 seconds. Real local HTTP cases cover missing/invalid health
+(operations 503), stale health, STOPPED, HALTED, current observations and redirect
+refusal. Initial test setup errors (bytes fixture and its default HALTED state,
+plus an oversized pytest-generated Windows filename) were corrected in fixtures;
+no production behavior was loosened. Before/after reproduction confirmed reason
+HEALTH_MISSING and worker UNKNOWN now survive with execution_authorized=false.
+
+Full frozen-source fresh PostgreSQL 17 regression: 2,972 passed, 26 platform skips,
+one Bash behavior deselected in 347.78 seconds; 89.10% coverage versus unchanged
+89% gate. Three Bash contract files were omitted locally; Linux CI remains the
+gate for these and platform skips. Complete source/test/runbook diff reviewed;
+publication uses expected-SHA non-force branch update and exact pushed-head CI.
+This batch changes audit reporting only: strategy/risk/NO_TRADE, execution,
+database schema and deployment behavior remain unchanged. No AWS actions,
+credential exposure or PAPER cycle occurred. Actual AWS diagnosis, reviewed
+factory/run selection and separate execution authorization remain pending; M3
+operational acceptance is not established by these local tests.
