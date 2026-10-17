@@ -1,0 +1,32 @@
+[Unit]
+Description=HOPE M3 private operational dashboard (dashboard-only release)
+After=network.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=hope-dashboard
+Group=hope-operations
+WorkingDirectory=/opt/hope-operations/dashboard-current
+Environment=PYTHONPATH=/opt/hope-operations/dashboard-current/src
+ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.dashboard_server --port 8788 --preview /opt/hope-operations/dashboard-current/docs/dashboard/preview.html --snapshot /var/lib/hope-dashboard-ops/snapshot.json --operations-status-file /var/lib/hope-paper/health.json
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=256M
+TasksMax=32
+LimitNOFILE=512
+
+[Install]
+WantedBy=multi-user.target

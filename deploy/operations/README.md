@@ -207,6 +207,51 @@ audit evidence; never delete claims to force replay.
 Code/test completion does not certify an AWS deployment. Until this checklist is
 executed against the authenticated host, report **AWS DEPLOYMENT ACCEPTANCE PENDING**.
 
+## M3 dashboard-only activation
+
+The M3 dashboard can be activated without moving the shared `current` pointer and
+without controlling PAPER. The dedicated unit uses the root-owned
+`/opt/hope-operations/dashboard-current` symlink. The existing snapshot exporter
+and PAPER service retain their existing release and state; this procedure neither
+starts nor enables them.
+
+Before host mutation, rerun exact-release/CI attestation, dashboard-role read-only
+schema preflight, snapshot validation, Python imports, resource checks and
+`systemd-analyze verify` against the staged target. Then an approved root operator
+may run:
+
+```bash
+PYTHONPATH=/opt/hope-operations/releases/TARGET/src \
+  /opt/hope-operations/venv/bin/python \
+  /opt/hope-operations/releases/TARGET/deploy/operations/activate_dashboard_release.py \
+  --target TARGET --expected-current OLD_SHA \
+  --approve-dashboard-only-host-change
+```
+
+The wrapper installs only the fixed `hope-m3-dashboard-web.service`, stops the old
+and new dashboard web units, atomically moves the dedicated pointer, starts the new
+loopback-only service and verifies an exact post-start snapshot plus truthful M3
+readiness. A missing PAPER health file remains an explicit UNAVAILABLE condition;
+no synthetic health is created. Failed acceptance restores the old pointer and
+metadata, disables the new unit, and restarts the prior dashboard. It never calls
+the PAPER unit, changes a database, applies migrations or opens a network port.
+
+SIGKILL or host loss deliberately leaves `.dashboard-activation.lock`. Do not
+remove it manually. Inspect the recorded process and pointer state, then for a
+stale authenticated lease run the separately approved recovery wrapper with the
+same exact SHAs:
+
+```bash
+PYTHONPATH=/opt/hope-operations/releases/TARGET/src \
+  /opt/hope-operations/venv/bin/python \
+  /opt/hope-operations/releases/TARGET/deploy/operations/recover_dashboard_activation.py \
+  --expected-current OLD_SHA --target TARGET --approve-dashboard-recovery
+```
+
+Recovery stops only dashboard web units, rechecks the unchanged lease, restores
+the old dedicated pointer and metadata, and starts the legacy dashboard. Ambiguous,
+active, tampered or pending-pointer states fail closed for operator review.
+
 ## M2 upgrade prerequisites (separate approval required)
 
 Before activating M2, stop admission, back up and restore-test the database, then

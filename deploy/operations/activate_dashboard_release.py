@@ -1,0 +1,119 @@
+"""Operator-approved dashboard-only activation; never controls PAPER."""
+import argparse
+from datetime import UTC, datetime
+import os
+from pathlib import Path
+import subprocess
+import time
+
+from hope.api.dashboard_deployment import switch_dashboard_release
+from hope.api.dashboard_server import _verified_snapshot
+from hope.api.dashboard_upgrade_probe import verify_dashboard, verify_readiness
+from hope.api.operations_deployment import inspect_release
+
+ROOT = Path("/opt/hope-operations")
+STATE = Path("/var/lib/hope-dashboard-ops")
+UNIT = "hope-m3-dashboard-web.service"
+LEGACY_UNIT = "hope-ops-dashboard-web.service"
+UNIT_PATH = Path("/etc/systemd/system") / UNIT
+
+
+def systemctl(*arguments: str) -> str:
+    result = subprocess.run(["systemctl", *arguments], check=True, timeout=90,
+                            capture_output=True, text=True)
+    return result.stdout.strip()
+
+
+def _install_exact_unit(target: Path) -> None:
+    source = target / "deploy/operations" / UNIT
+    expected = source.read_bytes()
+    if UNIT_PATH.exists():
+        if UNIT_PATH.is_symlink() or UNIT_PATH.read_bytes() != expected:
+            raise RuntimeError("DASHBOARD_INSTALLED_UNIT_MISMATCH")
+        return
+    temporary = UNIT_PATH.with_suffix(".next")
+    if temporary.exists() or temporary.is_symlink():
+        raise RuntimeError("DASHBOARD_UNIT_INSTALL_PENDING")
+    with temporary.open("xb") as stream:
+        stream.write(expected)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.chmod(temporary, 0o644)
+    os.replace(temporary, UNIT_PATH)
+
+
+def _accepted(target: str) -> bool:
+    try:
+        if systemctl("is-active", UNIT) != "active":
+            return False
+        pointer = (ROOT / "dashboard-current").resolve(strict=True)
+        if pointer != ROOT / "releases" / target:
+            return False
+        payload, generated = _verified_snapshot(STATE / "snapshot.json")
+        if not 0 <= (datetime.now(UTC) - generated).total_seconds() <= 3600:
+            return False
+        result = verify_dashboard("http://127.0.0.1:8788", activation_started=generated,
+                                  activation_snapshot=payload)
+        readiness = verify_readiness("http://127.0.0.1:8788")
+        return (result["service"] == "RUNNING" and readiness["server"] == "RUNNING"
+                and readiness["paper_only"] is True and readiness["live_enabled"] is False
+                and readiness["execution_authorized"] is False)
+    except (OSError, TypeError, ValueError, subprocess.SubprocessError):
+        return False
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Guarded dashboard-only activation with rollback")
+    parser.add_argument("--target", required=True)
+    parser.add_argument("--expected-current", required=True)
+    parser.add_argument("--approve-dashboard-only-host-change", action="store_true", required=True)
+    args = parser.parse_args()
+    if os.geteuid() != 0:
+        parser.exit(2, "DASHBOARD_ACTIVATION_ROOT_REQUIRED\n")
+    target = ROOT / "releases" / args.target
+    inspect_release(target, args.target)
+    inspect_release(ROOT / "releases" / args.expected_current, args.expected_current)
+    _verified_snapshot(STATE / "snapshot.json")
+    legacy_enabled = systemctl("is-enabled", LEGACY_UNIT) == "enabled"
+
+    def before_switch() -> None:
+        _install_exact_unit(target)
+        systemctl("daemon-reload")
+        systemctl("stop", UNIT, LEGACY_UNIT)
+
+    def rollback_services() -> None:
+        try:
+            systemctl("stop", UNIT)
+            systemctl("disable", UNIT)
+            if legacy_enabled:
+                systemctl("enable", LEGACY_UNIT)
+            systemctl("start", LEGACY_UNIT)
+        except Exception:
+            raise RuntimeError("DASHBOARD_ROLLBACK_REQUIRES_OPERATOR_REVIEW")
+
+    def accept() -> None:
+        try:
+            if legacy_enabled:
+                systemctl("disable", LEGACY_UNIT)
+            systemctl("enable", UNIT)
+            systemctl("start", UNIT)
+            for _ in range(30):
+                if _accepted(args.target):
+                    return
+                time.sleep(1)
+            raise RuntimeError("DASHBOARD_ACCEPTANCE_TIMEOUT")
+        except BaseException:
+            rollback_services()
+            raise
+
+    switch_dashboard_release(ROOT, args.target, expected_current=args.expected_current,
+                             before_switch=before_switch, accept=accept)
+    print("M3_DASHBOARD_ONLY_ACTIVATION_ACCEPTED")
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception:
+        print("M3_DASHBOARD_ACTIVATION_FAILED_ROLLBACK_ATTEMPTED")
+        raise SystemExit(2)

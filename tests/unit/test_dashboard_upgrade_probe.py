@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from hope.api.dashboard_server import DashboardHTTPServer
-from hope.api.dashboard_upgrade_probe import verify_dashboard, verify_with_startup_retry
+from hope.api.dashboard_upgrade_probe import verify_dashboard, verify_readiness, verify_with_startup_retry
 
 
 class Response(io.BytesIO):
@@ -48,6 +48,37 @@ def fixture_responses():
         "/legacy-research.json": (503, b"Verified legacy research inventory unavailable"),
         "/snapshot.json": (503, b"Verified snapshot unavailable"),
     }
+
+
+def valid_readiness():
+    return {
+        "schema": "hope.operational-readiness.v1",
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "server": "RUNNING", "paper_health": "UNAVAILABLE", "reason": "HEALTH_MISSING",
+        "worker_report": "UNKNOWN", "snapshot": "CURRENT",
+        "database": "OBSERVED_AT_SNAPSHOT", "reconciliation": "UNVERIFIED",
+        "last_successful_poll_at": None, "last_successful_paper_at": None,
+        "last_failure_at": None, "last_failure_code": None,
+        "execution_authorized": False, "paper_only": True, "live_enabled": False,
+    }
+
+
+def test_m3_readiness_probe_accepts_truthful_unavailable_paper_and_rejects_authorization():
+    responses = {"/readiness.json": (200, json.dumps(valid_readiness()).encode())}
+    assert verify_readiness(opener=FakeOpener(responses))["paper_health"] == "UNAVAILABLE"
+    for field, bad in (("execution_authorized", True), ("paper_only", False),
+                       ("live_enabled", True), ("server", "STOPPED")):
+        payload = valid_readiness()
+        payload[field] = bad
+        with pytest.raises(ValueError, match="READINESS_RESPONSE_INVALID"):
+            verify_readiness(opener=FakeOpener({"/readiness.json": (200, json.dumps(payload).encode())}))
+
+
+@pytest.mark.parametrize("response", [(404, b"missing"), (302, b"redirect"), (200, b"[]"),
+                                      (200, b"x" * 8193)])
+def test_m3_readiness_probe_rejects_missing_redirected_or_unbounded_response(response):
+    with pytest.raises((ValueError, json.JSONDecodeError)):
+        verify_readiness(opener=FakeOpener({"/readiness.json": response}))
 
 
 def test_m2_page_budget_is_64k_while_snapshot_budget_stays_32k():

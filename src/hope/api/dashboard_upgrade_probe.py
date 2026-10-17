@@ -201,6 +201,39 @@ def verify_with_startup_retry(*, attempts: int = 5, delay: float = 1.0, opener=N
     raise AssertionError("unreachable")
 
 
+def verify_readiness(base: str = "http://127.0.0.1:8788", *, opener=None) -> dict:
+    """Verify the bounded M3 readiness response without treating it as authorization."""
+    parts = urlsplit(base)
+    if (parts.scheme != "http" or parts.hostname != "127.0.0.1" or parts.username
+            or parts.password or parts.path or parts.query or parts.fragment):
+        raise ValueError("HOPE_UPGRADE_LOOPBACK_ONLY")
+    opener = opener if opener is not None else build_opener(ProxyHandler({}), _NoRedirect())
+    code, body = _read(opener, base + "/readiness.json", 8192)
+    if code != 200:
+        raise ValueError("HOPE_READINESS_HTTP_INVALID")
+    value = _json(body)
+    fields = {
+        "schema", "generated_at", "server", "paper_health", "reason", "worker_report",
+        "snapshot", "database", "reconciliation", "last_successful_poll_at",
+        "last_successful_paper_at", "last_failure_at", "last_failure_code",
+        "execution_authorized", "paper_only", "live_enabled",
+    }
+    timestamps = ("last_successful_poll_at", "last_successful_paper_at", "last_failure_at")
+    if (not _exact_keys(value, fields) or value["schema"] != "hope.operational-readiness.v1"
+            or not _timestamp(value["generated_at"]) or value["server"] != "RUNNING"
+            or value["paper_health"] not in {"UNAVAILABLE", "HALTED", "READY"}
+            or value["snapshot"] not in {"UNAVAILABLE", "STALE", "CURRENT"}
+            or value["database"] not in {"UNVERIFIED", "OBSERVED_AT_SNAPSHOT"}
+            or value["reconciliation"] not in {"UNVERIFIED", "CLAIMS_REQUIRE_REVIEW"}
+            or value["execution_authorized"] is not False or value["paper_only"] is not True
+            or value["live_enabled"] is not False
+            or any(value[name] is not None and not _timestamp(value[name]) for name in timestamps)
+            or (value["last_failure_at"] is None) != (value["last_failure_code"] is None)
+            or not isinstance(value["reason"], str) or not isinstance(value["worker_report"], str)):
+        raise ValueError("HOPE_READINESS_RESPONSE_INVALID")
+    return value
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fail-closed private dashboard upgrade acceptance")
     parser.add_argument("--attempts", type=int, default=5)

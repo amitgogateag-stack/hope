@@ -919,3 +919,31 @@ database schema and deployment behavior remain unchanged. No AWS actions,
 credential exposure or PAPER cycle occurred. Actual AWS diagnosis, reviewed
 factory/run selection and separate execution authorization remain pending; M3
 operational acceptance is not established by these local tests.
+## 2026-10-17: guarded M3 dashboard-only activation
+
+The prior full-release activation path moved the shared `current` symlink and
+started PAPER, so it could not safely activate only the staged M3 dashboard. The
+new workflow introduces a root-owned `dashboard-current` pointer, separate
+dashboard deployment metadata, a fixed loopback-only M3 web unit, and a dedicated
+authenticated operation lease. It never references the PAPER unit and leaves the
+snapshot exporter/timer unchanged.
+
+Activation validates both exact immutable releases and the existing bounded fresh
+snapshot, installs only an exact reviewed unit, stops the two dashboard web unit
+identities, atomically switches the dedicated pointer, and verifies the exact
+selected snapshot plus `/readiness.json`. Readiness must continue to report
+PAPER-only, LIVE disabled and execution unauthorized; missing PAPER health remains
+truthfully unavailable. Failed acceptance restores the old pointer/metadata and
+restarts the legacy dashboard. A process kill retains a component-specific lease;
+approved recovery authenticates stale process identity and exact SHAs, rejects
+ambiguous paths, restores the expected dashboard pointer and starts only the old
+web service. The shared release pointer, database, migrations, exporter and PAPER
+service are not modified.
+
+Focused dashboard/deployment validation passed 146 tests, including target failure,
+concurrent/tampered lease rejection, interruption before/after pointer switch,
+authenticated pending-pointer recovery, exact unit matching, missing PAPER health,
+rollback, and proof that operator commands never name the PAPER unit. The complete
+unit suite passed 2,365 tests after rebasing on the concurrent green M3 audit
+diagnostics commit. No AWS action was executed. Exact-head CI remains
+required after expected-SHA publication.
