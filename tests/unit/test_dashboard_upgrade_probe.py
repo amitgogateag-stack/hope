@@ -50,6 +50,19 @@ def fixture_responses():
     }
 
 
+def test_m2_page_budget_is_64k_while_snapshot_budget_stays_32k():
+    responses = fixture_responses()
+    responses["/"] = (200, responses["/"][1] + b" " * 40000)
+    assert verify_dashboard(opener=FakeOpener(responses))["service"] == "RUNNING"
+    responses["/"] = (200, responses["/"][1] + b" " * 65536)
+    with pytest.raises(ValueError, match="OVERSIZED_HTTP_RESPONSE"):
+        verify_dashboard(opener=FakeOpener(responses))
+    responses = fixture_responses()
+    responses["/snapshot.json"] = (200, b"x" * 32769)
+    with pytest.raises(ValueError, match="OVERSIZED_HTTP_RESPONSE"):
+        verify_dashboard(opener=FakeOpener(responses))
+
+
 
 def valid_legacy():
     return {

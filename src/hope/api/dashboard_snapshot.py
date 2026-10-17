@@ -15,6 +15,7 @@ from sqlalchemy import Connection, create_engine, text
 from sqlalchemy.exc import DBAPIError
 
 from hope.api.dashboard_projection import EXPERIMENT_STATES, VERDICTS, verified_projections
+from hope.api.dashboard_m2_snapshot import readers as m2_readers
 
 
 def _count(connection: Connection, query: str) -> int:
@@ -73,6 +74,7 @@ def _optional_projections(connection: Connection, generated: datetime) -> dict:
         "experiments": research_experiments, "decisions": decisions,
         "paper_activity": paper_activity, "market_data": market_data,
     }
+    readers.update(m2_readers(connection, generated))
     result = {"portfolio": {"status": "UNAVAILABLE"}}
     for name, reader in readers.items():
         try:

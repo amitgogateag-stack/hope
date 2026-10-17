@@ -168,49 +168,9 @@ class PaperStrategyDecisionJob:
             tuple(member.instrument_id for member in active_members),
             self.market_data_max_age,
         )
-        signals = self.strategy.generate_signals(
-            self.market_context,
-            self.universe.version,
-            active_members,
-            self.parameters,
-            expected_inputs_hash,
+        signals = validate_paper_strategy_signals(
+            self.strategy, self.market_context, self.universe, self.parameters, expected_inputs_hash
         )
-        if not isinstance(signals, tuple):
-            raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
-
-        universe_members_by_id = {
-            member.instrument_id: member for member in self.universe.members
-        }
-        seen_signal_ids: set[UUID] = set()
-        for signal in signals:
-            if not isinstance(signal, Signal):
-                raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
-            decision_time = signal.decision_time
-            if decision_time.tzinfo is None or decision_time.utcoffset() is None:
-                raise ValueError("PAPER_STRATEGY_SIGNAL_TIME_MUST_BE_TIMEZONE_AWARE")
-            if decision_time != as_of:
-                raise ValueError("PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH")
-            if signal.strategy_version != self.strategy.version:
-                raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
-            if signal.inputs_hash != expected_inputs_hash:
-                raise ValueError("PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH")
-            member = universe_members_by_id.get(signal.instrument_id)
-            if member is None:
-                raise ValueError("PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE")
-            if (
-                member.valid_from is not None
-                and decision_time < member.valid_from
-            ) or (
-                member.valid_to is not None
-                and decision_time >= member.valid_to
-            ):
-                raise ValueError(
-                    "PAPER_STRATEGY_SIGNAL_OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"
-                )
-            if signal.signal_id in seen_signal_ids:
-                raise ValueError("PAPER_STRATEGY_DUPLICATE_SIGNAL_ID")
-            seen_signal_ids.add(signal.signal_id)
-
         for signal in signals:
             runtime.record_signal(signal)
         if not signals:
@@ -336,3 +296,54 @@ class PaperFillAccountingJob:
             self.fill,
             sequence=self.sequence,
         )
+
+
+def validate_paper_strategy_signals(strategy, market_context, universe, parameters, inputs_hash):
+    """Shared signal contract for staged decisions and certified full cycles."""
+    as_of = market_context.as_of
+    expected_inputs_hash = inputs_hash
+    active_members = universe.active_members(as_of)
+    signals = strategy.generate_signals(
+        market_context,
+        universe.version,
+        active_members,
+        parameters,
+        expected_inputs_hash,
+    )
+    if not isinstance(signals, tuple):
+        raise TypeError("PAPER_STRATEGY_SIGNALS_MUST_BE_TUPLE")
+
+    universe_members_by_id = {
+        member.instrument_id: member for member in universe.members
+    }
+    seen_signal_ids: set[UUID] = set()
+    for signal in signals:
+        if not isinstance(signal, Signal):
+            raise TypeError("PAPER_STRATEGY_OUTPUT_REQUIRES_SIGNAL")
+        decision_time = signal.decision_time
+        if decision_time.tzinfo is None or decision_time.utcoffset() is None:
+            raise ValueError("PAPER_STRATEGY_SIGNAL_TIME_MUST_BE_TIMEZONE_AWARE")
+        if decision_time.astimezone(timezone.utc) != as_of.astimezone(timezone.utc):
+            raise ValueError("PAPER_STRATEGY_SIGNAL_DECISION_TIME_MISMATCH")
+        if signal.strategy_version != strategy.version:
+            raise ValueError("PAPER_STRATEGY_SIGNAL_VERSION_MISMATCH")
+        if signal.inputs_hash != expected_inputs_hash:
+            raise ValueError("PAPER_STRATEGY_SIGNAL_INPUTS_HASH_MISMATCH")
+        member = universe_members_by_id.get(signal.instrument_id)
+        if member is None:
+            raise ValueError("PAPER_STRATEGY_SIGNAL_OUTSIDE_UNIVERSE")
+        if (
+            member.valid_from is not None
+            and decision_time < member.valid_from
+        ) or (
+            member.valid_to is not None
+            and decision_time >= member.valid_to
+        ):
+            raise ValueError(
+                "PAPER_STRATEGY_SIGNAL_OUTSIDE_ACTIVE_UNIVERSE_MEMBERSHIP"
+            )
+        if signal.signal_id in seen_signal_ids:
+            raise ValueError("PAPER_STRATEGY_DUPLICATE_SIGNAL_ID")
+        seen_signal_ids.add(signal.signal_id)
+
+    return signals

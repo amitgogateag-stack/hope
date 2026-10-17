@@ -1,6 +1,6 @@
 import hashlib
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -143,6 +143,23 @@ def test_verified_source_resolver_returns_only_fully_verified_durable_evidence()
     assert markets.calls == [
         (experiment.dataset_version_id, experiment.universe_version_id)
     ]
+
+
+@pytest.mark.parametrize("offset", [-5, 5.5, 9])
+def test_verified_source_accepts_same_database_instant_without_rewriting_fingerprint(offset):
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+    original = json.dumps(evidence.canonical_result, sort_keys=True)
+    run.as_of = run.as_of.astimezone(timezone(timedelta(hours=offset)))
+    assert _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id) == evidence.canonical_result
+    assert json.dumps(evidence.canonical_result, sort_keys=True) == original
+
+
+@pytest.mark.parametrize("value", [None, 123, "invalid", "2026-01-31T00:00:00", "2026-01-31T00:00:01+00:00"])
+def test_verified_source_rejects_invalid_naive_or_different_evidence_instant(value):
+    run_id, experiment, run, evidence, plan, universe, markets = _fixture()
+    evidence.canonical_result["research_provenance"]["as_of"] = value
+    with pytest.raises(ValueError, match="VERIFIED_RESEARCH_SOURCE_RESEARCH_PROVENANCE_MISMATCH"):
+        _resolver(experiment, run, evidence, plan, universe, markets).resolve(run_id)
 
 
 @pytest.mark.parametrize("schema", [None, "invented.schema.v99", "hope.backtest-result.v1"])

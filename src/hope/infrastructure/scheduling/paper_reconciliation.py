@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, TypeVar
 
 from hope.application.jobs import (
@@ -27,6 +27,32 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
 _T = TypeVar("_T")
+
+
+def authenticate_successful_paper_run(connection: Connection, job_run: ScheduledJobRun) -> None:
+    """Verify committed ordinary completion and persist its observational receipt.
+
+    Restart may finish this step after a lost acknowledgement. It never changes
+    lifecycle state or replays accounting, and cannot bless partial effects.
+    """
+    SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
+    connection.execute(text("SELECT job_run_id FROM job_runs WHERE job_run_id=:id FOR UPDATE"),
+                       {"id": job_run.job_run_id})
+    durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(job_run)
+    if durable is None or durable.status is not JobRunStatus.SUCCEEDED or durable.failure_code is not None:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_SUCCEEDED")
+    effects = SqlAlchemyPaperEffectRepository(connection).list_for_job_run(job_run.job_run_id)
+    report = assess_due_paper_recovery(connection, (job_run,), current=job_run.scheduled_for,
+                                     max_lateness=timedelta(0))
+    report.assert_safe_to_execute()
+    if job_run.job_run_id not in report.succeeded_run_ids:
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_NOT_PROVEN")
+    _assert_durable_execution_lineage(connection, effects)
+    _assert_durable_accounting_truth(connection, effects)
+    audit = SqlAlchemyPaperReconciliationAuditRepository(connection)
+    audit.record(durable, effects)
+    if not audit.verify(durable, effects):
+        raise RuntimeError("PAPER_JOB_RECONCILIATION_AUDIT_NOT_DURABLE")
 
 
 def _job_identity_checked(operation: Callable[[], _T]) -> _T:

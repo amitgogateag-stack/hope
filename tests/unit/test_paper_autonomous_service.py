@@ -152,3 +152,35 @@ def test_factory_requires_callable_and_cli_sanitizes_startup(tmp_path, monkeypat
     assert exc.value.code == 2
     output = capsys.readouterr().err
     assert "PAPER_SERVICE_STARTUP_FAILED" in output and "secret" not in output
+
+
+def test_production_cli_always_requires_certified_work(tmp_path, monkeypatch):
+    import hope.api.paper_service as cli
+    captured = {}
+    engine = SimpleNamespace(dispose=lambda: None)
+    monkeypatch.setenv("HOPE_DATABASE_URL", "test-only")
+    monkeypatch.setattr(cli, "create_engine", lambda *a, **k: engine)
+    monkeypatch.setattr(cli, "load_plan_factory", lambda _: lambda *a: None)
+    def run(*a, **kwargs):
+        captured.update(kwargs)
+        return 0
+    monkeypatch.setattr(cli, "run_service", run)
+    assert cli.main(["--factory", "reviewed:factory", "--migrations-dir", str(tmp_path),
+                     "--status-file", str(tmp_path / "health"), "--once"]) == 0
+    assert captured["require_certified"] is True
+
+
+@pytest.mark.parametrize("primary", ["PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE",
+                                    "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID",
+                                    "secret database payload"])
+def test_eligibility_failure_exposes_only_fixed_database_codes(primary):
+    error = OperationalError("secret SQL", {}, SimpleNamespace(diag=SimpleNamespace(message_primary=primary)))
+    state, code = service._failure_state(error)
+    assert state == "UNAVAILABLE"
+    assert code == (primary if primary.startswith("PAPER_STRATEGY_AUTHORIZATION_") else "PAPER_SERVICE_DATABASE_UNAVAILABLE")
+
+
+@pytest.mark.parametrize("exception", [RuntimeError("PAPER_CERTIFIED_secret-payload"),
+    ValueError("VERIFIED_RESEARCH_SOURCE_secret-payload"), ValueError("RESEARCH_RUN_EVIDENCE_secret-payload")])
+def test_certified_input_failures_are_explicit_without_echoing_payload(exception):
+    assert service._failure_state(exception) == ("UNAVAILABLE", "PAPER_CERTIFIED_INPUT_UNAVAILABLE")

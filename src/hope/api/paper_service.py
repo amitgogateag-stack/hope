@@ -41,7 +41,8 @@ def main(argv=None) -> int:
             connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000 -c lock_timeout=10000"})
         try:
             return run_service(engine, factory, migrations_dir=args.migrations_dir,
-                status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once)
+                status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once,
+                require_certified=True)
         finally:
             engine.dispose()
     except Exception:

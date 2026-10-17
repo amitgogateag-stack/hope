@@ -51,6 +51,13 @@ def test_server_is_loopback_only_and_serves_private_preview(tmp_path):
         assert "default-src 'none'" in headers["Content-Security-Policy"]
 
 
+@pytest.mark.parametrize("size,expected", [(40000, 200), (65537, 503)])
+def test_m2_html_budget_is_independent_of_json_snapshot_budget(tmp_path, size, expected):
+    with dashboard(tmp_path) as server:
+        server.preview.write_bytes(b"x" * size)
+        assert request(server, "/")[0] == expected
+
+
 @pytest.mark.parametrize("path", ["/snapshot.json", "/index.html", "/../secrets", "/?x=1", "/unknown"])
 def test_server_missing_snapshot_or_unknown_paths_fail_closed(tmp_path, path):
     with dashboard(tmp_path) as server:

@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 _MAX_BYTES = 32768
+_MAX_PAGE_BYTES = 65536
 _REQUIRED_MARKERS = (
     b'id="legacy-experiments"',
     b'id="legacy-strategies"',
@@ -145,7 +146,7 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dic
             or (status["data_feed"] == "UNAVAILABLE" and status["snapshot_generated_at"] is not None)
             or (status["data_feed"] != "UNAVAILABLE" and not _timestamp(status["snapshot_generated_at"]))):
         raise ValueError("HOPE_UPGRADE_HEALTH_INVALID")
-    page_code, page = _read(opener, base + "/", _MAX_BYTES)
+    page_code, page = _read(opener, base + "/", _MAX_PAGE_BYTES)
     if page_code != 200 or any(marker not in page for marker in _REQUIRED_MARKERS):
         raise ValueError("HOPE_UPGRADE_RELEASE_MISMATCH")
     legacy_code, legacy_body = _read(opener, base + "/legacy-research.json", 8192)

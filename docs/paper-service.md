@@ -19,6 +19,10 @@ authorization. The callable supplies tuples of existing
 Bindings must use real, durable input resolution and the existing freshness and
 PIT protections. The supervisor independently loads current durable strategy
 candidate classifications and calls the existing registry/schedule validators.
+The production CLI now requires `CertifiedResearchPaperWork` for every binding;
+there is no command-line compatibility bypass. Its fresh database authorization
+and certified evidence reconstruction run before the new durable claim. See
+`m2-certified-paper-milestone.md` for configuration, risk anchors and scope.
 Factories must include the recovery window needed for earlier interrupted runs;
 the service does not discover historical work outside the explicit plan.
 

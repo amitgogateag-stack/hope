@@ -167,6 +167,9 @@ def _verified_operations(path: Path) -> bytes:
         "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
         "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
         "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
+        "PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED",
+        "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID",
+        "PAPER_CERTIFIED_INPUT_UNAVAILABLE",
     }:
         error = "PAPER_SERVICE_CYCLE_FAILED"
     safe = {
@@ -232,8 +235,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path in {"/", "/index.html"}:
             try:
+                if self.server.preview.stat().st_size > 65536:
+                    raise ValueError("HOPE_DASHBOARD_PAGE_TOO_LARGE")
                 payload = self.server.preview.read_bytes()
-            except OSError:
+                if len(payload) > 65536:
+                    raise ValueError("HOPE_DASHBOARD_PAGE_TOO_LARGE")
+            except (OSError, ValueError):
                 self._respond(503, b"Dashboard unavailable")
                 return
             self._respond(200, payload, "text/html; charset=utf-8")

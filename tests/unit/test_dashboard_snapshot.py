@@ -46,10 +46,13 @@ class _Connection:
             return _Result(scalar=3)
         if any(f"FROM {table}" in sql for table in (
             "datasets", "strategy_versions", "experiments", "research_decisions", "paper_no_trade_decisions", "market_bars",
+            "dataset_versions", "fills", "paper_strategy_authorizations", "paper_certified_outcomes",
         )):
             class MissingOptionalTable(Exception):
                 sqlstate = "42P01"
             raise DBAPIError(sql, None, MissingOptionalTable())
+        if "CASE WHEN failure_code" in sql:
+            return _Result(rows=[])
         if "FROM paper_effects" in sql:
             return _Result(scalar=self.recovery[0])
         if "INTERVAL '1 hour'" in sql:

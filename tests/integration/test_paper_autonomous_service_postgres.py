@@ -27,7 +27,7 @@ from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.paper_effects import SqlAlchemyPaperEffectRepository
-from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord
+from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord, SqlAlchemyStrategyCandidateRepository
 from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding, OperationalPaperSchedule
 
 NOW = datetime(2025, 9, 15, 14, tzinfo=UTC)
@@ -35,48 +35,66 @@ MIGRATIONS = Path(__file__).parents[2] / "migrations"
 
 
 @pytest.mark.integration
-def test_real_worker_process_termination_and_fresh_cli_restart(admitted_plan, tmp_path):
-    """Terminate a real child after commit, then restart from PostgreSQL truth."""
-    engine, make_plan, _ = admitted_plan
-    version = make_plan().bindings[0].strategy_version_id
+def test_real_worker_process_termination_and_fresh_cli_restart(tmp_path):
+    """A real child runs genuine certified lineage, commits, then restarts once."""
+    import runpy
+    from hope.domain.strategy.candidates import StrategyCandidateClassification
+    url = os.getenv("HOPE_DATABASE_URL")
+    if not url:
+        pytest.skip("HOPE_DATABASE_URL is not configured")
+    engine = create_engine(url, connect_args={"connect_timeout": 5})
     scheduled = datetime.now(UTC).replace(second=0, microsecond=0)
-    # Only the synthetic catalog is injected, as in the in-process fixture.
-    # The child executes the actual CLI, scheduler and PostgreSQL repositories.
-    module = tmp_path / "m1_process_fixture.py"
+    helper = runpy.run_path(str(Path(__file__).with_name("m2_research_fixture.py")))
+    configuration = {"parameters": {}, "paper_execution": {"market": "USA", "portfolio_id": str(uuid4()),
+        "initial_cash": "1000", "quantity": "1", "side": "BUY",
+        "risk_limits": {"max_position_notional": "500", "max_gross_exposure": "1000", "max_open_positions": 5},
+        "cost_model_version": "m2-cost-v1", "commission_rate": "0.001", "slippage_bps": "2",
+        "latency_milliseconds": 60000, "submission_delay_milliseconds": 0, "market_data_max_age_seconds": 120}}
+    with engine.begin() as connection:
+        apply_migrations(connection, MIGRATIONS)
+        data = helper["seed"](connection, configuration=configuration, as_of=scheduled, include_quote=True)
+    version = data["strategy_version_id"]
+    module = tmp_path / "m2_process_fixture.py"
     module.write_text('''
-from datetime import UTC, datetime, timedelta
-from uuid import UUID, uuid4
+from datetime import datetime, timedelta
+from uuid import UUID
 from hope.application.market_data.calendar import MarketSessionCalendar
-from hope.domain.strategy.candidates import StrategyCandidateState, StrategyMarket
+from hope.domain.strategy.candidates import StrategyMarket
+from hope.domain.strategy.models import Strategy, ParameterSnapshot
+from hope.infrastructure.certified_paper import CertifiedPaperDefinition, CertifiedResearchPaperWork
 from hope.infrastructure.paper_service import PaperServicePlan
-from hope.infrastructure.repositories.strategy_candidates import CurrentStrategyCandidateRecord, SqlAlchemyStrategyCandidateRepository
 from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding, OperationalPaperSchedule
 VERSION = UUID(VERSION_TEXT)
+CLASSIFICATION = UUID(CLASSIFICATION_TEXT)
+DATASET = UUID(DATASET_TEXT)
+DECISION = DECISION_TEXT
 SCHEDULED = datetime.fromisoformat(SCHEDULED_TEXT)
-catalog = CurrentStrategyCandidateRecord(classification_id=uuid4(),classification_sequence=1,
-    strategy_version_id=VERSION,family="TEST",markets=(StrategyMarket.USA,),
-    state=StrategyCandidateState.OPERATIONAL_CANDIDATE,research_decision_id="SYNTHETIC-PROCESS-FIXTURE",
-    rationale="Test catalog only",created_at=SCHEDULED)
-SqlAlchemyStrategyCandidateRepository.current = lambda self: [catalog]
-def no_trade(runtime):
-    runtime.record_no_trade(strategy_version="v1",decision_time=SCHEDULED,inputs_hash="c"*64)
+class NoTrade(Strategy):
+    name = "controlled-child-fixture"
+    version = "v1"
+    def generate_signals(self, *args):
+        return ()
 def factory(connection,current):
-    return PaperServicePlan((OperationalPaperJobBinding(VERSION,StrategyMarket.USA,"process",no_trade),),
+    work = CertifiedResearchPaperWork(VERSION,StrategyMarket.USA,CLASSIFICATION,DECISION,DATASET,
+        CertifiedPaperDefinition("TIME_SERIES_TREND","m2-synthetic-fixture",lambda _:NoTrade(),lambda _:ParameterSnapshot()))
+    return PaperServicePlan((OperationalPaperJobBinding(VERSION,StrategyMarket.USA,"process",work),),
         (OperationalPaperSchedule(VERSION,StrategyMarket.USA,"process",timedelta(0)),),
         {StrategyMarket.USA:MarketSessionCalendar(((SCHEDULED,SCHEDULED+timedelta(hours=1)),))},
         SCHEDULED,SCHEDULED+timedelta(hours=1),timedelta(minutes=5))
-'''.replace("VERSION_TEXT", repr(str(version))).replace("SCHEDULED_TEXT", repr(scheduled.isoformat())), encoding="utf-8")
+'''.replace("VERSION_TEXT", repr(str(version))).replace("CLASSIFICATION_TEXT", repr(str(data["classification_id"])))
+        .replace("DATASET_TEXT", repr(str(data["dataset_version_id"]))).replace("DECISION_TEXT", repr(data["research_decision_id"]))
+        .replace("SCHEDULED_TEXT", repr(scheduled.isoformat())), encoding="utf-8")
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(tmp_path) + os.pathsep + os.pathsep.join(sys.path)
     status = tmp_path / "process-health.json"
-    command = [sys.executable, "-m", "hope.api.paper_service", "--factory", "m1_process_fixture:factory",
+    command = [sys.executable, "-m", "hope.api.paper_service", "--factory", "m2_process_fixture:factory",
                "--migrations-dir", str(MIGRATIONS), "--status-file", str(status), "--poll-seconds", "30"]
     process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 25
         while time.monotonic() < deadline:
             if process.poll() is not None:
-                pytest.fail("Child worker exited before durable acceptance")
+                pytest.fail("Certified child exited before durable acceptance")
             try:
                 health = json.loads(status.read_text())
                 if health["state"] == "CURRENT":
@@ -86,19 +104,27 @@ def factory(connection,current):
                 pass
             time.sleep(0.05)
         else:
-            pytest.fail("Child worker never published committed acceptance")
+            pytest.fail("Certified child never published committed acceptance")
         process.terminate()
         process.wait(timeout=10)
+        restarted = subprocess.run(command + ["--once"], env=environment, capture_output=True, timeout=25)
+        assert restarted.returncode == 0
+        assert json.loads(status.read_text())["jobs_skipped"] == 1
+        run = create_scheduled_job_run(f"paper:USA:{version}:process", scheduled)
+        assert _counts(engine, run) == (1, 1, 1)
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM paper_strategy_authorizations WHERE job_run_id=:id"), {"id": run.job_run_id}).scalar_one() == 1
+            assert connection.execute(text("SELECT count(*) FROM paper_certified_outcomes WHERE job_run_id=:id"), {"id": run.job_run_id}).scalar_one() == 1
     finally:
         if process.poll() is None:
             process.kill()
             process.wait(timeout=10)
         process.stderr.close()
-    restarted = subprocess.run(command + ["--once"], env=environment, capture_output=True, timeout=25)
-    assert restarted.returncode == 0
-    assert json.loads(status.read_text())["jobs_skipped"] == 1
-    run = create_scheduled_job_run(f"paper:USA:{version}:process", scheduled)
-    assert _counts(engine, run) == (1, 1, 1)
+        with engine.begin() as connection:
+            SqlAlchemyStrategyCandidateRepository(connection).append(StrategyCandidateClassification(
+                strategy_version_id=version, markets=frozenset({StrategyMarket.USA}), state=StrategyCandidateState.RESEARCH,
+                rationale="Controlled certified child cleanup"))
+        engine.dispose()
 
 
 @pytest.fixture

@@ -16,7 +16,7 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.exc import SQLAlchemyError
 
 from hope.application.market_data.calendar import MarketSessionCalendar
-from hope.domain.strategy.candidates import StrategyMarket
+from hope.domain.strategy.candidates import StrategyMarket, StrategyCandidateState
 from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
 from hope.infrastructure.repositories.strategy_candidates import SqlAlchemyStrategyCandidateRepository
 from hope.infrastructure.scheduling.paper import (
@@ -78,7 +78,7 @@ def verify_schema_compatibility(connection: Connection, migrations_dir: str | Pa
 
 
 def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
-                      now: Callable[[], datetime]) -> tuple[int, int]:
+                      now: Callable[[], datetime], require_certified: bool = False) -> tuple[int, int]:
     current = now()
     if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
         raise RuntimeError("PAPER_SERVICE_CLOCK_INVALID")
@@ -93,6 +93,25 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         if not isinstance(plan, PaperServicePlan):
             raise RuntimeError("PAPER_SERVICE_PLAN_UNAVAILABLE")
         candidates = SqlAlchemyStrategyCandidateRepository(connection).current()
+        from hope.infrastructure.certified_paper import CertifiedResearchPaperWork
+        certified_plan = all(type(binding.work) is CertifiedResearchPaperWork for binding in plan.bindings)
+        if (not certified_plan and (require_certified or any(
+                isinstance(binding.work, CertifiedResearchPaperWork) for binding in plan.bindings))):
+            raise RuntimeError("PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED")
+        if certified_plan:
+            current_by_version = {row.strategy_version_id: row for row in candidates}
+            for binding in plan.bindings:
+                work = binding.work
+                candidate = current_by_version.get(binding.strategy_version_id)
+                if (candidate is None or candidate.state is not StrategyCandidateState.OPERATIONAL_CANDIDATE
+                        or binding.market not in candidate.markets):
+                    raise RuntimeError("PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE")
+                if (type(work) is not CertifiedResearchPaperWork or candidate is None
+                    or work.strategy_version_id != binding.strategy_version_id
+                    or work.market is not binding.market
+                    or work.classification_id != candidate.classification_id
+                    or work.research_decision_id != candidate.research_decision_id):
+                    raise RuntimeError("PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED")
         registry = build_operational_paper_registry(candidates, plan.bindings)
         runs = build_operational_paper_runs(plan.bindings, plan.schedules, plan.calendars,
             start=plan.start, end=plan.end)
@@ -112,8 +131,21 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         runs,
         now=now,
         max_lateness=plan.max_lateness,
-        authorize=authorize_current_candidates,
+        # Certified bindings acquire the same candidate lock on the execution
+        # connection BEFORE each claim. Holding it on this separate scheduler
+        # connection would block their own bind. Generic compatibility plans
+        # retain the independently published catalog revalidation contract.
+        authorize=None if certified_plan else authorize_current_candidates,
     )
+    if certified_plan:
+        from hope.infrastructure.scheduling.paper_reconciliation import authenticate_successful_paper_run
+        from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+        from hope.application.jobs import JobRunStatus
+        for run, _ in outcomes:
+            with engine.begin() as connection:
+                durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(run)
+                if durable is not None and durable.status is JobRunStatus.SUCCEEDED:
+                    authenticate_successful_paper_run(connection, run)
     return (sum(outcome is PaperCycleOutcome.EXECUTED for _, outcome in outcomes),
             sum(outcome is PaperCycleOutcome.SKIPPED_TERMINAL for _, outcome in outcomes))
 
@@ -141,7 +173,14 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     # Never serialize database errors, credentials, provider payloads or callback text.
     if isinstance(exc, RuntimeError) and str(exc) == "PAPER_ENVIRONMENT_HALTED":
         return "HALTED", "PAPER_ENVIRONMENT_HALTED"
+    if isinstance(exc, (RuntimeError, ValueError)) and str(exc).startswith(
+        ("PAPER_CERTIFIED_", "VERIFIED_RESEARCH_SOURCE_", "RESEARCH_RUN_EVIDENCE_")):
+        return "UNAVAILABLE", "PAPER_CERTIFIED_INPUT_UNAVAILABLE"
     if isinstance(exc, SQLAlchemyError):
+        primary = getattr(getattr(getattr(exc, "orig", None), "diag", None), "message_primary", None)
+        if primary in {"PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE",
+                       "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID"}:
+            return "UNAVAILABLE", primary
         return "UNAVAILABLE", "PAPER_SERVICE_DATABASE_UNAVAILABLE"
     if isinstance(exc, RuntimeError) and str(exc) in {
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
@@ -149,6 +188,8 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
         "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
         "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
         "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT",
+        "PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED",
+        "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE",
     }:
         return "UNAVAILABLE", str(exc)
     return "UNAVAILABLE", "PAPER_SERVICE_CYCLE_FAILED"
@@ -157,7 +198,8 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
 def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
                 status_file: str | Path, stop_event: Event | None = None,
                 poll_seconds: float = 30, once: bool = False,
-                now: Callable[[], datetime] = lambda: datetime.now(UTC)) -> int:
+                now: Callable[[], datetime] = lambda: datetime.now(UTC),
+                require_certified: bool = False) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
     if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)) or not 1 <= poll_seconds <= 300:
         raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
@@ -175,7 +217,8 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
     failed = False
     while not stop.is_set():
         try:
-            executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now)
+            executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now,
+                                                  require_certified=require_certified)
             health.update(state="CURRENT", schema_compatibility="COMPATIBLE", error_code=None, last_success_at=datetime.now(UTC).isoformat())
             health["cycles_succeeded"] += 1
             health["jobs_executed"] += executed

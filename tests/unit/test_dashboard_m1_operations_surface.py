@@ -33,6 +33,13 @@ def test_operations_projection_whitelists_fields_and_normalizes_unknown_error(tm
     assert safe["jobs_executed"] == 0
 
 
+@pytest.mark.parametrize("code", ["PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED", "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID", "PAPER_CERTIFIED_INPUT_UNAVAILABLE"])
+def test_m2_certified_admission_error_codes_are_preserved_without_raw_errors(tmp_path, code):
+    path = tmp_path / "operations.json"
+    path.write_text(json.dumps({**health(), "state": "UNAVAILABLE", "error_code": code}))
+    assert json.loads(_verified_operations(path))["error_code"] == code
+
+
 @pytest.mark.parametrize("change", [
     {"schema_version": True}, {"paper_only": False}, {"live_enabled": True},
     {"state": "LIVE"}, {"jobs_executed": True}, {"jobs_skipped": -1},

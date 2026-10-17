@@ -142,3 +142,51 @@ and a real restricted role to verify zero, stored counts, denied permissions,
 timeouts and recovery. This validates source behavior, not an AWS deployment or
 authenticated production data. No credentials, raw rows or identifiers are
 projected. Broker actions and LIVE execution remain unavailable.
+
+## M2 certification and execution observations
+
+Optional snapshot-v1 projections now add a strategy catalog bounded to 20
+strategy-version UUIDs sorted by UUID, a total count and explicit truncation.
+Family codes, candidate states and India/USA markets use fixed vocabularies;
+arbitrary strategy names, rationale, account/instrument identifiers and raw
+trades remain excluded. Unknown family labels become OTHER. The safe bounded
+strategy-version UUID is the sole intentional identifier exception to the M1
+aggregate-only interface. Candidate state is stored classification metadata, not
+current eligibility authorization.
+
+Dataset version observations distinguish total, sealed, sealed PIT-certified
+metadata and sealed manifest-backed counts. These metadata counts cannot prove
+full certified-chain validity or policy freshness. PAPER execution observations
+show fills, distinct applied fills, applications, accounting receipts and missing
+application/accounting counts. No currency amounts or portfolio truth are
+inferred. Failed PAPER jobs use a fixed reason vocabulary plus OTHER. Recorded
+NO_TRADE decisions include the latest logical decision time and an explicit
+count still owned by CLAIMED jobs. Future scheduled work remains UNKNOWN.
+
+Authorization receipts and certified outcome receipts are historical observations.
+Receipts survive candidate demotion; current OPERATIONAL classification count is
+shown separately and current certified-chain eligibility remains UNKNOWN. Outcome
+records are grouped into NO_TRADE, RISK_BLOCKED and FILLED, with CLAIMED ownership
+reported explicitly. Risk blocks use fixed existing portfolio/intelligence reason
+buckets plus OTHER; arbitrary stored reason text is never projected. Their provenance joins must be structurally supported and
+consistent. Missing source columns/tables, denied SELECT or corrupt receipt
+identity makes the affected section UNAVAILABLE, never a manufactured valid
+zero. A known empty, fully accessible table can truthfully report zero history
+while eligibility remains UNKNOWN.
+
+Additional optional SELECT sources: strategies, strategy_versions,
+current_strategy_candidate_classifications, strategy_candidate_classifications,
+dataset_versions, datasets, market_data_coverage_manifests, fills, orders,
+paper_portfolio_fill_applications, paper_portfolio_pnl_events, job_runs,
+paper_no_trade_decisions, paper_strategy_authorizations,
+paper_certified_outcomes, research_runs and experiments. Review grants and view
+permissions independently; no role or database changes are performed by the
+dashboard. Full migrated PostgreSQL tests use controlled fixtures, not production
+research approval or performance evidence.
+
+M2 deliberately raises only the HTML preview/acceptance budget to 64 KiB, enforced
+by both server and probe. Snapshot JSON remains capped at 32 KiB, optional health
+JSON at 8 KiB. The page retains M1 compatibility markers and all timeout,
+serialization, retained-snapshot, generation-fencing and independent aging
+behavior. New observations also age into STALE. None of these source changes
+deploys services, certifies production stored data or enables LIVE trading.

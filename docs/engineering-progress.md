@@ -381,3 +381,69 @@ new expected-SHA update; no concurrent GitHub work is overwritten.
 Complete merged acceptance passed 2,602 tests in 250.24 seconds with 89.40%
 coverage; the same two Windows symlink cases are reserved for Linux CI. The
 final publication parent is the preserved concurrent green commit 564e02d.
+
+## M2 certified research to autonomous PAPER — 2026-10-17
+
+Original baseline 94ef7290d5766ae723cb669bd3ec8a13fd9c3745 was verified against
+Actions 38969418657 and issue #5. Concurrent commits 6e55dcd and 235804e were
+preserved; the final parent is 235804e44a659419f84a4b4ca44437af5e48b47e,
+verified green against Actions 38999159872 and its exact issue #5 marker.
+Frozen day29 SHA 7e9d341742818a97accce3e2301b1c7f96596795 remains unchanged.
+
+A real PostgreSQL reproduction showed old registry admission surviving a
+committed demotion (one job/effect/NO_TRADE, no authorization receipt). The
+certified bridge now revalidates current promotion epoch, market, SUPPORTED
+decision and both experiment invalidations under control-then-candidate locks
+before claim, in the execution transaction. Migration 232 records immutable
+authorization. Fully certified plans avoid the generic scheduler connection's
+candidate lock, which would self-block their own execution connection; generic
+compatibility plans retain the concurrent upstream catalog protection. Mixed
+plans fail before claims. The production CLI always requires certified bindings.
+
+The bridge independently reconstructs both certified research sources, protocol,
+nine evaluation stages and comparison, exact version/code/configuration identity,
+PIT universe and sealed provider-compatible execution data. It reuses existing
+signal/risk/intelligence, order, cost-inclusive fill and accounting primitives.
+The bounded path supports zero signals or one ENTRY; other plans and missing
+reviewed performance anchors fail closed. No risk thresholds, entry/exit rules,
+promotion verdicts, LIVE policy or broker integration were changed.
+
+Migration 233 binds observational NO_TRADE/RISK_BLOCKED/FILLED outcomes to the
+actual authorization, research source, input hash, effect topology and certified
+dataset/universe. Review found and closed direct-insert hash/dataset gaps before
+publication. Successful service cycles independently authenticate execution and
+accounting before writing the existing reconciliation receipt. Lost postcommit
+acknowledgements recover that receipt without strategy or accounting replay.
+Verified research source timestamps now compare instants across PostgreSQL
+session timezones while preserving immutable fingerprint spelling.
+
+Dashboard projections add bounded strategy family/version catalogs, dataset
+certification metadata, authorization history, certified outcomes, safe risk
+reasons and fill/application/P&L gaps. Missing or partial evidence stays unknown
+or unavailable; historical permission is never current eligibility. JSON remains
+32 KiB bounded; the tested HTML limit is explicitly 64 KiB. No credentials,
+deployment, public endpoint or AWS infrastructure changes were made.
+
+Final merged focused acceptance: 103 passed in 34.30 seconds, including genuine
+PostgreSQL authorization, bridge, service/child-process restart, dashboard and
+preserved generic orchestration regressions. The bridge matrix includes India/
+USA NO_TRADE, risk rejection and cost-inclusive fills, exact cash/positions/P&L,
+demotion/invalidation/isolation races, worker contention, backend termination
+before commit and during postcommit audit, evidence/configuration/provider/
+instrument mismatches, stale/future-effective/missing quotes, direct receipt
+forgery and immutable history. Explicit market calendars cover US DST transitions,
+independent India UTC sessions, closures, duplicate schedules and session close.
+
+Final frozen-source fresh-database regression: **2,717 passed, 2 skipped in
+195.44 seconds; coverage 89.82%**, Python 3.12/PostgreSQL 17.11, unchanged 89%
+gate. The two symlink tests and three Bash-dependent dashboard contract files
+remain Linux-CI-only locally. Earlier runs were stopped for concurrent upstream
+integration and a correctly detected migration checksum change; no failed or
+interrupted run is reported as acceptance. Complete diff and independent review
+are finished. Exact pushed-head Actions and issue #5 remain the publication gate.
+
+AWS operational acceptance remains pending. The operations package documents
+approved migrations 231–233, least-privilege grants, genuine feed/candidate/
+calendar/configuration dependencies, risk-anchor resolution, compatible rollback,
+restart/HALT/outage checks and private dashboard acceptance. No AWS success or
+trading edge is inferred from synthetic engineering fixtures or GitHub CI.

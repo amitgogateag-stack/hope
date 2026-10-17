@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
@@ -96,6 +97,18 @@ class VerifiedCertifiedResearchSourceResolver:
         if research.get("market_data_manifest_hash") != authoritative_manifest_hash:
             raise ValueError("VERIFIED_RESEARCH_SOURCE_MARKET_DATA_MANIFEST_HASH_MISMATCH")
 
+        # PostgreSQL renders timestamptz in the session timezone. Authenticate
+        # the instant independently, retaining the original immutable spelling
+        # when reconstructing its fingerprint.
+        original_as_of = research.get("as_of")
+        try:
+            observed_as_of = datetime.fromisoformat(original_as_of)
+        except (TypeError, ValueError):
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_RESEARCH_PROVENANCE_MISMATCH") from None
+        if (observed_as_of.tzinfo is None or observed_as_of.utcoffset() is None
+                or run.as_of.tzinfo is None or run.as_of.utcoffset() is None
+                or observed_as_of.astimezone(UTC) != run.as_of.astimezone(UTC)):
+            raise ValueError("VERIFIED_RESEARCH_SOURCE_RESEARCH_PROVENANCE_MISMATCH")
         expected_identity = {
             "experiment_id": experiment.experiment_id,
             "strategy_version_id": str(experiment.strategy_version_id),
@@ -105,7 +118,7 @@ class VerifiedCertifiedResearchSourceResolver:
             "market_data_manifest_hash": authoritative_manifest_hash,
             "configuration_hash": experiment.configuration_hash,
             "environment": experiment.environment,
-            "as_of": run.as_of.isoformat(),
+            "as_of": original_as_of,
         }
         observed_identity = {field: research.get(field) for field in _RESEARCH_IDENTITY_FIELDS}
         if observed_identity != expected_identity:

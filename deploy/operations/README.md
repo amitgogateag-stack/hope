@@ -183,3 +183,37 @@ audit evidence; never delete claims to force replay.
 
 Code/test completion does not certify an AWS deployment. Until this checklist is
 executed against the authenticated host, report **AWS DEPLOYMENT ACCEPTANCE PENDING**.
+
+## M2 upgrade prerequisites (separate approval required)
+
+Before activating M2, stop admission, back up and restore-test the database, then
+have the authorized schema owner apply migrations 231 through 233 through the normal
+checksum-tracked migration runner. Review the new eligibility/invalidation
+triggers and lock ordering on staging. Never disable guards or backfill invented
+research evidence. M1 code expects its exact migration inventory, so an M2 schema
+upgrade requires a compatible rollback release; simply pointing to unmodified M1
+will fail schema preflight and is not a working rollback plan.
+
+Review least-privilege grants separately: the worker needs SELECT on the actual
+certified research/configuration/evaluation/PIT relations and INSERT/SELECT on
+`paper_strategy_authorizations` and `paper_certified_outcomes`, plus existing
+PAPER/accounting/audit rights and eligibility-function execution. It needs no
+research promotion, schema-owner or LIVE/broker permissions. The dashboard needs
+SELECT only on both new relations and their provenance joins. No new role/grant
+has been applied by this engineering batch; missing access must stay UNAVAILABLE.
+
+Replace reviewed M1 generic bindings with the certified work type and approve the
+immutable `paper_execution` configuration and genuine performance-anchor resolver.
+Verify both research runs, the current promotion epoch, exact strategy code, real
+provider manifests, market instruments and authoritative session calendar. Missing
+real-data prerequisites block startup/cycles; do not install test factories.
+
+On isolated staging, demonstrate concurrent demotion and evidence revocation,
+duplicate workers, precommit process loss, committed-effects restart, risk rejection,
+NO_TRADE and one authorized cost-inclusive PAPER fill with independently checked
+cash/position/P&L and reconciliation receipt. Restart after lost acknowledgement
+and prove exact counts stay unchanged. Verify safe ineligible reason codes,
+dashboard unavailable/stale/partial states and private authenticated access.
+Only then request host activation using the existing expected-pointer procedure.
+Retain November 15 operational readiness as dependent on this AWS acceptance,
+real feed/candidate readiness and approved configuration, rather than local CI.

@@ -64,6 +64,27 @@ async function main() {
  }
  {
   const b=browser(), data=sample();
+  data.projections={strategy_catalog:{status:'AVAILABLE',total:1,truncated:false,rows:[{strategy_version_id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',family_code:'TIME_SERIES_TREND',candidate_state:'RESEARCH',markets:['USA']}]},
+   dataset_certification:{status:'AVAILABLE',version_total:2,sealed_versions:1,pit_certified_versions:1,manifest_backed_sealed_versions:1},
+   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0},
+   blocked_runs:{status:'AVAILABLE',total:1,by_reason:{PAPER_JOB_INCOMPLETE_PRIOR_CLAIM:0,PAPER_MARKET_DATA_STALE:1,PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT:0,OTHER:0}},
+   decision_activity:{status:'AVAILABLE',no_trade_records:0,claimed_no_trade:0,latest_decision_at:null},
+   certified_chain:{status:'AVAILABLE',authorization_receipts:1,operational_classifications:0,latest_authorization_at:iso(BASE-1000),eligibility_policy:'UNKNOWN'},
+   certified_outcomes:{status:'AVAILABLE',total:1,claimed_records:0,latest_decision_at:iso(BASE-1000),by_outcome:{NO_TRADE:1,RISK_BLOCKED:0,FILLED:0},risk_blocked_reasons:{MAX_DAILY_LOSS_REACHED:0,MAX_DRAWDOWN_REACHED:0,MAX_POSITION_NOTIONAL_EXCEEDED:0,MAX_STRATEGY_EXPOSURE_EXCEEDED:0,CONCENTRATION_CONTEXT_REQUIRED:0,MAX_CONCENTRATION_EXPOSURE_EXCEEDED:0,MAX_GROSS_EXPOSURE_EXCEEDED:0,MAX_OPEN_POSITIONS_EXCEEDED:0,INTELLIGENCE_ENTRY_REVIEW_REQUIRED:0,OTHER:0}}};
+  b.api.applySnapshot(data,'local file');
+  assert.match(b.element('m2-strategy-catalog').textContent,/TIME_SERIES_TREND.*RESEARCH/);
+  assert.match(b.element('m2-execution-ledger').textContent,/1 fills without application/);
+  assert.match(b.element('m2-blocked-runs').textContent,/PAPER_MARKET_DATA_STALE: 1/);
+  assert.match(b.element('m2-certified-chain').textContent,/1 historical receipts.*0 OPERATIONAL classifications.*eligibility UNKNOWN/);
+  assert.match(b.element('m2-certified-outcomes').textContent,/NO_TRADE: 1/);
+  b.advance(3600001);assert.match(b.element('m2-certified-outcomes').textContent,/STALE/);
+  data.projections.certified_chain.eligibility_policy='ELIGIBLE';
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
+  data.projections.certified_chain.eligibility_policy='UNKNOWN';data.projections.strategy_catalog.rows[0].family_code='private';
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
+ }
+ {
+  const b=browser(), data=sample();
   data.projections={datasets:{status:'AVAILABLE',registered:0,pit_certified:0},strategies:{status:'UNAVAILABLE'},
    experiments:{status:'AVAILABLE',total:1,by_status:{CREATED:1,RUNNING:0,COMPLETED:0,FAILED:0,INVALIDATED:0,OTHER:0}},
    decisions:{status:'AVAILABLE',total:1,by_verdict:{SUPPORTED:0,WEAK_EVIDENCE:0,INCONCLUSIVE:1,REJECTED:0,INVALIDATED:0,REQUIRES_MORE_DATA:0}},
@@ -110,6 +131,10 @@ async function main() {
   b.advance(300001);
   assert.equal(b.element('operations-state').textContent,'STALE');
   assert.match(b.element('schema-compatibility').textContent,/STALE/);
+  b.api.applyOperations({...ops(),generated_at:iso(BASE+300001),state:'UNAVAILABLE',error_code:'PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE'});
+  assert.match(b.element('operations-note').textContent,/PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE/);
+  b.api.applyOperations({...ops(),generated_at:iso(BASE+300001),state:'UNAVAILABLE',error_code:'PRIVATE_SECRET'});
+  assert.doesNotMatch(b.element('operations-note').textContent,/PRIVATE_SECRET/);
   for(const change of [{live_enabled:true},{state:'LIVE'},{last_success_at:null},{cycles_failed:true},{deployed_commit:'private'}]) {
    assert.throws(()=>b.api.applyOperations({...ops(),...change}));
   }
