@@ -5,6 +5,8 @@ from decimal import Decimal
 from typing import Any
 from uuid import UUID
 
+from pydantic import TypeAdapter
+
 from hope.application.backtests.analytics import BacktestMetrics
 from hope.application.backtests.engine import BacktestDecision, BacktestEvent, BacktestResult
 from hope.application.trading.service import TradingKernelResult
@@ -29,6 +31,7 @@ BACKTEST_EVIDENCE_RESULT_FIELDS = (
     "unfilled_order_ids",
     "decisions",
 )
+_RESULT_ADAPTER = TypeAdapter(BacktestResult)
 
 
 def _decimal(value: Decimal) -> str:
@@ -254,3 +257,23 @@ def project_backtest_result(result: BacktestResult) -> dict[str, Any]:
     if tuple(projected_result) != BACKTEST_EVIDENCE_RESULT_FIELDS:
         raise RuntimeError("BACKTEST_EVIDENCE_V1_FIELD_CONTRACT_BROKEN")
     return {"schema": BACKTEST_EVIDENCE_SCHEMA, "result": projected_result}
+
+
+def verify_backtest_result_projection(value: object) -> None:
+    """Require a complete canonical v1 projection of the existing domain model.
+
+    Hash identity and a schema label do not validate nested result material.
+    Round-trip through the existing typed result and projector instead of a
+    second wire schema. This authenticates structure/canonical representation,
+    not profitability, scientific verdicts or independently recomputed returns.
+    """
+    if (not isinstance(value, dict) or set(value) != {"schema", "result"}
+            or value["schema"] != BACKTEST_EVIDENCE_SCHEMA or not isinstance(value["result"], dict)):
+        raise ValueError("BACKTEST_EVIDENCE_RESULT_INVALID")
+    try:
+        typed = _RESULT_ADAPTER.validate_python(value["result"])
+        rebuilt = project_backtest_result(typed)
+    except (TypeError, ValueError, ArithmeticError) as exc:
+        raise ValueError("BACKTEST_EVIDENCE_RESULT_INVALID") from exc
+    if rebuilt != value:
+        raise ValueError("BACKTEST_EVIDENCE_RESULT_NOT_CANONICAL")

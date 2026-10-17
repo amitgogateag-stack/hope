@@ -6,7 +6,7 @@ from typing import Any, Mapping
 from uuid import UUID
 
 from hope.application.backtests.engine import BacktestResult
-from hope.application.backtests.evidence import BACKTEST_EVIDENCE_SCHEMA, project_backtest_result
+from hope.application.backtests.evidence import BACKTEST_EVIDENCE_SCHEMA, project_backtest_result, verify_backtest_result_projection
 from hope.application.experiments.config_hash import configuration_hash
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
 
@@ -233,6 +233,7 @@ def verify_certified_backtest_evidence(
     backtest = value.get("backtest")
     if not isinstance(backtest, dict) or backtest.get("schema") != BACKTEST_EVIDENCE_SCHEMA:
         raise ValueError("CERTIFIED_BACKTEST_EVIDENCE_BACKTEST_SCHEMA_MISMATCH")
+    verify_backtest_result_projection(backtest)
     return value
 
 

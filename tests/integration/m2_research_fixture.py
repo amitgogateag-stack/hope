@@ -36,7 +36,7 @@ from hope.infrastructure.repositories.strategy_candidates import SqlAlchemyStrat
 from hope.infrastructure.repositories.universe_snapshots import UniverseSnapshotRepository
 
 
-def seed(connection, *, configuration=None, market=StrategyMarket.USA, as_of=None, include_quote=False, certified=True):
+def seed(connection, *, configuration=None, market=StrategyMarket.USA, as_of=None, include_quote=False, certified=True, backtest_override=None):
     """Return a fully persisted synthetic certified comparison + promoted version.
 
     Caller owns commit/rollback and migrations. No trigger, constraint, isolation
@@ -98,6 +98,11 @@ def seed(connection, *, configuration=None, market=StrategyMarket.USA, as_of=Non
         run_id = run_repo.deterministic_id(experiment.experiment_id, provenance["run_fingerprint"])
         run_repo.claim(ResearchRunRecord(research_run_id=run_id, experiment_id=experiment.experiment_id, run_fingerprint=provenance["run_fingerprint"], as_of=as_of))
         canonical, result_hash = research_result_fingerprint(result, execution_plan=execution, research_provenance=provenance)
+        if backtest_override is not None:
+            # Explicit counterfeit negative fixture only; retain all DB guards
+            # and recompute the real content hash rather than forging identity.
+            canonical["backtest"] = backtest_override
+            canonical, result_hash = research_result_fingerprint(canonical)
         if not certified:
             # Legitimate generic research storage is deliberately insufficient
             # for the certified PAPER bridge, even with matching run hashes.

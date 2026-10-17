@@ -538,3 +538,45 @@ expected-SHA non-force publication and exact pushed-head Actions/issue #5
 verification remain final gates. No deployment, credentials, database migration,
 strategy/risk changes or LIVE activation occurred. AWS operational acceptance is
 still pending; frozen day29 SHA 7e9d341742818a97accce3e2301b1c7f96596795 is preserved.
+
+## 2026-10-17: complete canonical certified backtest admission
+
+Starting GitHub HEAD: `27213a5e4d58a7768efcfd96c12fd6f2d6a8f8aa`.
+Exact-head Actions run `39023925611` and issue #5 Bot `HOPE_CI_STATUS_V1`
+reported success before work and were rechecked before publication.
+
+Demonstrated defect: the independent certified-source resolver accepted a
+freshly hash-matching nested backtest containing only its schema label, or only
+`result: {metrics: {}}`. Provenance and content identity did not validate result
+structure. Certified admission now round-trips the complete nested result through
+the existing typed BacktestResult and canonical projector. Missing/extra fields,
+invalid nested domain models, non-finite decimals and noncanonical wire values
+fail closed before implementation factories and PAPER claims. Fixed service error
+mapping exposes only PAPER_CERTIFIED_INPUT_UNAVAILABLE. Valid producer bytes,
+strategy/risk rules and scientific evaluation thresholds are unchanged; this does
+not independently recompute profitability or prove research edge.
+
+Tests include a genuine cost-inclusive engine round-trip and three PostgreSQL
+counterfeit admissions with matching fingerprints, complete lineage and explicit
+synthetic reviewer verdicts under all existing database guards. Rejection leaves
+zero job, authorization, effect, outcome or portfolio rows. Existing certified
+execution and historical recovery suites remain controls. No synthetic test data
+is production evidence; no immutable research or PAPER history is rewritten.
+
+Validation:
+- Focused unit: 88 passed (1.83 seconds).
+- Fresh PostgreSQL admission/bridge/historical recovery: 65 passed (26.86 seconds).
+- Final full fresh-PostgreSQL regression: 2,815 passed, 13 skipped (222.06 seconds),
+  89.33% coverage against the unchanged 89% gate.
+- The first full run exposed 11 Windows capability failures in the concurrent
+  parent's Linux activation tests. Capability skips now identify absent /proc,
+  POSIX ownership and symlink privileges; production lease logic and all original
+  assertions are preserved. The focused platform suite passed 14 tests with 13
+  skips. Linux CI runs those cases plus the existing three Bash-dependent
+  dashboard contract files omitted locally.
+
+Complete production/test/documentation diff reviewed; expected-SHA non-force
+publication and exact pushed-head CI/issue #5 verification remain final gates.
+No AWS deployment, role/network changes, credentials, migrations or LIVE
+activation occurred. AWS operational acceptance remains pending. Frozen day29
+SHA `7e9d341742818a97accce3e2301b1c7f96596795` remains preserved.

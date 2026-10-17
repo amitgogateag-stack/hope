@@ -122,6 +122,7 @@ def test_cli_preflight_sanitizes_repository_and_database_failure(tmp_path, monke
     assert "secret" not in capsys.readouterr().out
 
 
+@pytest.mark.skipif(not Path("/proc/self/stat").is_file(), reason="Requires Linux process identity; exercised on Linux CI")
 def test_activation_lock_serializes_complete_operation_and_cleans_after_failure(tmp_path):
     old, new = "1" * 40, "2" * 40
     with module.activation_lock(tmp_path, expected_current=old, target_sha=new):
@@ -148,11 +149,16 @@ def _proc_fixture(root, pid, *, boot="11111111-1111-1111-1111-111111111111", sta
 
 
 def _interrupted_activation(tmp_path, monkeypatch):
+    if not hasattr(os, "geteuid"):
+        pytest.skip("Requires POSIX ownership and symlinks; exercised on Linux CI")
     old, new, pid = "1" * 40, "2" * 40, 4321
     releases = tmp_path / "releases"
     (releases / old).mkdir(parents=True)
     (releases / new).mkdir()
-    os.symlink(releases / old, tmp_path / "current", target_is_directory=True)
+    try:
+        os.symlink(releases / old, tmp_path / "current", target_is_directory=True)
+    except OSError:
+        pytest.skip("Host does not grant symlink creation; exercised on Linux CI")
     (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={old}\n")
     proc = tmp_path / "proc"
     _proc_fixture(proc, pid)
@@ -198,6 +204,7 @@ def test_stale_activation_requires_review_for_every_ambiguous_state(
 
 
 @pytest.mark.parametrize("payload", ["not-json", "{}", '{"schema_version":1}', "[]"])
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="Requires POSIX lock ownership; exercised on Linux CI")
 def test_recovery_inspection_rejects_untrusted_or_malformed_lock(tmp_path, payload):
     (tmp_path / ".activation.lock").write_text(payload)
     with pytest.raises(module.DeploymentError, match="LOCK_INVALID"):

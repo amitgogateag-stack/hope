@@ -174,7 +174,7 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, RuntimeError) and str(exc) == "PAPER_ENVIRONMENT_HALTED":
         return "HALTED", "PAPER_ENVIRONMENT_HALTED"
     if isinstance(exc, (RuntimeError, ValueError)) and str(exc).startswith(
-        ("PAPER_CERTIFIED_", "VERIFIED_RESEARCH_SOURCE_", "RESEARCH_RUN_EVIDENCE_")):
+        ("PAPER_CERTIFIED_", "VERIFIED_RESEARCH_SOURCE_", "RESEARCH_RUN_EVIDENCE_", "BACKTEST_EVIDENCE_")):
         return "UNAVAILABLE", "PAPER_CERTIFIED_INPUT_UNAVAILABLE"
     if isinstance(exc, SQLAlchemyError):
         primary = getattr(getattr(getattr(exc, "orig", None), "diag", None), "message_primary", None)

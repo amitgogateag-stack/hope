@@ -3,6 +3,7 @@ import json
 from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
+from decimal import Decimal
 
 import pytest
 
@@ -12,6 +13,10 @@ from hope.application.experiments.verified_source import (
     VerifiedCertifiedResearchSourceResolver,
 )
 from hope.infrastructure.repositories.execution_provenance import CertifiedExecutionPlan
+from hope.application.backtests.analytics import BacktestMetrics
+from hope.application.backtests.engine import BacktestResult
+from hope.application.backtests.evidence import project_backtest_result
+from hope.domain.portfolio.ledger import PortfolioState
 
 
 class _Repo:
@@ -101,10 +106,9 @@ def _fixture():
             "configuration_hash": configuration_hash_value,
         },
         "research_provenance": research,
-        "backtest": {
-            "schema": "hope.backtest-result.v1",
-            "result": {"metrics": {}},
-        },
+        "backtest": project_backtest_result(BacktestResult(Decimal("100"),
+            PortfolioState(Decimal("100"),{}),(),(),BacktestMetrics(
+                Decimal("100"),Decimal("100"),*(Decimal("0") for _ in range(7))))),
     }
     canonical, result_fingerprint = research_result_fingerprint(certified)
     evidence = SimpleNamespace(

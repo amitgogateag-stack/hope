@@ -181,6 +181,7 @@ def test_eligibility_failure_exposes_only_fixed_database_codes(primary):
 
 
 @pytest.mark.parametrize("exception", [RuntimeError("PAPER_CERTIFIED_secret-payload"),
-    ValueError("VERIFIED_RESEARCH_SOURCE_secret-payload"), ValueError("RESEARCH_RUN_EVIDENCE_secret-payload")])
+    ValueError("VERIFIED_RESEARCH_SOURCE_secret-payload"), ValueError("RESEARCH_RUN_EVIDENCE_secret-payload"),
+    ValueError("BACKTEST_EVIDENCE_secret-payload")])
 def test_certified_input_failures_are_explicit_without_echoing_payload(exception):
     assert service._failure_state(exception) == ("UNAVAILABLE", "PAPER_CERTIFIED_INPUT_UNAVAILABLE")

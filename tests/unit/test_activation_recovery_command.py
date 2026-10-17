@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import pytest
 
 
 def _module():
@@ -22,6 +24,7 @@ def test_command_reports_safe_absence_without_mutation(tmp_path, capsys):
     assert set(tmp_path.iterdir()) == before
 
 
+@pytest.mark.skipif(not hasattr(os, "geteuid"), reason="Requires POSIX lock ownership; exercised on Linux CI")
 def test_command_sanitizes_untrusted_lock_and_fails_closed(tmp_path, capsys):
     command = _module()
     command.ROOT = tmp_path
