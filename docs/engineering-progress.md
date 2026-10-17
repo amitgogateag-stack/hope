@@ -447,3 +447,54 @@ approved migrations 231–233, least-privilege grants, genuine feed/candidate/
 calendar/configuration dependencies, risk-anchor resolution, compatible rollback,
 restart/HALT/outage checks and private dashboard acceptance. No AWS success or
 trading edge is inferred from synthetic engineering fixtures or GitHub CI.
+
+## Historical certified recovery after demotion — 2026-10-17
+
+Fetched live branch 9d16f72ee3443405b04aff15ca146011a6373841, verified exact-head
+Actions 39000192931 green and the matching issue #5 HOPE_CI_STATUS_V1 before work.
+The prior M2 batch is synchronized; this batch addresses a separate recovery gap.
+
+A genuine PostgreSQL reproduction committed a filled certified run, then demoted
+its strategy before the service audit step: SUCCEEDED, five effects, zero
+reconciliation receipts and one strategy call. Ordinary admission correctly
+returned PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE, preventing that service path
+from finishing the historical audit. Accounting stayed intact. No current
+eligibility rule should be relaxed to repair already-committed history.
+
+Added explicit recovery of at most 32 selected historical certified IDs and a
+reviewable incident CLI. It verifies original authorization/classification,
+SUPPORTED variant, immutable configuration, sealed PIT provider/universe metadata,
+actual input hash, latency, and filled portfolio identity. It uses the existing
+reconciliation and ordinary-success authenticators for execution/accounting
+proof, completion and audit. It does not invoke strategy/factory code, discover
+work, claim jobs, create effects, reconstruct accounting or grant fresh permission.
+Current demotion or experiment revocation does not erase legitimate history.
+
+All selected job locks follow canonical order after the fresh RUNNING control
+proof; completed CLAIMED owners reconcile before SUCCEEDED audit verification.
+The whole batch shares a savepoint and outer caller commit. Missing, failed,
+partial or uncertified history aborts the selection. HALT and non-READ-COMMITTED
+transactions remain blocked. CLI success is emitted only after commit ACK;
+database/configuration/payload errors remain sanitized. No automatic timer,
+deployment, migration, role or AWS changes were made.
+
+Focused acceptance: 42 passed in 12.99 seconds (28 genuine PostgreSQL cases plus
+14 command/bounds tests). Cases include NO_TRADE/risk-blocked/fill histories,
+both research revocations and demotion, CLAIMED/SUCCEEDED histories, old runs,
+repeat recovery, competing reversed selections, all-or-nothing later failure,
+backend termination before commit, real subprocess CLI retry, missing/partial/
+generic history rejection, HALT, isolation, bounded infinite input, sanitized
+errors and lost commit acknowledgement. New execution after revocation still
+fails its independent authorization proof.
+
+Final frozen-source fresh-database local regression: **2,759 passed, 2 skipped in
+214.37 seconds; 89.82% coverage**, unchanged 89% gate. Two Windows symlink skips
+and the existing three Bash-dependent contract files require exact-head Linux
+CI. Complete diff reviewed; publication uses an expected-SHA non-force update
+and exact-head Actions/issue #5 verification. No interrupted run is acceptance.
+
+See docs/paper-historical-recovery.md and the operations README for explicit
+selection, commit/retry semantics and staging acceptance. AWS operational
+acceptance and actual provider/candidate/configuration prerequisites remain
+pending. Existing risk/strategy behavior, PAPER-only/LIVE-disabled policy and
+frozen day29 commit 7e9d341742818a97accce3e2301b1c7f96596795 are preserved.

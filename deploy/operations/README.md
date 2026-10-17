@@ -217,3 +217,11 @@ dashboard unavailable/stale/partial states and private authenticated access.
 Only then request host activation using the existing expected-pointer procedure.
 Retain November 15 operational readiness as dependent on this AWS acceptance,
 real feed/candidate readiness and approved configuration, rather than local CI.
+
+For a reviewed historical certified run whose strategy has since become
+ineligible, use the bounded incident procedure in
+`docs/paper-historical-recovery.md`. The recovery command authenticates explicitly
+selected committed history without a strategy factory or new admission; it is
+not an automatic timer or a reason to re-promote a strategy. Existing HALT,
+schema, accounting and commit acknowledgement gates still apply. Approval for
+this engineering batch does not activate the command on AWS or alter roles.
