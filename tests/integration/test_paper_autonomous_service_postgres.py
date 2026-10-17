@@ -188,7 +188,8 @@ def test_clean_service_cycle_reboot_retry_and_schema_readonly(admitted_plan, tmp
     assert service.run_service(engine, factory, migrations_dir=MIGRATIONS, status_file=status,
         once=True, now=lambda: NOW) == 0
     health = json.loads(status.read_text())
-    assert health["state"] == "CURRENT" and health["schema_compatibility"] == "COMPATIBLE"
+    assert health["state"] == "STOPPED" and health["schema_compatibility"] == "COMPATIBLE"
+    assert health["last_success_at"] is not None
     assert health["jobs_skipped"] == 1 and health["live_enabled"] is False
 
 

@@ -792,3 +792,11 @@ terminal file contents, successful evidence retention and exact counters. No AWS
 operation, database write, migration, strategy/risk change or service activation
 is part of this source change. PAPER-only and LIVE-disabled markers and frozen
 day29 SHA `7e9d341742818a97accce3e2301b1c7f96596795` remain unchanged.
+
+
+Exact-head CI #1283 exercised 2,911 tests and reached 89.99% coverage, but
+correctly failed one pre-existing PostgreSQL integration assertion that still
+expected a successful one-shot to leave CURRENT. Production behavior and the new
+unit contract produced STARTING, CURRENT, STOPPED as intended. The repair updates
+that integration contract to require STOPPED plus retained last-success evidence;
+no assertion or production safety gate is removed.
