@@ -149,7 +149,11 @@ After approval run the target venv's Python on
 --approve-host-change` with approved PYTHONPATH. The wrapper stops only M1 units,
 uses an expected-pointer lease, switches atomically and accepts only a matching
 CURRENT service heartbeat from a successful compatible PAPER-only cycle that
-started after activation. An exclusive `.activation.lock` spans lease checking,
+started after activation. Acceptance also requires the PAPER worker, private web
+service and export timer to remain active, a newly atomically published and
+schema-verified PostgreSQL dashboard snapshot, and successful loopback delivery
+of that snapshot through the private dashboard. A healthy worker cannot mask a
+failed observability path. An exclusive `.activation.lock` spans lease checking,
 service stop, switch, acceptance and rollback; competing activations fail closed.
 A killed deployment process can leave the lock behind deliberately. Do not
 remove it until an operator proves no deployment is active, stops the M1 units

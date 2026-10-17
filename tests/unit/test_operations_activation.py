@@ -1,5 +1,6 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
 import sys
 from datetime import UTC, datetime, timedelta
@@ -15,11 +16,12 @@ def activation(tmp_path, monkeypatch):
     spec.loader.exec_module(module)
     module.ROOT = tmp_path
     module.HEALTH = tmp_path / "health.json"
+    module.SNAPSHOT = tmp_path / "snapshot.json"
     monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
     return module
 
 
-@pytest.mark.parametrize("failure", ["preflight", "start", "timeout", None])
+@pytest.mark.parametrize("failure", ["preflight", "start", "timeout", "dashboard", None])
 def test_activation_preflight_and_failed_acceptance_leave_services_safe(activation, monkeypatch, failure):
     module = activation
     old, target = "1" * 40, "2" * 40
@@ -36,6 +38,7 @@ def test_activation_preflight_and_failed_acceptance_leave_services_safe(activati
         if failure is None and args[0] == "start":
             module.HEALTH.write_text(json.dumps(valid_health(target)))
     monkeypatch.setattr(module, "systemctl", systemctl)
+    monkeypatch.setattr(module, "accepted_dashboard", lambda started: failure is None)
     monkeypatch.setattr(module, "metadata", metadata.append)
     monkeypatch.setattr(module.time, "sleep", lambda *_: None)
     module.HEALTH.write_text(json.dumps({"deployed_commit": target, "state": "CURRENT" if failure is None else "UNAVAILABLE"}))
@@ -62,6 +65,7 @@ def test_activation_preflight_and_failed_acceptance_leave_services_safe(activati
         module.main()
         assert switches == [target] and metadata == [target]
         assert commands[0][0] == "stop" and commands[1][0] == "start"
+        assert any(command == ("is-active", "--quiet", *module.UNITS) for command in commands)
 
 
 def test_metadata_is_atomically_published_with_no_secret_or_extra_fields(activation):
@@ -76,6 +80,18 @@ def valid_health(target):
                 state="CURRENT", schema_compatibility="COMPATIBLE", paper_only=True, live_enabled=False)
 
 
+def valid_snapshot(timestamp=None):
+    timestamp = timestamp or datetime.now(UTC)
+    return {
+        "schema_version": 1, "source": "hope_postgresql",
+        "generated_at": timestamp.isoformat(), "research": {"run_count": 0},
+        "paper": {
+            "environment_state": "RUNNING",
+            "job_runs": {"total": 0, "claimed": 0, "succeeded": 0, "failed": 0},
+        },
+    }
+
+
 @pytest.mark.parametrize("change", [dict(state="STARTING"), dict(schema_compatibility="UNKNOWN"),
     dict(paper_only=False), dict(live_enabled=True), dict(last_success_at=None),
     dict(generated_at="bad"), dict(deployed_commit="2"*40)])
@@ -86,3 +102,34 @@ def test_activation_rejects_old_or_unverified_heartbeat(activation, change):
     assert activation.accepted_health(value, target, started)
     assert not activation.accepted_health({**value, **change}, target, started)
     assert not activation.accepted_health(value, target, started + timedelta(seconds=1))
+
+
+def test_dashboard_acceptance_requires_fresh_export_and_available_loopback_feed(activation, monkeypatch):
+    started = datetime.now(UTC)
+    activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+        "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "UNAVAILABLE",
+    })
+    assert activation.accepted_dashboard(started)
+
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+        "service": "RUNNING", "paper_feed": "UNAVAILABLE", "legacy_feed": "UNAVAILABLE",
+    })
+    assert not activation.accepted_dashboard(started)
+
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+        "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "UNAVAILABLE",
+    })
+    old = started - timedelta(minutes=10)
+    activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(old)))
+    os.utime(activation.SNAPSHOT, (old.timestamp(), old.timestamp()))
+    assert not activation.accepted_dashboard(started)
+
+
+@pytest.mark.parametrize("payload", ["partial{", "[]", '{"schema_version":true}'])
+def test_dashboard_acceptance_rejects_malformed_export_without_probing(activation, monkeypatch, payload):
+    activation.SNAPSHOT.write_text(payload)
+    monkeypatch.setattr(
+        activation, "verify_dashboard", lambda *_: pytest.fail("invalid export must fail before HTTP probe")
+    )
+    assert not activation.accepted_dashboard(datetime.now(UTC))

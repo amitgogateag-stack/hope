@@ -1,6 +1,6 @@
 """Operator-invoked code-only activation/rollback; never migrates historical data."""
 import argparse
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import json
 import os
 from pathlib import Path
@@ -9,9 +9,12 @@ import tempfile
 import time
 
 from hope.api.operations_deployment import inspect_release, switch_release
+from hope.api.dashboard_server import _verified_snapshot
+from hope.api.dashboard_upgrade_probe import verify_dashboard
 
 ROOT = Path("/opt/hope-operations")
 HEALTH = Path("/var/lib/hope-paper/health.json")
+SNAPSHOT = Path("/var/lib/hope-dashboard-ops/snapshot.json")
 UNITS = ("hope-paper.service", "hope-ops-dashboard-web.service", "hope-ops-dashboard-export.timer")
 
 
@@ -44,6 +47,20 @@ def accepted_health(value, target, started):
         return False
 
 
+def accepted_dashboard(started):
+    """Require a post-switch export and its private loopback presentation."""
+    try:
+        _, generated = _verified_snapshot(SNAPSHOT)
+        modified = datetime.fromtimestamp(SNAPSHOT.stat().st_mtime, UTC)
+        result = verify_dashboard("http://127.0.0.1:8788")
+        return (modified >= started
+                and started - timedelta(minutes=5) <= generated <= datetime.now(UTC)
+                and result.get("service") == "RUNNING"
+                and result.get("paper_feed") == "AVAILABLE")
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def main():
     parser = argparse.ArgumentParser(description="Approved code-only switch with rollback; services stop first")
     parser.add_argument("--target", required=True)
@@ -65,10 +82,10 @@ def main():
             started = datetime.now(UTC)
             systemctl("start", *UNITS)
             for _ in range(60):
-                systemctl("is-active", "--quiet", "hope-paper.service", "hope-ops-dashboard-web.service")
+                systemctl("is-active", "--quiet", *UNITS)
                 try:
                     value = json.loads(HEALTH.read_text())
-                    if accepted_health(value, args.target, started):
+                    if accepted_health(value, args.target, started) and accepted_dashboard(started):
                         return
                 except (OSError, ValueError):
                     pass
