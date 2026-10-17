@@ -162,8 +162,15 @@ original Linux boot, process start identity, expected commit and target commit;
 PID reuse cannot masquerade as the original deployment. `recovery_safe=true`
 means only that the original pointer and metadata are intact, no pending pointer
 exists and the authenticated process is gone. Every target, mixed, unreadable or
-unknown state requires operator review with services stopped; the command never
-removes the lease, changes pointers or starts services. Root/code/venv
+unknown state requires operator review with services stopped; the diagnostic
+never removes the lease, changes pointers or starts services. For that one safe
+state, an approved root operator may run `deploy/operations/recover_activation.py
+--expected-current OLD_SHA --target SHA --approve-host-change`. Recovery stops
+and verifies every M1 unit, rechecks the exact lease file and all pointer/metadata
+facts, durably removes only that stale lease, and leaves every service stopped.
+It refuses an active/unknown process, mismatched arguments, any interrupted switch,
+or any state/lease change during quiescence. It never changes pointers or metadata
+and never starts a service. Root/code/venv
 ownership and write permissions are checked before executing the interpreter.
 On failed acceptance it restores the prior pointer
 and metadata and leaves services stopped for operator review. No historical

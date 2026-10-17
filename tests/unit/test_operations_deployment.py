@@ -209,3 +209,62 @@ def test_recovery_inspection_rejects_untrusted_or_malformed_lock(tmp_path, paylo
     (tmp_path / ".activation.lock").write_text(payload)
     with pytest.raises(module.DeploymentError, match="LOCK_INVALID"):
         module.inspect_activation_recovery(tmp_path)
+
+
+def test_safe_stale_recovery_stops_services_and_removes_only_unchanged_lock(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    before_pointer = os.readlink(tmp_path / "current")
+    before_metadata = (tmp_path / "deployed.env").read_bytes()
+    calls = []
+    result = module.recover_stale_activation(
+        tmp_path, expected_current=old, target_sha=new,
+        quiesce=lambda: calls.append("stopped"), proc_root=proc,
+    )
+    assert result == {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
+                      "expected_current": old, "target_sha": new}
+    assert calls == ["stopped"] and not (tmp_path / ".activation.lock").exists()
+    assert os.readlink(tmp_path / "current") == before_pointer
+    assert (tmp_path / "deployed.env").read_bytes() == before_metadata
+
+
+@pytest.mark.parametrize("failure", ["active", "expected", "target", "mixed", "pending"])
+def test_stale_recovery_refuses_every_unproven_state_before_stopping(tmp_path, monkeypatch, failure):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    if failure != "active":
+        (proc / str(pid) / "stat").unlink()
+    expected_arg, target_arg = old, new
+    if failure == "expected":
+        expected_arg = "3" * 40
+    elif failure == "target":
+        target_arg = "3" * 40
+    elif failure == "mixed":
+        (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={new}\n")
+    elif failure == "pending":
+        os.symlink(tmp_path / "releases" / new, tmp_path / ".current.next")
+    with pytest.raises(module.DeploymentError, match="RECOVERY_DENIED"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=expected_arg, target_sha=target_arg,
+            quiesce=lambda: pytest.fail("unsafe state must not stop services"), proc_root=proc,
+        )
+    assert (tmp_path / ".activation.lock").exists()
+
+
+def test_stale_recovery_retains_lock_when_stop_fails_or_state_changes(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    with pytest.raises(RuntimeError, match="stop failed"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=lambda: (_ for _ in ()).throw(RuntimeError("stop failed")), proc_root=proc,
+        )
+    assert (tmp_path / ".activation.lock").exists()
+
+    def change_state():
+        (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={new}\n")
+    with pytest.raises(module.DeploymentError, match="STATE_CHANGED"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=change_state, proc_root=proc,
+        )
+    assert (tmp_path / ".activation.lock").exists()

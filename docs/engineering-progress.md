@@ -619,3 +619,30 @@ exact pushed-head CI/issue #5 verification remain final gates. No deployment,
 credentials, role/network changes, migrations or LIVE activation. AWS operational
 acceptance remains pending. Frozen day29 SHA
 `7e9d341742818a97accce3e2301b1c7f96596795` is preserved.
+
+## 2026-10-17: guarded stale activation lease recovery
+
+Starting GitHub HEAD: `2562e287d6b03416a1ee2b2a7aedd899eb010d7b`.
+Exact-head Actions run `39027230347` and issue #5 Bot `HOPE_CI_STATUS_V1`
+reported success before work.
+
+The prior authenticated read-only diagnosis proved when an interrupted activation
+was safely still at its original pointer, but offered no bounded recovery action;
+an operator otherwise had to delete the retained lease manually without an atomic
+recheck. The new explicitly approved root command accepts only a safely stale lease
+whose embedded expected/target commits exactly match operator arguments. It stops
+and verifies every M1 unit, rechecks the exact file fingerprint and every release
+fact after quiescence, durably removes only that lease, and leaves services stopped.
+Active, unknown, mixed, pending, mismatched or changed states fail closed. No
+pointer, deployment metadata, database state or service is started or repaired.
+
+Adversarial tests cover active and reused identities, wrong commit arguments,
+mixed metadata, pending switches, stop failure, post-stop state change, root
+authorization and a unit that remains active. The success path proves pointer and
+metadata bytes are unchanged. No systemd or AWS action is performed by tests.
+
+Validation: **59 focused tests passed** and the complete unit regression passed
+**2,231 tests**. Python compilation and `git diff --check` also passed. This
+host-filesystem/systemd boundary does not require PostgreSQL and no local
+PostgreSQL test was claimed. Expected-SHA non-force publication and exact-head
+CI/issue #5 verification remain final gates.

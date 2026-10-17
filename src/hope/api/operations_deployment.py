@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 import re
@@ -180,6 +181,58 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
         "target_sha": target, "current_pointer": pointer, "deployed_metadata": metadata,
         "pending_pointer": pending, "recovery_safe": safe,
     }
+
+
+def _activation_lock_fingerprint(root: Path) -> tuple[int, int, int, int, str]:
+    """Bind recovery to the exact regular-file lease that was inspected."""
+    path = root / ".activation.lock"
+    info = path.lstat()
+    content = path.read_bytes()
+    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+            hashlib.sha256(content).hexdigest())
+
+
+def recover_stale_activation(
+    root: Path, *, expected_current: str, target_sha: str,
+    quiesce: Callable[[], None], proc_root: Path = Path("/proc"),
+) -> dict[str, object]:
+    """Remove only an authenticated, unchanged and safely stale activation lease.
+
+    The caller must stop and verify all deployment services in ``quiesce``.  This
+    operation never changes release pointers or metadata and never starts a unit.
+    """
+    expected_current, target_sha = _sha(expected_current), _sha(target_sha)
+    root = root.resolve(strict=True)
+    try:
+        fingerprint = _activation_lock_fingerprint(root)
+        diagnosis = inspect_activation_recovery(root, proc_root=proc_root)
+        if _activation_lock_fingerprint(root) != fingerprint:
+            raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_CHANGED")
+    except FileNotFoundError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_MISSING") from exc
+    if (diagnosis.get("state") != "STALE" or diagnosis.get("recovery_safe") is not True
+            or diagnosis.get("expected_current") != expected_current
+            or diagnosis.get("target_sha") != target_sha):
+        raise DeploymentError("OPERATIONS_ACTIVATION_RECOVERY_DENIED")
+
+    quiesce()
+
+    # Recheck every safety fact after stopping units. A concurrently changed
+    # lease or release state leaves services stopped and requires review.
+    try:
+        repeated = inspect_activation_recovery(root, proc_root=proc_root)
+        if repeated != diagnosis or _activation_lock_fingerprint(root) != fingerprint:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        (root / ".activation.lock").unlink()
+        descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    except FileNotFoundError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    return {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
+            "expected_current": expected_current, "target_sha": target_sha}
 
 
 def switch_release(
