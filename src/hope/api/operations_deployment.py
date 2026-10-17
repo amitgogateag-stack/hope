@@ -105,8 +105,43 @@ def _process_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, s
 
 
 @contextmanager
+def _activation_guard(root: Path):
+    """Serialize lease creation/removal on a persistent, never-unlinked inode.
+
+    Fingerprints cannot make pathname unlink conditional. Both activation and
+    stale recovery must hold this kernel lock across every lease operation.
+    Process death releases flock; the separate authenticated lease survives.
+    """
+    try:
+        import fcntl
+    except ImportError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_POSIX_REQUIRED") from exc
+    path = root.resolve(strict=True) / ".activation.guard"
+    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    try:
+        info = os.fstat(descriptor)
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o022 or info.st_nlink != 1):
+            raise DeploymentError("OPERATIONS_ACTIVATION_GUARD_UNTRUSTED")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
+        yield
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
 def activation_lock(root: Path, *, expected_current: str, target_sha: str):
     """Exclusive authenticated operation lease, retained after process death."""
+    with _activation_guard(root):
+        with _create_activation_lease(root, expected_current=expected_current, target_sha=target_sha):
+            yield
+
+
+@contextmanager
+def _create_activation_lease(root: Path, *, expected_current: str, target_sha: str):
     expected_current, target_sha = _sha(expected_current), _sha(target_sha)
     path = root.resolve(strict=True) / ".activation.lock"
     boot_id, started = _process_identity(os.getpid())
@@ -201,6 +236,13 @@ def recover_stale_activation(
     The caller must stop and verify all deployment services in ``quiesce``.  This
     operation never changes release pointers or metadata and never starts a unit.
     """
+    with _activation_guard(root):
+        return _recover_stale_activation(root, expected_current=expected_current,
+            target_sha=target_sha, quiesce=quiesce, proc_root=proc_root)
+
+
+def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: str,
+                            quiesce: Callable[[], None], proc_root: Path):
     expected_current, target_sha = _sha(expected_current), _sha(target_sha)
     root = root.resolve(strict=True)
     try:

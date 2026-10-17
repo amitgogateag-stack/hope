@@ -248,3 +248,23 @@ activation starts, CURRENT loopback status, and the exact sanitized selected
 export served over HTTP. A rewritten retained file or mismatched frame cannot
 count as a fresh export. See `docs/dashboard/activation-acceptance.md` for bounded
 rotation/retry and offline validation. Host activation still requires approval.
+# Persistent activation serialization
+
+Activation and stale-lease recovery now acquire an exclusive kernel lock on
+`.activation.guard` before creating, inspecting for mutation, or removing the
+authenticated `.activation.lock` lease. The guard file persists after normal
+completion and process death. Do not remove, replace or rotate it: all activation
+and recovery writers must use this guarded implementation and the same root.
+Read-only diagnosis does not acquire or create the guard.
+
+This closes a reproduced recovery race between the final lease fingerprint read
+and unlink: another recovery could remove the stale inode, allowing a new
+activation lease to be created and then incorrectly deleted by the first
+recovery. Fingerprint checks remain defense in depth; they are not atomic unlink.
+The guard is held across quiescence, final checks, unlink and directory fsync.
+Contenders fail before stopping services or writing leases. Process death releases
+the kernel guard but preserves the separate lease for explicit operator recovery.
+Symlink, hard-link, foreign-owner and writable-by-others guard files are rejected.
+
+No deployment is authorized or performed by this code change. Existing approval,
+service-stop, pointer/metadata consistency and PAPER-only checks still apply.

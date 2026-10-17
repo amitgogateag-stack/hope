@@ -646,3 +646,47 @@ Validation: **59 focused tests passed** and the complete unit regression passed
 host-filesystem/systemd boundary does not require PostgreSQL and no local
 PostgreSQL test was claimed. Expected-SHA non-force publication and exact-head
 CI/issue #5 verification remain final gates.
+
+## 2026-10-17: serialize activation and stale recovery lease mutation
+
+Fetched and fast-forwarded live GitHub HEAD
+`2e9f37900007128af575a3de5cdabd9782b7637e`. Exact-head Actions `39039990447`
+and matching issue #5 Bot HOPE_CI_STATUS_V1 were green before code modification.
+That parent added explicit stale activation recovery.
+
+Reproduced a lease pathname race with the actual recovery function: after its
+final fingerprint read, a competing recovery can remove the stale inode and a
+new activation can create a replacement. The first recovery then unlinks the
+replacement and returns RECOVERED. The controlled interleaving printed
+`RECOVERED replacement lease exists: False`. Fingerprint equality cannot provide
+atomic compare-and-unlink. No real host activation or service action was used.
+
+Activation and stale recovery now hold the same nonblocking kernel flock on a
+persistent .activation.guard inode across all lease mutation. The guard is never
+unlinked by these operations. Contenders fail before entering activation or
+quiescence. Kernel release on process death preserves the separate authenticated
+lease for explicit recovery. Existing fingerprint, process identity, stopped-unit,
+release-pointer and metadata checks remain in place. Guard metadata rejects
+foreign owners, writable-by-others files, nonregular files and hard-link aliases;
+O_NOFOLLOW refuses symlinks. Read-only diagnosis remains read-only. The runbook
+requires every activation/recovery writer to use this guarded version and root;
+manual replacement/removal of the guard is unsupported.
+
+Added 14 guard tests: independent descriptors, persistent inode reuse, exceptional
+exit, both mutation entrypoints, complete activation lifetime, untrusted metadata,
+link aliases, actual Linux subprocess death and stale recovery contention. Windows
+uses an explicit test-only kernel byte-range lock adapter and modeled POSIX mode
+metadata for orchestration tests. Native Linux flock, link and recovery tests run
+only in Linux CI; these are not claimed as locally executed Linux evidence.
+Focused suite before the final Linux-only link additions: 26 passed, 22 skipped
+in 8.46 seconds. Initial focused failures were Windows mode-bit fixture assumptions;
+the adapter was corrected without weakening production validation.
+
+Final frozen-source fresh-PostgreSQL regression: 2,850 passed, 24 skipped in
+371.14 seconds; 89.22% coverage, unchanged 89% gate. Existing three Bash dashboard
+contract files omitted locally remain Linux CI checks. Complete diff reviewed;
+expected-SHA non-force publication and exact pushed-head CI/marker remain final
+gates. No PAPER strategy/risk/accounting change, database migration, credentials,
+AWS/host deployment or service operation occurred. LIVE remains disabled. AWS
+operational acceptance remains pending. Frozen day29 SHA
+`7e9d341742818a97accce3e2301b1c7f96596795` remains preserved.
