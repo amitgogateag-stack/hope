@@ -1,6 +1,6 @@
 """Operator-invoked code-only activation/rollback; never migrates historical data."""
 import argparse
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
@@ -50,12 +50,14 @@ def accepted_health(value, target, started):
 def accepted_dashboard(started):
     """Require a post-switch export and its private loopback presentation."""
     try:
-        _, generated = _verified_snapshot(SNAPSHOT)
+        payload, generated = _verified_snapshot(SNAPSHOT)
         modified = datetime.fromtimestamp(SNAPSHOT.stat().st_mtime, UTC)
-        result = verify_dashboard("http://127.0.0.1:8788")
-        return (modified >= started
-                and started - timedelta(minutes=5) <= generated <= datetime.now(UTC)
-                and result.get("service") == "RUNNING"
+        current = datetime.now(UTC)
+        if not (modified >= started and started <= generated <= current):
+            return False
+        result = verify_dashboard("http://127.0.0.1:8788", activation_started=started,
+                                  activation_snapshot=payload)
+        return (result.get("service") == "RUNNING"
                 and result.get("paper_feed") == "AVAILABLE")
     except (OSError, TypeError, ValueError):
         return False

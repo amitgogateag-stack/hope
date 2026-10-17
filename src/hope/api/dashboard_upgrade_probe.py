@@ -130,7 +130,20 @@ def _validate_paper(value: dict) -> None:
             raise ValueError("HOPE_UPGRADE_PAPER_PROJECTIONS_INVALID") from error
 
 
-def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dict[str, str]:
+def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None,
+                     activation_started: datetime | None = None,
+                     activation_snapshot: bytes | None = None) -> dict[str, str]:
+    expected = None
+    if activation_started is not None or activation_snapshot is not None:
+        if (not isinstance(activation_started, datetime) or activation_started.tzinfo is None
+                or activation_started.utcoffset() is None or not isinstance(activation_snapshot, bytes)
+                or len(activation_snapshot) > _MAX_BYTES):
+            raise ValueError("HOPE_UPGRADE_ACTIVATION_INPUT_INVALID")
+        expected = _json(activation_snapshot)
+        _validate_paper(expected)
+        generated = datetime.fromisoformat(expected["generated_at"].replace("Z", "+00:00"))
+        if not activation_started <= generated <= datetime.now(timezone.utc):
+            raise ValueError("HOPE_UPGRADE_ACTIVATION_SNAPSHOT_NOT_NEW")
     parts = urlsplit(base)
     if parts.scheme != "http" or parts.hostname != "127.0.0.1" or parts.username or parts.password or parts.path or parts.query or parts.fragment:
         raise ValueError("HOPE_UPGRADE_LOOPBACK_ONLY")
@@ -161,6 +174,13 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None) -> dic
         _validate_paper(paper)
     elif paper_code != 503 or paper_body != b"Verified snapshot unavailable":
         raise ValueError("HOPE_UPGRADE_PAPER_HTTP_INVALID")
+    if expected is not None:
+        # Activation must prove the exact selected post-switch export is the
+        # snapshot presented over loopback. Ordinary upgrade observation keeps
+        # its existing independent/retained-feed semantics.
+        if (paper_code != 200 or status["data_feed"] != "CURRENT" or paper != expected
+                or datetime.fromisoformat(status["snapshot_generated_at"].replace("Z", "+00:00")) != generated):
+            raise ValueError("HOPE_UPGRADE_ACTIVATION_PRESENTATION_MISMATCH")
     return {
         "service": "RUNNING",
         "paper_feed": "AVAILABLE" if paper_code == 200 else "UNAVAILABLE",

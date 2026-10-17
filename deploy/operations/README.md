@@ -229,3 +229,9 @@ selected committed history without a strategy factory or new admission; it is
 not an automatic timer or a reason to re-promote a strategy. Existing HALT,
 schema, accounting and commit acknowledgement gates still apply. Approval for
 this engineering batch does not activate the command on AWS or alter roles.
+
+Post-switch observability acceptance also requires a snapshot generated after
+activation starts, CURRENT loopback status, and the exact sanitized selected
+export served over HTTP. A rewritten retained file or mismatched frame cannot
+count as a fresh export. See `docs/dashboard/activation-acceptance.md` for bounded
+rotation/retry and offline validation. Host activation still requires approval.

@@ -498,3 +498,43 @@ selection, commit/retry semantics and staging acceptance. AWS operational
 acceptance and actual provider/candidate/configuration prerequisites remain
 pending. Existing risk/strategy behavior, PAPER-only/LIVE-disabled policy and
 frozen day29 commit 7e9d341742818a97accce3e2301b1c7f96596795 are preserved.
+
+## Post-switch observability identity — 2026-10-17
+
+Fetched live HEAD 85673e14d2aa79c1a85ff07fa3c7d321f59ac618, its exact-head
+Actions 39020392867 success and matching issue #5 marker before work. Preserved
+that concurrent dashboard activation gate with a fast-forward update.
+
+Reviewed shared-portfolio recovery first. Existing accounting ownership rejects
+extending a portfolio whose earlier owner remains CLAIMED, and existing real
+PostgreSQL normal/reversed/failure/crash/concurrent tests cover that boundary.
+No accounting or risk behavior change was warranted.
+
+Demonstrated a separate activation defect offline: a snapshot generated four
+minutes before activation, rewritten afterward, returned accepted=True because
+generation allowed a five-minute pre-switch tolerance. The HTTP probe also
+checked feed availability without proving it presented that selected export.
+
+Activation now requires snapshot generation at/after its start and no later than
+the current clock. It supplies the verified sanitized payload to a strict probe
+that requires CURRENT health, matching health/snapshot generation and equality
+of the complete served snapshot to the selected local export. Same-time changed
+counts and export replacement fail closed. Existing bounded polling can retry
+an export rotation; timeout preserves existing stop, pointer/metadata rollback
+and operator-review contracts. Ordinary upgrade/retained-feed behavior is
+unchanged, as are 32 KiB JSON / 64 KiB HTML limits and loopback-only transport.
+
+Focused validation: **101 passed in 2.75 seconds**, covering rewritten old and
+future exports, stale/unavailable health, mismatched generations/payloads,
+same-time changed counts, invalid/oversized selection, exact probe arguments,
+rollback, and a real loopback server with replacement and successful reselection.
+No systemd or AWS host action was executed by these tests.
+
+Final frozen-source fresh-PostgreSQL regression: **2,785 passed, 2 skipped in
+215.59 seconds; 89.83% coverage**, unchanged 89% requirement. Two Windows symlink
+skips and the existing three Bash-dependent dashboard contract files remain
+exact-head Linux CI checks. Complete production/test/documentation diff reviewed;
+expected-SHA non-force publication and exact pushed-head Actions/issue #5
+verification remain final gates. No deployment, credentials, database migration,
+strategy/risk changes or LIVE activation occurred. AWS operational acceptance is
+still pending; frozen day29 SHA 7e9d341742818a97accce3e2301b1c7f96596795 is preserved.

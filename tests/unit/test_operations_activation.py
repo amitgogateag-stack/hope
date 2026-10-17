@@ -107,17 +107,17 @@ def test_activation_rejects_old_or_unverified_heartbeat(activation, change):
 def test_dashboard_acceptance_requires_fresh_export_and_available_loopback_feed(activation, monkeypatch):
     started = datetime.now(UTC)
     activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
-    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base, **kwargs: {
         "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "UNAVAILABLE",
     })
     assert activation.accepted_dashboard(started)
 
-    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base, **kwargs: {
         "service": "RUNNING", "paper_feed": "UNAVAILABLE", "legacy_feed": "UNAVAILABLE",
     })
     assert not activation.accepted_dashboard(started)
 
-    monkeypatch.setattr(activation, "verify_dashboard", lambda base: {
+    monkeypatch.setattr(activation, "verify_dashboard", lambda base, **kwargs: {
         "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "UNAVAILABLE",
     })
     old = started - timedelta(minutes=10)
@@ -133,3 +133,53 @@ def test_dashboard_acceptance_rejects_malformed_export_without_probing(activatio
         activation, "verify_dashboard", lambda *_: pytest.fail("invalid export must fail before HTTP probe")
     )
     assert not activation.accepted_dashboard(datetime.now(UTC))
+
+
+@pytest.mark.parametrize("seconds", [-240, -1, 1, 240])
+def test_rewritten_old_or_future_snapshot_cannot_pass_activation(activation, monkeypatch, seconds):
+    started = datetime.now(UTC)
+    activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started+timedelta(seconds=seconds))))
+    monkeypatch.setattr(activation,"verify_dashboard",lambda *a,**k: pytest.fail("non-new snapshot must fail before HTTP"))
+    assert not activation.accepted_dashboard(started)
+
+
+def test_activation_passes_exact_verified_export_to_strict_probe(activation,monkeypatch):
+    started = datetime.now(UTC)
+    activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
+    captured={}
+    def verify(base,**kwargs):
+        captured.update(kwargs)
+        return dict(service="RUNNING",paper_feed="AVAILABLE")
+    monkeypatch.setattr(activation,"verify_dashboard",verify)
+    assert activation.accepted_dashboard(started)
+    assert captured["activation_started"] == started
+    assert json.loads(captured["activation_snapshot"])["generated_at"] == started.isoformat()
+
+
+def test_probe_identity_failure_rolls_back_pointer_and_stops_services(activation,monkeypatch):
+    old,target="1"*40,"2"*40
+    commands,metadata,switches=[],[],[]
+    monkeypatch.setattr(sys,"argv",["activate","--target",target,"--expected-current",old,"--approve-host-change"])
+    monkeypatch.setattr(activation,"inspect_release",lambda *a:None)
+    def systemctl(*args):
+        commands.append(args)
+        if args[0]=="start":
+            activation.HEALTH.write_text(json.dumps(valid_health(target)))
+            activation.SNAPSHOT.write_text(json.dumps(valid_snapshot()))
+    monkeypatch.setattr(activation,"systemctl",systemctl)
+    monkeypatch.setattr(activation,"metadata",metadata.append)
+    monkeypatch.setattr(activation.time,"sleep",lambda *_:None)
+    def mismatch(*a,**k):
+        raise ValueError("HOPE_UPGRADE_ACTIVATION_PRESENTATION_MISMATCH")
+    monkeypatch.setattr(activation,"verify_dashboard",mismatch)
+    def switch(root,sha,*,expected_current,before_switch,accept):
+        before_switch();switches.append(sha)
+        try: accept()
+        except BaseException:
+            switches.append(expected_current)
+            raise
+    monkeypatch.setattr(activation,"switch_release",switch)
+    with pytest.raises(RuntimeError,match="ACCEPTANCE_TIMEOUT"):
+        activation.main()
+    assert switches==[target,old] and metadata==[target,old]
+    assert commands[-1][0]=="stop"
