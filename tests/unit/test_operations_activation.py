@@ -74,6 +74,17 @@ def test_metadata_is_atomically_published_with_no_secret_or_extra_fields(activat
     assert sorted(p.name for p in activation.ROOT.iterdir()) == ["deployed.env"]
 
 
+def test_service_control_ignores_ambient_path_and_loader_environment(activation, monkeypatch):
+    calls = []
+    monkeypatch.setattr(activation.subprocess, "run", lambda *args, **kwargs: calls.append((args, kwargs)))
+    monkeypatch.setenv("PATH", "/hostile/bin")
+    monkeypatch.setenv("LD_PRELOAD", "/hostile/inject.so")
+    activation.systemctl("show", "hope-paper.service")
+    assert calls[0][0][0] == ["/usr/bin/systemctl", "show", "hope-paper.service"]
+    assert calls[0][1]["env"] == activation.COMMAND_ENVIRONMENT
+    assert "LD_PRELOAD" not in calls[0][1]["env"]
+
+
 def valid_health(target):
     timestamp = datetime.now(UTC).isoformat()
     return dict(deployed_commit=target, generated_at=timestamp, last_success_at=timestamp,

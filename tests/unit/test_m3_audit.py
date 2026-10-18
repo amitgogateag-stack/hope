@@ -32,7 +32,8 @@ def test_systemd_output_is_whitelisted_and_never_runs_mutations(monkeypatch):
     monkeypatch.setattr(module.subprocess,"run",runner)
     result=module._unit("hope-paper.service")
     assert result=={"ActiveState":"inactive","SubState":"dead","UnitFileState":"disabled"}
-    assert runner.call_args.args[0][:2]==["systemctl","show"]
+    assert runner.call_args.args[0][:2]==["/usr/bin/systemctl","show"]
+    assert runner.call_args.kwargs["env"]==module.COMMAND_ENVIRONMENT
     assert "secret" not in str(result)
 
 

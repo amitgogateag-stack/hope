@@ -55,3 +55,16 @@ def test_operator_recovery_refuses_non_root_and_non_quiescent_unit(recovery, mon
     monkeypatch.setattr(recovery, "recover_stale_activation", recover)
     with pytest.raises(RuntimeError, match="NOT_STOPPED"):
         recovery.main()
+
+
+def test_recovery_service_control_ignores_ambient_environment(recovery, monkeypatch):
+    calls = []
+    result = type("Result", (), {"stdout": "inactive\n"})()
+    monkeypatch.setattr(recovery.subprocess, "run",
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or result)
+    monkeypatch.setenv("PATH", "/hostile/bin")
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/hostile/lib")
+    assert recovery.systemctl("show", "hope-paper.service") == "inactive"
+    assert calls[0][0][0] == ["/usr/bin/systemctl", "show", "hope-paper.service"]
+    assert calls[0][1]["env"] == recovery.COMMAND_ENVIRONMENT
+    assert "LD_LIBRARY_PATH" not in calls[0][1]["env"]

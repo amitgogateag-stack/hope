@@ -167,7 +167,9 @@ contracts in the same activation: unit revisions require separate review.
 After approval run the target venv's Python on
 `deploy/operations/activate_release.py --target SHA --expected-current OLD_SHA
 --approve-host-change` with approved PYTHONPATH. The wrapper stops only M1 units,
-uses an expected-pointer lease, switches atomically and accepts only a matching
+invokes the fixed system `systemctl` binary with a minimal locale/path environment,
+and never forwards operator Python or dynamic-loader variables to service control.
+It uses an expected-pointer lease, switches atomically and accepts only a matching
 CURRENT service heartbeat from a successful compatible PAPER-only cycle that
 started after activation. Acceptance also requires the PAPER worker, private web
 service and export timer to remain active, a newly atomically published and

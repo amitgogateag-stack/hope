@@ -227,6 +227,17 @@ def test_operator_failure_restores_legacy_service_without_paper_commands(operato
     assert len(calls)==1
 
 
+def test_compatibility_operator_systemctl_uses_fixed_environment(operator, monkeypatch):
+    calls=[]
+    result=type("Result",(),{"stdout":"inactive\n"})()
+    monkeypatch.setattr(operator.subprocess,"run",
+        lambda *args,**kwargs:calls.append((args,kwargs)) or result)
+    monkeypatch.setenv("PATH","/hostile/bin")
+    operator.systemctl("show",operator.UNIT)
+    assert calls[0][0][0]==["/usr/bin/systemctl","show",operator.UNIT]
+    assert calls[0][1]["env"]==operator.COMMAND_ENVIRONMENT
+
+
 def test_installed_unit_must_exactly_match_reviewed_target(operator, monkeypatch, tmp_path):
     target = tmp_path / "target"
     source = target / "deploy/operations" / operator.UNIT
@@ -265,6 +276,21 @@ def test_recovery_operator_stops_only_dashboards_then_restores_legacy(tmp_path, 
     assert ("enable", module.LEGACY) in commands
     assert ("start", module.LEGACY) in commands
     assert all("hope-paper" not in " ".join(command) for command in commands)
+
+
+def test_legacy_dashboard_recovery_systemctl_uses_fixed_environment(tmp_path, monkeypatch):
+    path = Path(__file__).parents[2] / "deploy/operations/recover_dashboard_activation.py"
+    spec = importlib.util.spec_from_file_location("dashboard_recovery_environment", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    calls = []
+    result = type("Result", (), {"stdout": "inactive\n"})()
+    monkeypatch.setattr(module.subprocess, "run",
+                        lambda *args, **kwargs: calls.append((args, kwargs)) or result)
+    monkeypatch.setenv("PATH", "/hostile/bin")
+    module.systemctl("show", module.NEW)
+    assert calls[0][0][0] == ["/usr/bin/systemctl", "show", module.NEW]
+    assert calls[0][1]["env"] == module.COMMAND_ENVIRONMENT
 
 
 def test_dashboard_unit_uses_dedicated_pointer_loopback_and_no_paper_activation():

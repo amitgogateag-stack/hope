@@ -11,11 +11,14 @@ from hope.api.operations_deployment import recover_stale_activation
 ROOT = Path("/opt/hope-operations")
 UNITS = ("hope-ops-dashboard-export.timer", "hope-ops-dashboard-export.service",
          "hope-paper.service", "hope-ops-dashboard-web.service")
+SYSTEMCTL = "/usr/bin/systemctl"
+COMMAND_ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C",
+                       "HOME": "/nonexistent"}
 
 
 def systemctl(*arguments: str) -> str:
-    result = subprocess.run(["systemctl", *arguments], check=True, timeout=90,
-                            capture_output=True, text=True)
+    result = subprocess.run([SYSTEMCTL, *arguments], check=True, timeout=90,
+                            capture_output=True, text=True, env=COMMAND_ENVIRONMENT)
     return result.stdout.strip()
 
 

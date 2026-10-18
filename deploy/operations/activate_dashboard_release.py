@@ -16,11 +16,14 @@ STATE = Path("/var/lib/hope-dashboard-ops")
 UNIT = "hope-m3-dashboard-web.service"
 LEGACY_UNIT = "hope-ops-dashboard-web.service"
 UNIT_PATH = Path("/etc/systemd/system") / UNIT
+SYSTEMCTL = "/usr/bin/systemctl"
+COMMAND_ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C",
+                       "HOME": "/nonexistent"}
 
 
 def systemctl(*arguments: str) -> str:
-    result = subprocess.run(["systemctl", *arguments], check=True, timeout=90,
-                            capture_output=True, text=True)
+    result = subprocess.run([SYSTEMCTL, *arguments], check=True, timeout=90,
+                            capture_output=True, text=True, env=COMMAND_ENVIRONMENT)
     return result.stdout.strip()
 
 

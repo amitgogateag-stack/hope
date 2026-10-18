@@ -16,10 +16,14 @@ ROOT = Path("/opt/hope-operations")
 HEALTH = Path("/var/lib/hope-paper/health.json")
 SNAPSHOT = Path("/var/lib/hope-dashboard-ops/snapshot.json")
 UNITS = ("hope-paper.service", "hope-ops-dashboard-web.service", "hope-ops-dashboard-export.timer")
+SYSTEMCTL = "/usr/bin/systemctl"
+COMMAND_ENVIRONMENT = {"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C",
+                       "HOME": "/nonexistent"}
 
 
 def systemctl(*arguments):
-    subprocess.run(["systemctl", *arguments], check=True, timeout=90, capture_output=True)
+    subprocess.run([SYSTEMCTL, *arguments], check=True, timeout=90, capture_output=True,
+                   env=COMMAND_ENVIRONMENT)
 
 
 def metadata(sha):

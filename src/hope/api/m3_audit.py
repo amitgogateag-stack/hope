@@ -29,6 +29,9 @@ READINESS_FIELDS={
     "database":{"UNVERIFIED","OBSERVED_AT_SNAPSHOT"},
     "reconciliation":{"UNVERIFIED","CLAIMS_REQUIRE_REVIEW"},
 }
+SYSTEMCTL="/usr/bin/systemctl"
+COMMAND_ENVIRONMENT={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C","LC_ALL":"C",
+    "HOME":"/nonexistent"}
 
 
 def _readiness(value):
@@ -76,8 +79,8 @@ def _readiness(value):
 
 def _unit(unit):
     try:
-        result=subprocess.run(["systemctl","show",unit,"--property=ActiveState,SubState,UnitFileState"],
-            capture_output=True,text=True,timeout=10,check=True)
+        result=subprocess.run([SYSTEMCTL,"show",unit,"--property=ActiveState,SubState,UnitFileState"],
+            capture_output=True,text=True,timeout=10,check=True,env=COMMAND_ENVIRONMENT)
         fields=dict(line.split("=",1) for line in result.stdout.splitlines() if "=" in line)
         return {key:fields.get(key) if fields.get(key) in {
             "active","inactive","failed","activating","deactivating","running","dead","exited","waiting",
