@@ -123,6 +123,7 @@ class _FakeAuditRepository:
 
 @pytest.fixture(autouse=True)
 def _reset_effect_repository(monkeypatch):
+    monkeypatch.setattr(paper_reconciliation, "bounded_paper_recovery", lambda c: c.begin_nested())
     _FakeConnection.exits = []
     _FakeControlRepository.calls = 0
     _FakeControlRepository.error = None

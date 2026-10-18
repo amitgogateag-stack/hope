@@ -1107,3 +1107,53 @@ Expected-SHA non-force publication and exact pushed-head CI/marker remain final 
 
 No AWS operations, dashboard activation, PAPER execution or public exposure.
 Factory review and separate AWS authorization remain operational prerequisites.
+
+
+## Public single-run recovery atomicity (2026-10-18)
+
+Fetched/fast-forwarded live 02996d05daf75a2dede2534cefd0fe2adef9fb4f before
+code changes. Exact-head CI 39130559117 and issue #5 HOPE_CI_STATUS_V1 were
+SUCCESS, attempt 1. Frozen baseline verified unchanged at
+7e9d341742818a97accce3e2301b1c7f96596795. Preserved the concurrent controlled
+acceptance environment-hardening commit; no AWS execution was performed.
+
+Reproduced a distinct atomicity defect on real PostgreSQL: successful-run
+authentication records a receipt inside the repository savepoint, releases it,
+then performs independent final verification with no outer operation savepoint.
+Injecting failure only at that final verification, catching the error, and
+committing the caller transaction persisted one receipt where zero was required.
+The regression failed on unmodified code (1 failed in 1.37s), proving the gap.
+The repository's inner atomicity did not cover the final public-operation proof.
+
+Wrapped successful-run authentication in the shared bounded recovery savepoint;
+its full lock/proof/receipt/final-verification sequence is now one rollback unit.
+The direct single-run reconciliation entry point also uses that scope, closing
+the remaining public-entrypoint wait-bound gap after the previous batch APIs.
+No lifecycle transition or economic replay is introduced by authentication.
+Existing committed receipts survive failed reauthentication. Raw SQLAlchemy
+exception types remain intact for the service's connection disposal and existing
+sanitized health classification. Single-run reconciliation retains its existing
+unavailable code and now uses the shared timeout classifier. Caller commit
+ownership and per-lock/per-statement limits remain unchanged.
+
+Focused validation: 106 passed in 23.78s. Fifteen new PostgreSQL cases cover late
+false/error/interrupt/statement cancellation with and without a prior receipt,
+control/job lock contention through both direct APIs, backend termination after
+return but before commit, fresh-connection retry and simultaneous authentication.
+They verify caller-marker preservation, timeout restoration, unchanged terminal
+state/effect cardinality and one durable receipt. Existing batch timeout,
+backend-crash, historical-revocation and single-run proof unit tests also pass.
+The initial regression plus 47 existing unit tests passed immediately after fix.
+
+Initial full Windows regression: 3135 passed, 33 platform skips, one deselected,
+one existing Bash-wrapper environment test failed because Bash was unavailable;
+89.32% coverage, 267.77 seconds. Added the missing POSIX/Bash platform guard to
+that newly inherited native test; all Linux assertions remain active. Clean
+rerun: 3135 passed, 34 platform skips, one deselected in 316.82s, 89.32%
+coverage against the unchanged 89% requirement. Local Python 3.12/PostgreSQL 17.
+Three Bash contract files and one Bash-dependent case omitted locally; Linux
+CI remains authoritative for Python 3.13 and all native cases. Complete diff and
+whitespace reviewed, PostgreSQL stopped. Exact pushed-head CI and marker remain
+final gates after expected-SHA non-force publication. No migration, strategy/risk rule, LIVE policy, factory,
+service configuration, dashboard deployment or public exposure changed. AWS
+activation and actual PAPER factory review remain separate operational gates.

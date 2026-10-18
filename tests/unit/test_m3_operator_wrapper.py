@@ -27,6 +27,8 @@ def test_wrapper_never_adds_external_factory_path(tmp_path):
     assert 'exec /usr/bin/env -i "${safe_environment[@]}" /usr/bin/timeout' in content
 
 
+@pytest.mark.skipif(os.name != "posix" or shutil.which("bash") is None,
+    reason="Linux environment and shell wrapper; exercised in Linux CI")
 def test_wrapper_gives_interpreter_only_reviewed_environment(tmp_path):
     script=Path(__file__).parents[2]/"deploy/operations/m3_accept_once.sh"
     release=tmp_path/"release"

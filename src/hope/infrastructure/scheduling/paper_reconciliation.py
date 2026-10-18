@@ -18,6 +18,9 @@ from hope.infrastructure.repositories.paper_reconciliation_audit import (
     SqlAlchemyPaperReconciliationAuditRepository,
 )
 from hope.infrastructure.scheduling.paper_lineage import verify_paper_recovery_lineage
+from hope.infrastructure.scheduling.paper_recovery_limits import (
+    bounded_paper_recovery, recovery_database_error_code,
+)
 from hope.infrastructure.scheduling.recovery import (
     PaperRecoveryDecision,
     assess_due_paper_recovery,
@@ -34,7 +37,17 @@ def authenticate_successful_paper_run(connection: Connection, job_run: Scheduled
 
     Restart may finish this step after a lost acknowledgement. It never changes
     lifecycle state or replays accounting, and cannot bless partial effects.
+    Receipt insertion and the final independent verification share a bounded
+    savepoint, even when a caller catches a proof failure and commits outer work.
     """
+    _validated_reconciliation_current(job_run, job_run.scheduled_for)
+    # Preserve SQLAlchemy exception types for service connection disposal and
+    # its existing sanitized database-health classification.
+    with bounded_paper_recovery(connection):
+        _authenticate_successful_paper_run(connection, job_run)
+
+
+def _authenticate_successful_paper_run(connection: Connection, job_run: ScheduledJobRun) -> None:
     SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
     connection.execute(text("SELECT job_run_id FROM job_runs WHERE job_run_id=:id FOR UPDATE"),
                        {"id": job_run.job_run_id})
@@ -282,7 +295,7 @@ def reconcile_completed_paper_run(
     """
     current = _validated_reconciliation_current(job_run, current)
     try:
-        with connection.begin_nested():
+        with bounded_paper_recovery(connection):
             SqlAlchemyPaperEnvironmentControlRepository(
                 connection
             ).assert_running()
@@ -292,7 +305,7 @@ def reconcile_completed_paper_run(
                 current=current,
             )
     except SQLAlchemyError as exc:
-        raise RuntimeError("PAPER_JOB_RECONCILIATION_DATABASE_UNAVAILABLE") from exc
+        raise RuntimeError(recovery_database_error_code(exc, "PAPER_JOB_RECONCILIATION")) from exc
 
 
 def _reconcile_completed_paper_run(

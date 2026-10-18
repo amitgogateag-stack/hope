@@ -200,3 +200,25 @@ and durable state, and retry only the same reviewed explicit recovery operation
 after the blocker is resolved. A lost connection/commit acknowledgement remains
 ambiguous until a fresh read/recovery proves the same IDs. These engineering
 changes do not authorize AWS mutations or a PAPER cycle.
+
+
+## Atomic single-run recovery and successful-run authentication
+
+The same transaction-local wait bounds also cover the direct
+`reconcile_completed_paper_run` and `authenticate_successful_paper_run` APIs.
+Successful-run authentication now owns a savepoint around control/job locks,
+lineage/accounting proofs, receipt insertion and final independent verification.
+The repository insertion's own savepoint alone cannot undo a receipt if a later
+public-operation proof fails after that inner savepoint was released.
+
+Catching a late proof error, cancellation or interrupt and committing the outer
+transaction leaves no new receipt. A receipt committed before this call remains
+intact. Successful authentication remains observational: no lifecycle transition,
+strategy invocation, claim or accounting replay. Concurrent callers serialize on
+the existing locks and produce one receipt. Single-run reconciliation retains its
+existing lifecycle behavior and fixed database-error codes, with the timeout code
+added by the shared classifier. Successful-run authentication preserves its raw
+SQLAlchemy exception contract so service connection disposal and sanitized health
+classification continue to work. Caller work before the savepoint remains intact;
+a returned result is still provisional until the outer commit succeeds. Backend
+loss before that commit requires a fresh durable-state check for the same run.
