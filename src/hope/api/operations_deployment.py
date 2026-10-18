@@ -22,6 +22,11 @@ class DeploymentError(RuntimeError):
     pass
 
 
+GIT_BINARY = "/usr/bin/git"
+GIT_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "HOME": "/nonexistent", "LANG": "C", "LC_ALL": "C",
+                   "GIT_CONFIG_NOSYSTEM": "1", "GIT_TERMINAL_PROMPT": "0", "GIT_PAGER": "cat"}
+
+
 def _sha(value: str) -> str:
     if not re.fullmatch(r"[0-9a-f]{40}", value):
         raise DeploymentError("OPERATIONS_COMMIT_INVALID")
@@ -30,9 +35,11 @@ def _sha(value: str) -> str:
 
 def _git(release: Path, *arguments: str) -> str:
     try:
-        result = subprocess.run(["git", "--no-optional-locks", "-c", f"safe.directory={release}",
+        result = subprocess.run([GIT_BINARY, "--no-optional-locks",
+                                 "-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false",
+                                 "-c", "core.pager=cat", "-c", f"safe.directory={release}",
                                  "-C", str(release), *arguments],
-                                check=True, capture_output=True, text=True, timeout=15)
+                                check=True, capture_output=True, text=True, timeout=15, env=GIT_ENVIRONMENT)
     except (OSError, subprocess.SubprocessError) as exc:
         raise DeploymentError("OPERATIONS_RELEASE_GIT_UNAVAILABLE") from exc
     return result.stdout.strip()

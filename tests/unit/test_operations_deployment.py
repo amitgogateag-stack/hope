@@ -2,6 +2,7 @@ import os
 from pathlib import Path
 import subprocess
 import json
+import shutil
 
 import pytest
 
@@ -9,7 +10,13 @@ from hope.api import operations_deployment as module
 
 
 @pytest.fixture
-def prepared_release(tmp_path):
+def prepared_release(tmp_path, monkeypatch):
+    if os.name != "posix":
+        # Exercise real Git metadata on Windows; Linux retains the fixed
+        # production binary and environment without any adapter.
+        monkeypatch.setattr(module, "GIT_BINARY", shutil.which("git"))
+        monkeypatch.setattr(module, "GIT_ENVIRONMENT", {**module.GIT_ENVIRONMENT,
+            "PATH":os.environ["PATH"], "SystemRoot":os.environ.get("SystemRoot", "")})
     release = tmp_path / "release"
     release.mkdir()
     for file in ("src/hope/api/paper_service.py", "src/hope/api/dashboard_server.py",
@@ -36,6 +43,22 @@ def test_preflight_accepts_exact_clean_release_without_mutation(prepared_release
     assert module.inspect_release(release, sha)["status"] == "COMPATIBLE_CODE"
     assert git("status", "--porcelain") == before == ""
     assert git("rev-parse", "HEAD") == sha
+
+
+@pytest.mark.skipif(os.name!="posix",reason="Native privileged Git isolation; exercised in Linux CI")
+def test_release_inspection_ignores_hostile_path_global_config_and_fsmonitor(prepared_release,tmp_path,monkeypatch):
+    release,sha,git=prepared_release
+    marker=tmp_path/"executed"
+    hostile=tmp_path/"hostile";hostile.mkdir()
+    hook=hostile/"monitor"
+    hook.write_text("#!/bin/sh\nprintf executed > '"+str(marker)+"'\n")
+    hook.chmod(0o700)
+    fake=hostile/"git";fake.write_text(hook.read_text());fake.chmod(0o700)
+    config=hostile/"config";config.write_text("[core]\nfsmonitor = "+str(hook)+"\n")
+    git("config","core.fsmonitor",str(hook))
+    monkeypatch.setenv("PATH",str(hostile));monkeypatch.setenv("GIT_CONFIG_GLOBAL",str(config))
+    assert module.inspect_release(release,sha)["status"]=="COMPATIBLE_CODE"
+    assert not marker.exists()
 
 
 @pytest.mark.parametrize("failure", ["sha", "dirty", "origin", "nested", "missing"])

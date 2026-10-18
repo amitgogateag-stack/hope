@@ -184,12 +184,25 @@ async function main() {
   const b=browser();
   const data={schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'UNAVAILABLE',reason:'HEALTH_MISSING',worker_report:'UNKNOWN',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:null,last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
   b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/HEALTH_MISSING/);
-  b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT'});
+  b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',last_successful_poll_at:iso(BASE)});
   assert.equal(b.element('readiness-state').textContent,'READY');
   b.advance(300001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
   assert.throws(()=>b.api.applyReadiness({...data,execution_authorized:true}));
   assert.throws(()=>b.api.applyReadiness({...data,reason:'secret-payload'}));
   b.api.clearReadiness();assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');
+ }
+ // A recent response cannot extend an old successful poll, or conceal new diagnoses.
+ {
+  const b=browser();
+  const data={schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:iso(BASE-299000),last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
+  b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'READY');
+  b.advance(1001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');
+  assert.throws(()=>b.api.applyReadiness({...data,last_successful_poll_at:null}));
+  assert.throws(()=>b.api.applyReadiness({...data,generated_at:iso(BASE+60000),last_successful_poll_at:iso(BASE+60000)}));
+  for(const reason of ['HEALTH_FROM_FUTURE','POLL_NOT_CURRENT','WORKER_STATUS_INCONSISTENT']) {
+   b.api.applyReadiness({...data,generated_at:iso(BASE+1001),paper_health:'UNAVAILABLE',reason});
+   assert.match(b.element('readiness-note').textContent,new RegExp(reason));
+  }
  }
  console.log('Dashboard M1: aging, unavailable/zero, compatibility, heartbeat, deadlines, serialization and generation fencing passed');
 }

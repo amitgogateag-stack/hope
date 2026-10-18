@@ -10,10 +10,19 @@ permissions:
 
 jobs:
   test:
+    name: test (PostgreSQL ${{ matrix.postgres.major }})
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres:
+          - major: '16'
+            image: docker.io/library/postgres:16@sha256:ca0bd484cb98bf4b24eb1010e73fb3fcbd6714d240fbc1a10eea5b7dbecb641d
+          - major: '17'
+            image: docker.io/library/postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
     services:
       postgres:
-        image: docker.io/library/postgres:17@sha256:d74eeac9a635390a49bc21bd49fccd973de707e2a53a76ac49b552b8712ec46f
+        image: ${{ matrix.postgres.image }}
         env:
           POSTGRES_USER: hope
           POSTGRES_PASSWORD: hope
@@ -43,6 +52,7 @@ jobs:
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
         run: pytest --cov=hope --cov-report=term-missing --cov-fail-under=89
 
   publish-ci-status:

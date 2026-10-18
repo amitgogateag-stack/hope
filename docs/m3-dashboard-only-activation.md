@@ -1,5 +1,12 @@
 # M3 dashboard-only activation and recovery
 
+Use [the consolidated final operator package](m3-final-operator-package.md) for
+the single EC2 paste block and guarded dispatcher. This document retains the
+detailed design/recovery reference. New drop-ins scrub inherited Python/loader
+variables and use `/usr/bin/env` to set the reviewed import path after systemd
+UnsetEnvironment. Previously committed complete legacy pairs are recognized and
+backed up verbatim for rollback; mixed/unreviewed pairs are rejected.
+
 Engineering tooling; AWS execution requires separate approval. No AWS activation
 has been performed by preparing or testing this package. Use AWS Console, region
 ap-south-1, EC2 Instance Connect for the reviewed HOPE instance
@@ -173,7 +180,7 @@ sudo preserve-env names a variable, not its value. Database credentials are read
 from the existing protected /etc/hope-dashboard-ops.env.
 
 ```sh
-sudo --preserve-env=GH_TOKEN "$ROOT/venv/bin/python" -B \
+sudo --preserve-env=GH_TOKEN "$ROOT/venv/bin/python" -I -B \
   "$RELEASE/deploy/operations/dashboard_release.py" preflight \
   --target "$TARGET" --expected-current "$SHARED" \
   --ci-run-id "$CI_RUN" --ci-run-attempt "$CI_ATTEMPT"
@@ -185,7 +192,7 @@ inside activation under the shared kernel guard; preflight alone grants nothing.
 Only after separate explicit host-change approval:
 
 ```sh
-sudo --preserve-env=GH_TOKEN "$ROOT/venv/bin/python" -B \
+sudo --preserve-env=GH_TOKEN "$ROOT/venv/bin/python" -I -B \
   "$RELEASE/deploy/operations/dashboard_release.py" activate \
   --target "$TARGET" --expected-current "$SHARED" \
   --ci-run-id "$CI_RUN" --ci-run-attempt "$CI_ATTEMPT" \
@@ -204,7 +211,7 @@ observations. Only then is COMMITTED durably published. No health is synthesized
 ## Independent observations and reboot behavior
 
 ```sh
-sudo "$ROOT/venv/bin/python" -B "$RELEASE/deploy/operations/dashboard_release.py" status
+sudo "$ROOT/venv/bin/python" -I -B "$RELEASE/deploy/operations/dashboard_release.py" status
 curl --fail --silent --show-error --noproxy '*' http://127.0.0.1:8788/release.json
 curl --fail --silent --show-error --noproxy '*' http://127.0.0.1:8788/readiness.json
 curl --fail --silent --show-error --noproxy '*' http://127.0.0.1:8788/status.json
@@ -243,7 +250,7 @@ confirming the owner process is dead, use the following separately approved
 dashboard-only recovery (also valid to revert a committed dashboard deployment):
 
 ```sh
-sudo "$ROOT/venv/bin/python" -B "$RELEASE/deploy/operations/dashboard_release.py" rollback \
+sudo "$ROOT/venv/bin/python" -I -B "$RELEASE/deploy/operations/dashboard_release.py" rollback \
   --target "$TARGET" --expected-current "$SHARED" --approve-dashboard-change
 ```
 

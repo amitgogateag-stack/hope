@@ -76,7 +76,7 @@ def test_database_role_and_schema_are_checked_without_sql_mutations(setup,monkey
     layout,_=setup;layout.environment.write_text("HOPE_DATABASE_URL='postgresql+psycopg://private'\n")
     monkeypatch.setattr(module,"_trusted",lambda *a,**k:None)
     engine=MagicMock();connection=engine.connect.return_value.__enter__.return_value
-    connection.execute.return_value.scalar_one.return_value="hope_m3_restore_test"
+    connection.execute.return_value.scalar_one.side_effect=["hope_m3_restore_test","160013"]
     monkeypatch.setattr(module,"create_engine",Mock(return_value=engine))
     role=Mock(side_effect=RuntimeError("role secret") if failure=="role" else None)
     schema=Mock(side_effect=RuntimeError("schema secret") if failure=="schema" else None)
@@ -86,7 +86,7 @@ def test_database_role_and_schema_are_checked_without_sql_mutations(setup,monkey
         with pytest.raises(RuntimeError):module.Host(layout).database(layout.root)
     else:module.Host(layout).database(layout.root)
     role.assert_called_once_with(connection,component="dashboard")
-    assert all(str(c.args[0]).startswith(("SET TRANSACTION READ ONLY","SELECT current_database")) for c in connection.execute.call_args_list)
+    assert all(str(c.args[0]).startswith(("SET TRANSACTION READ ONLY","SELECT current_database","SHOW server_version_num")) for c in connection.execute.call_args_list)
     engine.dispose.assert_called_once()
 
 

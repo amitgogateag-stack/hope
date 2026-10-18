@@ -15,15 +15,18 @@ def dashboard_readiness(snapshot,operations):
     data = None
     try:
         raw,generated = _verified_snapshot(snapshot)
-        data = json.loads(raw)
-        result["snapshot"] = "CURRENT" if (now-generated).total_seconds()<=3600 else "STALE"
+        age = (now-generated).total_seconds()
+        result["snapshot"] = "CURRENT" if 0<=age<=3600 else "STALE" if age>3600 else "UNAVAILABLE"
         result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
-        if result["snapshot"]=="CURRENT" and data["paper"]["environment_state"]=="HALTED":
+        # Historical/future snapshots cannot establish a current HALT, claim
+        # count or activity observation. They also cannot authorize execution.
+        data = json.loads(raw) if result["snapshot"]=="CURRENT" else None
+        if data and data["paper"]["environment_state"]=="HALTED":
             result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
-        activity = data.get("projections",{}).get("paper_activity",{})
+        activity = (data or {}).get("projections",{}).get("paper_activity",{})
         if activity.get("status")=="AVAILABLE":
             result["last_successful_paper_at"] = activity.get("last_completed_at")
-        if data["paper"].get("recovery",{}).get("claimed_with_effects",0)>0:
+        if data and data["paper"].get("recovery",{}).get("claimed_with_effects",0)>0:
             result["reconciliation"] = "CLAIMS_REQUIRE_REVIEW"
     except (OSError,ValueError,TypeError,UnicodeError):
         pass
@@ -32,20 +35,32 @@ def dashboard_readiness(snapshot,operations):
     except FileNotFoundError:
         return result
     except PermissionError:
-        result["reason"] = "HEALTH_UNREADABLE"
+        if result["paper_health"]!="HALTED":result["reason"] = "HEALTH_UNREADABLE"
         return result
     except (OSError,ValueError,TypeError,UnicodeError):
-        result["reason"] = "HEALTH_INVALID"
+        if result["paper_health"]!="HALTED":result["reason"] = "HEALTH_INVALID"
+        return result
+    # The file validators allow limited transport clock skew; a future-dated
+    # observation still must never be promoted into current readiness.
+    if any(datetime.fromisoformat(health[key])>now for key in
+            ("generated_at","last_success_at","last_failure_at") if health.get(key) is not None):
+        if result["paper_health"]!="HALTED":result["reason"]="HEALTH_FROM_FUTURE"
         return result
     result.update(worker_report=health["state"],last_successful_poll_at=health["last_success_at"],
         last_failure_at=health.get("last_failure_at"),last_failure_code=health.get("last_failure_code"))
     generated = datetime.fromisoformat(health["generated_at"])
-    if (now-generated).total_seconds()>300:
+    if result["paper_health"]=="HALTED":
+        pass  # A current durable snapshot HALT survives missing/stale health.
+    elif (now-generated).total_seconds()>300:
         result["reason"] = "HEALTH_STALE"
     elif health["state"]=="HALTED" or (data and data["paper"]["environment_state"]=="HALTED"):
         result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
     elif health["state"]!="CURRENT":
         result["reason"] = "WORKER_"+health["state"]
+    elif health["cycles_succeeded"]<1 or health["error_code"] is not None:
+        result["reason"] = "WORKER_STATUS_INCONSISTENT"
+    elif (now-datetime.fromisoformat(health["last_success_at"])).total_seconds()>300:
+        result["reason"] = "POLL_NOT_CURRENT"
     elif result["snapshot"]!="CURRENT":
         result["reason"] = "SNAPSHOT_NOT_CURRENT"
     elif health["schema_compatibility"]!="COMPATIBLE" or health["deployed_commit"] is None:

@@ -159,7 +159,7 @@ def _point(layout,sha):
         if temporary.is_symlink():temporary.unlink()
 
 
-def _configs(layout,sha):
+def _legacy_configs(layout,sha):
     base=layout.root/"dashboard-current"
     common=(f"[Service]\nWorkingDirectory={base}\nEnvironment=PYTHONPATH={base}/src\n"
         f"ExecStartPre={layout.python} -B -s -P -m hope.api.dashboard_activation gate --target {sha}\nExecStart=\n")
@@ -171,18 +171,40 @@ def _configs(layout,sha):
     }
 
 
+def _configs(layout,sha):
+    """Set the reviewed path after systemd applies UnsetEnvironment.
+
+    Environment= cannot override UnsetEnvironment in a base unit. /usr/bin/env
+    adds only this reviewed import path after systemd has scrubbed ambient input.
+    """
+    path=f"PYTHONPATH={layout.root}/dashboard-current/src"
+    unset=("UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS "
+        "PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR "
+        "LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT\n")
+    return {unit:payload.replace(f"Environment={path}\n",unset)
+        .replace(f"ExecStartPre={layout.python}",f"ExecStartPre=/usr/bin/env {path} {layout.python}")
+        .replace(f"ExecStart={layout.python}",f"ExecStart=/usr/bin/env {path} {layout.python}")
+        for unit,payload in _legacy_configs(layout,sha).items()}
+
+
 def _config_path(layout,unit):return layout.units/(unit+".d")/"90-hope-dashboard-only.conf"
 
 
 def _check_configs(layout,sha):
     expected=_configs(layout,sha) if sha else {WEB:None,EXPORT:None}
+    actual={}
     for unit,payload in expected.items():
         path=_config_path(layout,unit)
         if payload is None:
             _require(not path.exists() and not path.is_symlink(),"UNEXPECTED_OVERRIDE")
+            actual[unit]=None
         else:
             _trusted(path.parent,directory=True)
-            _trusted(path);_require(path.read_text()==payload,"OVERRIDE_CHANGED")
+            _trusted(path);actual[unit]=path.read_text()
+    # Accept only a complete reviewed pair. Preserve exact prior bytes for
+    # rollback; a mixed legacy/new pair or arbitrary override is never adopted.
+    _require(actual==expected or (sha and actual==_legacy_configs(layout,sha)),"OVERRIDE_CHANGED")
+    return actual
 
 
 def _install_configs(layout,sha):
@@ -196,7 +218,8 @@ def _backup(layout,record):
     value=_json(layout.root/("dashboard-backup-"+record["backup_id"]+".json"))
     _require(set(value)=={"previous_record","configs"} and isinstance(value["configs"],dict),"BACKUP_INVALID")
     expected=_configs(layout,record["previous"]) if record["previous"] else {WEB:None,EXPORT:None}
-    _require(value["configs"]==expected,"BACKUP_INVALID")
+    _require(value["configs"]==expected or (record["previous"]
+        and value["configs"]==_legacy_configs(layout,record["previous"])),"BACKUP_INVALID")
     previous=value["previous_record"]
     if previous is None:
         _require(record["previous"] is None,"BACKUP_INVALID")
@@ -287,14 +310,14 @@ def activate(layout,host,*,target,shared,ci_run,ci_attempt):
              (previous_record is not None and previous_record["target"]==previous
               and previous_record["shared"]==shared)),"EXPECTED_POINTER_MISMATCH")
         _require(target!=(previous or shared),"ALREADY_ACTIVE")
-        _check_configs(layout,previous)
+        previous_configs=_check_configs(layout,previous)
         timer_active=host.preflight(target,shared,previous,ci_run,ci_attempt)
         boot,ticks=operations._process_identity(os.getpid())
         record=dict(schema="hope.dashboard-activation.v1",target=target,shared=shared,
             previous=previous,phase="PREPARED",backup_id=uuid4().hex,timer_active=timer_active,
             pid=os.getpid(),boot=boot,ticks=ticks)
         _save(layout.root/("dashboard-backup-"+record["backup_id"]+".json"),
-            {"previous_record":previous_record,"configs":_configs(layout,previous) if previous else {WEB:None,EXPORT:None}},0o600)
+            {"previous_record":previous_record,"configs":previous_configs},0o600)
         _save(layout.journal,record)
         try:
             host.stop();_install_configs(layout,target);_point(layout,target)
@@ -433,8 +456,11 @@ class Host:
             with engine.connect() as connection:
                 connection.execute(text("SET TRANSACTION READ ONLY"))
                 _require(connection.execute(text("SELECT current_database()")).scalar_one()=="hope_m3_restore_test","WRONG_DATABASE")
+                version=int(connection.execute(text("SHOW server_version_num")).scalar_one())
+                _require(version//10000 in {16,17},"DATABASE_VERSION_UNVERIFIED")
                 operations.verify_database_role(connection,component="dashboard")
                 verify_schema_compatibility(connection,release/"migrations")
+                self.postgres_version_num=version
         finally:engine.dispose()
 
     def configuration(self,shared,previous):
@@ -560,6 +586,7 @@ def main(argv=None):
             host.preflight(_sha(args.target),args.expected_current,
                 _pointer(layout,"dashboard-current",optional=True),args.ci_run_id,args.ci_run_attempt)
             result={"status":"PREFLIGHT_PASSED","host_changes":False,"execution_authorized":False}
+            if hasattr(host,"postgres_version_num"):result["postgres_version_num"]=host.postgres_version_num
         print(json.dumps(result,sort_keys=True));return 0
     except Exception:
         stage=getattr(host,"stage","INITIAL")

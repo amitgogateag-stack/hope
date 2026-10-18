@@ -7,7 +7,8 @@ The new private dashboard uses loopback port **8788**. No inbound security-group
 rule is required. Do not expose it through a public proxy or port forwarding.
 
 For an existing M3 installation requiring only dashboard code activation, use
-[the dedicated dashboard-only procedure](../../docs/m3-dashboard-only-activation.md).
+[the consolidated final operator package](../../docs/m3-final-operator-package.md)
+and its [dashboard-only design and recovery reference](../../docs/m3-dashboard-only-activation.md).
 It preserves shared `current`, keeps PAPER inactive/disabled and uses a separate
 guarded dashboard pointer, durable recovery journal and boot/request fence.
 Do not use the full `activate_release.py` workflow for that purpose: it starts

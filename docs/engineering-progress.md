@@ -1157,3 +1157,72 @@ whitespace reviewed, PostgreSQL stopped. Exact pushed-head CI and marker remain
 final gates after expected-SHA non-force publication. No migration, strategy/risk rule, LIVE policy, factory,
 service configuration, dashboard deployment or public exposure changed. AWS
 activation and actual PAPER factory review remain separate operational gates.
+
+
+## M3 final dashboard deployment and PAPER readiness (2026-10-18)
+
+Fetched live 59d517da020aa18016703a8266f102bebf9476e2, verified exact-head HOPE
+CI 39134860861 SUCCESS and issue #5 matching Bot marker before changes. Preserved
+37cb5ae public recovery atomicity and 59d517d operator service isolation after
+fast-forward. Frozen day29-green-baseline verified unchanged at
+7e9d341742818a97accce3e2301b1c7f96596795. No AWS execution or deployment.
+
+Six before-fix regressions failed (0.57s): the managed unit command contract and
+five false READY cases with RUNNING snapshots (future heartbeat, stale successful
+poll, future snapshot, zero successful cycles and CURRENT with an error). Existing
+base-unit UnsetEnvironment removed PYTHONPATH after drop-in Environment=, so the
+managed interpreter could not import/gate the intended dashboard release.
+
+New drop-ins scrub inherited Python/loader variables and set the reviewed path
+through /usr/bin/env after systemd environment removal, preserving -B -s -P and
+existing service isolation. Complete legacy pairs are recognized for upgrade and
+backed up verbatim; rollback restores their exact prior bytes/journal. Mixed or
+unreviewed pairs fail closed. Shared current/deployed.env and PAPER enablement
+are untouched. Existing journal/lock/owner/request fences remain authoritative.
+
+Readiness now rejects future observations and stale successful polls, and cannot
+promote inconsistent CURRENT health to READY. Only a current snapshot can supply
+current HALT/claim/activity facts. A current durable HALT survives missing/invalid/
+stale health. The read-only audit/probe vocabulary also rejects fabricated READY
+without a current poll. Every result remains execution_authorized=false/LIVE=false.
+Privileged Git inspection now uses a fixed binary/minimal environment with hooks,
+fsmonitor and optional index writes disabled; it cannot execute ambient PATH,
+loader or global Git configuration. Native adversarial Git tests accompany this.
+
+Added a guarded operator dispatcher (isolated Python bootstrap, no staging/
+service/PAPER commands) and one consolidated EC2 paste procedure. Inspection is
+separate from explicit staging, snapshot refresh, activation and rollback approval.
+Preflight observes PostgreSQL server_version_num in READ ONLY mode, supports the
+tested 16/17 majors and rejects unknown versions. CI now runs full Python 3.13
+suites on digest-pinned PostgreSQL 16 and 17 images; the status publisher depends
+on aggregate matrix success. A dedicated read-only test proves actual server major.
+The PostgreSQL 16 manifest digest was resolved from the official registry; no
+registry credential or database URL is stored in this record.
+
+Repository inspection found no eligible real production plan factory in src.
+The consolidated evidence table distinguishes production certified work/plan
+interfaces from abstract/research-only catalogs and synthetic integration factories.
+None was invented, selected or approved. PAPER factory/input/run review and any
+one-cycle execution remain separate gates. No strategy, research threshold, risk
+control, migration file, production database or public-network change occurred.
+
+Focused engineering suite: 286 passed, 34 platform skips, 36.13s, including local
+PostgreSQL 17 scoped-reader/schema and public-recovery tests. Earlier focus: 264
+passed/20 skips. Corrected two fixture-import errors and a comment-sensitive static
+assertion during development; no production check was weakened. Full local
+regression: 3162 passed, 44 platform skips, one deselected, 544.69s, 89.35%
+coverage against the unchanged 89% requirement (Python 3.12/PostgreSQL 17).
+Three Bash contract files and one Bash-dependent case omitted locally. Native
+crash/process/launch and Bash cases execute in Python 3.13 Linux CI on both PG
+majors. PostgreSQL stopped after tests; complete diff/whitespace reviewed. Actual
+AWS systemd activation/reboot/rollback acceptance has not been performed.
+
+
+Final browser contract review also updated the shipped readiness vocabulary and
+requires a current successful poll for READY. Cached READY ages when the poll
+expires even if the response itself is newer. Deterministic Node browser tests
+verify independent poll aging, future/missing poll rejection and new diagnostic
+reasons. Browser/final-contract focus: 29 passed, one native-platform skip, 0.96s.
+
+Expected-SHA non-force publication and both exact-head CI jobs/marker remain final
+engineering gates. AWS activation/reboot/rollback and PAPER operations are pending.

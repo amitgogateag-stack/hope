@@ -23,6 +23,7 @@ READINESS_FIELDS={
     "reason":{"HEALTH_MISSING","HEALTH_UNREADABLE","HEALTH_INVALID","HEALTH_STALE",
         "WORKER_STARTING","WORKER_STOPPED","WORKER_UNAVAILABLE","SNAPSHOT_NOT_CURRENT",
         "WORKER_IDENTITY_UNVERIFIED","CLAIMS_REQUIRE_REVIEW","CURRENT_OBSERVATIONS_ONLY",
+        "HEALTH_FROM_FUTURE","POLL_NOT_CURRENT","WORKER_STATUS_INCONSISTENT",
         "DURABLE_HALT_OBSERVED"},
     "worker_report":{"UNKNOWN","STARTING","CURRENT","HALTED","UNAVAILABLE","STOPPED"},
     "snapshot":{"CURRENT","STALE","UNAVAILABLE"},
@@ -74,6 +75,10 @@ def _readiness(value):
         raise ValueError("readiness contradictory ready")
     # Never reproduce an old READY/HALTED claim as a current host observation.
     if age>300:return {"status":"STALE_RESPONSE"}
+    if safe["paper_health"]=="READY":
+        poll=stamps.get("last_successful_poll_at")
+        if age<0 or poll is None or not 0<=age+(generated-poll).total_seconds()<=300:
+            raise ValueError("readiness current poll required")
     return safe
 
 
