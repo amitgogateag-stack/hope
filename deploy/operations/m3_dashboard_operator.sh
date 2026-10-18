@@ -3,7 +3,7 @@
 set -euo pipefail
 action=${1:-preflight}
 case "$action" in
-  preflight|status) [[ $# -le 1 ]] || exit 2 ;;
+  preflight|status|paper-audit) [[ $# -le 1 ]] || exit 2 ;;
   activate|rollback) [[ $# == 2 && $2 == --approve-dashboard-change ]] || {
     printf '%s\n' 'DASHBOARD_EXPLICIT_OPERATOR_APPROVAL_REQUIRED' >&2; exit 2;
   } ;;
@@ -19,7 +19,7 @@ RELEASE="$ROOT/releases/$HOPE_DASHBOARD_TARGET"
 BOOTSTRAP="$RELEASE/deploy/operations/dashboard_release.py"
 [[ -f $BOOTSTRAP ]] || { printf '%s\n' 'DASHBOARD_REVIEWED_RELEASE_NOT_STAGED' >&2; exit 2; }
 arguments=("$action")
-if [[ $action != status ]]; then
+if [[ $action != status && $action != paper-audit ]]; then
   : "${HOPE_DASHBOARD_SHARED:?Independently verified shared SHA required}"
   [[ $HOPE_DASHBOARD_SHARED =~ ^[0-9a-f]{40}$ ]] || exit 2
   arguments+=(--target "$HOPE_DASHBOARD_TARGET" --expected-current "$HOPE_DASHBOARD_SHARED")

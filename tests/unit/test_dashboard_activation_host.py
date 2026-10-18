@@ -104,6 +104,7 @@ def test_unsafe_environment_file_is_never_executed_or_used_to_connect(setup,monk
 def test_host_stop_and_start_preserve_timer_enablement_and_never_touch_paper():
     host=module.Host(module.Layout());host.run=Mock(return_value="")
     host.legacy_safe=Mock()
+    host.paper_properties=Mock(return_value="LoadState=loaded\nActiveState=inactive\nUnitFileState=disabled\nMainPID=0\nFragmentPath=/etc/systemd/system/hope-paper.service\nDropInPaths=\n")
     host.show=Mock(side_effect=lambda unit:{"ActiveState":"inactive","UnitFileState":"disabled"})
     host.stop();host.reload();host.start(True)
     commands=[c.args for c in host.run.call_args_list]

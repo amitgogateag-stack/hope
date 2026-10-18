@@ -44,6 +44,13 @@ Shared /opt/hope-operations/current and deployed.env are never changed. PAPER
 continues to reference that shared release and must be inactive AND disabled or
 masked. This workflow never stops/starts/restarts/enables PAPER or executes its
 factory. Its service-control allowlist contains only the three dashboard units.
+Canonical PAPER inspection now requires an exact complete property record,
+including LoadState, zero MainPID, an absolute fragment and no drop-ins. A masked
+LoadState additionally requires masked UnitFileState and /dev/null fragment. Missing,
+duplicate, unknown or conflicting fields fail closed. A complete not-found
+record is classified separately but remains blocked: see the absent-unit review
+and read-only `paper-audit` procedure in the final operator package. A diagnostic
+scan is not an authorization artifact and cannot be replayed as a boot permit.
 No migration, database write, grant, strategy/risk change or network exposure
 occurs. The reader connects only to hope_m3_restore_test in a READ ONLY
 transaction; exact migration checksums must match BOTH target and rollback code.

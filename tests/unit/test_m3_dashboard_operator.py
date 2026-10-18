@@ -31,7 +31,7 @@ def test_consolidated_paste_blocks_parse_without_executing_host_commands():
 
 @pytest.mark.skipif(os.name!="posix" or shutil.which("bash") is None,reason="Linux dispatcher; exercised on CI")
 @pytest.mark.parametrize("action,approved,allowed", [
-    ("preflight",False,True),("status",False,True),("activate",False,False),
+    ("preflight",False,True),("status",False,True),("paper-audit",False,True),("activate",False,False),
     ("activate",True,True),("rollback",False,False),("rollback",True,True),
     ("migrate",False,False),
 ])

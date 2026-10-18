@@ -240,7 +240,8 @@ def test_service_mutation_firewall_and_private_commands():
 
 @pytest.mark.parametrize("state,enabled",[("active","disabled"),("inactive","enabled"),("failed","disabled"),("inactive","unknown")])
 def test_paper_activity_or_boot_enablement_blocks_every_dashboard_start(state,enabled):
-    host=module.Host(module.Layout());host.show=Mock(return_value={"ActiveState":state,"UnitFileState":enabled})
+    host=module.Host(module.Layout())
+    host.paper_properties=Mock(return_value=f"LoadState=loaded\nActiveState={state}\nUnitFileState={enabled}\nMainPID=0\nFragmentPath=/etc/systemd/system/hope-paper.service\nDropInPaths=\n")
     host.control=Mock()
     with pytest.raises(RuntimeError,match="PAPER_MUST"):host.start(False)
     host.control.assert_not_called()

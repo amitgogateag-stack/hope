@@ -25,6 +25,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine,text
 
 from hope.api import operations_deployment as operations
+from hope.api import paper_absence_audit
 from hope.api.dashboard_server import _verified_snapshot
 from hope.api.m3_audit import _readiness
 from hope.api.release_attestation import _NoRedirect,verify_exact_ci
@@ -370,9 +371,35 @@ class Host:
         self.run("systemctl",verb,*units,timeout=90)
 
     def paper_safe(self):
-        value=self.show(PAPER)
-        _require(value.get("ActiveState")=="inactive" and value.get("UnitFileState") in {"disabled","masked"},"PAPER_MUST_BE_INACTIVE_DISABLED")
+        state=paper_absence_audit.unit_state(self.paper_properties())
+        _require(state!="ABSENT_REQUIRES_REVIEW","PAPER_ABSENCE_REQUIRES_HOST_REVIEW")
+        _require(state=="INSTALLED_INACTIVE","PAPER_MUST_BE_INACTIVE_DISABLED")
         self.legacy_safe()
+
+    def paper_properties(self):
+        try:
+            return self.run("systemctl","show",PAPER,
+                "--property="+",".join(paper_absence_audit.PROPERTIES))
+        except subprocess.CalledProcessError as exc:
+            # A nonzero response is usable only as a complete, exact absent
+            # record. It still cannot satisfy the activation gate.
+            _require(exc.returncode in {1,4} and
+                paper_absence_audit.unit_state(exc.stdout)=="ABSENT_REQUIRES_REVIEW",
+                "PAPER_UNIT_UNVERIFIED")
+            return exc.stdout
+
+    def absence_deployment_check(self):
+        _idle(self.layout)
+        value=_record(self.layout)
+        _require(value is None or value["phase"]=="COMMITTED","RECOVERY_REQUIRED")
+        shared=_pointer(self.layout,"current")
+        if value is not None:
+            _require(value["shared"]==_pointer(self.layout,"current")
+                and value["target"]==_pointer(self.layout,"dashboard-current"),"GATE_POINTER_MISMATCH")
+        with paper_absence_audit.deployment_view(self.layout.root):
+            _idle(self.layout)
+            _require(_record(self.layout)==value and _pointer(self.layout,"current")==shared,"DEPLOYMENT_CHANGED")
+        return (0,)  # No conflicts seen; never an absence attestation.
 
     def legacy_safe(self):
         try:output=self.run("systemctl","show",LEGACY_M3,"--property=LoadState,ActiveState,UnitFileState")
@@ -557,7 +584,7 @@ class Host:
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Approved dashboard-only activation; never starts PAPER")
-    parser.add_argument("action",choices=("preflight","activate","rollback","gate","status"))
+    parser.add_argument("action",choices=("preflight","activate","rollback","gate","status","paper-audit"))
     parser.add_argument("--target")
     parser.add_argument("--expected-current")
     parser.add_argument("--ci-run-id",type=int)
@@ -569,7 +596,9 @@ def main(argv=None):
             _require(args.approve_dashboard_change,"EXPLICIT_APPROVAL_REQUIRED")
         _require(sys.platform=="linux","LINUX_REQUIRED")
         if args.action!="gate":_require(os.geteuid()==0,"ROOT_REQUIRED")
-        if args.action=="status":
+        if args.action=="paper-audit":
+            print(json.dumps(paper_absence_audit.audit(host),sort_keys=True));return 2
+        elif args.action=="status":
             value=_record(layout)
             result={"status":"UNMANAGED" if value is None else value["phase"],
                 "dashboard_commit":_pointer(layout,"dashboard-current",optional=True),

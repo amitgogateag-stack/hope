@@ -1,5 +1,6 @@
 """Privilege-boundary contracts for the retained M1 operator scripts."""
 from pathlib import Path
+import os
 import re
 import shutil
 import subprocess
@@ -67,6 +68,7 @@ def test_privileged_scripts_remain_valid_bash(script):
 
 
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda path: path.name)
+@pytest.mark.skipif(os.name != "posix", reason="Native /usr/bin/bash environment isolation runs on Linux CI")
 def test_spoofed_sanitization_marker_cannot_bypass_environment_guard(script):
     result = subprocess.run(
         ["/usr/bin/bash", str(script)],
@@ -88,6 +90,7 @@ def test_spoofed_sanitization_marker_cannot_bypass_environment_guard(script):
     ],
     ids=("preflight", "installer"),
 )
+@pytest.mark.skipif(os.name != "posix", reason="Native /usr/bin/bash environment isolation runs on Linux CI")
 def test_hostile_caller_environment_is_scrubbed_before_argument_validation(script, message):
     result = subprocess.run(
         ["/usr/bin/bash", str(script)],

@@ -1226,3 +1226,72 @@ reasons. Browser/final-contract focus: 29 passed, one native-platform skip, 0.96
 
 Expected-SHA non-force publication and both exact-head CI jobs/marker remain final
 engineering gates. AWS activation/reboot/rollback and PAPER operations are pending.
+
+## M3 absent PAPER unit review (2026-10-18)
+
+Started from live faaddd81c03fa74ff9b66698d5e5a6ec843a44d8 after its exact-head
+run 39153715153 succeeded and issue #5 Bot marker matched. Frozen baseline was
+verified unchanged. Preserved that concurrent shell-isolation change by fast
+forwarding before work.
+
+Operator-reported not-found/inactive canonical unit, empty installation fields
+and no matching unit files do not prove no independent PAPER execution. More
+fundamentally, a root census at preflight cannot enforce future absence at the
+restricted dashboard account's restart gate. No reviewed host execution-boundary
+inventory or persistent enforcement exists. Therefore absent-unit activation
+remains blocked; no not-found allowlist, dummy unit or reusable audit permit was
+introduced. This batch improves diagnostics and strict rejection, and does not
+claim AWS activation is unblocked.
+
+Canonical guard now requires complete nonduplicated load/state/PID/fragment/
+drop-in properties. Even an exact not-found result with a permitted nonzero
+systemctl exit remains a separate blocked review state. Installed units require
+loaded/inactive, disabled or masked, zero PID, absolute fragment, no overrides.
+A masked LoadState requires the exact masked state and /dev/null fragment.
+Unknown/active/activating/ambiguous responses fail closed.
+
+Added root-only paper-audit dispatcher: read-only process identity/cgroup and
+command census, both installed and transient systemd inventories with execution
+metadata independent of service names, timer/path/socket review, cron/at/user
+schedulers, and existing deployment pointer/journal/lock checks. The kernel
+guard probe opens only a preexisting inode read-only, rejects active owners,
+symlinks, hardlinks and writable inodes, and never creates or replaces a file.
+Limits,
+permissions, unsupported metadata, disappearing/reused processes and conflicts
+cannot produce a safety attestation. Only fixed codes and counts leave the audit;
+no commands, schedule contents, exception details or secrets are emitted. The
+audit always returns BLOCKED/exit 2, execution and activation unauthorized,
+including zero-match scans. Renamed executables, other namespaces and external
+schedulers still need host inventory and restart-safe enforcement review.
+
+Adversarial tests cover absent fields, forged not-found with active PID or
+overrides, duplicates, nonzero command exits, rogue Python/renamed services,
+scheduled triggers, visibility failures, PID reuse, scan limits and wall-clock
+bounds, concurrent full/legacy deployment and interrupted journal states. The
+operator package explains staging approval, diagnostic-only use and why the
+current active dashboard/shared pointer must remain intact at this blocker.
+No AWS command, database change, migration, trading cycle, strategy/risk change,
+factory selection or LIVE enablement occurred. Full regression and final
+GitHub/CI evidence are recorded in the batch completion comment on issue #5.
+
+Initial full local run: 3230 passed, eight fixture/platform failures, 47 skips,
+one deselected (447.72s). Four retained tests mocked the former two-property
+interface; updated their complete records without weakening startup denial.
+Four upstream native /usr/bin/bash tests lacked Windows platform guards; added
+Windows skips while preserving all Linux assertions. The final full local run
+and exact-head Linux CI validate those corrections. Focus before final full:
+128 passed, 19 native-platform skips (3.34s).
+
+Fresh full run: 3235 passed, 55 platform skips, one deselected, one Windows
+synthetic Git-fixture failure (428.20s); coverage 89.31%, required 89%. The fixture
+used ambient global autocrlf while the inspector correctly ignored global Git
+configuration, producing a racy clean/dirty mismatch. Pin the fixture repository's
+own autocrlf=false, preserving production isolation and all clean-release checks.
+Final unit regression and exact-head full CI validate the correction; this record
+does not label either intermediate full local run green.
+
+Final complete local unit suite: 2542 passed, 55 platform skips, one deselected,
+67.66s. Local runtime is Python 3.12/PostgreSQL 17; Python 3.13 and native Linux
+process/Bash/guard cases are validated by both exact-head PostgreSQL CI jobs.
+PostgreSQL was stopped after local validation. GitHub publication/CI/marker
+results are supplied in the completion record rather than anticipated here.

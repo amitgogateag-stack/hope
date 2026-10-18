@@ -29,6 +29,10 @@ def prepared_release(tmp_path, monkeypatch):
         return subprocess.run(["git", "-C", str(release), *args], check=True,
                               capture_output=True, text=True).stdout.strip()
     git("init")
+    # Use the same line-ending policy under ambient and isolated Git. Otherwise
+    # Windows global autocrlf can make this synthetic checkout appear dirty
+    # only when the production inspector correctly ignores global config.
+    git("config", "core.autocrlf", "false")
     git("config", "user.name", "HOPE Test")
     git("config", "user.email", "local-fixture@example.invalid")
     git("remote", "add", "origin", "https://github.com/amitgogateag-stack/hope.git")

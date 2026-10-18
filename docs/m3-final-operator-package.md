@@ -31,6 +31,40 @@ snapshot, trusted private listener owned by the correct unit/Python, and suffici
 resources. The detailed fail-closed checks and recovery limitations remain in
 [dashboard activation design](m3-dashboard-only-activation.md).
 
+### Absent PAPER unit: activation remains blocked
+
+The operator reports no installed hope-paper unit (not-found/inactive, empty
+unit-file/fragment/drop-in fields), dashboard active/enabled, shared f17a549 and
+69a3034 staged. These facts do not establish absence of independent execution.
+Do not create a dummy unit, add not-found to an allowlist, stop unknown workers,
+delete deployment locks or retry activation with an older tool.
+
+After separately approving staging of the newly reviewed exact-head release,
+use the helper below as `hope_dashboard paper-audit`. It performs read-only
+diagnostics and intentionally returns exit code 2 with status BLOCKED. Capture
+only its redacted JSON, never raw process arguments, unit commands, scheduler
+contents, credentials or connection strings. Use `hope_dashboard status` for
+release/journal identity. No CI credentials are needed for either diagnostic.
+The audit inspects all installed/loaded service names, command metadata, timers,
+path/socket triggers, process identities/cgroups, cron/at and user-unit locations,
+and known deployment conflicts. Limits, permissions, races, unsupported JSON and
+ambiguous metadata yield UNVERIFIED. Counts include this audit and dashboard;
+candidate counts are triage signals, never proof of a worker or of its absence.
+
+Even zero candidates require review: a renamed executable, a detached container,
+another process namespace, an external scheduler or a user manager can evade a
+name/content search or start work after it. The restricted dashboard account
+cannot repeat a root census at every startup. A reviewed inventory of execution
+boundaries and a persistent restart-safe enforcement design are prerequisites
+for accepting absence. Neither has been established for this EC2 host. This
+release therefore keeps absent-unit activation blocked; it does not claim to
+finish AWS activation. PAPER factory review remains a separate requirement.
+
+At this blocker, leave the existing active dashboard and shared pointer intact.
+Do not run activate or rollback solely to bypass PAPER_INACTIVE. Existing
+interrupted dashboard journal state requires its separately reviewed recovery;
+the audit cannot clear it or authorize recovery.
+
 The following block defines operator commands and performs only inspection.
 Set the four non-secret HOPE_DASHBOARD_* identity variables from the completion
 report before pasting. Existing GH_TOKEN, if needed, must be injected through the
