@@ -239,6 +239,9 @@ def test_cli_dispatches_fixed_layout_and_keeps_preflight_read_only(setup,monkeyp
     monkeypatch.setattr(module,"Layout",lambda:layout)
     monkeypatch.setattr(module,"Host",lambda l:host)
     monkeypatch.setattr(module.sys,"platform","linux")
+    # Isolate CLI privilege identity from the real kernel-lock owner checks.
+    from types import SimpleNamespace
+    monkeypatch.setattr(module,"os",SimpleNamespace(**vars(module.os)))
     monkeypatch.setattr(module.os,"geteuid",lambda:0,raising=False)
     result=module.main([action,"--target",NEW,"--expected-current",OLD,"--ci-run-id","123",
         "--ci-run-attempt","1","--approve-dashboard-change"])

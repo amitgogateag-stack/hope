@@ -1052,3 +1052,9 @@ old/future/malformed rejection assertions remain unchanged. Production root and
 freshness checks are unchanged. Focused repair validation: 75 passed in 3.22s.
 This is repair of actual CI failures, not a new batch. Exact-head CI remains a
 publication gate; AWS activation remains pending approval and host prerequisites.
+
+Repair CI 39089407279: 3128 passed, two CLI fixture failures, 90.01% coverage.
+The root mock modified shared os.geteuid and incorrectly changed kernel guard
+ownership expectations. Scope that mock to a private OS facade in the CLI test;
+real Linux guard UID/flock checks remain native and unchanged. Focused validation:
+75 passed in 3.19s. No production code change. Await next exact-head CI.
