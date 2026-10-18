@@ -10,10 +10,11 @@ def documents():
     return {"/branches/p0-pit-context":{"commit":{"sha":sha}},
         "/branches/day29-green-baseline":{"commit":{"sha":"7e9d341742818a97accce3e2301b1c7f96596795"}},
         "/actions/runs/123":{"id":123,"run_attempt":1,"head_sha":sha,"head_branch":"p0-pit-context",
-            "event":"push","name":"HOPE CI","status":"completed","conclusion":"success",
+            "event":"push","name":"HOPE CI","path":".github/workflows/ci.yml","run_number":456,
+            "status":"completed","conclusion":"success",
             "repository":{"full_name":"amitgogateag-stack/hope"}},
-        "/issues/5/comments?per_page=100":[{"user":{"type":"Bot"},"body":
-            f"HOPE_CI_STATUS_V1\nsha={sha}\nrun_id=123\nrun_attempt=1\ntest_result=success\nevent=push"}]}
+        "/issues/5/comments?per_page=100":[{"user":{"type":"Bot","login":"github-actions[bot]"},
+            "body":module._marker(sha,123,456,1)}]}
 
 
 def test_exact_attestation_requires_all_three_authorities(monkeypatch):
@@ -26,7 +27,8 @@ def test_exact_attestation_requires_all_three_authorities(monkeypatch):
 
 
 @pytest.mark.parametrize("field,value",[("head_sha","b"*40),("head_branch","other"),
-    ("event","pull_request"),("name","other"),("status","in_progress"),
+    ("event","pull_request"),("name","other"),("path",".github/workflows/other.yml"),
+    ("run_number",True),("status","in_progress"),
     ("conclusion","failure"),("run_attempt",2),("repository",{"full_name":"other/repo"})])
 def test_mismatched_ci_fails_closed(monkeypatch,field,value):
     values=documents();values["/actions/runs/123"][field]=value
@@ -35,12 +37,15 @@ def test_mismatched_ci_fails_closed(monkeypatch,field,value):
         module.verify_exact_ci("a"*40,123,1)
 
 
-@pytest.mark.parametrize("kind",["human","old","failed","absent"])
+@pytest.mark.parametrize("kind",["human","other_bot","old","wrong_number","failed","extra","absent"])
 def test_marker_must_match_bot_and_exact_attempt(monkeypatch,kind):
     values=documents();comments=values["/issues/5/comments?per_page=100"]
     if kind=="human":comments[0]["user"]["type"]="User"
+    elif kind=="other_bot":comments[0]["user"]["login"]="deployment-app[bot]"
     elif kind=="old":comments[0]["body"]=comments[0]["body"].replace("run_attempt=1","run_attempt=2")
+    elif kind=="wrong_number":comments[0]["body"]=comments[0]["body"].replace("run_number=456","run_number=455")
     elif kind=="failed":comments[0]["body"]=comments[0]["body"].replace("test_result=success","test_result=failure")
+    elif kind=="extra":comments[0]["body"]+="\nsha="+"b"*40
     else:comments.clear()
     monkeypatch.setattr(module,"_fetch",lambda path:values[path])
     with pytest.raises(ValueError,match="MARKER_REQUIRED"):

@@ -6,6 +6,8 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 REPOSITORY = "amitgogateag-stack/hope"
 API = f"https://api.github.com/repos/{REPOSITORY}"
+WORKFLOW_PATH = ".github/workflows/ci.yml"
+MARKER_AUTHOR = "github-actions[bot]"
 
 
 class _NoRedirect(HTTPRedirectHandler):
@@ -25,6 +27,13 @@ def _fetch(path):
         return json.loads(body)
 
 
+def _marker(sha: str, run_id: int, run_number: int, attempt: int) -> str:
+    return "\n".join(("<!-- hope-ci-status -->", "HOPE_CI_STATUS_V1", f"sha={sha}",
+        f"run_id={run_id}", f"run_number={run_number}", f"run_attempt={attempt}",
+        "event=push", "test_result=success",
+        f"run_url=https://github.com/{REPOSITORY}/actions/runs/{run_id}"))
+
+
 def verify_exact_ci(sha: str, run_id: int, attempt: int) -> dict:
     if (not isinstance(sha,str) or re.fullmatch(r"[0-9a-f]{40}",sha) is None
             or type(run_id) is not int or run_id<1 or type(attempt) is not int or attempt<1
@@ -33,18 +42,21 @@ def verify_exact_ci(sha: str, run_id: int, attempt: int) -> dict:
     branch = _fetch("/branches/p0-pit-context")
     baseline = _fetch("/branches/day29-green-baseline")
     run = _fetch(f"/actions/runs/{run_id}")
+    run_number = run.get("run_number")
     if (branch.get("commit",{}).get("sha")!=sha
             or baseline.get("commit",{}).get("sha")!="7e9d341742818a97accce3e2301b1c7f96596795" or run.get("head_sha")!=sha
             or run.get("head_branch")!="p0-pit-context" or run.get("event")!="push"
-            or run.get("name")!="HOPE CI" or run.get("id")!=run_id
+            or run.get("name")!="HOPE CI" or run.get("path")!=WORKFLOW_PATH
+            or run.get("id")!=run_id or type(run_number) is not int or run_number<1
             or run.get("run_attempt")!=attempt or run.get("status")!="completed"
             or run.get("conclusion")!="success" or run.get("repository",{}).get("full_name")!=REPOSITORY):
         raise ValueError("M3_EXACT_HEAD_CI_REQUIRED")
     comments = _fetch("/issues/5/comments?per_page=100")
-    required = {f"sha={sha}",f"run_id={run_id}",f"run_attempt={attempt}","test_result=success","event=push","HOPE_CI_STATUS_V1"}
+    marker = _marker(sha,run_id,run_number,attempt)
     if not isinstance(comments,list) or not any(
         isinstance(c,dict) and c.get("user",{}).get("type")=="Bot"
-        and required.issubset(set(c.get("body","").splitlines())) for c in comments):
+        and c.get("user",{}).get("login")==MARKER_AUTHOR and c.get("body")==marker
+        for c in comments):
         raise ValueError("M3_EXACT_HEAD_MARKER_REQUIRED")
     return dict(sha=sha,run_id=run_id,run_attempt=attempt,
                 run_url=f"https://github.com/{REPOSITORY}/actions/runs/{run_id}")

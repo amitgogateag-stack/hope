@@ -26,6 +26,10 @@ requires live p0-pit-context HEAD and the unchanged frozen baseline
 7e9d341742818a97accce3e2301b1c7f96596795. A branch advance requires a fresh review;
 do not reset or overwrite newer work. The completion report supplies the target
 SHA/run/attempt and a console-ready copy of this procedure with those values set.
+The CI run must come from `.github/workflows/ci.yml`; its run number and attempt
+must exactly match the strict `HOPE_CI_STATUS_V1` body published by
+`github-actions[bot]`. Markers from other bots, duplicate/conflicting identity
+lines, extra fields or merely similar workflow names fail closed.
 
 ## Architecture and trust boundary
 
