@@ -126,7 +126,11 @@ bash "$HOPE_M3_RELEASE/deploy/operations/m3_accept_once.sh" --approve-one-paper-
 Unset required values abort before execution. This command cannot be made runnable
 until the actual factory and run selection are reviewed. The wrapper has a
 180-second process budget plus a 10-second forced-stop ceiling. It does not invoke
-systemd or deploy anything. The CLI verifies release/CI/marker, explicit PAPER/LIVE
+systemd or deploy anything. Before starting Python it replaces the inherited
+environment with a fixed system path, locale, reviewed release import path and
+only the explicit PAPER/database identity values (plus an optional scoped GitHub
+token for attestation); unrelated operator, Python and dynamic-loader variables
+do not reach the interpreter. The CLI verifies release/CI/marker, explicit PAPER/LIVE
 configuration, exact database, least-privilege role, schema checksums and a fresh
 selected run before work. No historical LIVE orders may exist in the isolated DB.
 
