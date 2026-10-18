@@ -109,8 +109,10 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
 @pytest.mark.parametrize("name,python_path", [
     ("hope-paper.service", "/opt/hope-operations/current/src:/opt/hope-operations/config"),
     ("hope-ops-dashboard-export.service", "/opt/hope-operations/current/src"),
+    ("hope-ops-dashboard-web.service", "/opt/hope-operations/current/src"),
+    ("hope-m3-dashboard-web.service", "/opt/hope-operations/dashboard-current/src"),
 ])
-def test_environment_files_cannot_override_reviewed_python_or_loader_paths(name, python_path):
+def test_python_units_ignore_ambient_python_or_loader_paths(name, python_path):
     unit = (Path(__file__).parents[2] / "deploy/operations" / name).read_text()
     unset = next(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
     for variable in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONWARNINGS",

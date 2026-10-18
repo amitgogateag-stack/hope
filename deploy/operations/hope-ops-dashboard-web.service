@@ -9,8 +9,8 @@ Type=simple
 User=hope-dashboard
 Group=hope-operations
 WorkingDirectory=/opt/hope-operations/current
-Environment=PYTHONPATH=/opt/hope-operations/current/src
-ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.dashboard_server --port 8788 --preview /opt/hope-operations/current/docs/dashboard/preview.html --snapshot /var/lib/hope-dashboard-ops/snapshot.json --operations-status-file /var/lib/hope-paper/health.json
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+ExecStart=/usr/bin/env PYTHONPATH=/opt/hope-operations/current/src /opt/hope-operations/venv/bin/python -m hope.api.dashboard_server --port 8788 --preview /opt/hope-operations/current/docs/dashboard/preview.html --snapshot /var/lib/hope-dashboard-ops/snapshot.json --operations-status-file /var/lib/hope-paper/health.json
 Restart=on-failure
 RestartSec=10s
 TimeoutStopSec=15s

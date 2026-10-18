@@ -20,16 +20,17 @@ def test_systemd_units_are_non_root_and_separate():
     assert "OnUnitActiveSec=5min" in timer
 
 
-def test_export_environment_file_cannot_inject_python_or_loader_paths():
-    export = (ROOT / "hope-dashboard-export.service").read_text()
-    unset = next(line for line in export.splitlines() if line.startswith("UnsetEnvironment="))
-    for variable in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONWARNINGS",
-                     "PYTHONINSPECT", "PYTHONSTARTUP", "PYTHONBREAKPOINT",
-                     "PYTHONPLATLIBDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
-        assert variable in unset.split("=", 1)[1].split()
-    assert "Environment=PYTHONPATH=" not in export
-    assert ("ExecStart=/usr/bin/env PYTHONPATH=/opt/hope/src "
-            "/opt/hope/.venv/bin/python -m hope.api.dashboard_snapshot") in export
+def test_units_ignore_ambient_python_or_loader_paths():
+    units = [(ROOT / name).read_text() for name in
+             ("hope-dashboard-export.service", "hope-dashboard-web.service")]
+    for unit in units:
+        unset = next(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
+        for variable in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONWARNINGS",
+                         "PYTHONINSPECT", "PYTHONSTARTUP", "PYTHONBREAKPOINT",
+                         "PYTHONPLATLIBDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
+            assert variable in unset.split("=", 1)[1].split()
+        assert "Environment=PYTHONPATH=" not in unit
+        assert "ExecStart=/usr/bin/env PYTHONPATH=/opt/hope/src " in unit
 
 
 def test_deployment_has_no_public_port_or_trading_controls():

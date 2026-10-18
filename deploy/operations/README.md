@@ -58,8 +58,9 @@ prerequisites are unavailable, leave PAPER disabled and report UNAVAILABLE.
    only `HOPE_DEPLOYED_COMMIT=APPROVED_40_HEX_SHA`. systemd reads these files
    before dropping privileges. The web service receives no database credential.
    Python and dynamic-loader control variables are not configuration: the reviewed
-   units remove them after all environment files are loaded, then supply the exact
-   release `PYTHONPATH` directly to the interpreter. Do not add `PYTHONPATH`,
+   units remove them after system-manager and environment-file variables are
+   assembled, then supply the exact release `PYTHONPATH` directly to the
+   interpreter. Do not add `PYTHONPATH`,
    `PYTHONHOME`, `PYTHONWARNINGS`, `LD_PRELOAD`, `LD_LIBRARY_PATH` or `LD_AUDIT`
    to an environment file; they are deliberately ignored.
 6. Database role changes require separate review. Neither role may be superuser,
