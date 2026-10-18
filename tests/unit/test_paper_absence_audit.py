@@ -106,7 +106,7 @@ def test_incomplete_process_visibility_is_not_clean(tmp_path,monkeypatch,failure
 
 
 def systemd_run(name="unrelated.service", command="/usr/bin/python -m hope.infrastructure.paper_service", extra=()):
-    def run(*args):
+    def run(*args,**kwargs):
         if args[1] in {"list-units","list-unit-files"}:
             key="unit" if args[1]=="list-units" else "unit_file"
             return json.dumps([{key:value} for value in (name,*extra)])
@@ -131,7 +131,7 @@ def test_inactive_timers_paths_and_sockets_require_review():
 @pytest.mark.parametrize("raw", ["secret", "[]", "{}", '[{"unit":"--host=remote"}]',
     '[{"unit":"worker.service"},{"unit":null}]'])
 def test_unparseable_or_partial_systemd_inventory_is_unverified(raw):
-    with pytest.raises((ValueError,TypeError)):module.systemd_inventory(lambda *a:raw)
+    with pytest.raises((ValueError,TypeError)):module.systemd_inventory(lambda *a,**k:raw)
 
 
 def test_scheduler_jobs_and_user_units_are_counted_without_content(tmp_path):
@@ -165,7 +165,7 @@ def test_deployment_conflicts_never_produce_a_clean_audit(setup,conflict):
 def test_clean_pattern_scans_cannot_certify_renamed_workers_or_restart_safety(tmp_path):
     process(tmp_path,b"/usr/local/bin/innocent-name",b"0::/session.scope")
     host=Mock();host.paper_properties.return_value=properties(ABSENT)
-    host.run.side_effect=systemd_run(command="/usr/bin/true")
+    host.audit_run.side_effect=systemd_run(command="/usr/bin/true")
     host.absence_deployment_check.return_value=(0,)
     result=module.audit(host,proc=tmp_path,schedules=())
     assert result["status"]=="BLOCKED" and result["activation_authorized"] is False
@@ -177,7 +177,7 @@ def test_clean_pattern_scans_cannot_certify_renamed_workers_or_restart_safety(tm
 
 def test_failed_diagnostics_are_redacted_and_do_not_skip_other_checks(tmp_path):
     host=Mock();host.paper_properties.side_effect=RuntimeError("secret")
-    host.run.side_effect=RuntimeError("credential")
+    host.audit_run.side_effect=RuntimeError("credential")
     host.absence_deployment_check.side_effect=RuntimeError("token")
     result=module.audit(host,proc=tmp_path,schedules=(tmp_path,))
     assert result["checks"]["canonical_unit"]=="UNVERIFIED"

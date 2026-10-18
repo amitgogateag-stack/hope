@@ -1295,3 +1295,50 @@ Final complete local unit suite: 2542 passed, 55 platform skips, one deselected,
 process/Bash/guard cases are validated by both exact-head PostgreSQL CI jobs.
 PostgreSQL was stopped after local validation. GitHub publication/CI/marker
 results are supplied in the completion record rather than anticipated here.
+
+## M3 diagnostic collection resource/race hardening (2026-10-18)
+
+Fetched live 8f1de655a13d60e3331f9695b3f198260f780cf8, confirmed exact-head run
+39155973272 success and matching issue #5 Bot marker, with frozen baseline
+unchanged. Inspection found a demonstrable audit-only file race: lstat checked
+one inode, then open could consume a replacement inode. The portable regression
+failed before the fix (one failed/one native skip). A replacement symlink/FIFO
+could also defeat the reader's type check. Scheduler pending.extend eagerly
+materialized names before limits were checked, and systemd capture_output could
+retain unbounded output before the collector's post-read size check; each
+command could spend the full ordinary Host timeout despite the census deadline.
+
+Use a no-follow/nonblocking/close-on-exec descriptor on Linux; compare checked,
+opened and final inode/type/size/mtime, cap reads and close on every exit. Stream
+scandir entries and bound discovered scheduler work before queue insertion,
+including the initial explicit root selection. Add a POSIX selector-based
+command reader with incremental byte limits, deadline, private clean environment,
+discarded stderr and no shell. Abort hung/flooding/inherited-pipe commands by
+killing their unreaped session and reaping the leader. Avoid PID-reuse cleanup
+after a successful wait. Always close pipes/selectors. Restrict the Host adapter
+to exact read-only systemctl list/show shapes, fixed binary and metadata fields;
+start/stop/reload, option-like units and environment queries are denied before
+spawning. One ten-second systemd census budget is propagated to each query.
+
+All audit failures remain redacted UNVERIFIED under status BLOCKED. Zero matches
+still grant neither activation nor execution. Regular filesystem calls can
+stall inside the kernel; documented checked deadlines are not a fabricated
+absolute wall-clock SLA. No host-wide absence attestation or new permit was
+introduced. No AWS execution, PAPER/factory activation, database/migration,
+strategy/risk/research or LIVE change occurred.
+
+Adversarial tests cover changed/replaced files, symlink/FIFO replacement, bounded
+directory and explicit-root consumption, forbidden systemctl mutations, fixed
+environment and shared budget. Native Linux tests exercise exact output bounds,
+stderr flooding, stdout overflow, hung leaders, closed stdout with a hung leader,
+exited leaders with descendants retaining the pipe, cleanup/reaping and invalid
+encoding/nonzero exits. Initial focused result: 138 passed, 14 native skips,
+3.69s. Full local results and exact-head CI/marker are in the completion record.
+
+Full local regression (Python 3.12/PostgreSQL 17): 3253 passed, 65 native platform
+skips, one deselected, 420.35s. Three Bash contract files and one Bash-dependent
+case remain omitted on Windows. No coverage floor was changed; the full Python
+3.13 Linux PostgreSQL 16/17 CI jobs enforce the existing 89% requirement and run
+all native subprocess/descriptor cases. Final focus after adding real-procfs,
+reaped-PID and canonical bounded-probe tests: 141 passed, 18 native skips, 3.10s.
+Local PostgreSQL stopped after validation; complete diff/whitespace reviewed.

@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from contextlib import contextmanager
 import os
+from itertools import islice
 from pathlib import Path
 import re
 import stat
@@ -54,20 +55,48 @@ def unit_state(output):
 
 
 def _read(path):
-    # Do not follow schedule/process symlinks or read unbounded files.
-    if not stat.S_ISREG(path.lstat().st_mode):
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
         raise ValueError("UNREADABLE")
-    with path.open("rb") as stream:
-        result = stream.read(BYTE_LIMIT + 1)
-    if len(result) > BYTE_LIMIT:
-        raise ValueError("LIMIT")
-    return result
+    flags = os.O_RDONLY | getattr(os,"O_BINARY",0)
+    if os.name == "posix":
+        flags |= os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        def identity(value):
+            return value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns
+        if not stat.S_ISREG(opened.st_mode) or identity(before) != identity(opened):
+            raise ValueError("FILE_CHANGED")
+        result = bytearray()
+        while len(result) <= BYTE_LIMIT:
+            block = os.read(descriptor, min(8192, BYTE_LIMIT + 1 - len(result)))
+            if not block:
+                break
+            result.extend(block)
+        if len(result) > BYTE_LIMIT:
+            raise ValueError("LIMIT")
+        if identity(opened) != identity(os.fstat(descriptor)) or identity(opened) != identity(path.lstat()):
+            raise ValueError("FILE_CHANGED")
+        return bytes(result)
+    finally:
+        os.close(descriptor)
+
+
+def _entries(path, deadline):
+    # pathlib.iterdir on supported Python versions may materialize os.listdir.
+    # scandir streams names and closes its descriptor on every exit.
+    with os.scandir(path) as entries:
+        for index, entry in enumerate(entries):
+            if index >= LIMIT or time.monotonic() > deadline:
+                raise ValueError("LIMIT")
+            yield Path(entry.path)
 
 
 def process_inventory(proc):
     count = candidates = 0
     deadline = time.monotonic() + 10
-    for entry in proc.iterdir():
+    for entry in _entries(proc, deadline):
         if not entry.name.isdecimal():
             continue
         count += 1
@@ -96,7 +125,10 @@ def process_inventory(proc):
 def schedule_inventory(paths):
     count = populated = 0
     deadline = time.monotonic() + 10
-    pending = [(path, True) for path in paths]
+    pending = [(path, True) for path in islice(paths,LIMIT+1)]
+    if len(pending)>LIMIT:
+        raise ValueError("LIMIT")
+    discovered = len(pending)
     while pending:
         path, top = pending.pop()
         try:
@@ -110,7 +142,11 @@ def schedule_inventory(paths):
         if count > LIMIT or time.monotonic() > deadline:
             raise ValueError("LIMIT")
         if stat.S_ISDIR(mode):
-            pending.extend((entry, False) for entry in path.iterdir())
+            for entry in _entries(path, deadline):
+                discovered += 1
+                if discovered > LIMIT:
+                    raise ValueError("LIMIT")
+                pending.append((entry, False))
         elif _read(path).strip():
             populated += 1
     return count, populated
@@ -119,7 +155,7 @@ def schedule_inventory(paths):
 def schedule_paths(home=Path("/home")):
     paths = [Path(p) for p in SCHEDULES]
     # Inspect user unit locations only, never recursively read home contents.
-    for index, user in enumerate(home.iterdir()):
+    for index, user in enumerate(_entries(home,time.monotonic()+10)):
         if index >= LIMIT or not stat.S_ISDIR(user.lstat().st_mode):
             raise ValueError("HOME_INVENTORY")
         paths.extend((user/".config/systemd/user", user/".local/share/systemd/user"))
@@ -154,7 +190,10 @@ def systemd_inventory(run):
     deadline = time.monotonic() + 10
     schedules = 0
     for verb, key in (("list-units", "unit"), ("list-unit-files", "unit_file")):
-        raw = run("systemctl", verb, "--all", "--no-pager", "--output=json")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:raise ValueError("LIMIT")
+        raw = run("systemctl", verb, "--all", "--no-pager", "--output=json",
+            timeout=remaining, max_output=4*1024*1024)
         if len(raw) > 4 * 1024 * 1024:
             raise ValueError("LIMIT")
         rows = json.loads(raw)
@@ -162,7 +201,7 @@ def systemd_inventory(run):
             raise ValueError("INVENTORY")
         for row in rows:
             name = row.get(key) if isinstance(row, dict) else None
-            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_@.:\\-]+", name):
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_@.:\\-]*", name):
                 raise ValueError("UNIT")
             names.add(name)
     if len(names) > LIMIT:
@@ -176,7 +215,8 @@ def systemd_inventory(run):
         if not name.endswith(".service"):
             continue
         raw = run("systemctl", "show", name,
-            "--property=Id,LoadState,ActiveState,ExecStart,FragmentPath,DropInPaths")
+            "--property=Id,LoadState,ActiveState,ExecStart,FragmentPath,DropInPaths",
+            timeout=deadline-time.monotonic(), max_output=BYTE_LIMIT)
         if len(raw) > BYTE_LIMIT:
             raise ValueError("LIMIT")
         fields = {}
@@ -201,12 +241,12 @@ def audit(host, *, proc=Path("/proc"), schedules=None):
         required_review="HOST_EXECUTION_BOUNDARIES_AND_RESTART_ENFORCEMENT")
     checks = {}
     try:
-        checks["canonical_unit"] = unit_state(host.paper_properties())
+        checks["canonical_unit"] = unit_state(host.paper_properties(run=host.audit_run))
     except Exception:
         checks["canonical_unit"] = "UNVERIFIED"
     for key, inspect in (
             ("processes", lambda: process_inventory(proc)),
-            ("systemd", lambda: systemd_inventory(host.run)),
+            ("systemd", lambda: systemd_inventory(host.audit_run)),
             ("schedules", lambda: schedule_inventory(
                 schedule_paths() if schedules is None else schedules)),
             ("deployment", lambda: host.absence_deployment_check())):

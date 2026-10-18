@@ -51,6 +51,19 @@ and known deployment conflicts. Limits, permissions, races, unsupported JSON and
 ambiguous metadata yield UNVERIFIED. Counts include this audit and dashboard;
 candidate counts are triage signals, never proof of a worker or of its absence.
 
+Diagnostic file reads validate the opened descriptor against the checked file,
+reject replacements and changes during reads, and use no-follow/nonblocking
+opens on Linux so a replacement FIFO cannot hang the type check. Directory
+names are streamed and capped before queueing. Systemd audit queries use the
+fixed /usr/bin/systemctl binary and a read-only argument allowlist, discard
+stderr, bound stdout while reading it, and share one ten-second inventory
+deadline. A canonical-unit query has its own ten-second cap. Timeouts/output
+overflow kill and reap the command session; inherited stdout cannot keep the
+collector waiting after its leader exits. No shell or ambient credential
+environment is inherited. OS filesystem calls can still stall in the kernel;
+these checked census deadlines are not an absolute host-wide wall-clock SLA.
+An incomplete or interrupted collection never authorizes activation.
+
 Even zero candidates require review: a renamed executable, a detached container,
 another process namespace, an external scheduler or a user manager can evade a
 name/content search or start work after it. The restricted dashboard account

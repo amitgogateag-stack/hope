@@ -26,6 +26,7 @@ from sqlalchemy import create_engine,text
 
 from hope.api import operations_deployment as operations
 from hope.api import paper_absence_audit
+from hope.api.diagnostic_io import bounded_capture
 from hope.api.dashboard_server import _verified_snapshot
 from hope.api.m3_audit import _readiness
 from hope.api.release_attestation import _NoRedirect,verify_exact_ci
@@ -376,10 +377,22 @@ class Host:
         _require(state=="INSTALLED_INACTIVE","PAPER_MUST_BE_INACTIVE_DISABLED")
         self.legacy_safe()
 
-    def paper_properties(self):
+    def audit_run(self,*args,timeout=10,max_output=65536):
+        lists={("systemctl",verb,"--all","--no-pager","--output=json")
+            for verb in ("list-units","list-unit-files")}
+        queries={"--property="+",".join(paper_absence_audit.PROPERTIES),
+            "--property=Id,LoadState,ActiveState,ExecStart,FragmentPath,DropInPaths"}
+        allowed=args in lists or (len(args)==4 and args[:2]==("systemctl","show")
+            and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_@.:\\-]*\.service",args[2])
+            and args[3] in queries)
+        _require(allowed,"DIAGNOSTIC_COMMAND_DENIED")
+        return bounded_capture(("/usr/bin/systemctl",*args[1:]),timeout=timeout,
+            max_output=max_output,env=SAFE_ENVIRONMENT)
+
+    def paper_properties(self,*,run=None):
         try:
-            return self.run("systemctl","show",PAPER,
-                "--property="+",".join(paper_absence_audit.PROPERTIES))
+            command=("systemctl","show",PAPER,"--property="+",".join(paper_absence_audit.PROPERTIES))
+            return self.run(*command) if run is None else run(*command,timeout=10,max_output=65536)
         except subprocess.CalledProcessError as exc:
             # A nonzero response is usable only as a complete, exact absent
             # record. It still cannot satisfy the activation gate.
