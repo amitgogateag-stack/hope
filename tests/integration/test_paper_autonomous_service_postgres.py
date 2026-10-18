@@ -4,6 +4,7 @@ Only the candidate catalog is injected to avoid inventing scientific promotion
 history. Operational claims, effects, control locks and recovery remain real.
 """
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -54,7 +55,12 @@ def test_real_worker_process_termination_and_fresh_cli_restart(tmp_path):
         apply_migrations(connection, MIGRATIONS)
         data = helper["seed"](connection, configuration=configuration, as_of=scheduled, include_quote=True)
     version = data["strategy_version_id"]
-    module = tmp_path / "m2_process_fixture.py"
+    release = tmp_path / "release"
+    release_src = release / "src"
+    release_src.mkdir(parents=True)
+    release_migrations = release / "migrations"
+    shutil.copytree(MIGRATIONS, release_migrations)
+    module = release_src / "m2_process_fixture.py"
     module.write_text('''
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -85,10 +91,10 @@ def factory(connection,current):
         .replace("DATASET_TEXT", repr(str(data["dataset_version_id"]))).replace("DECISION_TEXT", repr(data["research_decision_id"]))
         .replace("SCHEDULED_TEXT", repr(scheduled.isoformat())), encoding="utf-8")
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(tmp_path) + os.pathsep + os.pathsep.join(sys.path)
+    environment["PYTHONPATH"] = str(release_src) + os.pathsep + os.pathsep.join(sys.path)
     status = tmp_path / "process-health.json"
     command = [sys.executable, "-m", "hope.api.paper_service", "--factory", "m2_process_fixture:factory",
-               "--migrations-dir", str(MIGRATIONS), "--status-file", str(status), "--poll-seconds", "30"]
+               "--migrations-dir", str(release_migrations), "--status-file", str(status), "--poll-seconds", "30"]
     process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
         deadline = time.monotonic() + 25
