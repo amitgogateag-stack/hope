@@ -138,16 +138,26 @@ never reset, clean or overwrite it. Fetch only into the new standalone clone.
 ROOT=/opt/hope-operations
 SEED="$ROOT/releases/1c0bd9a0e28c78c2996ebd0f658a7dc24b385484"
 RELEASE="$ROOT/releases/$TARGET"
+SAFE_GIT=(env -i PATH=/usr/bin:/bin HOME=/nonexistent \
+  GIT_CONFIG_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_PAGER=cat \
+  git -c core.hooksPath=/dev/null -c core.fsmonitor=false)
 test -d "$SEED/.git"
 if test ! -e "$RELEASE"; then
-  sudo git -c "safe.directory=$SEED" clone --no-hardlinks --no-checkout "$SEED" "$RELEASE"
-  sudo git -C "$RELEASE" remote set-url origin https://github.com/amitgogateag-stack/hope.git
-  sudo git -C "$RELEASE" fetch --no-tags origin p0-pit-context
-  sudo git -C "$RELEASE" checkout --detach "$TARGET"
+  sudo "${SAFE_GIT[@]}" -c "safe.directory=$SEED" clone --no-hardlinks --no-checkout "$SEED" "$RELEASE"
+  sudo "${SAFE_GIT[@]}" -C "$RELEASE" remote set-url origin https://github.com/amitgogateag-stack/hope.git
+  sudo "${SAFE_GIT[@]}" -C "$RELEASE" fetch --no-tags origin p0-pit-context
+  sudo "${SAFE_GIT[@]}" -C "$RELEASE" checkout --detach "$TARGET"
 fi
-test "$(sudo git -C "$RELEASE" rev-parse HEAD)" = "$TARGET"
-test -z "$(sudo git -C "$RELEASE" status --porcelain --untracked-files=all)"
+test "$(sudo "${SAFE_GIT[@]}" -C "$RELEASE" rev-parse HEAD)" = "$TARGET"
+test -z "$(sudo "${SAFE_GIT[@]}" -C "$RELEASE" status --porcelain --untracked-files=all)"
 ```
+
+The cleared Git environment is a security boundary, not optional shell hygiene.
+It prevents root system/global configuration, credential helpers, pagers,
+filesystem monitors and checkout hooks from becoming executable staging inputs.
+Do not replace `SAFE_GIT` with ambient `sudo git` or preserve Git configuration
+variables. The activation release scanner still independently rejects dirty,
+writable, linked or externally backed Git state after staging.
 
 Execute blocks in a shell with set -eu so any command failure stops the procedure.
 Root ownership/permissions and the existing venv must already be trusted; failures
