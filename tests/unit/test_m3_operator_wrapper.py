@@ -17,3 +17,10 @@ def test_wrapper_cannot_execute_without_approval_and_real_factory(tmp_path,appro
         env=environment,capture_output=True,text=True,timeout=5)
     assert result.returncode!=0
     assert list(tmp_path.iterdir())==[]
+
+
+def test_wrapper_never_adds_external_factory_path(tmp_path):
+    script=Path(__file__).parents[2]/"deploy/operations/m3_accept_once.sh"
+    content=script.read_text()
+    assert "HOPE_M3_FACTORY_PATH" not in content
+    assert 'export PYTHONPATH="$HOPE_M3_RELEASE/src"' in content

@@ -175,13 +175,46 @@ def test_factory_requires_callable_and_cli_sanitizes_startup(tmp_path, monkeypat
     assert "PAPER_SERVICE_STARTUP_FAILED" in output and "secret" not in output
 
 
+@pytest.mark.parametrize("kind", ["outside", "reexported", "missing_source"])
+def test_factory_must_be_defined_inside_exact_release(tmp_path, monkeypatch, kind):
+    import hope.api.paper_service as cli
+    release = tmp_path / "release"
+    source = release / "src" / "reviewed_factory.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("reviewed = True\n")
+    outside = tmp_path / "outside.py"
+    outside.write_text("unreviewed = True\n")
+    def factory(*_):
+        return None
+    factory.__module__ = "dependency" if kind == "reexported" else "reviewed_factory"
+    imported = SimpleNamespace(factory=factory,
+        __file__=None if kind == "missing_source" else str(outside if kind == "outside" else source))
+    monkeypatch.setattr(cli.importlib, "import_module", lambda _: imported)
+    with pytest.raises(ValueError, match="FACTORY_RELEASE_MISMATCH"):
+        cli.load_plan_factory("reviewed_factory:factory", release=release)
+
+
+def test_factory_defined_inside_exact_release_is_accepted(tmp_path, monkeypatch):
+    import hope.api.paper_service as cli
+    release = tmp_path / "release"
+    source = release / "src" / "reviewed_factory.py"
+    source.parent.mkdir(parents=True)
+    source.write_text("reviewed = True\n")
+    def factory(*_):
+        return None
+    factory.__module__ = "reviewed_factory"
+    monkeypatch.setattr(cli.importlib, "import_module",
+        lambda _: SimpleNamespace(factory=factory,__file__=str(source)))
+    assert cli.load_plan_factory("reviewed_factory:factory",release=release) is factory
+
+
 def test_production_cli_always_requires_certified_work(tmp_path, monkeypatch):
     import hope.api.paper_service as cli
     captured = {}
     engine = SimpleNamespace(dispose=lambda: None)
     monkeypatch.setenv("HOPE_DATABASE_URL", "test-only")
     monkeypatch.setattr(cli, "create_engine", lambda *a, **k: engine)
-    monkeypatch.setattr(cli, "load_plan_factory", lambda _: lambda *a: None)
+    monkeypatch.setattr(cli, "load_plan_factory", lambda _, **kwargs: lambda *a: None)
     def run(*a, **kwargs):
         captured.update(kwargs)
         return 0

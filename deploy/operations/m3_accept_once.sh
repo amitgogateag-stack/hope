@@ -15,7 +15,7 @@ fi
 : "${HOPE_M3_EVIDENCE_DIR:?New private evidence directory required}"
 [[ $HOPE_M3_RELEASE == /* && $HOPE_M3_PYTHON == /* && $HOPE_M3_EVIDENCE_DIR == /* ]] || exit 2
 [[ ${HOPE_EXECUTION_MODE:-} == PAPER && ${HOPE_LIVE_ENABLED:-} == false ]] || exit 2
-export PYTHONPATH="$HOPE_M3_RELEASE/src${HOPE_M3_FACTORY_PATH:+:$HOPE_M3_FACTORY_PATH}"
+export PYTHONPATH="$HOPE_M3_RELEASE/src"
 umask 0077
 cd "$HOPE_M3_RELEASE"
 exec timeout --signal=TERM --kill-after=10s 180s "$HOPE_M3_PYTHON" -m hope.api.paper_acceptance \

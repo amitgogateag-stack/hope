@@ -35,7 +35,7 @@ def main(argv=None):
                 or args.evidence_dir.resolve().is_relative_to(args.release.resolve())):
             raise RuntimeError("M3_PRIVATE_EXTERNAL_EVIDENCE_DIRECTORY_REQUIRED")
         attestation = verify_exact_ci(args.expected_sha,args.ci_run_id,args.ci_run_attempt)
-        factory = load_plan_factory(args.factory)
+        factory = load_plan_factory(args.factory,release=args.release)
         engine = create_engine(os.environ["HOPE_DATABASE_URL"],pool_pre_ping=True,pool_timeout=10,
             connect_args={"connect_timeout":10,"options":"-c statement_timeout=30000 -c lock_timeout=10000"})
         result = controlled_paper_acceptance(engine,factory,expected_database=args.expected_database,

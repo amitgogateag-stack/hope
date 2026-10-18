@@ -98,7 +98,9 @@ prerequisite; do not expose 8788 publicly to work around it.
 
 The placeholder `reviewed_module:factory` is not an implementation. Identify,
 review and explicitly approve an actual module:function and its code/dependencies
-before setting HOPE_PAPER_FACTORY. No bundled synthetic test factory is approved
+before setting HOPE_PAPER_FACTORY. The module and callable must be defined under
+the exact attested release's `src`; external factory paths, site-package factories
+and re-exported callables are rejected. No bundled synthetic test factory is approved
 for AWS. Review real research comparison/evaluation evidence, current scoped
 strategy authorization, sealed PIT universe/feed, market session/calendar,
 configured latency, freshness and unchanged risk limits. Compute and review the
