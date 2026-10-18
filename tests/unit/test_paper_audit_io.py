@@ -66,6 +66,16 @@ def test_replacement_with_fifo_does_not_block_before_type_rejection(tmp_path,mon
     assert time.monotonic()-started<1
 
 
+@pytest.mark.skipif(os.name!="posix",reason="Native FIFO guard proof runs in Linux CI")
+def test_deployment_guard_fifo_is_rejected_without_waiting_for_a_writer(tmp_path):
+    os.mkfifo(tmp_path/".activation.guard")
+    started=time.monotonic()
+    with pytest.raises(ValueError,match="GUARD_UNTRUSTED"):
+        with module.deployment_view(tmp_path):
+            pytest.fail("FIFO entered as a deployment guard")
+    assert time.monotonic()-started<1
+
+
 def test_huge_scheduler_iterator_is_cut_off_before_materialization(tmp_path,monkeypatch):
     class Entries:
         consumed=0

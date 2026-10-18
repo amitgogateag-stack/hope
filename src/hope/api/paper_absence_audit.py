@@ -167,7 +167,12 @@ def deployment_view(root):
     """Probe the existing kernel guard; never create, replace or unlink it."""
     import fcntl
     path = root / ".activation.guard"
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    # A corrupted or raced host path must not turn this read-only root audit
+    # into an unbounded process. Opening a FIFO read-only blocks until a writer
+    # appears unless the descriptor is explicitly nonblocking; the descriptor
+    # type/ownership/link validation below then rejects it.
+    descriptor = os.open(path,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
     try:
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()

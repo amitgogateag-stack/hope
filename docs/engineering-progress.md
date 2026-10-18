@@ -1342,3 +1342,24 @@ case remain omitted on Windows. No coverage floor was changed; the full Python
 all native subprocess/descriptor cases. Final focus after adding real-procfs,
 reaped-PID and canonical bounded-probe tests: 141 passed, 18 native skips, 3.10s.
 Local PostgreSQL stopped after validation; complete diff/whitespace reviewed.
+
+## M3 deployment-guard special-file bound (2026-10-18)
+
+After exact-head run 39157791705 and its issue #5 Bot marker succeeded, a
+follow-up descriptor review found one remaining blocking-open path. The
+read-only absence audit opened `.activation.guard` before validating that the
+descriptor was a trusted regular file. If a corrupted or raced host supplied a
+FIFO, root audit could wait indefinitely for a writer and never reach its
+fail-closed type check.
+
+The guard probe now opens no-follow, nonblocking and close-on-exec before the
+existing descriptor-based regular-file, owner, mode and link-count checks. A
+native regression constructs a real FIFO with no writer and proves prompt
+`GUARD_UNTRUSTED` rejection. Focused audit/activation tests: 159 passed, with
+one managed-PID-namespace procfs identity assertion deselected locally. Broader
+unit regression: 2638 passed with that same assertion deselected and the known
+native activation crash file excluded; exact-head Linux CI exercises both.
+
+This does not attest host-wide PAPER absence or authorize activation. No AWS
+command, database/migration, PAPER cycle, strategy/risk/research change, factory
+selection, LIVE enablement or public exposure occurred.
