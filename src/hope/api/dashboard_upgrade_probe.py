@@ -231,7 +231,14 @@ def verify_readiness(base: str = "http://127.0.0.1:8788", *, opener=None) -> dic
             or (value["last_failure_at"] is None) != (value["last_failure_code"] is None)
             or not isinstance(value["reason"], str) or not isinstance(value["worker_report"], str)):
         raise ValueError("HOPE_READINESS_RESPONSE_INVALID")
-    return value
+    from hope.api.m3_audit import _readiness
+    try:
+        safe = _readiness(value)
+        if "status" in safe:
+            raise ValueError("stale")
+    except ValueError:
+        raise ValueError("HOPE_READINESS_RESPONSE_INVALID") from None
+    return safe
 
 
 def main() -> None:

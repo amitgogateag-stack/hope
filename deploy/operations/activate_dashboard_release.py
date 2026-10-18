@@ -63,52 +63,18 @@ def _accepted(target: str) -> bool:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Guarded dashboard-only activation with rollback")
+    # Compatibility entry point: one canonical guarded activation lifecycle.
+    from hope.api.dashboard_activation import main as dashboard_main
+    parser = argparse.ArgumentParser(description="Reviewed dashboard-only activation with durable journal")
     parser.add_argument("--target", required=True)
     parser.add_argument("--expected-current", required=True)
+    parser.add_argument("--ci-run-id", type=int, required=True)
+    parser.add_argument("--ci-run-attempt", type=int, required=True)
     parser.add_argument("--approve-dashboard-only-host-change", action="store_true", required=True)
     args = parser.parse_args()
-    if os.geteuid() != 0:
-        parser.exit(2, "DASHBOARD_ACTIVATION_ROOT_REQUIRED\n")
-    target = ROOT / "releases" / args.target
-    inspect_release(target, args.target)
-    inspect_release(ROOT / "releases" / args.expected_current, args.expected_current)
-    _verified_snapshot(STATE / "snapshot.json")
-    legacy_enabled = systemctl("is-enabled", LEGACY_UNIT) == "enabled"
-
-    def before_switch() -> None:
-        _install_exact_unit(target)
-        systemctl("daemon-reload")
-        systemctl("stop", UNIT, LEGACY_UNIT)
-
-    def rollback_services() -> None:
-        try:
-            systemctl("stop", UNIT)
-            systemctl("disable", UNIT)
-            if legacy_enabled:
-                systemctl("enable", LEGACY_UNIT)
-            systemctl("start", LEGACY_UNIT)
-        except Exception:
-            raise RuntimeError("DASHBOARD_ROLLBACK_REQUIRES_OPERATOR_REVIEW")
-
-    def accept() -> None:
-        try:
-            if legacy_enabled:
-                systemctl("disable", LEGACY_UNIT)
-            systemctl("enable", UNIT)
-            systemctl("start", UNIT)
-            for _ in range(30):
-                if _accepted(args.target):
-                    return
-                time.sleep(1)
-            raise RuntimeError("DASHBOARD_ACCEPTANCE_TIMEOUT")
-        except BaseException:
-            rollback_services()
-            raise
-
-    switch_dashboard_release(ROOT, args.target, expected_current=args.expected_current,
-                             before_switch=before_switch, accept=accept)
-    print("M3_DASHBOARD_ONLY_ACTIVATION_ACCEPTED")
+    return dashboard_main(["activate", "--target", args.target,
+        "--expected-current", args.expected_current, "--ci-run-id", str(args.ci_run_id),
+        "--ci-run-attempt", str(args.ci_run_attempt), "--approve-dashboard-change"])
 
 
 if __name__ == "__main__":

@@ -6,6 +6,14 @@ its existing dashboard services, the frozen baseline checkout or the live databa
 The new private dashboard uses loopback port **8788**. No inbound security-group
 rule is required. Do not expose it through a public proxy or port forwarding.
 
+For an existing M3 installation requiring only dashboard code activation, use
+[the dedicated dashboard-only procedure](../../docs/m3-dashboard-only-activation.md).
+It preserves shared `current`, keeps PAPER inactive/disabled and uses a separate
+guarded dashboard pointer, durable recovery journal and boot/request fence.
+Do not use the full `activate_release.py` workflow for that purpose: it starts
+PAPER. Reviewed full activation is blocked while dashboard overrides remain;
+restore them to the shared release before any full activation/schema change.
+
 ## Acceptance prerequisites and authorization
 
 Obtain explicit authorization before host changes, service-account or database
@@ -209,48 +217,22 @@ executed against the authenticated host, report **AWS DEPLOYMENT ACCEPTANCE PEND
 
 ## M3 dashboard-only activation
 
-The M3 dashboard can be activated without moving the shared `current` pointer and
-without controlling PAPER. The dedicated unit uses the root-owned
-`/opt/hope-operations/dashboard-current` symlink. The existing snapshot exporter
-and PAPER service retain their existing release and state; this procedure neither
-starts nor enables them.
+Use the [canonical dashboard-only procedure](../../docs/m3-dashboard-only-activation.md)
+and `dashboard_release.py`: exact-head CI, scoped-reader/schema/runtime preflight,
+durable journal, shared kernel guard, boot/request fence and dashboard-only
+rollback. Shared `current` and PAPER remain unchanged; no factory is required.
+The earlier `activate_dashboard_release.py` command is now a compatibility entry
+point delegating to the same canonical workflow and requiring CI run/attempt.
+It cannot use its former independent unit-enablement/switch path.
 
-Before host mutation, rerun exact-release/CI attestation, dashboard-role read-only
-schema preflight, snapshot validation, Python imports, resource checks and
-`systemd-analyze verify` against the staged target. Then an approved root operator
-may run:
-
-```bash
-PYTHONPATH=/opt/hope-operations/releases/TARGET/src \
-  /opt/hope-operations/venv/bin/python \
-  /opt/hope-operations/releases/TARGET/deploy/operations/activate_dashboard_release.py \
-  --target TARGET --expected-current OLD_SHA \
-  --approve-dashboard-only-host-change
-```
-
-The wrapper installs only the fixed `hope-m3-dashboard-web.service`, stops the old
-and new dashboard web units, atomically moves the dedicated pointer, starts the new
-loopback-only service and verifies an exact post-start snapshot plus truthful M3
-readiness. A missing PAPER health file remains an explicit UNAVAILABLE condition;
-no synthetic health is created. Failed acceptance restores the old pointer and
-metadata, disables the new unit, and restarts the prior dashboard. It never calls
-the PAPER unit, changes a database, applies migrations or opens a network port.
-
-SIGKILL or host loss deliberately leaves `.dashboard-activation.lock`. Do not
-remove it manually. Inspect the recorded process and pointer state, then for a
-stale authenticated lease run the separately approved recovery wrapper with the
-same exact SHAs:
-
-```bash
-PYTHONPATH=/opt/hope-operations/releases/TARGET/src \
-  /opt/hope-operations/venv/bin/python \
-  /opt/hope-operations/releases/TARGET/deploy/operations/recover_dashboard_activation.py \
-  --expected-current OLD_SHA --target TARGET --approve-dashboard-recovery
-```
-
-Recovery stops only dashboard web units, rechecks the unchanged lease, restores
-the old dedicated pointer and metadata, and starts the legacy dashboard. Ambiguous,
-active, tampered or pending-pointer states fail closed for operator review.
+The former `hope-m3-dashboard-web.service`, deployment metadata and low-level
+recovery helpers are retained for historical recovery only. They share the
+serialization fence and refuse canonical journal state. An existing legacy unit
+must be absent or inactive/disabled; legacy lease, pointer-stage or metadata
+requires explicit engineering review before adopting the canonical workflow.
+Do not manually remove metadata or run old unguarded scripts to bypass that gate.
+The canonical procedure preserves existing web/export service identities and
+never installs or enables the historical M3 unit.
 
 ## M2 upgrade prerequisites (separate approval required)
 

@@ -10,7 +10,7 @@ import stat
 import tempfile
 from typing import Callable
 
-from hope.api.operations_deployment import DeploymentError, _process_identity, _sha, inspect_release
+from hope.api.operations_deployment import DeploymentError, _process_identity, _sha, inspect_release, _activation_guard
 
 
 POINTER = "dashboard-current"
@@ -52,6 +52,15 @@ def _point(root: Path, release: Path) -> None:
 
 @contextmanager
 def _guard(root: Path):
+    # Historical recovery shares the full/dashboard journal serialization fence.
+    with _activation_guard(root):
+        if (root/"dashboard-activation.json").exists() or (root/"dashboard-activation.json").is_symlink():
+            raise DeploymentError("DASHBOARD_JOURNAL_WORKFLOW_REQUIRED")
+        with _legacy_guard(root):yield
+
+
+@contextmanager
+def _legacy_guard(root: Path):
     try:
         import fcntl
     except ImportError as exc:

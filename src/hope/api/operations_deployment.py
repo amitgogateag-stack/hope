@@ -295,6 +295,10 @@ def switch_release(
 def _switch_release(root, target_sha, *, expected_current, accept, before_switch):
     target_sha, expected_current = _sha(target_sha), _sha(expected_current)
     root = root.resolve(strict=True)
+    if any((root/name).exists() or (root/name).is_symlink()
+           for name in ("dashboard-current","dashboard-activation.json",".dashboard-activation.lock",
+                        ".dashboard-current.next","dashboard-deployed.env")):
+        raise DeploymentError("OPERATIONS_DASHBOARD_OVERRIDE_REQUIRES_ROLLBACK")
     releases = (root / "releases").resolve(strict=True)
     current = root / "current"
     if not current.is_symlink():

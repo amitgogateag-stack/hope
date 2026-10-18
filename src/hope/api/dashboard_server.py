@@ -199,9 +199,14 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None):
+    def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
+                 *, deployed_commit: str | None = None, activation_check=None):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
+        if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
+            raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
+        self.deployed_commit=deployed_commit
+        self.activation_check=activation_check
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
@@ -246,6 +251,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not self._host_allowed():
             self._respond(403, b"Forbidden")
             return
+        if self.server.activation_check is not None:
+            try:self.server.activation_check()
+            except Exception:
+                self._respond(503,b"Dashboard activation requires recovery")
+                return
         if self.path in {"/", "/index.html"}:
             try:
                 if self.server.preview.stat().st_size > 65536:
@@ -301,6 +311,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = json.dumps(dashboard_readiness(self.server.snapshot,self.server.operations),separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return
+        if self.path == "/release.json":
+            payload=json.dumps({"schema":"hope.dashboard-release.v1",
+                "dashboard_commit":self.server.deployed_commit,"paper_only":True,
+                "live_enabled":False,"execution_authorized":False},separators=(",",":")).encode()
+            self._respond(200 if self.server.deployed_commit else 503,payload,"application/json; charset=utf-8")
+            return
         if self.path == "/snapshot.json":
             try:
                 payload, _ = _verified_snapshot(self.server.snapshot)
@@ -334,8 +350,16 @@ def main() -> None:
     parser.add_argument("--preview", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--operations-status-file", type=Path)
+    parser.add_argument("--deployed-commit")
+    parser.add_argument("--activation-gate",action="store_true")
     args = parser.parse_args()
-    with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file) as server:
+    check=None
+    if args.activation_gate:
+        if args.deployed_commit is None:parser.error("--activation-gate requires --deployed-commit")
+        from hope.api.dashboard_activation import Layout,runtime_gate
+        check=lambda:runtime_gate(Layout(),args.deployed_commit)
+    with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file,
+                             deployed_commit=args.deployed_commit,activation_check=check) as server:
         server.serve_forever(poll_interval=0.5)
 
 

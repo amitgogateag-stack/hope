@@ -947,3 +947,98 @@ rollback, and proof that operator commands never name the PAPER unit. The comple
 unit suite passed 2,365 tests after rebasing on the concurrent green M3 audit
 diagnostics commit. No AWS action was executed. Exact-head CI remains
 required after expected-SHA publication.
+
+## 2026-10-17: guarded dashboard-only activation milestone
+
+The dashboard-only mission was received while the preceding audit batch was in
+CI. No new source edits began until d6737f7200ffcbf9daa73e4d2f6349a07c2b4735
+completed HOPE CI 39074054022 attempt 1 successfully (3,011 passed, 89.81%) with
+matching issue #5 Bot marker. Live HEAD and frozen baseline
+7e9d341742818a97accce3e2301b1c7f96596795 were reverified before the new batch.
+User-supplied instance i-019d427e5a9b6fa87 / ap-south-1, active f17a549 release,
+staged 1c0bd9a release, Python/PostgreSQL/service/HTTP observations are recorded as
+HISTORICAL, not newly observed AWS evidence. No AWS console/terminal was operated.
+
+Architectural finding: existing web/export units both follow shared current;
+the full activator starts PAPER. New dashboard_release.py / dashboard_activation
+provide dedicated read-only preflight, explicit approved activation, status and
+rollback. A separate dashboard-current pointer and two known service drop-ins
+leave shared current, deployed.env, base units, credentials, schemas and all unit
+enablement bits unchanged. Export timer activity is preserved; an initially
+inactive timer stays inactive and freshness will decay unless separately reviewed
+refresh is configured. Unknown base-unit/drop-in configurations fail closed.
+Reviewed full activation is blocked until dashboard overrides are rolled back;
+old unguarded tools/manual root edits remain outside the supported contract.
+
+Prerequisites include exact-head CI/marker/frozen-branch attestation, trusted
+root-owned/non-writable release/Git/venv paths, standalone Git state, clean SHA,
+Python 3.13 imports and file access as hope-dashboard, scoped read-only role and
+exact target/rollback migration checksums on hope_m3_restore_test, valid current
+snapshot, resources, known systemd config and exact private listener/PID/python.
+Trust scans, file reads, subprocesses, HTTP and verification retries are bounded.
+The EnvironmentFile is parsed as data with a closed key vocabulary: no runtime
+PYTHONPATH/loader overrides, duplicate keys, LIVE=true or non-PAPER mode. Managed
+Python commands use -B -s -P. No credentials enter output or unit backups.
+
+The shared persistent kernel guard serializes dashboard/full activation and
+recovery. A fsynced atomic journal/backup precedes mutations; the pointer switch
+is atomic and directory-fsynced. ExecStartPre gates restart/boot. A separate
+request-time owner/journal/source-path fence closes HTTP after activator death
+even if web already started. Loaded module paths and exact PYTHONPATH must match
+the scoped release. COMMITTED follows actual endpoint/listener/page/snapshot and
+release-identity validation; 503 health and HALTED/STOPPED/UNAVAILABLE remain valid
+observations. New /release.json is unavailable without a pinned launch SHA.
+
+Ordinary failures attempt dashboard-only restoration of the prior pointer,
+drop-ins, web/timer activity and committed journal. SIGKILL/power loss require
+explicit authenticated stale-owner recovery; no code can run cleanup after
+SIGKILL. Rollback failure durably records ROLLBACK_FAILED and quiesces dashboard
+units where possible. Review found/fixed an unsafe failure path: new web must be
+stopped before restoration prerequisites that might fail. Stops are always allowed
+for dashboard units even if PAPER became unsafe; starts remain blocked. A service
+command firewall refuses every PAPER mutation. Database history is never rewound.
+
+Pre-reconciliation focused suite: 84 passed, 6 native Linux cases skipped in 7.72 seconds.
+Real disposable PostgreSQL preflight accepts the scoped reader and rejects writer,
+privileged owner, wrong DB and incompatible staged migration copies. The database
+immutability trigger correctly rejected an initial fixture attempting to alter
+history; the test was corrected to corrupt only a disposable code copy. Native
+Linux tests cover PREPARED/config/pointer/VERIFYING/started/COMMITTED SIGKILL,
+competing processes, stale recovery and committed boot-gate behavior. The started
+case uses a separate real HTTP process loading a copied release and proves HTTP
+503 after the activator dies. Local Windows tests use a real kernel lock plus
+explicit pointer/metadata adapters; native cases are deferred to Linux CI.
+
+Pre-reconciliation frozen source on a fresh local PostgreSQL 17 database: 3,056 passed,
+32 platform skips, one Bash behavior deselected in 330.58 seconds; 89.22% coverage
+against unchanged 89% gate. Three Bash contract files omitted locally remain in
+Linux CI. An earlier full run was intentionally stopped for the demonstrated
+EnvironmentFile override fix; it is not counted as validation of final code.
+Complete diff and whitespace reviewed; local PostgreSQL stopped after tests.
+
+The consolidated EC2 Instance Connect procedure separates read-only inspection,
+approved local-object-seeded staging, preflight, explicit activation, independent
+private HTTP observations and rollback. It needs no local installation or pasted
+credentials. Missing current AWS facts, trusted prepared target/runtime/config,
+fresh snapshot/reader scope, PAPER disabled state and separate host-change approval
+are operational prerequisites. This package does not establish actual AWS reboot
+or activation acceptance. PAPER was not activated; no trading/risk/NO_TRADE rules,
+migrations, historical claims/fills/audits or public network exposure were changed.
+Expected-SHA non-force publication and exact pushed-head CI/marker are final gates
+before M3 DASHBOARD ENGINEERING COMPLETE. M3 DASHBOARD ACTIVATED is not claimed.
+
+Publication reconciliation and final validation: the expected-SHA check detected
+concurrent green commit a9169a3711df2229830e2c0fcbff4059cc467222 (CI 39074596955,
+issue #5 exact marker). Preserved that commit by fast-forward and reconciled both
+engineering records. Historical dashboard entry points now delegate to the single
+journalled workflow or refuse conflicting state; all activation uses the shared
+kernel guard. No force update was used.
+
+The first merged Windows run exposed a coverage failure (88.25%) because native
+legacy recovery tests were skipped. Added a Windows filesystem metadata adapter
+while retaining real kernel locks and all assertions; Linux retains native tests.
+Final clean regression: 3085 passed, 32 platform skips, 1 deselected, 331.94 seconds,
+89.26% coverage against the unchanged 89% requirement. Local Python 3.12/PostgreSQL
+17; Linux CI must independently exercise Python 3.13 and native crash tests. Three
+Bash contract files and one Bash-dependent case omitted locally. PostgreSQL stopped.
+AWS remains unmodified and activation pending separate authorization.

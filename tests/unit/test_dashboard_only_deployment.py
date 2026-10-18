@@ -7,6 +7,54 @@ import sys
 import pytest
 
 from hope.api import dashboard_deployment as deployment
+from test_activation_guard import guard_platform
+
+
+
+@pytest.fixture(autouse=True)
+def legacy_platform_surface(monkeypatch,request,tmp_path):
+    if os.name != "nt":
+        return  # Linux CI exercises the production filesystem unchanged.
+    request.getfixturevalue("guard_platform")
+    process_identity=deployment._process_identity
+    monkeypatch.setattr(deployment,"_process_identity",lambda pid,proc_root=Path("/proc"):
+        ("1"*36,"10") if proc_root==Path("/proc") else process_identity(pid,proc_root))
+    # Windows model of POSIX pointer metadata; flock uses real Windows kernel
+    # byte locks. Directory fsync is represented by fsync of a real private fd;
+    # native directory fsync/symlink behavior is exercised on Linux CI.
+    links={}
+    original_resolve=Path.resolve;original_symlink=Path.is_symlink
+    original_unlink=Path.unlink;original_lstat=Path.lstat
+    original_open=os.open;original_replace=os.replace;original_readlink=os.readlink
+    def key(path):return os.path.abspath(str(path))
+    def symlink(source,destination,**kwargs):
+        Path(destination).write_bytes(b"POSIX_POINTER_MODEL")
+        links[key(destination)]=Path(source)
+    def resolve(path,*args,**kwargs):
+        return original_resolve(links.get(key(path),path),*args,**kwargs)
+    def unlink(path,*args,**kwargs):
+        result=original_unlink(path,*args,**kwargs);links.pop(key(path),None);return result
+    def replace(source,destination):
+        result=original_replace(source,destination)
+        value=links.pop(key(source),None);links.pop(key(destination),None)
+        if value is not None:links[key(destination)]=value
+        return result
+    class PosixMetadata:
+        def __init__(self,info):self.info=info;self.st_mode=info.st_mode & ~0o022
+        def __getattr__(self,name):return getattr(self.info,name)
+    def opened(path,flags,*args,**kwargs):
+        if flags==os.O_RDONLY and Path(path).is_dir():
+            return original_open(tmp_path/".legacy-directory-sync",os.O_CREAT|os.O_RDWR,0o600)
+        return original_open(path,flags,*args,**kwargs)
+    monkeypatch.setattr(os,"symlink",symlink)
+    monkeypatch.setattr(Path,"resolve",resolve)
+    monkeypatch.setattr(Path,"is_symlink",lambda p:key(p) in links or original_symlink(p))
+    monkeypatch.setattr(Path,"unlink",unlink)
+    monkeypatch.setattr(Path,"lstat",lambda p,*a,**k:PosixMetadata(original_lstat(p,*a,**k)))
+    monkeypatch.setattr(os,"replace",replace)
+    monkeypatch.setattr(os,"readlink",lambda p,*a,**k:str(links[key(p)]) if key(p) in links else original_readlink(p,*a,**k))
+    monkeypatch.setattr(os,"open",opened)
+    monkeypatch.setattr(os,"fchmod",lambda *args:None,raising=False)
 
 
 def _release_tree(root: Path, sha: str) -> Path:
@@ -23,7 +71,6 @@ def _prepared(tmp_path, monkeypatch):
     return old, target
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink"), reason="Requires symlinks; exercised on Linux CI")
 def test_dashboard_switch_uses_dedicated_pointer_and_rolls_back_without_shared_current(tmp_path, monkeypatch):
     old, target = _prepared(tmp_path, monkeypatch)
     os.symlink(tmp_path / "releases" / old, tmp_path / "current", target_is_directory=True)
@@ -45,7 +92,6 @@ def test_dashboard_switch_uses_dedicated_pointer_and_rolls_back_without_shared_c
     assert not (tmp_path / deployment.LOCK).exists()
 
 
-@pytest.mark.skipif(not hasattr(os, "symlink"), reason="Requires symlinks; exercised on Linux CI")
 def test_dashboard_switch_accepts_target_and_rejects_wrong_pointer_or_concurrency(tmp_path, monkeypatch):
     old, target = _prepared(tmp_path, monkeypatch)
     deployment.switch_dashboard_release(tmp_path, target, expected_current=old,
@@ -140,60 +186,45 @@ def operator(tmp_path, monkeypatch):
     module.ROOT = tmp_path
     module.STATE = tmp_path / "state"
     module.STATE.mkdir()
-    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
     monkeypatch.setattr(module, "inspect_release", lambda *args: {"status": "COMPATIBLE_CODE"})
     monkeypatch.setattr(module, "_verified_snapshot", lambda *args: (b"{}", None))
     return module
 
 
 def test_operator_switches_only_dashboard_units_and_requires_acceptance(operator, monkeypatch):
-    old, target = "1" * 40, "2" * 40
-    commands = []
-    def systemctl(*args):
-        commands.append(args)
-        if args == ("is-enabled", operator.LEGACY_UNIT):
-            return "enabled"
-        return ""
-    monkeypatch.setattr(operator, "systemctl", systemctl)
-    monkeypatch.setattr(operator, "_install_exact_unit", lambda *args: None)
-    monkeypatch.setattr(operator, "_accepted", lambda *args: True)
-    def switch(root, target_sha, *, expected_current, before_switch, accept):
-        assert (target_sha, expected_current) == (target, old)
-        before_switch()
-        accept()
-    monkeypatch.setattr(operator, "switch_dashboard_release", switch)
-    monkeypatch.setattr(sys, "argv", ["activate-dashboard", "--target", target,
-                                      "--expected-current", old,
-                                      "--approve-dashboard-only-host-change"])
-    operator.main()
-    flattened = " ".join(" ".join(call) for call in commands)
-    assert "hope-paper" not in flattened
-    assert ("stop", operator.UNIT, operator.LEGACY_UNIT) in commands
-    assert ("enable", operator.UNIT) in commands
-    assert ("start", operator.UNIT) in commands
+    from hope.api import dashboard_activation
+    calls=[]
+    monkeypatch.setattr(dashboard_activation, "main", lambda args: calls.append(args) or 0)
+    monkeypatch.setattr(operator, "systemctl", lambda *args: pytest.fail("obsolete service workflow invoked"))
+    monkeypatch.setattr(sys, "argv", ["activate-dashboard", "--target", "2"*40,
+        "--expected-current", "1"*40, "--ci-run-id", "123", "--ci-run-attempt", "1",
+        "--approve-dashboard-only-host-change"])
+    assert operator.main()==0
+    assert calls==[["activate", "--target", "2"*40, "--expected-current", "1"*40,
+        "--ci-run-id", "123", "--ci-run-attempt", "1", "--approve-dashboard-change"]]
 
 
 def test_operator_failure_restores_legacy_service_without_paper_commands(operator, monkeypatch):
-    old, target = "1" * 40, "2" * 40
-    commands = []
-    monkeypatch.setattr(operator, "systemctl", lambda *args: commands.append(args) or
-                        ("enabled" if args == ("is-enabled", operator.LEGACY_UNIT) else ""))
-    monkeypatch.setattr(operator, "_install_exact_unit", lambda *args: None)
-    monkeypatch.setattr(operator, "_accepted", lambda *args: False)
-    monkeypatch.setattr(operator.time, "sleep", lambda *_: None)
-    def switch(root, target_sha, *, expected_current, before_switch, accept):
-        before_switch()
-        accept()
-    monkeypatch.setattr(operator, "switch_dashboard_release", switch)
-    monkeypatch.setattr(sys, "argv", ["activate-dashboard", "--target", target,
-                                      "--expected-current", old,
-                                      "--approve-dashboard-only-host-change"])
-    with pytest.raises(RuntimeError, match="ACCEPTANCE_TIMEOUT"):
-        operator.main()
-    assert ("disable", operator.UNIT) in commands
-    assert ("enable", operator.LEGACY_UNIT) in commands
-    assert ("start", operator.LEGACY_UNIT) in commands
-    assert all("hope-paper" not in " ".join(command) for command in commands)
+    # Lifecycle/rollback are covered by canonical real-file/native crash tests.
+    # Compatibility entry must preserve the canonical failure, never run its
+    # obsolete service-enablement code or silently bypass exact-head CI.
+    from hope.api import dashboard_activation
+    calls=[]
+    def denied(args):
+        calls.append(args)
+        raise RuntimeError("canonical preflight blocked")
+    monkeypatch.setattr(dashboard_activation, "main", denied)
+    monkeypatch.setattr(operator, "systemctl", lambda *args: pytest.fail("obsolete service workflow invoked"))
+    monkeypatch.setattr(sys, "argv", ["activate-dashboard", "--target", "2"*40,
+        "--expected-current", "1"*40, "--ci-run-id", "123", "--ci-run-attempt", "1",
+        "--approve-dashboard-only-host-change"])
+    with pytest.raises(RuntimeError, match="canonical preflight blocked"):operator.main()
+    assert len(calls)==1
+    monkeypatch.setattr(sys, "argv", ["activate-dashboard", "--target", "2"*40,
+        "--expected-current", "1"*40, "--approve-dashboard-only-host-change"])
+    with pytest.raises(SystemExit):operator.main()
+    assert len(calls)==1
 
 
 def test_installed_unit_must_exactly_match_reviewed_target(operator, monkeypatch, tmp_path):
@@ -214,7 +245,7 @@ def test_recovery_operator_stops_only_dashboards_then_restores_legacy(tmp_path, 
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     module.ROOT = tmp_path
-    monkeypatch.setattr(module.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
     old, target = "1" * 40, "2" * 40
     commands, invocation = [], {}
     def systemctl(*args):
