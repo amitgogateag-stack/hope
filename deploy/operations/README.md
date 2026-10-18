@@ -81,7 +81,11 @@ prerequisites are unavailable, leave PAPER disabled and report UNAVAILABLE.
 Run `sudo bash /opt/hope-operations/current/deploy/operations/preflight.sh SHA`.
 It is read-only and rejects mismatched code, private-config permissions, service
 accounts, unsupported Python/systemd and invalid unit definitions. It does not
-certify database grants or a plan factory. Review its failures; never bypass them.
+certify database grants or a plan factory. The script re-executes with a minimal
+locale/path environment, invokes fixed system binaries, and gives the reviewed
+Python verifier only its release import path; operator Python, Git, loader and
+unrelated secret variables are not forwarded. Review its failures; never bypass
+them.
 
 Perform **both** database checks with the correct environment injected securely
 by the operator's approved secret-handling mechanism:
@@ -103,7 +107,9 @@ upgrade and backup, not an automatic repair.
 After approval, `sudo bash .../deploy/operations/install_operations.sh SHA`
 installs **disabled** units and refuses existing units or an occupied 8788 port.
 Failure rolls back only newly installed unit files. It does not create users,
-change the database, enable PAPER or touch existing dashboard units.
+change the database, enable PAPER or touch existing dashboard units. Installation
+also uses fixed system binaries and a minimal child environment; do not modify it
+to preserve the caller environment.
 
 Before enabling, run an authorized PAPER `--once` with the reviewed factory,
 inspect the sanitized health and durable database outcome, and perform the
