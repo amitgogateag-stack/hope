@@ -54,6 +54,36 @@ def _audit(connection, run):
 
 
 @pytest.mark.integration
+def test_certified_statement_timeout_rolls_back_prior_authentication_and_retries(certified_case, monkeypatch):
+    engine, make = certified_case
+    cases = sorted([make(), make()], key=lambda case: case[1].job_run_id.int)
+    for data, run, _, work, registry in cases:
+        _commit(engine, data, run, work, registry, False)
+    ids = tuple(case[1].job_run_id for case in cases)
+    current = max(case[0]["as_of"] for case in cases) + timedelta(days=1)
+    original = recovery.authenticate_successful_paper_run
+    def timeout_second(connection, run):
+        if run.job_run_id == ids[1]:
+            connection.execute(text("SELECT pg_sleep(0.4)"))
+        return original(connection, run)
+    with engine.begin() as connection:
+        connection.execute(text("SET LOCAL statement_timeout='90ms'"))
+        with monkeypatch.context() as patch:
+            patch.setattr(recovery, "authenticate_successful_paper_run", timeout_second)
+            with pytest.raises(RuntimeError, match="CERTIFIED_RECOVERY_DATABASE_TIMEOUT"):
+                recovery.recover_certified_paper_batch(connection, ids, current=current)
+        assert connection.execute(text("SELECT current_setting('statement_timeout')")).scalar_one() == "90ms"
+        for _, run, _, _, _ in cases:
+            assert _audit(connection, run) == 0
+    with engine.begin() as connection:
+        result = recovery.recover_certified_paper_batch(connection, reversed(ids), current=current)
+        assert result.authenticated_run_ids == ids
+        for _, run, strategy, _, _ in cases:
+            assert _audit(connection, run) == 1
+            assert len(strategy.calls) == 1
+
+
+@pytest.mark.integration
 @pytest.mark.parametrize("path", ["NO_TRADE", "RISK_BLOCKED", "FILLED"])
 @pytest.mark.parametrize("revocation", ["demotion", "control", "variant"])
 @pytest.mark.parametrize("claimed", [False, True])

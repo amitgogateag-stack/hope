@@ -34,6 +34,7 @@ def harness(monkeypatch):
             events.append("release")
 
     connection = SimpleNamespace(begin_nested=savepoint)
+    monkeypatch.setattr(batch, "bounded_paper_recovery", lambda c: savepoint())
     monkeypatch.setattr(batch, "SqlAlchemyPaperEnvironmentControlRepository", lambda c:
                         SimpleNamespace(assert_running=lambda: events.append("control")))
     monkeypatch.setattr(batch, "SqlAlchemyJobRunRepository", lambda c:

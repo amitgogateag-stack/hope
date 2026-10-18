@@ -170,3 +170,29 @@ M3 CONTROLLED PAPER ACCEPTED requires an actually authorized AWS cycle, durable
 outcomes, reconciliation and reviewed dashboard evidence. M3 BLOCKED applies while
 a required target, factory, data, permission, authorization or access prerequisite
 is unresolved. No local/synthetic test result can establish AWS acceptance.
+
+
+## Explicit recovery database wait bounds
+
+Both direct recovery library entry points (`reconcile_completed_paper_batch` and
+`recover_certified_paper_batch`) apply transaction-local PostgreSQL limits inside
+their batch savepoint: at most 5 seconds per lock acquisition and 30 seconds per
+statement. A caller's stricter nonzero setting wins. The CLI already configures
+connection timeouts; direct callers now receive the same bounded-wait protection.
+These limits do not constitute a total batch wall-clock deadline, connection
+establishment deadline, or a timeout for a caller's later outer COMMIT.
+
+A server lock timeout/cancellation raises the entry point's fixed
+`*_DATABASE_TIMEOUT` code with the database cause retained for internal diagnosis;
+other database failures retain `*_DATABASE_UNAVAILABLE`. The CLI still emits its
+fixed sanitized failure and never publishes VERIFIED before successful commit.
+No automatic retry, new claim, factory invocation, or accounting replay occurs.
+
+Timeout rolls back every transition and receipt produced by that batch, including
+an earlier successful member. Savepoint rollback restores the caller's settings;
+success restores them explicitly before release. Caller work preceding the batch
+remains under the caller's transaction. Preserve selected IDs, inspect contention
+and durable state, and retry only the same reviewed explicit recovery operation
+after the blocker is resolved. A lost connection/commit acknowledgement remains
+ambiguous until a fresh read/recovery proves the same IDs. These engineering
+changes do not authorize AWS mutations or a PAPER cycle.

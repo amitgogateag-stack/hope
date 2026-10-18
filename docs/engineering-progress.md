@@ -1058,3 +1058,52 @@ The root mock modified shared os.geteuid and incorrectly changed kernel guard
 ownership expectations. Scope that mock to a private OS facade in the CLI test;
 real Linux guard UID/flock checks remain native and unchanged. Focused validation:
 75 passed in 3.19s. No production code change. Await next exact-head CI.
+
+
+## PAPER recovery database wait bounds (2026-10-18)
+
+Started from live aff6c7d120125f9cbbb0bd7d294583d7f86862b8 after fast-forwarding
+all eight concurrent commits. Exact-head Actions run 39126641024 and issue #5 Bot
+HOPE_CI_STATUS_V1 were SUCCESS, attempt 1. Frozen day29-green-baseline verified at
+7e9d341742818a97accce3e2301b1c7f96596795 before code changes.
+
+Demonstrable gap: both recovery batch APIs bounded selection to 32 runs but their
+savepoint/control advisory lock/job row locks/proof queries inherited unlimited
+PostgreSQL waits from direct callers with zero timeout settings. The CLI already
+configured connection-level limits; the library contract did not. A competing
+transaction could therefore indefinitely delay an explicitly selected recovery.
+
+Added one shared savepoint scope for ordinary and certified recovery. It caps
+lock_timeout at 5000ms and statement_timeout at 30000ms with SET LOCAL, preserving
+stricter nonzero caller limits. Success restores prior values before releasing
+the savepoint; PostgreSQL rollback restores values on failure/cancellation. Caller
+work preceding recovery remains outside that savepoint. Fixed sanitized timeout
+codes distinguish SQLSTATE 55P03/57014 while other database failures retain their
+existing unavailable codes. No retry, new claim, factory, migration, economic
+replay or strategy/risk change was introduced. Limits are per lock/statement,
+not an end-to-end SLA or caller commit/connection deadline.
+
+Real PostgreSQL focused validation: 62 passed in 26.81 seconds. Tests cover zero,
+looser and stricter settings; nested scopes and pooled connection reuse; proof
+failure/interrupt/statement cancellation; environment-control and job row lock
+contention through both APIs; cancellation after the first ordinary receipt and
+after the first certified authentication; caller-transaction usability; retry
+with one receipt and unchanged strategy invocation/effect counts. Existing
+backend-termination, opposite-order concurrency and revoked historical recovery
+tests also pass. Initial focused test targeted a later uncertified run before
+historical validation, so it correctly failed receipt proof; corrected contention
+fixture to block the first certified identity without bypassing receipt checks.
+
+First full Windows run: 3120 passed, 32 skipped, one deselected, one pre-existing
+Linux staging fixture failure, 89.31% coverage, 427.14 seconds. The fixture used
+POSIX PATH, /dev/null and shell hooks without a platform declaration. Marked that
+single native test POSIX-only; Linux CI still executes every assertion. No
+coverage threshold or production behavior was weakened. Clean rerun: 3120 passed,
+33 platform skips, one deselected, 421.39 seconds; 89.31% coverage against the
+unchanged 89% gate. Local Python 3.12/PostgreSQL 17. Three Bash contract files and
+one Bash-dependent case omitted locally; Linux CI is authoritative for these and
+all native POSIX tests. Complete diff/whitespace reviewed; local PostgreSQL stopped.
+Expected-SHA non-force publication and exact pushed-head CI/marker remain final gates.
+
+No AWS operations, dashboard activation, PAPER execution or public exposure.
+Factory review and separate AWS authorization remain operational prerequisites.

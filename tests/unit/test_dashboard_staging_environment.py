@@ -2,6 +2,8 @@ import os
 from pathlib import Path
 import subprocess
 
+import pytest
+
 
 ROOT = Path(__file__).parents[2]
 RUNBOOK = ROOT / "docs/m3-dashboard-only-activation.md"
@@ -30,6 +32,7 @@ def _seed(tmp_path):
     return seed
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux staging paths and shell hooks; exercised on Linux CI")
 def test_aws_staging_clears_ambient_git_execution_inputs(tmp_path):
     seed = _seed(tmp_path)
     hostile_home = tmp_path / "hostile-home"

@@ -7,6 +7,9 @@ from uuid import UUID
 
 from sqlalchemy import Connection, text
 from sqlalchemy.exc import SQLAlchemyError
+from hope.infrastructure.scheduling.paper_recovery_limits import (
+    bounded_paper_recovery, recovery_database_error_code,
+)
 
 from hope.application.experiments.config_hash import configuration_hash
 from hope.application.jobs import JobRunStatus, create_scheduled_job_run
@@ -117,7 +120,7 @@ def recover_certified_paper_batch(connection: Connection, run_ids: Iterable[UUID
         raise ValueError("PAPER_CERTIFIED_RECOVERY_CLOCK_INVALID")
     reconciled, authenticated = [], []
     try:
-        with connection.begin_nested():
+        with bounded_paper_recovery(connection):
             SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
             records = []
             repository = SqlAlchemyJobRunRepository(connection)
@@ -141,5 +144,5 @@ def recover_certified_paper_batch(connection: Connection, run_ids: Iterable[UUID
                     authenticate_successful_paper_run(connection, record.run)
                     authenticated.append(record.run.job_run_id)
     except SQLAlchemyError as exc:
-        raise RuntimeError("PAPER_CERTIFIED_RECOVERY_DATABASE_UNAVAILABLE") from exc
+        raise RuntimeError(recovery_database_error_code(exc, "PAPER_CERTIFIED_RECOVERY")) from exc
     return CertifiedPaperRecoveryResult(tuple(reconciled), tuple(authenticated))
