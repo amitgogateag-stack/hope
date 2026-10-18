@@ -4,6 +4,7 @@ from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
 from hope.infrastructure.market_data.ingestion import NormalizedMarketBarBatch
+from hope.infrastructure.market_data.identity import snapshot_request_bindings
 from hope.infrastructure.market_data.persistence import MarketBarSink
 from hope.infrastructure.market_data.pipeline import ingest_market_data_window
 from hope.infrastructure.market_data.provider import MarketDataProvider, MarketDataRequest
@@ -43,6 +44,8 @@ def ingest_market_data_recovery_windows(
         raise TypeError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRED")
+
+    identity_map = snapshot_request_bindings(requests, identity_map)
 
     required_identity_keys = {
         (request.source, symbol)

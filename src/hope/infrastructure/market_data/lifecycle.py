@@ -6,6 +6,7 @@ from uuid import UUID
 
 from hope.application.market_data.calendar import MarketSessionCalendar
 from hope.infrastructure.market_data.ingestion import NormalizedMarketBarBatch
+from hope.infrastructure.market_data.identity import snapshot_request_bindings
 from hope.infrastructure.market_data.persistence import MarketBarSink
 from hope.infrastructure.market_data.pipeline import ingest_market_data_window
 from hope.infrastructure.market_data.provider import MarketDataProvider, MarketDataRequest
@@ -95,6 +96,7 @@ def ingest_and_seal_market_data_windows(
         ):
             raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_SKIP_TRADING_SLOTS")
 
+    identity_map = snapshot_request_bindings(requests, identity_map)
     required_identity_keys = {
         (request.source, symbol)
         for request in requests

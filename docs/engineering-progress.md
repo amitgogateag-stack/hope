@@ -1363,3 +1363,52 @@ native activation crash file excluded; exact-head Linux CI exercises both.
 This does not attest host-wide PAPER absence or authorize activation. No AWS
 command, database/migration, PAPER cycle, strategy/risk/research change, factory
 selection, LIVE enablement or public exposure occurred.
+
+## Market-data approved identity snapshot batch (2026-10-18)
+
+Fetched live c80426ad74de54b56a8dfb30f7678c16836804f2; exact-head CI
+39157791705 and issue #5 Bot marker green/matching. Frozen baseline unchanged.
+Reviewed PAPER recovery savepoint, timeout, receipt and portfolio lock paths.
+Ran 40 PostgreSQL adversarial recovery tests (17.33s), including lock cancellation,
+caught-error rollback, concurrent reconciliation and backend death; no new defect
+was reproduced in those paths. No artificial recovery change was made.
+
+Found a distinct market-data integrity defect: recovery approves a mutable
+caller-owned identity map, then provider normalization reads it after callbacks.
+A deterministic provider mutation changed the instrument supplied to the sink
+after preflight. The regression also reproduced against the exact c80426a
+provider/recovery source loaded in an isolated test process. Protect recovery,
+full ingestion/sealing and direct provider normalization with a scoped immutable
+binding snapshot. Authorize/validate that snapshot, retain it through all windows
+and finalization, and copy only requested keys once. Preserve missing/invalid
+values and defaultdict semantics, existing rejection codes, timestamps, calendars,
+research thresholds, risk/strategy behavior and caller transaction ownership.
+Every retry captures and reauthorizes afresh; no cache or new permission exists.
+
+Adversarial unit tests cover replacement/deletion/clear during fetch, mutation by
+preflight or sink between windows, mutation denial on the view, concurrent reload,
+single lookup per requested key and no enumeration of unrelated mappings. Eight
+real PostgreSQL cases verify manifest authorization, distinct instrument prices,
+concurrent/callback drift, savepoint interruption and retry, exact idempotency,
+unchanged manifest hashes and lifecycle-only sealing. Their synthetic rows are
+rolled back. Focused combined suite: 52 passed (1.00s).
+
+No AWS deployment/execution, production database/migration, PAPER factory or cycle,
+LIVE enablement or public exposure. The dashboard absent-unit activation gate
+remains blocked pending reviewed execution boundaries and restart enforcement.
+Full regression and exact-head CI/marker outcomes are in the completion record.
+
+Full local Python 3.12/PostgreSQL 17 regression: 3282 passed, 69 native-platform
+skips, one deselected, 283.56s; coverage 89.08%, unchanged 89% requirement. Three
+Bash contract files and one Bash-dependent case omitted on Windows; full native
+Python 3.13/PostgreSQL 16/17 CI remains the publication gate. Local PostgreSQL
+stopped after tests. Complete diff and whitespace reviewed before publication.
+
+Before publication, live HEAD advanced to 775dc83b6c3905b569d20f26799b366641063d24
+(deployment-guard special-file hardening). Verified exact-head CI 39175287096
+success and matching Bot marker before incorporating it. Preserved that change
+and its complete engineering record; only the two appended documentation blocks
+needed merge resolution. The full local result above predates that integration;
+combined focused validation and final full CI verify the published composition.
+Post-integration combined focus: 193 passed, 19 native-platform skips, 3.92s;
+local PostgreSQL stopped again. No source conflict or override was needed.

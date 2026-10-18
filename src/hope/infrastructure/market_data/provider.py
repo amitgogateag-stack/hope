@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
+from hope.infrastructure.market_data.identity import snapshot_request_bindings
 
 from hope.infrastructure.market_data.ingestion import (
     NormalizedMarketBarBatch,
@@ -122,6 +123,7 @@ def fetch_and_normalize_bars(
 ) -> NormalizedMarketBarBatch:
     """Fetch through a provider boundary and normalize only coherent evidence."""
 
+    identity_map = snapshot_request_bindings((request,), identity_map)
     if provider.source != request.source:
         raise ValueError("PROVIDER_REQUEST_SOURCE_MISMATCH")
     batch = provider.fetch_bars(request)
