@@ -112,6 +112,24 @@ def test_host_stop_and_start_preserve_timer_enablement_and_never_touch_paper():
         ("systemctl","start",module.WEB),("systemctl","start",module.TIMER)]
 
 
+def test_privileged_commands_use_minimal_environment_and_reject_injection(monkeypatch):
+    monkeypatch.setenv("PATH","/tmp/operator-controlled")
+    monkeypatch.setenv("PYTHONPATH","/tmp/operator-controlled")
+    monkeypatch.setenv("LD_PRELOAD","/tmp/operator-controlled.so")
+    run=Mock(return_value=SimpleNamespace(stdout="ok"));monkeypatch.setattr(module.subprocess,"run",run)
+    host=module.Host(module.Layout())
+    assert host.run("systemctl","show")=="ok"
+    assert run.call_args.kwargs["env"]==module.SAFE_ENVIRONMENT
+    for environment in ({"PATH":"/tmp/operator-controlled"},{"LD_PRELOAD":"private"}):
+        with pytest.raises(RuntimeError,match="SUBPROCESS_(PATH|ENVIRONMENT)_DENIED"):
+            host.run("systemctl","show",env=environment)
+    assert run.call_count==1
+    allowed={"PATH":module.SAFE_PATH,"PYTHONPATH":"/reviewed/release/src",
+        "PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"}
+    host.run("runuser","--user","hope-dashboard",env=allowed)
+    assert run.call_args.kwargs["env"]=={**module.SAFE_ENVIRONMENT,**allowed}
+
+
 def test_http_verification_accepts_missing_paper_health_without_inventing_ready(setup,monkeypatch):
     layout,_=setup;host=module.Host(layout);host.paper_safe=Mock();host.listener=Mock()
     page=layout.root/"releases"/NEW/"docs/dashboard/preview.html"

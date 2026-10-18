@@ -38,6 +38,9 @@ PAPER="hope-paper.service"
 LEGACY_M3="hope-m3-dashboard-web.service"
 DASHBOARD_UNITS=(WEB,EXPORT,TIMER)
 PHASES={"PREPARED","VERIFYING","COMMITTED","ROLLING_BACK","ROLLBACK_FAILED"}
+SAFE_PATH="/usr/sbin:/usr/bin:/sbin:/bin"
+SAFE_ENVIRONMENT={"PATH":SAFE_PATH,"LANG":"C","LC_ALL":"C"}
+CHILD_ENVIRONMENT_KEYS={"PATH","PYTHONPATH","PYTHONDONTWRITEBYTECODE","PYTHONNOUSERSITE"}
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,15 @@ class Layout:
 
 def _require(condition,code):
     if not condition:raise RuntimeError("DASHBOARD_"+code)
+
+
+def _command_environment(value=None):
+    value={} if value is None else value
+    _require(isinstance(value,dict) and set(value)<=CHILD_ENVIRONMENT_KEYS,
+        "SUBPROCESS_ENVIRONMENT_DENIED")
+    _require(value.get("PATH",SAFE_PATH)==SAFE_PATH,"SUBPROCESS_PATH_DENIED")
+    environment=dict(SAFE_ENVIRONMENT);environment.update(value)
+    return environment
 
 
 def _sha(value):
@@ -315,7 +327,8 @@ class Host:
     def __init__(self,layout):self.layout=layout;self.stage="INITIAL"
 
     def run(self,*args,timeout=20,env=None):
-        return subprocess.run(args,check=True,capture_output=True,text=True,timeout=timeout,env=env).stdout
+        return subprocess.run(args,check=True,capture_output=True,text=True,timeout=timeout,
+            env=_command_environment(env)).stdout
 
     def show(self,unit):
         _require(unit in (*DASHBOARD_UNITS,PAPER),"UNIT_DENIED")

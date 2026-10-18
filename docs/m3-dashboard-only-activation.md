@@ -73,6 +73,10 @@ Only HOPE_DATABASE_URL and optional PAPER-valued HOPE_EXECUTION_MODE / false-val
 HOPE_LIVE_ENABLED keys are accepted. PYTHONPATH, loader settings and other keys
 are compatibility blockers; do not bypass them. All managed Python commands
 disable bytecode/user-site/current-directory imports with -B -s -P.
+Privileged host probes and service controls use a fixed system executable path and
+minimal C-locale environment; operator PATH/PYTHONPATH, loader variables and other
+ambient process settings are not inherited. The one reviewed child-Python launch
+accepts only its fixed PATH and explicit import/bytecode isolation variables.
 Its credentials are never returned. It need not be readable by
 hope-dashboard: systemd injects it for the exporter. Python imports, preview and
 snapshot readability are separately tested as hope-dashboard using Python 3.13.
