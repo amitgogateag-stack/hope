@@ -8,9 +8,9 @@ Type=oneshot
 User=hope-dashboard
 Group=hope-operations
 WorkingDirectory=/opt/hope-operations/current
-Environment=PYTHONPATH=/opt/hope-operations/current/src
 EnvironmentFile=/etc/hope-dashboard-ops.env
-ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.dashboard_snapshot --output /var/lib/hope-dashboard-ops/snapshot.json
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+ExecStart=/usr/bin/env PYTHONPATH=/opt/hope-operations/current/src /opt/hope-operations/venv/bin/python -m hope.api.dashboard_snapshot --output /var/lib/hope-dashboard-ops/snapshot.json
 TimeoutStartSec=120s
 UMask=0077
 NoNewPrivileges=yes

@@ -106,6 +106,25 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     assert "OnBootSec=30s" in timer and "OnUnitInactiveSec=60s" in timer
 
 
+@pytest.mark.parametrize("name,python_path", [
+    ("hope-paper.service", "/opt/hope-operations/current/src:/opt/hope-operations/config"),
+    ("hope-ops-dashboard-export.service", "/opt/hope-operations/current/src"),
+])
+def test_environment_files_cannot_override_reviewed_python_or_loader_paths(name, python_path):
+    unit = (Path(__file__).parents[2] / "deploy/operations" / name).read_text()
+    unset = next(line for line in unit.splitlines() if line.startswith("UnsetEnvironment="))
+    for variable in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE", "PYTHONWARNINGS",
+                     "PYTHONINSPECT", "PYTHONSTARTUP", "PYTHONBREAKPOINT",
+                     "PYTHONPLATLIBDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
+        assert variable in unset.split("=", 1)[1].split()
+    assert "Environment=PYTHONPATH=" not in unit
+    python_commands = [line for line in unit.splitlines()
+                       if line.startswith(("ExecStart=", "ExecStartPre=")) and "/python " in line]
+    assert python_commands
+    assert all(line.split("=", 1)[1].startswith(f"/usr/bin/env PYTHONPATH={python_path} ")
+               for line in python_commands)
+
+
 def test_cli_preflight_sanitizes_repository_and_database_failure(tmp_path, monkeypatch, capsys):
     import sys
     monkeypatch.setattr(sys, "argv", ["preflight", "--release", str(tmp_path), "--expected-sha", "a" * 40,

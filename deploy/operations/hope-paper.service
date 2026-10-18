@@ -10,11 +10,11 @@ Type=simple
 User=hope-paper
 Group=hope-operations
 WorkingDirectory=/opt/hope-operations/current
-Environment=PYTHONPATH=/opt/hope-operations/current/src:/opt/hope-operations/config
 EnvironmentFile=/etc/hope-paper.env
 EnvironmentFile=/opt/hope-operations/deployed.env
-ExecStartPre=/opt/hope-operations/venv/bin/python -m hope.api.operations_deployment --release /opt/hope-operations/current --expected-sha ${HOPE_DEPLOYED_COMMIT} --database-component paper
-ExecStart=/opt/hope-operations/venv/bin/python -m hope.api.paper_service --factory ${HOPE_PAPER_FACTORY} --migrations-dir /opt/hope-operations/current/migrations --status-file /var/lib/hope-paper/health.json --poll-seconds 30
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
+ExecStartPre=/usr/bin/env PYTHONPATH=/opt/hope-operations/current/src:/opt/hope-operations/config /opt/hope-operations/venv/bin/python -m hope.api.operations_deployment --release /opt/hope-operations/current --expected-sha ${HOPE_DEPLOYED_COMMIT} --database-component paper
+ExecStart=/usr/bin/env PYTHONPATH=/opt/hope-operations/current/src:/opt/hope-operations/config /opt/hope-operations/venv/bin/python -m hope.api.paper_service --factory ${HOPE_PAPER_FACTORY} --migrations-dir /opt/hope-operations/current/migrations --status-file /var/lib/hope-paper/health.json --poll-seconds 30
 Restart=on-failure
 RestartSec=15s
 TimeoutStartSec=90s
