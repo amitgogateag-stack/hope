@@ -102,6 +102,22 @@ def test_second_dashboard_upgrade_can_restore_previous_committed_override(setup)
     assert not layout.journal.exists()
 
 
+@pytest.mark.parametrize("field,value",[
+    ("pid","invalid"),("boot","invalid"),("ticks","invalid"),
+    ("backup_id","invalid"),("phase","PREPARED"),("extra","unexpected")])
+def test_nested_rollback_rejects_malformed_prior_journal_before_host_mutation(setup,field,value):
+    layout,host=setup;activate(layout,host);activate(layout,host,THIRD)
+    record=module._record(layout)
+    backup=layout.root/("dashboard-backup-"+record["backup_id"]+".json")
+    payload=json.loads(backup.read_text());payload["previous_record"][field]=value
+    module._save(backup,payload,0o600);host.calls.clear()
+    with pytest.raises(RuntimeError,match="BACKUP_INVALID"):
+        module.rollback(layout,host,target=THIRD,shared=OLD)
+    assert host.calls==["paper_safe"]
+    assert module._pointer(layout,"dashboard-current")==THIRD
+    assert module._record(layout)==record
+
+
 @pytest.mark.parametrize("failure",["preflight","stop","reload","start","verify","paper_safe"])
 def test_failures_never_switch_shared_release_and_restore_original(setup,failure):
     layout,host=setup;host.failure=failure

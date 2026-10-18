@@ -113,9 +113,7 @@ def _save(path,value,mode=0o644):
     _write(path,json.dumps(value,sort_keys=True,separators=(",",":")).encode(),mode)
 
 
-def _record(layout):
-    if not layout.journal.exists() and not layout.journal.is_symlink():return None
-    value=_json(layout.journal)
+def _validate_record(value):
     _require(set(value)=={"schema","target","shared","previous","phase","backup_id",
         "timer_active","pid","boot","ticks"} and value["schema"]=="hope.dashboard-activation.v1",
         "RECORD_INVALID")
@@ -127,6 +125,11 @@ def _record(layout):
         and isinstance(value["boot"],str) and re.fullmatch("[0-9a-f-]{36}",value["boot"])
         and isinstance(value["ticks"],str) and value["ticks"].isdigit(),"RECORD_INVALID")
     return value
+
+
+def _record(layout):
+    if not layout.journal.exists() and not layout.journal.is_symlink():return None
+    return _validate_record(_json(layout.journal))
 
 
 def _owner_alive(record):
@@ -195,9 +198,13 @@ def _backup(layout,record):
     expected=_configs(layout,record["previous"]) if record["previous"] else {WEB:None,EXPORT:None}
     _require(value["configs"]==expected,"BACKUP_INVALID")
     previous=value["previous_record"]
-    _require((previous is None and record["previous"] is None) or
-        (isinstance(previous,dict) and previous.get("phase")=="COMMITTED"
-         and previous.get("target")==record["previous"] and previous.get("shared")==record["shared"]),"BACKUP_INVALID")
+    if previous is None:
+        _require(record["previous"] is None,"BACKUP_INVALID")
+    else:
+        try:_validate_record(previous)
+        except (KeyError,TypeError,RuntimeError):raise RuntimeError("DASHBOARD_BACKUP_INVALID") from None
+        _require(previous["phase"]=="COMMITTED" and previous["target"]==record["previous"]
+            and previous["shared"]==record["shared"],"BACKUP_INVALID")
     return value
 
 
