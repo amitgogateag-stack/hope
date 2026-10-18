@@ -1042,3 +1042,13 @@ Final clean regression: 3085 passed, 32 platform skips, 1 deselected, 331.94 sec
 17; Linux CI must independently exercise Python 3.13 and native crash tests. Three
 Bash contract files and one Bash-dependent case omitted locally. PostgreSQL stopped.
 AWS remains unmodified and activation pending separate authorization.
+
+Exact-head CI 39089027959 for 904cdca completed with 3125 passed, 5 failed,
+89.93% coverage. Six native crash tests passed. Four CLI dispatch fixtures failed
+because Linux runner is non-root: explicitly model required root for dispatch.
+The existing full-activation freshness fixture also raced filesystem mtime versus
+wall-clock: explicitly set new-export mtime to its asserted activation timestamp;
+old/future/malformed rejection assertions remain unchanged. Production root and
+freshness checks are unchanged. Focused repair validation: 75 passed in 3.22s.
+This is repair of actual CI failures, not a new batch. Exact-head CI remains a
+publication gate; AWS activation remains pending approval and host prerequisites.

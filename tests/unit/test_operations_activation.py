@@ -107,6 +107,8 @@ def test_activation_rejects_old_or_unverified_heartbeat(activation, change):
 def test_dashboard_acceptance_requires_fresh_export_and_available_loopback_feed(activation, monkeypatch):
     started = datetime.now(UTC)
     activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
+    # Filesystem mtime may lag wall-clock reads; explicitly model a new export.
+    os.utime(activation.SNAPSHOT, (started.timestamp(), started.timestamp()))
     monkeypatch.setattr(activation, "verify_dashboard", lambda base, **kwargs: {
         "service": "RUNNING", "paper_feed": "AVAILABLE", "legacy_feed": "UNAVAILABLE",
     })
@@ -146,6 +148,8 @@ def test_rewritten_old_or_future_snapshot_cannot_pass_activation(activation, mon
 def test_activation_passes_exact_verified_export_to_strict_probe(activation,monkeypatch):
     started = datetime.now(UTC)
     activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
+    # Filesystem mtime may lag wall-clock reads; explicitly model a new export.
+    os.utime(activation.SNAPSHOT, (started.timestamp(), started.timestamp()))
     captured={}
     def verify(base,**kwargs):
         captured.update(kwargs)
