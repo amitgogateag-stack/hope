@@ -122,7 +122,8 @@ def test_atomic_release_switch_restores_previous_on_acceptance_failure(tmp_path,
 def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     root = Path(__file__).parents[2] / "deploy/operations"
     paper = (root / "hope-paper.service").read_text()
-    for required in ("User=hope-paper", "Restart=on-failure", "KillSignal=SIGTERM",
+    for required in ("User=hope-paper", "Type=notify", "NotifyAccess=main", "WatchdogSec=15min",
+                     "Restart=on-failure", "KillSignal=SIGTERM",
                      "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
                      "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
         assert required in paper

@@ -6,7 +6,9 @@ StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
-Type=simple
+Type=notify
+NotifyAccess=main
+WatchdogSec=15min
 User=hope-paper
 Group=hope-operations
 WorkingDirectory=/opt/hope-operations/current

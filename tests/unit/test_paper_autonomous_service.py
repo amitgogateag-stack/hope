@@ -1,6 +1,8 @@
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 import json
+import os
+import socket
 from threading import Event
 from types import SimpleNamespace
 from uuid import uuid4
@@ -109,12 +111,19 @@ def test_once_health_redacts_failures(tmp_path, monkeypatch, exception, code):
 def test_successful_once_publishes_terminal_stopped_state(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(service, "run_service_cycle", lambda *args, **kwargs: (1, 2))
     target = tmp_path / "health.json"
+    notifications = []
+    notifier = SimpleNamespace(
+        ready=lambda: notifications.append("ready"),
+        watchdog=lambda: notifications.append("watchdog"),
+        stopping=lambda: notifications.append("stopping"),
+    )
     assert service.run_service(
         SimpleNamespace(),
         lambda *_: None,
         migrations_dir=tmp_path,
         status_file=target,
         once=True,
+        notifier=notifier,
     ) == 0
     value = json.loads(target.read_text())
     assert value["state"] == "STOPPED"
@@ -125,6 +134,82 @@ def test_successful_once_publishes_terminal_stopped_state(tmp_path, monkeypatch,
     publications = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [item["state"] for item in publications] == ["STARTING", "CURRENT", "STOPPED"]
     assert publications[-1] == value
+    assert notifications == ["ready", "watchdog", "stopping"]
+
+
+@pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Requires Unix notification sockets")
+def test_systemd_notifier_uses_main_process_watchdog_protocol(tmp_path, monkeypatch):
+    path = tmp_path / "notify.sock"
+    try:
+        server = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+    except PermissionError:
+        pytest.skip("Managed runner blocks native Unix sockets; exercised on Linux CI")
+    with server:
+        server.bind(str(path))
+        server.settimeout(2)
+        monkeypatch.setenv("NOTIFY_SOCKET", str(path))
+        monkeypatch.setenv("WATCHDOG_PID", str(os.getpid()))
+        monkeypatch.setenv("WATCHDOG_USEC", "900000000")
+        notifier = service.SystemdNotifier.from_environment()
+        notifier.ready()
+        notifier.watchdog()
+        notifier.stopping()
+        messages = [server.recv(512).decode("utf-8") for _ in range(3)]
+    assert messages[0].startswith("READY=1\nWATCHDOG=1\n")
+    assert messages[1].startswith("WATCHDOG=1\n")
+    assert messages[2].startswith("STOPPING=1\n")
+    assert all("secret" not in message for message in messages)
+
+
+@pytest.mark.parametrize("environment", [
+    {"NOTIFY_SOCKET": "relative", "WATCHDOG_USEC": "900000000"},
+    {"NOTIFY_SOCKET": "/run/systemd/notify", "WATCHDOG_USEC": "invalid"},
+    {"NOTIFY_SOCKET": "/run/systemd/notify", "WATCHDOG_PID": "invalid", "WATCHDOG_USEC": "900000000"},
+])
+def test_invalid_systemd_notification_environment_fails_closed(monkeypatch, environment):
+    for name in ("NOTIFY_SOCKET", "WATCHDOG_PID", "WATCHDOG_USEC"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    with pytest.raises(RuntimeError, match="NOTIFY_CONFIGURATION_INVALID"):
+        service.SystemdNotifier.from_environment()
+
+
+def test_watchdog_for_another_process_is_ignored(monkeypatch):
+    monkeypatch.setenv("NOTIFY_SOCKET", "/run/systemd/notify")
+    monkeypatch.setenv("WATCHDOG_PID", str(os.getpid() + 1))
+    monkeypatch.setenv("WATCHDOG_USEC", "900000000")
+    assert service.SystemdNotifier.from_environment().address is None
+
+
+def test_notifier_sends_only_fixed_protocol_without_environment_payload(monkeypatch):
+    calls = []
+
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def connect(self, address):
+            calls.append(("connect", address))
+
+        def sendall(self, payload):
+            calls.append(("send", payload))
+
+    monkeypatch.setattr(service.socket, "socket", lambda *_: Client())
+    monkeypatch.setenv("UNRELATED_SECRET", "do-not-send")
+    notifier = service.SystemdNotifier("/run/systemd/notify")
+    notifier.ready()
+    notifier.watchdog()
+    notifier.stopping()
+    payloads = [value.decode("utf-8") for operation, value in calls if operation == "send"]
+    assert len(payloads) == 3
+    assert payloads[0].startswith("READY=1\nWATCHDOG=1\n")
+    assert payloads[1].startswith("WATCHDOG=1\n")
+    assert payloads[2].startswith("STOPPING=1\n")
+    assert "do-not-send" not in "".join(payloads)
 
 
 def test_service_recovers_on_next_poll_and_stops_gracefully(tmp_path, monkeypatch):

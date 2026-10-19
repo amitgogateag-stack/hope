@@ -1425,3 +1425,18 @@ local PostgreSQL stopped again. No source conflict or override was needed.
 - Added adversarial regressions for caller mutation, attempted mutation through the
   approved plan, and a custom mapping that returns a different calendar on a second
   read. The regressions fail against the prior implementation.
+
+## 2026-10-19 — Autonomous PAPER hung-cycle watchdog
+
+- Demonstrated an operational recovery gap: `Restart=on-failure` restarts a
+  crashed worker, but cannot detect a process that remains alive while a trusted
+  factory, provider, strategy, or database path wedges inside a cycle. Its health
+  file eventually becomes stale while systemd continues reporting the unit active.
+- The PAPER unit now uses `Type=notify`, main-process-only notification, and a
+  15-minute watchdog. The Python supervisor sends fixed, credential-free protocol
+  messages at startup, after complete cycles, and during graceful shutdown. A hung
+  cycle stops heartbeats and becomes a normal systemd failure/restart; database
+  rollback and existing durable reconciliation remain authoritative.
+- Added a real Unix datagram protocol regression, fail-closed environment parsing,
+  foreign-PID suppression, unit-contract coverage, and operator documentation.
+  PAPER-only/LIVE-disabled policy, strategies, schedules, and risk rules are unchanged.

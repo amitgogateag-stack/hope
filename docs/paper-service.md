@@ -35,6 +35,15 @@ have 30-second statement and 10-second lock/connect timeouts. The deployment's
 stop deadline may terminate a hung process, after which database transaction
 and existing recovery proofs remain authoritative.
 
+The systemd unit uses `Type=notify` with a 15-minute watchdog. The main Python
+process announces startup and pings only after a complete service cycle; it does
+not delegate watchdog authority to callback or child processes. A factory,
+provider, strategy, or database path that wedges a cycle therefore stops feeding
+the watchdog and is terminated/restarted by systemd instead of remaining falsely
+active forever. The 15-minute bound is an operational recovery limit, not trading
+authorization. Any open database transaction rolls back on process death and the
+existing durable scheduler/reconciliation rules govern the next attempt.
+
 ## Durable boundaries
 
 Each poll opens new preflight connections. It verifies the complete migration

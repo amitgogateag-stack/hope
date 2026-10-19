@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 from pathlib import Path
 import tempfile
 from threading import Event
@@ -79,6 +80,54 @@ class PaperServicePlan:
 
 
 PlanFactory = Callable[[Connection, datetime], PaperServicePlan]
+
+
+@dataclass(frozen=True)
+class SystemdNotifier:
+    """Minimal main-process sd_notify client; absent outside the service unit."""
+
+    address: str | None
+
+    @classmethod
+    def from_environment(cls) -> SystemdNotifier:
+        address = os.getenv("NOTIFY_SOCKET")
+        if address is None:
+            return cls(None)
+        if (not address or len(address) > 512
+                or (not address.startswith("/") and not address.startswith("@"))):
+            raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID")
+        watchdog_pid = os.getenv("WATCHDOG_PID")
+        if watchdog_pid is not None:
+            try:
+                if int(watchdog_pid) != os.getpid():
+                    return cls(None)
+            except ValueError:
+                raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID") from None
+        watchdog_usec = os.getenv("WATCHDOG_USEC")
+        if watchdog_usec is None or not watchdog_usec.isascii() or not watchdog_usec.isdecimal() \
+                or int(watchdog_usec) <= 0:
+            raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID")
+        return cls(address)
+
+    def _send(self, value: str) -> None:
+        if self.address is None:
+            return
+        target = "\0" + self.address[1:] if self.address.startswith("@") else self.address
+        try:
+            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+                client.connect(target)
+                client.sendall(value.encode("utf-8"))
+        except OSError:
+            raise RuntimeError("PAPER_SERVICE_NOTIFY_FAILED") from None
+
+    def ready(self) -> None:
+        self._send("READY=1\nWATCHDOG=1\nSTATUS=Autonomous PAPER supervisor started")
+
+    def watchdog(self) -> None:
+        self._send("WATCHDOG=1\nSTATUS=Autonomous PAPER cycle completed")
+
+    def stopping(self) -> None:
+        self._send("STOPPING=1\nSTATUS=Autonomous PAPER supervisor stopped")
 
 
 def verify_schema_compatibility(connection: Connection, migrations_dir: str | Path) -> None:
@@ -215,11 +264,13 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
                 status_file: str | Path, stop_event: Event | None = None,
                 poll_seconds: float = 30, once: bool = False,
                 now: Callable[[], datetime] = lambda: datetime.now(UTC),
-                require_certified: bool = False) -> int:
+                require_certified: bool = False,
+                notifier: SystemdNotifier | None = None) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
     if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)) or not 1 <= poll_seconds <= 300:
         raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
     stop = stop_event if stop_event is not None else Event()
+    service_notifier = notifier if notifier is not None else SystemdNotifier.from_environment()
     commit = os.getenv("HOPE_DEPLOYED_COMMIT")
     commit = commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
     health = dict(deployed_commit=commit, schema_compatibility="UNKNOWN", schema_version=1, generated_at=None, state="STARTING", last_success_at=None,
@@ -230,6 +281,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
         publish_service_status(status_file, health)
         print(json.dumps(health, sort_keys=True, separators=(",", ":")), flush=True)
     publish()
+    service_notifier.ready()
     failed = False
     while not stop.is_set():
         try:
@@ -251,6 +303,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
             if isinstance(exc, SQLAlchemyError):
                 engine.dispose()
         publish()
+        service_notifier.watchdog()
         if once:
             exit_code = 1 if failed else 0
             # A successful one-shot is an acceptance probe, not a running
@@ -260,9 +313,11 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
             if not failed:
                 health.update(state="STOPPED", error_code=None)
                 publish()
+                service_notifier.stopping()
             return exit_code
         stop.wait(poll_seconds)
     health.update(state="STOPPED", error_code=None)
     publish()
+    service_notifier.stopping()
     return 0
 
