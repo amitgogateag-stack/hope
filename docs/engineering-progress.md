@@ -1412,3 +1412,16 @@ needed merge resolution. The full local result above predates that integration;
 combined focused validation and final full CI verify the published composition.
 Post-integration combined focus: 193 passed, 19 native-platform skips, 3.92s;
 local PostgreSQL stopped again. No source conflict or override was needed.
+## 2026-10-19 — Autonomous PAPER calendar snapshot integrity
+
+- Reproduced a per-cycle time-of-check/time-of-use defect in `PaperServicePlan`: the
+  frozen plan retained the factory's mutable calendar mapping. A configuration reload
+  or callback could replace a market calendar after plan validation but before run
+  construction, changing which scheduled jobs were due without revalidation.
+- Plan construction now reads each calendar binding exactly once, validates and bounds
+  that same value, and retains an immutable mapping snapshot for the rest of the cycle.
+  No session times, scheduling rules, strategy behavior, risk rules, or execution
+  authority changed.
+- Added adversarial regressions for caller mutation, attempted mutation through the
+  approved plan, and a custom mapping that returns a different calendar on a second
+  read. The regressions fail against the prior implementation.

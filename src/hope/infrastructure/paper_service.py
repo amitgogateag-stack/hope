@@ -10,6 +10,7 @@ import re
 from pathlib import Path
 import tempfile
 from threading import Event
+from types import MappingProxyType
 from typing import Callable, Mapping
 
 from sqlalchemy import Connection, Engine, text
@@ -53,13 +54,28 @@ class PaperServicePlan:
             raise ValueError("PAPER_SERVICE_PLAN_WINDOW_OUT_OF_BOUNDS")
         if not isinstance(self.max_lateness, timedelta) or not timedelta(0) <= self.max_lateness <= timedelta(days=7):
             raise ValueError("PAPER_SERVICE_PLAN_LATENESS_OUT_OF_BOUNDS")
-        if not isinstance(self.calendars, Mapping) or any(
-            not isinstance(k, StrategyMarket) or not isinstance(v, MarketSessionCalendar)
-            for k, v in self.calendars.items()
-        ):
+        if not isinstance(self.calendars, Mapping):
             raise TypeError("PAPER_SERVICE_PLAN_CALENDAR_INVALID")
-        if sum(len(v.sessions) for v in self.calendars.values()) > 4096:
-            raise ValueError("PAPER_SERVICE_PLAN_CALENDAR_LIMIT_EXCEEDED")
+        # A factory-owned dict must not remain an authority after this plan has
+        # passed review. Read every binding once, validate that exact value and
+        # retain an immutable per-cycle snapshot through schedule construction.
+        # The entry bound also prevents a custom Mapping from making validation
+        # itself an unbounded operation.
+        calendars: dict[StrategyMarket, MarketSessionCalendar] = {}
+        session_count = 0
+        for index, market in enumerate(self.calendars):
+            if index >= 96:
+                raise ValueError("PAPER_SERVICE_PLAN_CALENDAR_LIMIT_EXCEEDED")
+            if not isinstance(market, StrategyMarket) or market in calendars:
+                raise TypeError("PAPER_SERVICE_PLAN_CALENDAR_INVALID")
+            calendar = self.calendars[market]
+            if not isinstance(calendar, MarketSessionCalendar):
+                raise TypeError("PAPER_SERVICE_PLAN_CALENDAR_INVALID")
+            session_count += len(calendar.sessions)
+            if session_count > 4096:
+                raise ValueError("PAPER_SERVICE_PLAN_CALENDAR_LIMIT_EXCEEDED")
+            calendars[market] = calendar
+        object.__setattr__(self, "calendars", MappingProxyType(calendars))
 
 
 PlanFactory = Callable[[Connection, datetime], PaperServicePlan]

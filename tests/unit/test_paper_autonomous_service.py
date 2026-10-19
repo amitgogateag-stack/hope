@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
 import json
 from threading import Event
@@ -32,6 +33,43 @@ def plan(**changes):
 def test_plan_rejects_unbounded_or_ambiguous_configuration(changes):
     with pytest.raises((ValueError, TypeError)):
         plan(**changes)
+
+
+def test_plan_freezes_reviewed_calendars_against_caller_mutation():
+    original = MarketSessionCalendar(((NOW, NOW + timedelta(hours=1)),))
+    replacement = MarketSessionCalendar(((NOW + timedelta(days=1), NOW + timedelta(days=1, hours=1)),))
+    calendars = {StrategyMarket.USA: original}
+    approved = plan(calendars=calendars)
+
+    calendars[StrategyMarket.USA] = replacement
+
+    assert approved.calendars == {StrategyMarket.USA: original}
+    with pytest.raises(TypeError):
+        approved.calendars[StrategyMarket.USA] = replacement
+
+
+def test_plan_reads_each_reviewed_calendar_once():
+    original = MarketSessionCalendar(((NOW, NOW + timedelta(hours=1)),))
+    replacement = MarketSessionCalendar(((NOW + timedelta(days=1), NOW + timedelta(days=1, hours=1)),))
+
+    class DriftingCalendars(Mapping):
+        reads = 0
+
+        def __iter__(self):
+            return iter((StrategyMarket.USA,))
+
+        def __len__(self):
+            return 1
+
+        def __getitem__(self, key):
+            assert key is StrategyMarket.USA
+            self.reads += 1
+            return original if self.reads == 1 else replacement
+
+    calendars = DriftingCalendars()
+    approved = plan(calendars=calendars)
+    assert approved.calendars == {StrategyMarket.USA: original}
+    assert calendars.reads == 1
 
 
 def test_status_replacement_is_atomic_and_private(tmp_path, monkeypatch):
