@@ -113,8 +113,14 @@ class SystemdNotifier:
         if self.address is None:
             return
         target = "\0" + self.address[1:] if self.address.startswith("@") else self.address
+        # systemd notification requires an AF_UNIX datagram socket. Keep this
+        # boundary deterministic on unsupported Python/platform builds instead
+        # of leaking AttributeError from a process-level health mechanism.
+        family = getattr(socket, "AF_UNIX", None)
+        if family is None:
+            raise RuntimeError("PAPER_SERVICE_NOTIFY_FAILED")
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as client:
+            with socket.socket(family, socket.SOCK_DGRAM) as client:
                 client.connect(target)
                 client.sendall(value.encode("utf-8"))
         except OSError:

@@ -198,7 +198,15 @@ def test_notifier_sends_only_fixed_protocol_without_environment_payload(monkeypa
         def sendall(self, payload):
             calls.append(("send", payload))
 
-    monkeypatch.setattr(service.socket, "socket", lambda *_: Client())
+    unix_family = object()
+    monkeypatch.setattr(service.socket, "AF_UNIX", unix_family, raising=False)
+    monkeypatch.setattr(
+        service.socket,
+        "socket",
+        lambda family, kind: Client()
+        if (family, kind) == (unix_family, socket.SOCK_DGRAM)
+        else pytest.fail("unexpected notification socket protocol"),
+    )
     monkeypatch.setenv("UNRELATED_SECRET", "do-not-send")
     notifier = service.SystemdNotifier("/run/systemd/notify")
     notifier.ready()
@@ -210,6 +218,46 @@ def test_notifier_sends_only_fixed_protocol_without_environment_payload(monkeypa
     assert payloads[1].startswith("WATCHDOG=1\n")
     assert payloads[2].startswith("STOPPING=1\n")
     assert "do-not-send" not in "".join(payloads)
+
+
+def test_notifier_without_unix_socket_support_fails_closed(monkeypatch):
+    monkeypatch.delattr(service.socket, "AF_UNIX", raising=False)
+    monkeypatch.setattr(
+        service.socket,
+        "socket",
+        lambda *_: pytest.fail("socket must not be opened without AF_UNIX support"),
+    )
+    with pytest.raises(RuntimeError, match="^PAPER_SERVICE_NOTIFY_FAILED$"):
+        service.SystemdNotifier("/run/systemd/notify").watchdog()
+
+
+@pytest.mark.parametrize("failure_point", ["open", "connect", "send"])
+def test_notifier_io_failures_expose_only_fixed_error(monkeypatch, failure_point):
+    class Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return None
+
+        def connect(self, _address):
+            if failure_point == "connect":
+                raise OSError("credential-shaped transport detail")
+
+        def sendall(self, _payload):
+            if failure_point == "send":
+                raise OSError("credential-shaped transport detail")
+
+    def open_socket(*_):
+        if failure_point == "open":
+            raise OSError("credential-shaped transport detail")
+        return Client()
+
+    monkeypatch.setattr(service.socket, "AF_UNIX", object(), raising=False)
+    monkeypatch.setattr(service.socket, "socket", open_socket)
+    with pytest.raises(RuntimeError, match="^PAPER_SERVICE_NOTIFY_FAILED$") as raised:
+        service.SystemdNotifier("/run/systemd/notify").ready()
+    assert "credential-shaped" not in str(raised.value)
 
 
 def test_service_recovers_on_next_poll_and_stops_gracefully(tmp_path, monkeypatch):

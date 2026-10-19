@@ -1440,3 +1440,16 @@ local PostgreSQL stopped again. No source conflict or override was needed.
 - Added a real Unix datagram protocol regression, fail-closed environment parsing,
   foreign-PID suppression, unit-contract coverage, and operator documentation.
   PAPER-only/LIVE-disabled policy, strategies, schedules, and risk rules are unchanged.
+
+## 2026-10-19 — PAPER notifier unsupported-platform fail-closed boundary
+
+- Reproduced the notifier on a Python build without `socket.AF_UNIX`: the health
+  boundary leaked `AttributeError` instead of HOPE's fixed notification failure.
+  The fixed-protocol mocked regression also evaluated the missing constant before
+  reaching its socket double, preventing cross-platform validation.
+- Notification now explicitly rejects a missing Unix datagram transport as
+  `PAPER_SERVICE_NOTIFY_FAILED` before opening a socket. The protocol regression
+  supplies its transport constant explicitly, while a new adversarial case removes
+  it and proves no socket is opened and no platform detail escapes.
+- This does not add a non-systemd fallback, relax the watchdog, authorize PAPER,
+  change LIVE disablement, or alter strategy/risk behavior.

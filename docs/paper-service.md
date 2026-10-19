@@ -43,6 +43,10 @@ the watchdog and is terminated/restarted by systemd instead of remaining falsely
 active forever. The 15-minute bound is an operational recovery limit, not trading
 authorization. Any open database transaction rolls back on process death and the
 existing durable scheduler/reconciliation rules govern the next attempt.
+Unsupported Unix-notification transports and notification I/O failures terminate
+with the fixed `PAPER_SERVICE_NOTIFY_FAILED` code; platform exception details and
+environment values are not exposed. This service unit is supported on Linux with
+systemd and does not silently downgrade to an unmonitored process.
 
 ## Durable boundaries
 
