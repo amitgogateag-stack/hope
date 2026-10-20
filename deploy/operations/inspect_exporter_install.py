@@ -95,6 +95,7 @@ def _verify_directory_path(path: Path, opened_fd: int, *, owner_uid: int) -> Non
 
 
 def _verify_private_file(path: Path, *, owner_uid: int = 0) -> None:
+    """Verify safe metadata belongs to the inode still named by path."""
     flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
     try:
@@ -102,9 +103,22 @@ def _verify_private_file(path: Path, *, owner_uid: int = 0) -> None:
     except OSError:
         raise ValueError("CONFIG_UNSAFE") from None
     try:
-        opened = os.fstat(fd)
-        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
-                or opened.st_uid != owner_uid or opened.st_mode & 0o077):
+        before = os.fstat(fd)
+        after = os.fstat(fd)
+        try:
+            named = os.stat(path, follow_symlinks=False)
+        except OSError:
+            raise ValueError("CONFIG_UNSAFE") from None
+        identity = lambda value: (
+            value.st_dev, value.st_ino, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns,
+        )
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1
+                or before.st_uid != owner_uid or before.st_mode & 0o077
+                or identity(before) != identity(after)
+                or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                or named.st_uid != owner_uid or named.st_mode & 0o077
+                or identity(after) != identity(named)):
             raise ValueError("CONFIG_UNSAFE")
     finally:
         os.close(fd)

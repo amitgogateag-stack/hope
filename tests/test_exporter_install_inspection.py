@@ -167,6 +167,40 @@ def test_unsafe_config_metadata_is_rejected(tmp_path, mutation):
         mod._verify_private_file(config, owner_uid=os.getuid())
 
 
+@pytest.mark.parametrize("replacement_kind", ["regular", "symlink"])
+def test_config_replacement_during_metadata_check_is_rejected(
+    tmp_path, monkeypatch, replacement_kind,
+):
+    """Safe metadata from an unlinked inode cannot attest the config pathname."""
+    config = tmp_path / "config"
+    config.write_text("secret\n")
+    config.chmod(0o600)
+    original_identity = (config.stat().st_dev, config.stat().st_ino)
+    original_fstat = os.fstat
+    swapped = False
+
+    def fstat_then_replace(fd):
+        nonlocal swapped
+        opened = original_fstat(fd)
+        if (not swapped
+                and (opened.st_dev, opened.st_ino) == original_identity):
+            swapped = True
+            replacement = config.with_name("config.replacement")
+            replacement.write_text("secret\n")
+            replacement.chmod(0o600)
+            if replacement_kind == "regular":
+                os.replace(replacement, config)
+            else:
+                config.unlink()
+                config.symlink_to(replacement)
+        return opened
+
+    monkeypatch.setattr(mod.os, "fstat", fstat_then_replace)
+    with pytest.raises(ValueError, match="^CONFIG_UNSAFE$"):
+        mod._verify_private_file(config, owner_uid=os.getuid())
+    assert swapped
+
+
 def test_expected_shared_argument_and_root_are_mandatory(capsys):
     with patch.object(mod.os, "geteuid", return_value=1000):
         assert mod.main([]) == 2

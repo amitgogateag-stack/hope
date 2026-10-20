@@ -137,3 +137,19 @@ removal, replacement, permission change or path redirection fails closed with
 `operations` mid-read with byte-identical lookalikes; both cases failed before
 this correction. The canonical current-pointer protections remain intact. The
 behavior remains read-only, non-authorizing, PAPER-only and LIVE-disabled.
+
+
+## Credential pathname continuity — 2026-10-20
+
+The read-only preflight previously authenticated only metadata from an opened
+credential descriptor. A concurrent replacement could leave the live
+`/etc/hope-dashboard-ops.env` pathname naming a byte-identical regular file or
+a symlink while the inspector accepted safe metadata from the unlinked original.
+
+The checker now proves descriptor metadata is stable and then compares device,
+inode, size, modification time and change time with a final no-follow pathname
+observation. Type, owner, link count and private permissions must be safe on
+both observations. Adversarial tests replace the credential pathname with both
+a regular file and a symlink during metadata inspection. Both cases failed
+before this correction. Credential contents remain unread and unprinted; this
+is still a read-only diagnostic gate and does not authorize installation.
