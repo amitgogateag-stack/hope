@@ -211,3 +211,37 @@ def test_release_file_replacement_during_read_is_rejected(
     ):
         mod.verify_release(sha, owner_uid=os.getuid())
     assert swapped
+
+
+@pytest.mark.parametrize("directory_name", ["deploy", "operations"])
+def test_release_subdirectory_replacement_during_read_is_rejected(
+    tmp_path, monkeypatch, directory_name,
+):
+    """Pinned bytes cannot attest a directory entry replaced mid-inspection."""
+    root, release, sha = release_layout(tmp_path)
+    deploy = release / "deploy"
+    operations = deploy / "operations"
+    target = deploy if directory_name == "deploy" else operations
+    template = operations / mod.NAMES[0]
+    template_identity = (template.stat().st_dev, template.stat().st_ino)
+    original_read = os.read
+    swapped = False
+
+    def read_then_replace(fd, count):
+        nonlocal swapped
+        data = original_read(fd, count)
+        opened = os.fstat(fd)
+        if (not swapped and data
+                and (opened.st_dev, opened.st_ino) == template_identity):
+            swapped = True
+            original = target.with_name(target.name + ".original")
+            target.rename(original)
+            shutil.copytree(original, target)
+        return data
+
+    monkeypatch.setattr(mod.os, "read", read_then_replace)
+    with patch.object(mod, "ROOT", root), pytest.raises(
+        ValueError, match="^RELEASE_DIRECTORY_CHANGED$"
+    ):
+        mod.verify_release(sha, owner_uid=os.getuid())
+    assert swapped
