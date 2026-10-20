@@ -16,6 +16,7 @@ from sqlalchemy.exc import DBAPIError
 
 from hope.api.dashboard_projection import EXPERIMENT_STATES, VERDICTS, verified_projections
 from hope.api.dashboard_m2_snapshot import readers as m2_readers
+from hope.infrastructure.durable_file import durable_replace
 
 
 def _count(connection: Connection, query: str) -> int:
@@ -191,7 +192,7 @@ def export_dashboard_snapshot(
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp_name, output)
+        durable_replace(temp_name, output)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)

@@ -1453,3 +1453,22 @@ local PostgreSQL stopped again. No source conflict or override was needed.
   it and proves no socket is opened and no platform detail escapes.
 - This does not add a non-systemd fallback, relax the watchdog, authorize PAPER,
   change LIVE disablement, or alter strategy/risk behavior.
+
+## 2026-10-20 — Crash-durable operational JSON publication
+
+- Demonstrated that the dashboard snapshot, legacy research inventory, and PAPER
+  health publishers fsynced complete temporary contents and atomically renamed
+  them, but returned success without fsyncing the containing directory. A host
+  crash could therefore lose the newly acknowledged filename update even though
+  the process had reported successful publication.
+- Added one shared bounded replacement primitive. It opens the same directory
+  before rename, rejects cross-directory use, atomically replaces the file, fsyncs
+  the already-open directory, and closes the descriptor on every failure path.
+  Failure to establish directory durability occurs before replacing the prior
+  target; a post-rename sync failure is surfaced and never reported as success.
+- Applied the primitive to the current M3 aggregate snapshot, separate legacy
+  research inventory, and autonomous PAPER health file. Tests cover exact operation
+  ordering, unavailable directory sync, replace/fsync failures, descriptor cleanup,
+  cross-directory rejection, prior-target preservation, and all three real callers.
+  No database write, AWS action, PAPER activation, LIVE enablement, strategy/risk
+  change, or trading authority is introduced.

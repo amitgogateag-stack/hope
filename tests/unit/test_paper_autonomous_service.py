@@ -80,7 +80,7 @@ def test_status_replacement_is_atomic_and_private(tmp_path, monkeypatch):
     original = target.read_bytes()
     def failed_replace(*args):
         raise OSError("INTERRUPTED")
-    monkeypatch.setattr(service.os, "replace", failed_replace)
+    monkeypatch.setattr(service, "durable_replace", failed_replace)
     with pytest.raises(OSError):
         service.publish_service_status(target, {"state": "HALTED"})
     assert target.read_bytes() == original

@@ -7,7 +7,11 @@ Status: **deployment-ready source and tests only**. These steps have NOT been ex
 - HTTP server binds **127.0.0.1:8787 only**, and checks the Host header. There is no internet-facing dashboard port, reverse proxy, or public URL.
 - Access uses the existing EC2 SSH authentication, forwarded over an SSH tunnel. Do **not** add inbound TCP 8787 to the AWS security group.
 - Dedicated OS account `hope-dashboard`, no login shell. Separate PostgreSQL `hope_dashboard` role with **SELECT only** on five aggregate source tables. No database writes, no trading commands.
-- Exporter produces an atomic JSON snapshot every five minutes; browser refreshes every minute. Missing/invalid data fails closed; data older than an hour is marked stale. Snapshot contains no identifiers, credentials, fills or P&L.
+- Exporter produces a crash-durable atomic JSON snapshot every five minutes: the
+  completed temporary file and its replacement directory entry are both synced
+  before success is reported. Browser refreshes every minute. Missing/invalid data
+  fails closed; data older than an hour is marked stale. Snapshot contains no
+  identifiers, credentials, fills or P&L.
 - Engineering CI is not fetched by the HTML; GitHub Actions is authoritative. Deployment health requires separate monitoring.
 
 ## Preflight — stop on any failed condition

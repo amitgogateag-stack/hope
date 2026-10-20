@@ -68,14 +68,17 @@ boundary. No success is inferred from a lost commit acknowledgement.
 
 ## Health and logs
 
-The private JSON health file is replaced atomically with mode 0640. Its parent
-must be provisioned with the shared operations group and mode 0750 by the
-installation package. Publication failure leaves the old complete file; consumers
-must enforce its timestamp age. Status is also emitted as sanitized JSON to
-stdout for journald. Exception text, SQL, connection URLs and provider records
-are never included. `HOPE_DATABASE_URL` is consumed from the protected process
-environment; `HOPE_DEPLOYED_COMMIT` is exposed only when it is 40 lowercase hex
-characters. It is an operator-provided release identifier, not proof of CI.
+The private JSON health file is replaced atomically with mode 0640. Its completed
+temporary contents and the replacement directory entry are both synced before
+publication succeeds. Its parent must be provisioned with the shared operations
+group and mode 0750 by the installation package. A failure before replacement
+leaves the old complete file; any directory-sync failure is reported rather than
+claiming durable publication. Consumers must still enforce timestamp age. Status
+is also emitted as sanitized JSON to stdout for journald. Exception text, SQL,
+connection URLs and provider records are never included. `HOPE_DATABASE_URL` is
+consumed from the protected process environment; `HOPE_DEPLOYED_COMMIT` is exposed
+only when it is 40 lowercase hex characters. It is an operator-provided release
+identifier, not proof of CI.
 
 Schema version 1 fields are `generated_at`, `state`, `last_success_at`,
 `cycles_succeeded`, `cycles_failed`, `jobs_executed`, `jobs_skipped`, `error_code`,

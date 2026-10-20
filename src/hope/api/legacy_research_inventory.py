@@ -13,6 +13,8 @@ from pathlib import Path
 from datetime import datetime, timezone
 from sqlalchemy import Connection, create_engine, text
 
+from hope.infrastructure.durable_file import durable_replace
+
 _REQUIRED = {
     "experiments": {"experiment_id", "status", "environment"},
     "strategy_versions": {"strategy_version_id", "strategy_id", "version"},
@@ -95,7 +97,7 @@ def export_legacy_research_inventory(output: Path, database_url: str) -> Path:
             stream.write("\n")
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp_name, output)
+        durable_replace(temp_name, output)
     finally:
         if os.path.exists(temp_name):
             os.unlink(temp_name)

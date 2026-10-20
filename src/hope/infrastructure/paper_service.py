@@ -27,6 +27,7 @@ from hope.infrastructure.scheduling.paper import (
     run_due_operational_paper_jobs,
 )
 from hope.application.paper import PaperCycleOutcome
+from hope.infrastructure.durable_file import durable_replace
 
 
 @dataclass(frozen=True)
@@ -234,7 +235,7 @@ def publish_service_status(path: str | Path, value: dict) -> None:
             json.dump(value, stream, sort_keys=True, separators=(",", ":"), allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, target)
+        durable_replace(temporary, target)
     finally:
         if temporary is not None:
             temporary.unlink(missing_ok=True)
