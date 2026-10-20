@@ -211,3 +211,54 @@ def test_release_file_replacement_during_read_is_rejected(
     ):
         mod.verify_release(sha, owner_uid=os.getuid())
     assert swapped
+
+
+@pytest.mark.parametrize("target", ["absolute-alias", "relative-detour"])
+def test_current_pointer_cannot_traverse_indirect_or_noncanonical_path(tmp_path, target):
+    """The old inode-only check accepted both lookalike pointers."""
+    root, release, sha = release_layout(tmp_path)
+    current = root / "current"
+    current.unlink()
+    if target == "absolute-alias":
+        alias = tmp_path / "mutable-alias"
+        alias.symlink_to(release, target_is_directory=True)
+        current.symlink_to(alias, target_is_directory=True)
+    else:
+        current.symlink_to(f"releases/../releases/{sha}", target_is_directory=True)
+    with patch.object(mod, "ROOT", root), pytest.raises(
+        ValueError, match="^SHARED_POINTER_MISMATCH$"
+    ):
+        mod.verify_release(sha, owner_uid=os.getuid())
+
+
+def test_replacement_of_current_link_to_same_release_invalidates_attestation(
+    tmp_path, monkeypatch,
+):
+    """A concurrent symlink replacement must not pass on target inode alone."""
+    root, release, sha = release_layout(tmp_path)
+    original = mod._read_regular_at
+    replaced = False
+
+    def swap_pointer(*args, **kwargs):
+        nonlocal replaced
+        if not replaced:
+            replacement = root / ".current-replacement"
+            replacement.symlink_to(release, target_is_directory=True)
+            os.replace(replacement, root / "current")
+            replaced = True
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(mod, "_read_regular_at", swap_pointer)
+    with patch.object(mod, "ROOT", root), pytest.raises(
+        ValueError, match="^SHARED_POINTER_CHANGED$"
+    ):
+        mod.verify_release(sha, owner_uid=os.getuid())
+    assert replaced
+
+
+def test_canonical_relative_current_pointer_is_supported(tmp_path):
+    root, release, sha = release_layout(tmp_path)
+    (root / "current").unlink()
+    (root / "current").symlink_to(f"releases/{sha}", target_is_directory=True)
+    with patch.object(mod, "ROOT", root):
+        mod.verify_release(sha, owner_uid=os.getuid())

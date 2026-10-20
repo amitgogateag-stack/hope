@@ -123,6 +123,35 @@ def _read_regular_at(directory_fd: int, name: str, *, owner_uid: int) -> bytes:
         os.close(fd)
 
 
+def _current_pointer(root_fd: int, expected: str, *, owner_uid: int) -> tuple:
+    """Authenticate the link itself, not just the directory it resolves to.
+
+    A link through an independently mutable directory can resolve to the
+    reviewed release during inspection and be redirected afterwards. Replacing
+    a link with a fresh link to the same inode must also invalidate inspection.
+    """
+    def identity(value):
+        return (value.st_dev, value.st_ino, value.st_mtime_ns, value.st_ctime_ns)
+
+    try:
+        before = os.stat("current", dir_fd=root_fd, follow_symlinks=False)
+        if not stat.S_ISLNK(before.st_mode) or before.st_uid != owner_uid:
+            raise ValueError("SHARED_POINTER_UNVERIFIED")
+        target = os.readlink("current", dir_fd=root_fd)
+        after_link = os.stat("current", dir_fd=root_fd, follow_symlinks=False)
+        if identity(before) != identity(after_link):
+            raise ValueError("SHARED_POINTER_CHANGED")
+        if target not in (str(ROOT / "releases" / expected), f"releases/{expected}"):
+            raise ValueError("SHARED_POINTER_MISMATCH")
+        resolved = os.stat("current", dir_fd=root_fd)
+        final_link = os.stat("current", dir_fd=root_fd, follow_symlinks=False)
+        if identity(after_link) != identity(final_link):
+            raise ValueError("SHARED_POINTER_CHANGED")
+        return identity(final_link), (resolved.st_dev, resolved.st_ino)
+    except OSError:
+        raise ValueError("SHARED_POINTER_UNVERIFIED") from None
+
+
 def verify_release(expected: str, *, owner_uid: int = 0) -> None:
     """Bind inspection to one immutable-looking reviewed release on this host."""
     if not SHA_RE.fullmatch(expected) or expected == FROZEN_BASELINE:
@@ -134,11 +163,10 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
         release_fd = _open_directory_at(releases_fd, expected, owner_uid=owner_uid)
         release = os.fstat(release_fd)
 
-        current = ROOT / "current"
-        if not current.is_symlink():
-            raise ValueError("SHARED_POINTER_UNVERIFIED")
-        current_stat = current.stat()
-        if (current_stat.st_dev, current_stat.st_ino) != (release.st_dev, release.st_ino):
+        pointer_identity, current_inode = _current_pointer(
+            root_fd, expected, owner_uid=owner_uid,
+        )
+        if current_inode != (release.st_dev, release.st_ino):
             raise ValueError("SHARED_POINTER_MISMATCH")
 
         deployed = _read_regular_at(root_fd, "deployed.env", owner_uid=owner_uid)
@@ -161,8 +189,11 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
             if deploy_fd >= 0:
                 os.close(deploy_fd)
 
-        final_current = current.stat()
-        if (final_current.st_dev, final_current.st_ino) != (release.st_dev, release.st_ino):
+        final_pointer_identity, final_inode = _current_pointer(
+            root_fd, expected, owner_uid=owner_uid,
+        )
+        if (final_pointer_identity != pointer_identity
+                or final_inode != (release.st_dev, release.st_ino)):
             raise ValueError("SHARED_POINTER_CHANGED")
     finally:
         if release_fd >= 0:
