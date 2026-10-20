@@ -27,6 +27,12 @@ def durable_replace(source: str | Path, target: str | Path) -> None:
     directory = os.open(target_path.parent, flags)
     try:
         opened = os.fstat(directory)
+        # Pinning the directory prevents pathname redirection but cannot stop a
+        # different group/world writer from swapping entries through its own
+        # descriptor. Enforce the non-attacker-writable precondition instead of
+        # relying only on deployment documentation.
+        if not stat.S_ISDIR(opened.st_mode) or opened.st_mode & 0o022:
+            raise ValueError("DURABLE_REPLACE_UNSAFE_DIRECTORY")
 
         def check_parent(path: Path) -> None:
             named = os.stat(path, follow_symlinks=False)

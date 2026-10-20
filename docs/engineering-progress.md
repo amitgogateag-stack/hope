@@ -1494,3 +1494,28 @@ failure-before-readiness silence, retry-to-readiness, and the deployed unit boun
 No AWS/service action, database or migration change, strategy/risk modification,
 PAPER execution or LIVE enablement is part of this source change. Frozen day29 SHA
 `7e9d341742818a97accce3e2301b1c7f96596795` remains unchanged.
+
+## 2026-10-20: pinned and authenticated operational publication
+
+Exact authoritative parent `f99d9222dda2ca67501b16dd7bb2a5e66662f982`,
+Actions run `39392930793` (#1321), and the authenticated issue #5 marker were
+green before integration. The separate three-commit durability review ending at
+`e017ee4e5a92a67c40a29ecc1afa7903556666c2` was a clean fast-forward from that
+parent and independently passed PostgreSQL 16/17 CI run `39413952471` (#1326).
+
+That reviewed delta pins rename operations to one verified directory descriptor;
+rejects symlink, FIFO, hardlink, writable-source and identical-path inputs; and
+detects directory replacement, inode substitution, size/mtime changes, and an
+in-place rewrite that restores mtime by authenticating ctime before rename.
+
+Review exposed one remaining mismatch between its stated security precondition
+and executable policy: a pinned directory could still be group/world writable,
+allowing another writer with its own descriptor to race entries after validation.
+A failing adversarial regression reproduced publication from modes 0770, 0707,
+and 0777. The primitive now rejects those directories before rename; the deployed
+0750 PAPER state and 0700 dashboard state remain valid. The shared behavior covers
+the dashboard snapshot, legacy research inventory, and PAPER health publishers.
+
+No AWS/service action, production database mutation, migration, PAPER execution,
+strategy/risk change or LIVE enablement is included. Frozen day29 SHA
+`7e9d341742818a97accce3e2301b1c7f96596795` remains unchanged.

@@ -9,7 +9,9 @@ Status: **deployment-ready source and tests only**. These steps have NOT been ex
 - Dedicated OS account `hope-dashboard`, no login shell. Separate PostgreSQL `hope_dashboard` role with **SELECT only** on five aggregate source tables. No database writes, no trading commands.
 - Exporter produces a crash-durable atomic JSON snapshot every five minutes: the
   completed temporary file and its replacement directory entry are both synced
-  before success is reported. Browser refreshes every minute. Missing/invalid data
+  before success is reported. Publication rejects symlinked or group/world-
+  writable parent directories and unsafe, substituted, or multiply linked
+  temporary files. Browser refreshes every minute. Missing/invalid data
   fails closed; data older than an hour is marked stale. Snapshot contains no
   identifiers, credentials, fills or P&L.
 - Engineering CI is not fetched by the HTML; GitHub Actions is authoritative. Deployment health requires separate monitoring.

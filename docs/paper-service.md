@@ -77,7 +77,9 @@ temporary contents and the replacement directory entry are both synced before
 publication succeeds. Its parent must be provisioned with the shared operations
 group and mode 0750 by the installation package. A failure before replacement
 leaves the old complete file; any directory-sync failure is reported rather than
-claiming durable publication. Consumers must still enforce timestamp age. Status
+claiming durable publication. Symlinked or group/world-writable parent directories
+and unsafe, substituted, or multiply linked temporary files are rejected before
+publication. Consumers must still enforce timestamp age. Status
 is also emitted as sanitized JSON to stdout for journald. Exception text, SQL,
 connection URLs and provider records are never included. `HOPE_DATABASE_URL` is
 consumed from the protected process environment; `HOPE_DEPLOYED_COMMIT` is exposed

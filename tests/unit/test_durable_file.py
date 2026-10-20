@@ -260,3 +260,21 @@ def test_source_rewrite_with_restored_mtime_is_rejected_before_rename(tmp_path, 
         durable_file.durable_replace(source, target)
     assert target.read_bytes() == b"prior"
     assert source.read_bytes() == b"EVIL"
+
+
+@pytest.mark.parametrize("mode", [0o770, 0o707, 0o777])
+def test_writable_publication_directory_is_rejected_before_rename(tmp_path, mode):
+    publication = tmp_path / "publication"
+    publication.mkdir()
+    source = publication / ".new"
+    target = publication / "snapshot.json"
+    source.write_bytes(b"new")
+    target.write_bytes(b"prior")
+    publication.chmod(mode)
+    try:
+        with pytest.raises(ValueError, match="DURABLE_REPLACE_UNSAFE_DIRECTORY"):
+            durable_file.durable_replace(source, target)
+        assert target.read_bytes() == b"prior"
+        assert source.read_bytes() == b"new"
+    finally:
+        publication.chmod(0o700)
