@@ -201,6 +201,50 @@ def test_config_replacement_during_metadata_check_is_rejected(
     assert swapped
 
 
+@pytest.mark.parametrize("replacement_kind", ["regular", "symlink"])
+def test_unit_path_creation_during_metadata_collection_blocks(
+    tmp_path, capsys, replacement_kind,
+):
+    """Absence metadata cannot attest a unit pathname created mid-check."""
+    root = tmp_path / "root"
+    (root / "current").mkdir(parents=True)
+    unit_dir = tmp_path / "systemd"
+    unit_dir.mkdir()
+    original_exists = Path.exists
+
+    def exists(path):
+        if path == Path("/var/lib/hope-dashboard-ops"):
+            return True
+        return original_exists(path)
+
+    def metadata_then_create(name):
+        path = unit_dir / name
+        if replacement_kind == "regular":
+            path.write_text("[Unit]\n")
+        else:
+            target = tmp_path / (name + ".target")
+            target.write_text("[Unit]\n")
+            path.symlink_to(target)
+        return dict(mod.ABSENT_UNIT)
+
+    with (
+        patch.object(mod, "ROOT", root),
+        patch.object(mod, "UNIT_DIR", unit_dir),
+        patch.object(mod, "verify_release"),
+        patch.object(mod, "unit_metadata", side_effect=metadata_then_create),
+        patch.object(mod, "_verify_private_file"),
+        patch.object(mod.os, "geteuid", return_value=0),
+        patch.object(mod.Path, "exists", new=exists),
+    ):
+        assert mod.main(["--expected-shared", "1" * 40]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["result"] == "BLOCKED"
+    assert result["exporter_absence"] == "NOT_VERIFIED"
+    assert {
+        "UNIT_PATH_ALREADY_EXISTS:" + name for name in mod.NAMES
+    }.issubset(result["findings"])
+
+
 def test_expected_shared_argument_and_root_are_mandatory(capsys):
     with patch.object(mod.os, "geteuid", return_value=1000):
         assert mod.main([]) == 2
