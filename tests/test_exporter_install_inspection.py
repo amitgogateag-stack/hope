@@ -227,11 +227,17 @@ def test_unit_path_creation_during_metadata_collection_blocks(
             path.symlink_to(target)
         return dict(mod.ABSENT_UNIT)
 
+    original_open_directory = mod._open_directory
+    original_verify_directory_path = mod._verify_directory_path
     with (
         patch.object(mod, "ROOT", root),
         patch.object(mod, "UNIT_DIR", unit_dir),
         patch.object(mod, "verify_release"),
         patch.object(mod, "unit_metadata", side_effect=metadata_then_create),
+        patch.object(mod, "_open_directory", side_effect=lambda path, *, owner_uid:
+                     original_open_directory(path, owner_uid=os.getuid())),
+        patch.object(mod, "_verify_directory_path", side_effect=lambda path, fd, *, owner_uid:
+                     original_verify_directory_path(path, fd, owner_uid=os.getuid())),
         patch.object(mod, "_verify_private_file"),
         patch.object(mod.os, "geteuid", return_value=0),
         patch.object(mod.Path, "exists", new=exists),
@@ -374,3 +380,84 @@ def test_release_subdirectory_replacement_during_read_is_rejected(
     ):
         mod.verify_release(sha, owner_uid=os.getuid())
     assert swapped
+
+
+def test_systemd_directory_replacement_during_metadata_fails_closed(tmp_path, capsys):
+    """A path swap must not combine absence from two distinct directories."""
+    root = tmp_path / "root"
+    (root / "current").mkdir(parents=True)
+    unit_dir = tmp_path / "systemd"
+    unit_dir.mkdir()
+    original_dir = tmp_path / "systemd-original"
+    original_open = mod._open_directory
+    original_verify = mod._verify_directory_path
+    real_exists = Path.exists
+    swapped = False
+
+    def exists(path):
+        return True if path == Path("/var/lib/hope-dashboard-ops") else real_exists(path)
+
+    def metadata_then_swap(name):
+        nonlocal swapped
+        if not swapped:
+            unit_dir.rename(original_dir)
+            unit_dir.mkdir()
+            swapped = True
+        return dict(mod.ABSENT_UNIT)
+
+    with (
+        patch.object(mod, "ROOT", root),
+        patch.object(mod, "UNIT_DIR", unit_dir),
+        patch.object(mod, "verify_release"),
+        patch.object(mod, "unit_metadata", side_effect=metadata_then_swap),
+        patch.object(mod, "_open_directory", side_effect=lambda path, *, owner_uid:
+                     original_open(path, owner_uid=os.getuid())),
+        patch.object(mod, "_verify_directory_path", side_effect=lambda path, fd, *, owner_uid:
+                     original_verify(path, fd, owner_uid=os.getuid())),
+        patch.object(mod, "_verify_private_file"),
+        patch.object(mod.os, "geteuid", return_value=0),
+        patch.object(mod.Path, "exists", new=exists),
+    ):
+        assert mod.main(["--expected-shared", "1" * 40]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert swapped
+    assert result["result"] == "BLOCKED"
+    assert result["exporter_absence"] == "NOT_VERIFIED"
+    assert "INSPECTION_UNVERIFIED" in result["findings"]
+
+
+@pytest.mark.parametrize("mutation", ["symlink", "world-writable"])
+def test_untrusted_systemd_directory_cannot_attest_absence(tmp_path, capsys, mutation):
+    """An untrusted directory must not provide an exporter-absence verdict."""
+    root = tmp_path / "root"
+    (root / "current").mkdir(parents=True)
+    unit_dir = tmp_path / "systemd"
+    unit_dir.mkdir()
+    if mutation == "symlink":
+        actual = tmp_path / "actual-systemd"
+        unit_dir.rename(actual)
+        unit_dir.symlink_to(actual, target_is_directory=True)
+    else:
+        unit_dir.chmod(0o777)
+    original_open = mod._open_directory
+    real_exists = Path.exists
+
+    def exists(path):
+        return True if path == Path("/var/lib/hope-dashboard-ops") else real_exists(path)
+
+    with (
+        patch.object(mod, "ROOT", root),
+        patch.object(mod, "UNIT_DIR", unit_dir),
+        patch.object(mod, "verify_release"),
+        patch.object(mod, "unit_metadata", return_value=dict(mod.ABSENT_UNIT)),
+        patch.object(mod, "_open_directory", side_effect=lambda path, *, owner_uid:
+                     original_open(path, owner_uid=os.getuid())),
+        patch.object(mod, "_verify_private_file"),
+        patch.object(mod.os, "geteuid", return_value=0),
+        patch.object(mod.Path, "exists", new=exists),
+    ):
+        assert mod.main(["--expected-shared", "1" * 40]) == 2
+    result = json.loads(capsys.readouterr().out)
+    assert result["result"] == "BLOCKED"
+    assert result["exporter_absence"] == "NOT_VERIFIED"
+    assert "INSPECTION_UNVERIFIED" in result["findings"]

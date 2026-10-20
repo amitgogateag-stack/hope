@@ -312,10 +312,12 @@ def _bounded_capture(arguments: list[str], *, timeout: float = 8,
             child.stdout.close()
 
 
-def _unit_path_absent(path: Path) -> bool:
-    """Observe absence without following a final symlink component."""
+def _unit_path_absent(name: str, unit_dir_fd: int) -> bool:
+    """Observe an allowlisted entry relative to one pinned systemd directory."""
+    if name not in NAMES:
+        raise ValueError("UNIT_PATH_UNVERIFIED")
     try:
-        os.lstat(path)
+        os.stat(name, dir_fd=unit_dir_fd, follow_symlinks=False)
     except FileNotFoundError:
         return True
     except OSError:
@@ -361,15 +363,24 @@ def main(argv: list[str] | None = None) -> int:
         expected = arguments[1]
         verify_release(expected)
         release_verified = True
-        for name in NAMES:
-            path = UNIT_DIR / name
-            absent_before = _unit_path_absent(path)
-            info = unit_metadata(name)
-            absent_after = _unit_path_absent(path)
-            if not absent_before or not absent_after:
-                failures.append("UNIT_PATH_ALREADY_EXISTS:" + name)
-            if info != ABSENT_UNIT:
-                failures.append("UNIT_NOT_ABSENT:" + name)
+        # Keep the same trusted directory inode pinned throughout both unit
+        # observations and the intervening systemctl calls. A path replacement
+        # must not turn checks against different directories into "absence".
+        unit_dir_fd = _open_directory(UNIT_DIR, owner_uid=0)
+        try:
+            _verify_directory_path(UNIT_DIR, unit_dir_fd, owner_uid=0)
+            for name in NAMES:
+                absent_before = _unit_path_absent(name, unit_dir_fd)
+                info = unit_metadata(name)
+                absent_after = _unit_path_absent(name, unit_dir_fd)
+                _verify_directory_path(UNIT_DIR, unit_dir_fd, owner_uid=0)
+                if not absent_before or not absent_after:
+                    failures.append("UNIT_PATH_ALREADY_EXISTS:" + name)
+                if info != ABSENT_UNIT:
+                    failures.append("UNIT_NOT_ABSENT:" + name)
+            _verify_directory_path(UNIT_DIR, unit_dir_fd, owner_uid=0)
+        finally:
+            os.close(unit_dir_fd)
         absence_verified = not any(
             value.startswith(("UNIT_PATH_ALREADY_EXISTS:", "UNIT_NOT_ABSENT:"))
             for value in failures
