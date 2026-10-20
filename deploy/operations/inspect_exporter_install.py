@@ -19,6 +19,9 @@ ROOT = Path("/opt/hope-operations")
 UNIT_DIR = Path("/etc/systemd/system")
 NAMES = ("hope-ops-dashboard-export.service", "hope-ops-dashboard-export.timer")
 EXPECTED_DB = "hope_m3_restore_test"
+# A missing exporter is only an observation; all five properties must agree.
+ABSENT_UNIT = {"LoadState": "not-found", "ActiveState": "inactive",
+               "UnitFileState": "", "FragmentPath": "", "DropInPaths": ""}
 MAX_BYTES = 65536
 SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 FROZEN_BASELINE = "7e9d341742818a97accce3e2301b1c7f96596795"
@@ -161,7 +164,8 @@ def unit_metadata(name: str) -> dict[str, str]:
          "--no-pager"],
         capture_output=True, timeout=8, check=False, env={"PATH": "/usr/bin:/bin"},
     )
-    if p.returncode or len(p.stdout) > MAX_BYTES:
+    if (p.returncode not in (0, 1, 4) or (p.returncode and not p.stdout)
+            or len(p.stdout) > MAX_BYTES):
         raise ValueError("UNIT_METADATA_UNVERIFIED")
     result = {}
     for line in p.stdout.decode("utf-8", errors="strict").splitlines():
@@ -173,6 +177,8 @@ def unit_metadata(name: str) -> dict[str, str]:
         result[key] = value
     if set(result) != {"LoadState", "ActiveState", "UnitFileState", "FragmentPath", "DropInPaths"}:
         raise ValueError("UNIT_METADATA_INCOMPLETE")
+    if p.returncode and result != ABSENT_UNIT:
+        raise ValueError("UNIT_METADATA_UNVERIFIED")
     return result
 
 
@@ -192,9 +198,7 @@ def main(argv: list[str] | None = None) -> int:
             if path.exists() or path.is_symlink():
                 failures.append("UNIT_PATH_ALREADY_EXISTS:" + name)
             info = unit_metadata(name)
-            if (info["LoadState"] != "not-found"
-                    or info["ActiveState"] != "inactive"
-                    or info["FragmentPath"] or info["DropInPaths"]):
+            if info != ABSENT_UNIT:
                 failures.append("UNIT_NOT_ABSENT:" + name)
         config = Path("/etc/hope-dashboard-ops.env")
         try:

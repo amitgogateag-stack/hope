@@ -78,3 +78,24 @@ outside the release store, containing arbitrary lookalike templates, previously
 produced `REVIEW_REQUIRED` with no findings. The preflight remains diagnostic;
 it still reports database identity and PAPER isolation as `NOT_VERIFIED`, always
 returns a non-success exit status, and never installs or changes anything.
+
+
+## Strict exporter absence metadata — 2026-10-20
+
+Exporter absence requires all five properties to agree: LoadState=not-found,
+ActiveState=inactive, and empty UnitFileState, FragmentPath and DropInPaths.
+A known systemctl missing-unit status (1 or 4) is accepted only with that complete
+unique UTF-8 record. Unknown exit statuses, contradictory states, missing/duplicate
+properties and oversized responses fail closed. A zero exit status cannot make a
+nonempty or unknown unit-file state count as absence.
+
+This applies only to diagnostic inspection of the two exporter units. It does
+not change PAPER absence handling or authorize an installer. The preflight still
+returns exit 2 even for REVIEW_REQUIRED, never changes host state, and reports
+PAPER isolation and database identity as NOT_VERIFIED. Operator review, release
+identity, credential metadata and separate activation gates remain required.
+
+Regression checks reproduced two false rejections for canonical missing-unit
+responses and three failures to flag contradictory unit-file states before the
+fix. Native filesystem/systemd/AWS acceptance is not inferred from portable API
+doubles; full exact-head Linux CI remains required.
