@@ -11,26 +11,41 @@ def test_replace_opens_directory_before_rename_and_syncs_after(monkeypatch, tmp_
     target = tmp_path / "snapshot.json"
     source.write_bytes(b"complete")
     calls = []
+    real_open = durable_file.os.open
+    real_replace = durable_file.os.replace
+    real_fsync = durable_file.os.fsync
+    real_close = durable_file.os.close
 
-    monkeypatch.setattr(
-        durable_file.os,
-        "open",
-        lambda path, flags: calls.append(("open", Path(path), flags)) or 71,
-    )
-    monkeypatch.setattr(
-        durable_file.os,
-        "replace",
-        lambda old, new: calls.append(("replace", Path(old), Path(new))),
-    )
-    monkeypatch.setattr(durable_file.os, "fsync", lambda descriptor: calls.append(("fsync", descriptor)))
-    monkeypatch.setattr(durable_file.os, "close", lambda descriptor: calls.append(("close", descriptor)))
+    def recorded_open(path, flags):
+        fd = real_open(path, flags)
+        calls.append(("open", Path(path), flags, fd))
+        return fd
 
+    def recorded_replace(old, new, **kwargs):
+        calls.append(("replace", old, new, kwargs))
+        return real_replace(old, new, **kwargs)
+
+    def recorded_fsync(fd):
+        calls.append(("fsync", fd))
+        return real_fsync(fd)
+
+    def recorded_close(fd):
+        calls.append(("close", fd))
+        return real_close(fd)
+
+    monkeypatch.setattr(durable_file.os, "open", recorded_open)
+    monkeypatch.setattr(durable_file.os, "replace", recorded_replace)
+    monkeypatch.setattr(durable_file.os, "fsync", recorded_fsync)
+    monkeypatch.setattr(durable_file.os, "close", recorded_close)
     durable_file.durable_replace(source, target)
 
     assert [call[0] for call in calls] == ["open", "replace", "fsync", "close"]
     assert calls[0][1] == tmp_path
-    assert calls[1][1:] == (source, target)
-    assert calls[2:] == [("fsync", 71), ("close", 71)]
+    descriptor = calls[0][3]
+    assert calls[1][1:] == (source.name, target.name,
+                            {"src_dir_fd": descriptor, "dst_dir_fd": descriptor})
+    assert calls[2:] == [("fsync", descriptor), ("close", descriptor)]
+    assert target.read_bytes() == b"complete"
 
 
 def test_directory_open_failure_preserves_prior_target(monkeypatch, tmp_path):
@@ -59,10 +74,14 @@ def test_directory_open_failure_preserves_prior_target(monkeypatch, tmp_path):
 def test_directory_descriptor_is_closed_on_publication_failure(monkeypatch, tmp_path, failure):
     source = tmp_path / ".snapshot.tmp"
     target = tmp_path / "snapshot.json"
+    source.write_bytes(b"new")
+    target.write_bytes(b"prior")
     closed = []
-    monkeypatch.setattr(durable_file.os, "open", lambda *_: 72)
+    real_open = durable_file.os.open
+    real_close = durable_file.os.close
+    monkeypatch.setattr(durable_file.os, "open", lambda path, flags: real_open(path, flags))
 
-    def replace(*_):
+    def replace(*_, **__):
         if failure == "replace":
             raise OSError("replace failed")
 
@@ -72,11 +91,11 @@ def test_directory_descriptor_is_closed_on_publication_failure(monkeypatch, tmp_
 
     monkeypatch.setattr(durable_file.os, "replace", replace)
     monkeypatch.setattr(durable_file.os, "fsync", fsync)
-    monkeypatch.setattr(durable_file.os, "close", closed.append)
+    monkeypatch.setattr(durable_file.os, "close", lambda fd: (closed.append(fd), real_close(fd)))
 
     with pytest.raises(OSError, match=f"{failure} failed"):
         durable_file.durable_replace(source, target)
-    assert closed == [72]
+    assert len(closed) == 1
 
 
 def test_cross_directory_replace_is_rejected_before_open(monkeypatch, tmp_path):
@@ -99,3 +118,46 @@ def test_relative_target_accepts_absolute_temp_in_same_directory(monkeypatch, tm
 
     assert target.read_bytes() == b"complete"
     assert not source.exists()
+
+
+def test_parent_replacement_cannot_publish_into_wrong_directory(tmp_path, monkeypatch):
+    """A swap after opening the directory must not redirect publication."""
+    import os
+
+    live = tmp_path / "live"
+    live.mkdir()
+    archived = tmp_path / "archived"
+    substitute = tmp_path / "substitute"
+    substitute.mkdir()
+    (live / ".new").write_bytes(b"legitimate-new")
+    (live / "snapshot.json").write_bytes(b"legitimate-old")
+    (substitute / ".new").write_bytes(b"injected-new")
+    (substitute / "snapshot.json").write_bytes(b"substitute-old")
+    actual_replace = os.replace
+    once = False
+
+    def swap_before_rename(src, dst, **kwargs):
+        nonlocal once
+        if not once:
+            once = True
+            live.rename(archived)
+            substitute.rename(live)
+        return actual_replace(src, dst, **kwargs)
+
+    monkeypatch.setattr(durable_file.os, "replace", swap_before_rename)
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_DIRECTORY_CHANGED"):
+        durable_file.durable_replace(live / ".new", live / "snapshot.json")
+    assert (live / "snapshot.json").read_bytes() == b"substitute-old"
+    assert (archived / "snapshot.json").read_bytes() == b"legitimate-new"
+
+
+def test_symlinked_parent_is_rejected(tmp_path):
+    trusted = tmp_path / "trusted"
+    trusted.mkdir()
+    (trusted / ".new").write_bytes(b"new")
+    (trusted / "snapshot.json").write_bytes(b"old")
+    alias = tmp_path / "alias"
+    alias.symlink_to(trusted, target_is_directory=True)
+    with pytest.raises((OSError, ValueError)):
+        durable_file.durable_replace(alias / ".new", alias / "snapshot.json")
+    assert (trusted / "snapshot.json").read_bytes() == b"old"
