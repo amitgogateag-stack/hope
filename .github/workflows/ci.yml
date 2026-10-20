@@ -56,10 +56,13 @@ jobs:
         run: pytest --cov=hope --cov-report=term-missing --cov-fail-under=89
 
   publish-ci-status:
+    concurrency:
+      group: hope-authoritative-ci-status
+      cancel-in-progress: false
     permissions:
       contents: read
       issues: write
-    if: ${{ always() && github.event_name == 'push' }}
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/p0-pit-context' }}
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -70,6 +73,12 @@ jobs:
           HOPE_CI_TEST_RESULT: ${{ needs.test.result }}
         with:
           script: |
+            // The single issue marker belongs only to the authoritative branch.
+            if (context.eventName !== 'push' || context.ref !== 'refs/heads/p0-pit-context') return;
+            const { data: branch } = await github.rest.repos.getBranch({
+              ...context.repo, branch: 'p0-pit-context',
+            });
+            if (branch.commit.sha !== context.sha) return;
             const marker = '<!-- hope-ci-status -->';
             const body = [
               marker,
@@ -84,7 +93,7 @@ jobs:
             ].join('\n');
 
             const issue_number = 5;
-            const { data: comments } = await github.rest.issues.listComments({
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number,
@@ -92,10 +101,20 @@ jobs:
             });
             const existing = comments.find(
               (comment) =>
-                comment.user?.type === 'Bot' &&
+                comment.user?.login === 'github-actions[bot]' &&
                 comment.body?.includes(marker),
             );
 
+            // A rerun or duplicate run for the same SHA must not regress evidence.
+            if (existing) {
+              const fields = Object.fromEntries(existing.body.split('\n')
+                .filter(line => line.includes('='))
+                .map(line => { const i = line.indexOf('='); return [line.slice(0, i), line.slice(i + 1)]; }));
+              if (fields.sha === context.sha &&
+                  (Number(fields.run_number) > context.runNumber ||
+                   (Number(fields.run_number) === context.runNumber &&
+                    Number(fields.run_attempt) > Number(process.env.HOPE_CI_RUN_ATTEMPT)))) return;
+            }
             if (existing) {
               await github.rest.issues.updateComment({
                 owner: context.repo.owner,
