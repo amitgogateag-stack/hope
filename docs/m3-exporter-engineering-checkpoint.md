@@ -99,3 +99,23 @@ Regression checks reproduced two false rejections for canonical missing-unit
 responses and three failures to flag contradictory unit-file states before the
 fix. Native filesystem/systemd/AWS acceptance is not inferred from portable API
 doubles; full exact-head Linux CI remains required.
+
+## Bounded native systemd observation — 2026-10-20
+
+The earlier preflight asked `subprocess.run(capture_output=True)` to retain the
+entire systemctl response and checked the 64 KiB ceiling only after the child
+exited. A pathological property response could therefore consume unbounded
+memory or leave descendants holding the output pipe until the timeout.
+
+The inspector now reads stdout incrementally to an absolute byte ceiling and
+wall-clock deadline, discards stderr, uses a fixed minimal environment, starts a
+separate process session, and kills/reaps the complete child process group on
+timeout or overflow. Native adversarial tests cover oversize output followed by
+a hung child, a descendant retaining the session, discarded high-volume stderr,
+exact successful output and invalid bounds.
+
+Diagnostic evidence is also separated: `release_identity` records only the
+reviewed release proof, while `exporter_absence` records the two canonical unit
+observations. A later configuration failure no longer rewrites successfully
+verified release evidence, but any finding still keeps the overall result
+`BLOCKED`. This remains read-only and non-authorizing.

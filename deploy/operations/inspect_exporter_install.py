@@ -11,9 +11,12 @@ import json
 import os
 from pathlib import Path
 import re
+import selectors
+import signal
 import stat
 import subprocess
 import sys
+import time
 
 ROOT = Path("/opt/hope-operations")
 UNIT_DIR = Path("/etc/systemd/system")
@@ -31,6 +34,8 @@ EXPECTED_TEMPLATE_HASHES = {
     "hope-ops-dashboard-export.timer":
         "8de0be15a995a1e3ec8de852e8743142fa8556c6dfbfbbb01a52d8c763a5ee17",
 }
+COMMAND_ENVIRONMENT = {"PATH": "/usr/bin:/bin", "LANG": "C", "LC_ALL": "C",
+                       "HOME": "/nonexistent"}
 
 
 def _open_directory(path: Path, *, owner_uid: int) -> int:
@@ -157,13 +162,66 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
         os.close(root_fd)
 
 
-def unit_metadata(name: str) -> dict[str, str]:
-    p = subprocess.run(
-        ["/usr/bin/systemctl", "show", name,
-         "--property=LoadState,ActiveState,UnitFileState,FragmentPath,DropInPaths",
-         "--no-pager"],
-        capture_output=True, timeout=8, check=False, env={"PATH": "/usr/bin:/bin"},
+def _bounded_capture(arguments: list[str], *, timeout: float = 8,
+                     max_output: int = MAX_BYTES) -> subprocess.CompletedProcess:
+    """Capture bounded stdout without retaining stderr or leaving descendants."""
+    if os.name != "posix" or not 0 < timeout <= 20 or not 0 < max_output <= MAX_BYTES:
+        raise ValueError("UNIT_METADATA_UNVERIFIED")
+    deadline = time.monotonic() + timeout
+    child = subprocess.Popen(
+        arguments, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL, env=COMMAND_ENVIRONMENT, close_fds=True,
+        start_new_session=True,
     )
+    reaped = False
+    try:
+        output = bytearray()
+        with selectors.DefaultSelector() as selector:
+            selector.register(child.stdout, selectors.EVENT_READ)
+            while selector.get_map():
+                remaining = deadline - time.monotonic()
+                if remaining <= 0 or not selector.select(remaining):
+                    raise ValueError("UNIT_METADATA_TIMEOUT")
+                block = os.read(
+                    child.stdout.fileno(),
+                    min(65536, max_output + 1 - len(output)),
+                )
+                if not block:
+                    selector.unregister(child.stdout)
+                else:
+                    output.extend(block)
+                    if len(output) > max_output:
+                        raise ValueError("UNIT_METADATA_OUTPUT_LIMIT")
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise ValueError("UNIT_METADATA_TIMEOUT")
+        try:
+            code = child.wait(timeout=remaining)
+        except subprocess.TimeoutExpired:
+            raise ValueError("UNIT_METADATA_TIMEOUT") from None
+        reaped = True
+        return subprocess.CompletedProcess(arguments, code, bytes(output), b"")
+    finally:
+        try:
+            if not reaped and child.returncode is None:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    child.wait(timeout=1)
+                except subprocess.TimeoutExpired:
+                    pass
+        finally:
+            child.stdout.close()
+
+
+def unit_metadata(name: str) -> dict[str, str]:
+    p = _bounded_capture([
+        "/usr/bin/systemctl", "show", name,
+        "--property=LoadState,ActiveState,UnitFileState,FragmentPath,DropInPaths",
+        "--no-pager",
+    ])
     if (p.returncode not in (0, 1, 4) or (p.returncode and not p.stdout)
             or len(p.stdout) > MAX_BYTES):
         raise ValueError("UNIT_METADATA_UNVERIFIED")
@@ -184,6 +242,8 @@ def unit_metadata(name: str) -> dict[str, str]:
 
 def main(argv: list[str] | None = None) -> int:
     failures = []
+    release_verified = False
+    absence_verified = False
     try:
         arguments = sys.argv[1:] if argv is None else argv
         if (len(arguments) != 2 or arguments[0] != "--expected-shared"
@@ -193,6 +253,7 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError("ROOT_INSPECTION_REQUIRED")
         expected = arguments[1]
         verify_release(expected)
+        release_verified = True
         for name in NAMES:
             path = UNIT_DIR / name
             if path.exists() or path.is_symlink():
@@ -200,6 +261,10 @@ def main(argv: list[str] | None = None) -> int:
             info = unit_metadata(name)
             if info != ABSENT_UNIT:
                 failures.append("UNIT_NOT_ABSENT:" + name)
+        absence_verified = not any(
+            value.startswith(("UNIT_PATH_ALREADY_EXISTS:", "UNIT_NOT_ABSENT:"))
+            for value in failures
+        )
         config = Path("/etc/hope-dashboard-ops.env")
         try:
             _verify_private_file(config)
@@ -215,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
         failures.append("INSPECTION_UNVERIFIED")
     print(json.dumps({"schema_version": 1, "result": result,
                       "findings": sorted(set(failures)),
-                      "release_identity": "VERIFIED" if not failures else "NOT_VERIFIED",
+                      "release_identity": "VERIFIED" if release_verified else "NOT_VERIFIED",
+                      "exporter_absence": "VERIFIED" if absence_verified else "NOT_VERIFIED",
                       "database_identity": "NOT_VERIFIED",
                       "paper_isolation": "NOT_VERIFIED",
                       "host_changes": False}, sort_keys=True))
