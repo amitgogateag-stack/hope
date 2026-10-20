@@ -220,3 +220,43 @@ def test_source_substitution_before_rename_preserves_prior_target(tmp_path, monk
     with pytest.raises(ValueError, match="DURABLE_REPLACE_UNSAFE_SOURCE"):
         durable_file.durable_replace(source, target)
     assert target.read_bytes() == b"prior"
+
+
+@pytest.mark.parametrize("mode", [0o620, 0o602, 0o666])
+def test_writable_source_never_replaces_snapshot(tmp_path, mode):
+    source = tmp_path / ".new"
+    target = tmp_path / "snapshot.json"
+    target.write_bytes(b"prior")
+    source.write_bytes(b"new")
+    source.chmod(mode)
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_UNSAFE_SOURCE"):
+        durable_file.durable_replace(source, target)
+    assert target.read_bytes() == b"prior"
+    assert source.read_bytes() == b"new"
+
+
+def test_source_rewrite_with_restored_mtime_is_rejected_before_rename(tmp_path, monkeypatch):
+    import os
+
+    source = tmp_path / ".new"
+    target = tmp_path / "snapshot.json"
+    source.write_bytes(b"GOOD")
+    target.write_bytes(b"prior")
+    before = source.stat()
+    actual_stat = os.stat
+    seen = 0
+
+    def adversarial_stat(path, *args, **kwargs):
+        nonlocal seen
+        if path == source.name and kwargs.get("dir_fd") is not None:
+            seen += 1
+            if seen == 2:
+                source.write_bytes(b"EVIL")
+                os.utime(source, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return actual_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(durable_file.os, "stat", adversarial_stat)
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_SOURCE_CHANGED"):
+        durable_file.durable_replace(source, target)
+    assert target.read_bytes() == b"prior"
+    assert source.read_bytes() == b"EVIL"
