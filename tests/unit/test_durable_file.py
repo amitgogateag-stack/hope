@@ -79,11 +79,13 @@ def test_directory_descriptor_is_closed_on_publication_failure(monkeypatch, tmp_
     closed = []
     real_open = durable_file.os.open
     real_close = durable_file.os.close
+    real_replace = durable_file.os.replace
     monkeypatch.setattr(durable_file.os, "open", lambda path, flags: real_open(path, flags))
 
-    def replace(*_, **__):
+    def replace(*args, **kwargs):
         if failure == "replace":
             raise OSError("replace failed")
+        return real_replace(*args, **kwargs)
 
     def fsync(*_):
         if failure == "fsync":
@@ -161,3 +163,60 @@ def test_symlinked_parent_is_rejected(tmp_path):
     with pytest.raises((OSError, ValueError)):
         durable_file.durable_replace(alias / ".new", alias / "snapshot.json")
     assert (trusted / "snapshot.json").read_bytes() == b"old"
+
+@pytest.mark.parametrize("source_kind", ["symlink", "hardlink", "fifo"])
+def test_unsafe_source_is_rejected_without_replacing_prior_target(tmp_path, source_kind):
+    import os
+
+    secret = tmp_path / "secret"
+    secret.write_bytes(b"not for publication")
+    source = tmp_path / ".new"
+    target = tmp_path / "snapshot.json"
+    target.write_bytes(b"prior")
+    if source_kind == "symlink":
+        source.symlink_to(secret)
+    elif source_kind == "hardlink":
+        os.link(secret, source)
+    else:
+        if not hasattr(os, "mkfifo"):
+            pytest.skip("FIFO requires POSIX")
+        os.mkfifo(source)
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_UNSAFE_SOURCE"):
+        durable_file.durable_replace(source, target)
+    assert target.read_bytes() == b"prior"
+    assert secret.read_bytes() == b"not for publication"
+
+
+def test_identical_source_target_refused(tmp_path):
+    target = tmp_path / "snapshot.json"
+    target.write_bytes(b"prior")
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_IDENTICAL_PATH"):
+        durable_file.durable_replace(target, target)
+    assert target.read_bytes() == b"prior"
+
+
+def test_source_substitution_before_rename_preserves_prior_target(tmp_path, monkeypatch):
+    import os
+
+    source = tmp_path / ".new"
+    source.write_bytes(b"complete")
+    secret = tmp_path / "secret"
+    secret.write_bytes(b"untrusted")
+    target = tmp_path / "snapshot.json"
+    target.write_bytes(b"prior")
+    real_stat = os.stat
+    seen = 0
+
+    def swap_before_second_stat(path, *args, **kwargs):
+        nonlocal seen
+        if path == source.name and kwargs.get("dir_fd") is not None:
+            seen += 1
+            if seen == 2:
+                source.unlink()
+                source.symlink_to(secret)
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(durable_file.os, "stat", swap_before_second_stat)
+    with pytest.raises(ValueError, match="DURABLE_REPLACE_UNSAFE_SOURCE"):
+        durable_file.durable_replace(source, target)
+    assert target.read_bytes() == b"prior"
