@@ -66,6 +66,34 @@ def _open_directory_at(directory_fd: int, name: str, *, owner_uid: int) -> int:
     return fd
 
 
+def _verify_directory_at(
+    parent_fd: int, name: str, opened_fd: int, *, owner_uid: int,
+) -> None:
+    """Prove a directory name still references the safe pinned descriptor."""
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        raise ValueError("RELEASE_DIRECTORY_CHANGED") from None
+    opened = os.fstat(opened_fd)
+    if (not stat.S_ISDIR(named.st_mode) or named.st_uid != owner_uid
+            or named.st_mode & 0o022
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)):
+        raise ValueError("RELEASE_DIRECTORY_CHANGED")
+
+
+def _verify_directory_path(path: Path, opened_fd: int, *, owner_uid: int) -> None:
+    """Prove the absolute release root still names the pinned descriptor."""
+    try:
+        named = os.stat(path, follow_symlinks=False)
+    except OSError:
+        raise ValueError("RELEASE_DIRECTORY_CHANGED") from None
+    opened = os.fstat(opened_fd)
+    if (not stat.S_ISDIR(named.st_mode) or named.st_uid != owner_uid
+            or named.st_mode & 0o022
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)):
+        raise ValueError("RELEASE_DIRECTORY_CHANGED")
+
+
 def _verify_private_file(path: Path, *, owner_uid: int = 0) -> None:
     flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
@@ -183,18 +211,31 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
                 payload = _read_regular_at(operations_fd, name, owner_uid=owner_uid)
                 if hashlib.sha256(payload).hexdigest() != expected_hash:
                     raise ValueError("TEMPLATE_IDENTITY_MISMATCH")
+            _verify_directory_at(
+                deploy_fd, "operations", operations_fd, owner_uid=owner_uid,
+            )
+            _verify_directory_at(
+                release_fd, "deploy", deploy_fd, owner_uid=owner_uid,
+            )
         finally:
             if operations_fd >= 0:
                 os.close(operations_fd)
             if deploy_fd >= 0:
                 os.close(deploy_fd)
 
+        _verify_directory_at(
+            releases_fd, expected, release_fd, owner_uid=owner_uid,
+        )
+        _verify_directory_at(
+            root_fd, "releases", releases_fd, owner_uid=owner_uid,
+        )
         final_pointer_identity, final_inode = _current_pointer(
             root_fd, expected, owner_uid=owner_uid,
         )
         if (final_pointer_identity != pointer_identity
                 or final_inode != (release.st_dev, release.st_ino)):
             raise ValueError("SHARED_POINTER_CHANGED")
+        _verify_directory_path(ROOT, root_fd, owner_uid=owner_uid)
     finally:
         if release_fd >= 0:
             os.close(release_fd)

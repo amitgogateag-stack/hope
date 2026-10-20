@@ -119,3 +119,21 @@ reviewed release proof, while `exporter_absence` records the two canonical unit
 observations. A later configuration failure no longer rewrites successfully
 verified release evidence, but any finding still keeps the overall result
 `BLOCKED`. This remains read-only and non-authorizing.
+
+
+## Descriptor-to-path directory continuity — 2026-10-20
+
+The release inspector previously pinned the release, deploy and operations
+directories by descriptor, but did not prove after reading that their parent
+directory entries still named those descriptors. An attacker able to replace
+`deploy` or `operations` during inspection could therefore leave the inspector
+attesting byte-identical files from an unlinked old tree while the authoritative
+release path named a different directory.
+
+The inspector now revalidates every opened directory against its no-follow parent
+entry and revalidates the absolute release root after all reads. Directory
+removal, replacement, permission change or path redirection fails closed with
+`RELEASE_DIRECTORY_CHANGED`. Adversarial Linux tests replace both `deploy` and
+`operations` mid-read with byte-identical lookalikes; both cases failed before
+this correction. The canonical current-pointer protections remain intact. The
+behavior remains read-only, non-authorizing, PAPER-only and LIVE-disabled.
