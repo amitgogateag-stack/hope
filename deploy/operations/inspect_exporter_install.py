@@ -312,6 +312,17 @@ def _bounded_capture(arguments: list[str], *, timeout: float = 8,
             child.stdout.close()
 
 
+def _unit_path_absent(path: Path) -> bool:
+    """Observe absence without following a final symlink component."""
+    try:
+        os.lstat(path)
+    except FileNotFoundError:
+        return True
+    except OSError:
+        raise ValueError("UNIT_PATH_UNVERIFIED") from None
+    return False
+
+
 def unit_metadata(name: str) -> dict[str, str]:
     p = _bounded_capture([
         "/usr/bin/systemctl", "show", name,
@@ -352,9 +363,11 @@ def main(argv: list[str] | None = None) -> int:
         release_verified = True
         for name in NAMES:
             path = UNIT_DIR / name
-            if path.exists() or path.is_symlink():
-                failures.append("UNIT_PATH_ALREADY_EXISTS:" + name)
+            absent_before = _unit_path_absent(path)
             info = unit_metadata(name)
+            absent_after = _unit_path_absent(path)
+            if not absent_before or not absent_after:
+                failures.append("UNIT_PATH_ALREADY_EXISTS:" + name)
             if info != ABSENT_UNIT:
                 failures.append("UNIT_NOT_ABSENT:" + name)
         absence_verified = not any(

@@ -153,3 +153,19 @@ both observations. Adversarial tests replace the credential pathname with both
 a regular file and a symlink during metadata inspection. Both cases failed
 before this correction. Credential contents remain unread and unprinted; this
 is still a read-only diagnostic gate and does not authorize installation.
+
+
+## Exporter unit-path observation continuity — 2026-10-20
+
+The preflight previously checked each systemd unit pathname only before asking
+systemd for absence metadata. A unit file or symlink created during that command
+could therefore leave the inspector reporting `REVIEW_REQUIRED` and
+`exporter_absence=VERIFIED` even though the authoritative unit pathname existed.
+
+Each exporter unit pathname is now observed with no-follow `lstat` immediately
+before and after metadata collection. Any regular file, symlink (including a
+dangling symlink), other directory entry, or unobservable pathname blocks with
+`UNIT_PATH_ALREADY_EXISTS` or `UNIT_PATH_UNVERIFIED`. Adversarial tests create
+both regular unit files and symlinks after the initial observation; both cases
+failed before this correction. This remains a read-only diagnostic snapshot,
+not an installation or activation authorization.
