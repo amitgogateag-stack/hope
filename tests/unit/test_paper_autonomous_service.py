@@ -458,12 +458,12 @@ def test_notifier_rejects_ambiguous_address_and_unbounded_numeric_input(monkeypa
 
 @pytest.mark.skipif(os.name != "posix", reason="Native Unix queue saturation runs on Linux CI")
 def test_full_notify_queue_fails_within_transport_deadline(tmp_path):
+    import inspect
     import subprocess
     import sys
     path = str(tmp_path / "full.sock")
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
         receiver.bind(path)
-        # Fill the queue without consuming messages. Linux bounds Unix datagrams.
         with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as filler:
             filler.setblocking(False)
             filler.connect(path)
@@ -471,10 +471,12 @@ def test_full_notify_queue_fails_within_transport_deadline(tmp_path):
                 try: filler.send(b"occupied")
                 except BlockingIOError: break
             else: pytest.fail("queue did not saturate within the test bound")
-        # An external deadline also bounds the test if the production timeout regresses.
-        code = """
-import sys,time
-from hope.infrastructure.paper_service import SystemdNotifier
+            # Keep the producer alive throughout the saturation probe. Execute
+            # the actual class in isolation, without importing the whole runtime
+            # in the child or depending on pytest's import-path configuration.
+            code = ("from __future__ import annotations\n"
+                    "from dataclasses import dataclass\nimport os,socket,sys,time\n" +
+                    inspect.getsource(service.SystemdNotifier) + """
 start=time.monotonic()
 try:
     SystemdNotifier(sys.argv[1]).watchdog()
@@ -484,7 +486,8 @@ else:
     raise AssertionError('full queue notification unexpectedly succeeded')
 assert time.monotonic()-start < 3
 print('BOUNDED_QUEUE_FAILURE')
-"""
-        result = subprocess.run([sys.executable, "-c", code, path],
-                                capture_output=True, text=True, timeout=5, check=True)
-        assert result.stdout.strip() == "BOUNDED_QUEUE_FAILURE"
+""")
+            result = subprocess.run([sys.executable, "-c", code, path],
+                                    capture_output=True, text=True, timeout=5)
+            assert result.returncode == 0, result.stderr
+            assert result.stdout.strip() == "BOUNDED_QUEUE_FAILURE"
