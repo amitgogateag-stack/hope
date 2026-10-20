@@ -124,7 +124,7 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     paper = (root / "hope-paper.service").read_text()
     for required in ("User=hope-paper", "Type=notify", "NotifyAccess=main", "WatchdogSec=15min",
                      "Restart=on-failure", "KillSignal=SIGTERM",
-                     "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
+                     "TimeoutStartSec=15min", "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
                      "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
         assert required in paper
     web = (root / "hope-ops-dashboard-web.service").read_text()

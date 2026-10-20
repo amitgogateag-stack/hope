@@ -290,7 +290,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
         publish_service_status(status_file, health)
         print(json.dumps(health, sort_keys=True, separators=(",", ":")), flush=True)
     publish()
-    service_notifier.ready()
+    ready_notified = False
     failed = False
     while not stop.is_set():
         try:
@@ -312,7 +312,17 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
             if isinstance(exc, SQLAlchemyError):
                 engine.dispose()
         publish()
-        service_notifier.watchdog()
+        # Type=notify must not make an unvalidated worker active. The first
+        # READY also carries WATCHDOG=1 and is emitted only after a complete,
+        # successful cycle has durably published CURRENT health. Before that,
+        # systemd's startup deadline retains restart authority. Once ready,
+        # every completed cycle (including a fail-closed observation) proves
+        # the supervisor is responsive and may refresh the watchdog.
+        if not ready_notified and not failed:
+            service_notifier.ready()
+            ready_notified = True
+        elif ready_notified:
+            service_notifier.watchdog()
         if once:
             exit_code = 1 if failed else 0
             # A successful one-shot is an acceptance probe, not a running

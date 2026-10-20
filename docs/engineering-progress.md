@@ -1472,3 +1472,25 @@ local PostgreSQL stopped again. No source conflict or override was needed.
   cross-directory rejection, prior-target preservation, and all three real callers.
   No database write, AWS action, PAPER activation, LIVE enablement, strategy/risk
   change, or trading authority is introduced.
+
+## 2026-10-20: PAPER systemd readiness follows verified cycle readiness
+
+Exact live parent `88121e8df75675c8a56999b2adf01ef8595a5757`, Actions run
+`39391453571` (#1320) and the matching authenticated issue #5 marker were green
+before work. The service unit is `Type=notify`, but the supervisor sent READY
+immediately after STARTING health, before schema/control/factory/candidate checks
+or any complete PAPER cycle. That could make systemd and its dependents treat an
+unvalidated worker as ready, contrary to the operator contract.
+
+The supervisor now withholds READY and watchdog refreshes until the first complete
+successful cycle has durably published CURRENT health. Initial failed cycles remain
+visible but cannot announce readiness. A later successful retry announces readiness
+exactly once; subsequent completed cycles retain the existing watchdog behavior.
+The systemd startup deadline is aligned to the existing 15-minute watchdog/recovery
+ceiling so delayed readiness stays bounded rather than restoring the premature
+announcement. Tests assert notification order against the durable health file,
+failure-before-readiness silence, retry-to-readiness, and the deployed unit bound.
+
+No AWS/service action, database or migration change, strategy/risk modification,
+PAPER execution or LIVE enablement is part of this source change. Frozen day29 SHA
+`7e9d341742818a97accce3e2301b1c7f96596795` remains unchanged.

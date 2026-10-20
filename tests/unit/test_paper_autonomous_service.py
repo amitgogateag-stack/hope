@@ -113,7 +113,7 @@ def test_successful_once_publishes_terminal_stopped_state(tmp_path, monkeypatch,
     target = tmp_path / "health.json"
     notifications = []
     notifier = SimpleNamespace(
-        ready=lambda: notifications.append("ready"),
+        ready=lambda: notifications.append(("ready", json.loads(target.read_text())["state"])),
         watchdog=lambda: notifications.append("watchdog"),
         stopping=lambda: notifications.append("stopping"),
     )
@@ -134,7 +134,29 @@ def test_successful_once_publishes_terminal_stopped_state(tmp_path, monkeypatch,
     publications = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert [item["state"] for item in publications] == ["STARTING", "CURRENT", "STOPPED"]
     assert publications[-1] == value
-    assert notifications == ["ready", "watchdog", "stopping"]
+    assert notifications == [("ready", "CURRENT"), "stopping"]
+
+
+def test_failed_startup_cycle_never_announces_ready_or_watchdog(tmp_path, monkeypatch):
+    def fail(*args, **kwargs):
+        raise RuntimeError("PAPER_SERVICE_SCHEMA_INCOMPATIBLE")
+
+    monkeypatch.setattr(service, "run_service_cycle", fail)
+    notifications = []
+    notifier = SimpleNamespace(
+        ready=lambda: notifications.append("ready"),
+        watchdog=lambda: notifications.append("watchdog"),
+        stopping=lambda: notifications.append("stopping"),
+    )
+    assert service.run_service(
+        SimpleNamespace(),
+        lambda *_: None,
+        migrations_dir=tmp_path,
+        status_file=tmp_path / "health.json",
+        once=True,
+        notifier=notifier,
+    ) == 1
+    assert notifications == []
 
 
 @pytest.mark.skipif(not hasattr(socket, "AF_UNIX"), reason="Requires Unix notification sockets")
@@ -277,11 +299,52 @@ def test_service_recovers_on_next_poll_and_stops_gracefully(tmp_path, monkeypatc
         return 1, 2
     monkeypatch.setattr(service, "run_service_cycle", cycle)
     target = tmp_path / "health.json"
+    notifications = []
+    notifier = SimpleNamespace(
+        ready=lambda: notifications.append(("ready", len(calls))),
+        watchdog=lambda: notifications.append(("watchdog", len(calls))),
+        stopping=lambda: notifications.append(("stopping", len(calls))),
+    )
     assert service.run_service(SimpleNamespace(), lambda *_: None, migrations_dir=tmp_path,
-        status_file=target, stop_event=stop, poll_seconds=1) == 0
+        status_file=target, stop_event=stop, poll_seconds=1, notifier=notifier) == 0
     value = json.loads(target.read_text())
     assert value["state"] == "STOPPED" and value["last_success_at"] is not None
     assert (value["cycles_succeeded"], value["cycles_failed"], value["jobs_executed"], value["jobs_skipped"]) == (1, 1, 1, 2)
+    assert notifications == [("ready", 2), ("stopping", 2)]
+
+
+def test_completed_failure_after_readiness_refreshes_watchdog(tmp_path, monkeypatch):
+    stop = Event()
+    calls = []
+
+    def cycle(*args, **kwargs):
+        calls.append(True)
+        if len(calls) == 1:
+            return 0, 0
+        stop.set()
+        raise RuntimeError("PAPER_MARKET_DATA_STALE")
+
+    monkeypatch.setattr(service, "run_service_cycle", cycle)
+    notifications = []
+    notifier = SimpleNamespace(
+        ready=lambda: notifications.append(("ready", len(calls))),
+        watchdog=lambda: notifications.append(("watchdog", len(calls))),
+        stopping=lambda: notifications.append(("stopping", len(calls))),
+    )
+    target = tmp_path / "health.json"
+    assert service.run_service(
+        SimpleNamespace(),
+        lambda *_: None,
+        migrations_dir=tmp_path,
+        status_file=target,
+        stop_event=stop,
+        poll_seconds=1,
+        notifier=notifier,
+    ) == 0
+    value = json.loads(target.read_text())
+    assert value["state"] == "STOPPED"
+    assert value["last_failure_code"] == "PAPER_MARKET_DATA_STALE"
+    assert notifications == [("ready", 1), ("watchdog", 2), ("stopping", 2)]
 
 
 @pytest.mark.parametrize("seconds", [0, 301, True, float("nan"), "30"])

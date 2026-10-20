@@ -35,8 +35,12 @@ have 30-second statement and 10-second lock/connect timeouts. The deployment's
 stop deadline may terminate a hung process, after which database transaction
 and existing recovery proofs remain authoritative.
 
-The systemd unit uses `Type=notify` with a 15-minute watchdog. The main Python
-process announces startup and pings only after a complete service cycle; it does
+The systemd unit uses `Type=notify` with a 15-minute startup deadline and
+15-minute watchdog. The main Python process withholds `READY=1` until the first
+complete successful cycle has durably published CURRENT health. Failed initial
+cycles publish their fail-closed health but cannot make systemd report the worker
+ready or refresh its watchdog. After readiness, the process pings only after a
+complete service cycle; it does
 not delegate watchdog authority to callback or child processes. A factory,
 provider, strategy, or database path that wedges a cycle therefore stops feeding
 the watchdog and is terminated/restarted by systemd instead of remaining falsely
