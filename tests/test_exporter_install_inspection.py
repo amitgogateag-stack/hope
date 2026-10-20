@@ -173,3 +173,41 @@ def test_expected_shared_argument_and_root_are_mandatory(capsys):
         result = json.loads(capsys.readouterr().out)
         assert result["result"] == "BLOCKED"
         assert result["release_identity"] == "NOT_VERIFIED"
+
+
+@pytest.mark.parametrize("target_kind", ["deployed", "template"])
+@pytest.mark.parametrize("replacement_kind", ["regular", "symlink"])
+def test_release_file_replacement_during_read_is_rejected(
+    tmp_path, monkeypatch, target_kind, replacement_kind,
+):
+    """Bytes from a pinned descriptor cannot attest a replaced pathname."""
+    root, release, sha = release_layout(tmp_path)
+    target = (root / "deployed.env" if target_kind == "deployed"
+              else release / "deploy" / "operations" / mod.NAMES[0])
+    original_identity = (target.stat().st_dev, target.stat().st_ino)
+    original_read = os.read
+    swapped = False
+
+    def read_then_replace(fd, count):
+        nonlocal swapped
+        data = original_read(fd, count)
+        opened = os.fstat(fd)
+        if (not swapped and data
+                and (opened.st_dev, opened.st_ino) == original_identity):
+            swapped = True
+            replacement = target.with_name(target.name + ".replacement")
+            replacement.write_bytes(target.read_bytes())
+            replacement.chmod(0o600)
+            if replacement_kind == "regular":
+                os.replace(replacement, target)
+            else:
+                target.unlink()
+                target.symlink_to(replacement)
+        return data
+
+    monkeypatch.setattr(mod.os, "read", read_then_replace)
+    with patch.object(mod, "ROOT", root), pytest.raises(
+        ValueError, match="^RELEASE_FILE_CHANGED$"
+    ):
+        mod.verify_release(sha, owner_uid=os.getuid())
+    assert swapped

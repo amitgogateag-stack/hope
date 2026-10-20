@@ -102,11 +102,21 @@ def _read_regular_at(directory_fd: int, name: str, *, owner_uid: int) -> bytes:
             remaining -= len(chunk)
         payload = b"".join(chunks)
         after = os.fstat(fd)
+        # An open descriptor authenticates the bytes but not whether the
+        # directory still names that descriptor. A concurrent release update
+        # must not let us attest a replaced deployed.env or unit template.
+        try:
+            named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError:
+            raise ValueError("RELEASE_FILE_CHANGED") from None
         identity = lambda value: (
             value.st_dev, value.st_ino, value.st_size,
             value.st_mtime_ns, value.st_ctime_ns,
         )
-        if len(payload) > MAX_BYTES or identity(before) != identity(after):
+        if (len(payload) > MAX_BYTES or identity(before) != identity(after)
+                or not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                or named.st_uid != owner_uid or named.st_mode & 0o022
+                or identity(after) != identity(named)):
             raise ValueError("RELEASE_FILE_CHANGED")
         return payload
     finally:
