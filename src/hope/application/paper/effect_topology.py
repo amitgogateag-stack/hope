@@ -103,6 +103,21 @@ def classify_paper_reconciliation_effect_topology(
     return classify_paper_effect_topology(values)
 
 
+def classify_paper_reconciliation_effect_counts(
+    effect_counts: Iterable[tuple[PaperEffectType, int]],
+) -> PaperEffectTopology:
+    """Classify aggregate counts without allocating once per durable effect.
+
+    Canonical reconciliation topology distinguishes zero, one and many only,
+    including the multi-signal stage exception. Retain at most two occurrences
+    per entry. The caller still owns the bound on the number of count entries;
+    this does not bound database retrieval or authorize reconciliation.
+    """
+    return classify_paper_reconciliation_effect_topology(
+        kind for kind, count in effect_counts for _ in range(min(count, 2))
+    )
+
+
 def require_complete_paper_reconciliation_effects(
     effects: tuple[PaperEffect, ...],
 ) -> None:

@@ -6,7 +6,7 @@ from uuid import UUID
 from sqlalchemy import Connection, bindparam, text
 
 from hope.application.jobs import create_scheduled_job_run
-from hope.application.paper.effect_topology import classify_paper_reconciliation_effect_topology
+from hope.application.paper.effect_topology import classify_paper_reconciliation_effect_counts
 from hope.application.paper.effects import PaperEffectType
 
 MAX_INSPECTED_RUNS = 32
@@ -65,9 +65,9 @@ def inspect_paper_runs(connection: Connection, run_ids: Iterable[UUID]) -> dict:
                     # Cardinality classification only needs 0/1/many. Do not
                     # expand attacker-sized counts into an unbounded iterable.
                     try:
-                        topology = classify_paper_reconciliation_effect_topology(
-                            PaperEffectType(kind) for kind, total in raw.items()
-                            for _ in range(min(total, 2)))
+                        topology = classify_paper_reconciliation_effect_counts(
+                            (PaperEffectType(kind), total) for kind, total in raw.items()
+                            if total > 0)
                         item["topology"] = topology.value
                         item["effect_counts"] = {kind: raw[kind] for kind in sorted(raw)}
                     except ValueError:

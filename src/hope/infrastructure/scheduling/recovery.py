@@ -12,6 +12,7 @@ from hope.application.jobs import JobRunStatus, ScheduledJobRun
 from hope.application.paper.effect_topology import (
     PaperEffectTopology,
     classify_paper_reconciliation_effect_topology,
+    classify_paper_reconciliation_effect_counts,
 )
 from hope.application.paper.effects import PaperEffectType
 from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -60,11 +61,7 @@ def _classify_recovery_evidence(
 def _has_unambiguous_recovery_cardinality(
     effect_counts: tuple[tuple[PaperEffectType, int], ...],
 ) -> bool:
-    topology = _classify_recovery_topology(
-        effect_type
-        for effect_type, count in effect_counts
-        for _ in range(count)
-    )
+    topology = classify_paper_reconciliation_effect_counts(effect_counts)
     return topology is PaperEffectTopology.COMPLETE
 
 
@@ -98,11 +95,7 @@ class PaperRecoveryAssessment:
     @property
     def evidence(self) -> PaperRecoveryEvidence:
         if self.effect_counts:
-            topology = _classify_recovery_topology(
-                effect_type
-                for effect_type, count in self.effect_counts
-                for _ in range(count)
-            )
+            topology = classify_paper_reconciliation_effect_counts(self.effect_counts)
             return PaperRecoveryEvidence(topology.value)
         return _classify_recovery_evidence(self.durable_effect_types)
 
