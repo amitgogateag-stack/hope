@@ -461,16 +461,32 @@ def test_full_notify_queue_fails_within_transport_deadline(tmp_path):
     import inspect
     import subprocess
     import sys
+    from contextlib import ExitStack
     path = str(tmp_path / "full.sock")
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
         receiver.bind(path)
-        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as filler:
-            filler.setblocking(False)
-            filler.connect(path)
-            for _ in range(4096):
-                try: filler.send(b"occupied")
-                except BlockingIOError: break
-            else: pytest.fail("queue did not saturate within the test bound")
+        with ExitStack() as producers:
+            # One producer can exhaust its own send budget while the receiver
+            # still admits a fresh sender. Only a fresh sender's first enqueue
+            # failing establishes the receiver saturation required by this test.
+            saturated = False
+            for _ in range(32):
+                filler = producers.enter_context(socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM))
+                filler.setblocking(False)
+                filler.connect(path)
+                sent = 0
+                for _ in range(4096):
+                    try:
+                        filler.send(b"occupied")
+                        sent += 1
+                    except BlockingIOError:
+                        break
+                else:
+                    pytest.fail("producer did not block within the message bound")
+                if sent == 0:
+                    saturated = True
+                    break
+            assert saturated, "receiver not saturated within the producer bound"
             # Keep the producer alive throughout the saturation probe. Execute
             # the actual class in isolation, without importing the whole runtime
             # in the child or depending on pytest's import-path configuration.
