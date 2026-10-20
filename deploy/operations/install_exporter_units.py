@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""Install only the reviewed M3 exporter units; never start or enable them."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import importlib.util
+import os
+from pathlib import Path
+import secrets
+import stat
+import subprocess
+
+ROOT = Path("/opt/hope-operations")
+UNIT_DIR = Path("/etc/systemd/system")
+NAMES = ("hope-ops-dashboard-export.service", "hope-ops-dashboard-export.timer")
+COMMAND_ENVIRONMENT = {
+    "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANG": "C",
+    "LC_ALL": "C",
+    "HOME": "/nonexistent",
+}
+
+
+class InstallError(RuntimeError):
+    """Fail-closed exporter installation error."""
+
+
+def _load_inspector():
+    path = Path(__file__).with_name("inspect_exporter_install.py")
+    spec = importlib.util.spec_from_file_location("hope_exporter_inspector", path)
+    if spec is None or spec.loader is None:
+        raise InstallError("EXPORTER_INSPECTOR_UNAVAILABLE")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise InstallError("EXPORTER_STAGE_WRITE_FAILED")
+        view = view[written:]
+
+
+def _absent(name: str, directory_fd: int) -> bool:
+    if name not in NAMES:
+        raise InstallError("EXPORTER_UNIT_NAME_UNVERIFIED")
+    try:
+        os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return True
+    except OSError as exc:
+        raise InstallError("EXPORTER_UNIT_PATH_UNVERIFIED") from exc
+    return False
+
+
+def _named_identity(name: str, directory_fd: int) -> tuple[int, int]:
+    value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    if not stat.S_ISREG(value.st_mode):
+        raise InstallError("EXPORTER_UNIT_PATH_UNVERIFIED")
+    return value.st_dev, value.st_ino
+
+
+def _rollback(
+    directory_fd: int,
+    installed: list[tuple[str, tuple[int, int], str]],
+    payloads: dict[str, bytes],
+    inspector,
+    *,
+    owner_uid: int,
+) -> None:
+    unsafe = False
+    for name, identity, digest in reversed(installed):
+        try:
+            current = inspector._read_regular_at(
+                directory_fd, name, owner_uid=owner_uid
+            )
+            if (_named_identity(name, directory_fd) != identity
+                    or hashlib.sha256(current).hexdigest() != digest
+                    or current != payloads[name]):
+                unsafe = True
+                continue
+            os.unlink(name, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except (OSError, ValueError, InstallError):
+            unsafe = True
+    if unsafe:
+        raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+
+
+def install_exporter_units(
+    expected: str,
+    *,
+    root: Path = ROOT,
+    unit_dir: Path = UNIT_DIR,
+    owner_uid: int = 0,
+    daemon_reload=None,
+    inspector=None,
+) -> tuple[str, ...]:
+    """Install two disabled exporter units from one verified shared release."""
+    inspector = inspector or _load_inspector()
+    inspector.ROOT = root
+    inspector.verify_release(expected, owner_uid=owner_uid)
+
+    root_fd = inspector._open_directory(root, owner_uid=owner_uid)
+    releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
+    staged: list[str] = []
+    installed: list[tuple[str, tuple[int, int], str]] = []
+    payloads: dict[str, bytes] = {}
+    try:
+        releases_fd = inspector._open_directory_at(
+            root_fd, "releases", owner_uid=owner_uid
+        )
+        release_fd = inspector._open_directory_at(
+            releases_fd, expected, owner_uid=owner_uid
+        )
+        deploy_fd = inspector._open_directory_at(
+            release_fd, "deploy", owner_uid=owner_uid
+        )
+        operations_fd = inspector._open_directory_at(
+            deploy_fd, "operations", owner_uid=owner_uid
+        )
+        unit_fd = inspector._open_directory(unit_dir, owner_uid=owner_uid)
+        inspector._verify_directory_path(unit_dir, unit_fd, owner_uid=owner_uid)
+
+        for name in NAMES:
+            if not _absent(name, unit_fd):
+                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
+            payload = inspector._read_regular_at(
+                operations_fd, name, owner_uid=owner_uid
+            )
+            expected_digest = inspector.EXPECTED_TEMPLATE_HASHES[name]
+            if hashlib.sha256(payload).hexdigest() != expected_digest:
+                raise InstallError("EXPORTER_TEMPLATE_IDENTITY_MISMATCH")
+            payloads[name] = payload
+            temporary = f".{name}.{secrets.token_hex(16)}.next"
+            fd = os.open(
+                temporary,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+                | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+                dir_fd=unit_fd,
+            )
+            try:
+                _write_all(fd, payload)
+                os.fchmod(fd, 0o644)
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+            staged.append(temporary)
+
+        inspector._verify_directory_at(
+            deploy_fd, "operations", operations_fd, owner_uid=owner_uid
+        )
+        inspector._verify_directory_path(unit_dir, unit_fd, owner_uid=owner_uid)
+        for name in NAMES:
+            if not _absent(name, unit_fd):
+                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
+
+        for name, temporary in zip(NAMES, tuple(staged), strict=True):
+            # link() is an atomic no-replace publication within the pinned
+            # directory. rename() would overwrite a concurrently created unit.
+            os.link(
+                temporary,
+                name,
+                src_dir_fd=unit_fd,
+                dst_dir_fd=unit_fd,
+                follow_symlinks=False,
+            )
+            os.unlink(temporary, dir_fd=unit_fd)
+            staged.remove(temporary)
+            os.fsync(unit_fd)
+            identity = _named_identity(name, unit_fd)
+            digest = hashlib.sha256(payloads[name]).hexdigest()
+            installed.append((name, identity, digest))
+            inspector._verify_directory_path(
+                unit_dir, unit_fd, owner_uid=owner_uid
+            )
+
+        if daemon_reload is None:
+            daemon_reload = lambda: subprocess.run(
+                ["/usr/bin/systemctl", "daemon-reload"],
+                check=True,
+                timeout=90,
+                env=COMMAND_ENVIRONMENT,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        daemon_reload()
+        return NAMES
+    except Exception as exc:
+        if unit_fd >= 0 and installed:
+            try:
+                _rollback(
+                    unit_fd, installed, payloads, inspector,
+                    owner_uid=owner_uid,
+                )
+            except InstallError as rollback_exc:
+                raise rollback_exc from exc
+        raise
+    finally:
+        if unit_fd >= 0:
+            for temporary in staged:
+                try:
+                    os.unlink(temporary, dir_fd=unit_fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
+        for fd in (unit_fd, operations_fd, deploy_fd, release_fd, releases_fd, root_fd):
+            if fd >= 0:
+                os.close(fd)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Install reviewed M3 exporter units disabled"
+    )
+    parser.add_argument("--expected-shared", required=True)
+    parser.add_argument("--approve-exporter-install", action="store_true")
+    args = parser.parse_args(argv)
+    if os.geteuid() != 0 or not args.approve_exporter_install:
+        print("EXPORTER_INSTALL_EXPLICIT_ROOT_APPROVAL_REQUIRED")
+        return 2
+    try:
+        installed = install_exporter_units(args.expected_shared)
+    except Exception:
+        print("EXPORTER_INSTALL_BLOCKED")
+        return 2
+    print("EXPORTER_UNITS_INSTALLED_DISABLED:" + ",".join(installed))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
