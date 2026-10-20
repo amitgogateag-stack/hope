@@ -1,6 +1,7 @@
 """Exporter absence is diagnostic evidence, never installation authority."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import subprocess
 
@@ -11,6 +12,25 @@ spec = importlib.util.spec_from_file_location("exporter_metadata_contract", SOUR
 mod = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(mod)
 ABSENT = dict(LoadState="not-found",ActiveState="inactive",UnitFileState="",FragmentPath="",DropInPaths="")
+
+
+@pytest.fixture(autouse=True)
+def verify_temporary_unit_directory_as_runner(monkeypatch):
+    """Exercise directory trust checks against the real test-runner owner."""
+    original_open = mod._open_directory
+    original_verify = mod._verify_directory_path
+    monkeypatch.setattr(
+        mod,
+        "_open_directory",
+        lambda path, *, owner_uid: original_open(path, owner_uid=os.getuid()),
+    )
+    monkeypatch.setattr(
+        mod,
+        "_verify_directory_path",
+        lambda path, fd, *, owner_uid: original_verify(
+            path, fd, owner_uid=os.getuid()
+        ),
+    )
 
 
 def encoded(values):
