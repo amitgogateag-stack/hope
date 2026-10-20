@@ -109,3 +109,19 @@ validated candidate catalog to isolate lifecycle behavior from research promotio
 all PostgreSQL trading/control/recovery guards remain active. Existing independent
 research admission and accounting suites remain required. A pool restart is not
 an EC2 reboot test; actual systemd reboot and AWS acceptance remain operator work.
+
+### Notification transport failure bounds
+
+Each systemd notification socket operation has a one-second timeout. A full or
+unavailable manager queue raises a fixed `PAPER_SERVICE_NOTIFY_FAILED` error and
+closes the socket; the CLI exits through its existing sanitized startup/failure
+boundary and systemd retains restart authority. This is a per-operation timeout,
+not a total cycle deadline. Unsupported Unix socket platforms report a fixed
+`PAPER_SERVICE_NOTIFY_FAILED` error only when notifications are configured;
+normal runs without `NOTIFY_SOCKET` open no notification socket.
+
+Notification configuration rejects embedded NUL, an empty abstract address, and
+oversized watchdog numeric input. These checks grant no execution authority and
+do not alter the watchdog interval, PAPER schedules, risk rules, or deployment
+approval requirements. The mocked protocol tests run without native Unix socket
+support; real datagram and full-queue tests remain Linux checks.

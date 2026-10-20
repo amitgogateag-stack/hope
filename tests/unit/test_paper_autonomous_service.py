@@ -192,6 +192,9 @@ def test_notifier_sends_only_fixed_protocol_without_environment_payload(monkeypa
         def __exit__(self, *_):
             return None
 
+        def settimeout(self, seconds):
+            assert seconds == 1.0
+
         def connect(self, address):
             calls.append(("connect", address))
 
@@ -239,6 +242,9 @@ def test_notifier_io_failures_expose_only_fixed_error(monkeypatch, failure_point
 
         def __exit__(self, *_):
             return None
+
+        def settimeout(self, seconds):
+            assert seconds == 1.0
 
         def connect(self, _address):
             if failure_point == "connect":
@@ -410,3 +416,75 @@ def test_eligibility_failure_exposes_only_fixed_database_codes(primary):
     ValueError("BACKTEST_EVIDENCE_secret-payload")])
 def test_certified_input_failures_are_explicit_without_echoing_payload(exception):
     assert service._failure_state(exception) == ("UNAVAILABLE", "PAPER_CERTIFIED_INPUT_UNAVAILABLE")
+
+
+@pytest.mark.parametrize("stage", ["connect", "send"])
+def test_notifier_transport_failure_is_bounded_closed_and_sanitized(monkeypatch, stage):
+    events = []
+    class Client:
+        def __enter__(self): return self
+        def __exit__(self, *args): events.append("closed")
+        def settimeout(self, seconds): events.append(("timeout", seconds))
+        def connect(self, address):
+            events.append("connect")
+            if stage == "connect": raise TimeoutError("private socket path")
+        def sendall(self, payload):
+            events.append("send")
+            raise OSError("private transport details")
+    monkeypatch.setattr(service.socket, "AF_UNIX", 1, raising=False)
+    monkeypatch.setattr(service.socket, "socket", lambda *_: Client())
+    with pytest.raises(RuntimeError) as error:
+        service.SystemdNotifier("/run/systemd/notify").watchdog()
+    assert str(error.value) == "PAPER_SERVICE_NOTIFY_FAILED"
+    assert events[0] == ("timeout", 1.0)
+    assert events[-1] == "closed"
+
+
+def test_notifier_absence_does_not_open_socket(monkeypatch):
+    def forbidden(*args): raise AssertionError("socket must not open")
+    monkeypatch.setattr(service.socket, "socket", forbidden)
+    service.SystemdNotifier(None).ready()
+
+
+@pytest.mark.parametrize("address,usec", [("@", "1"), ("/run/notify\0other", "1"),
+    ("/run/notify", "9" * 5000)])
+def test_notifier_rejects_ambiguous_address_and_unbounded_numeric_input(monkeypatch, address, usec):
+    # getenv is mocked because OS environment APIs themselves reject NUL.
+    values = {"NOTIFY_SOCKET": address, "WATCHDOG_USEC": usec}
+    monkeypatch.setattr(service.os, "getenv", values.get)
+    with pytest.raises(RuntimeError, match="^PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID$"):
+        service.SystemdNotifier.from_environment()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native Unix queue saturation runs on Linux CI")
+def test_full_notify_queue_fails_within_transport_deadline(tmp_path):
+    import subprocess
+    import sys
+    path = str(tmp_path / "full.sock")
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as receiver:
+        receiver.bind(path)
+        # Fill the queue without consuming messages. Linux bounds Unix datagrams.
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as filler:
+            filler.setblocking(False)
+            filler.connect(path)
+            for _ in range(4096):
+                try: filler.send(b"occupied")
+                except BlockingIOError: break
+            else: pytest.fail("queue did not saturate within the test bound")
+        # An external deadline also bounds the test if the production timeout regresses.
+        code = """
+import sys,time
+from hope.infrastructure.paper_service import SystemdNotifier
+start=time.monotonic()
+try:
+    SystemdNotifier(sys.argv[1]).watchdog()
+except RuntimeError as error:
+    assert str(error) == 'PAPER_SERVICE_NOTIFY_FAILED'
+else:
+    raise AssertionError('full queue notification unexpectedly succeeded')
+assert time.monotonic()-start < 3
+print('BOUNDED_QUEUE_FAILURE')
+"""
+        result = subprocess.run([sys.executable, "-c", code, path],
+                                capture_output=True, text=True, timeout=5, check=True)
+        assert result.stdout.strip() == "BOUNDED_QUEUE_FAILURE"

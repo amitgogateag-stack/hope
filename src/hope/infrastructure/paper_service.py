@@ -94,7 +94,7 @@ class SystemdNotifier:
         address = os.getenv("NOTIFY_SOCKET")
         if address is None:
             return cls(None)
-        if (not address or len(address) > 512
+        if (not address or len(address) > 512 or "\0" in address or address == "@"
                 or (not address.startswith("/") and not address.startswith("@"))):
             raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID")
         watchdog_pid = os.getenv("WATCHDOG_PID")
@@ -105,7 +105,7 @@ class SystemdNotifier:
             except ValueError:
                 raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID") from None
         watchdog_usec = os.getenv("WATCHDOG_USEC")
-        if watchdog_usec is None or not watchdog_usec.isascii() or not watchdog_usec.isdecimal() \
+        if watchdog_usec is None or len(watchdog_usec) > 20 or not watchdog_usec.isascii() or not watchdog_usec.isdecimal() \
                 or int(watchdog_usec) <= 0:
             raise RuntimeError("PAPER_SERVICE_NOTIFY_CONFIGURATION_INVALID")
         return cls(address)
@@ -122,6 +122,8 @@ class SystemdNotifier:
             raise RuntimeError("PAPER_SERVICE_NOTIFY_FAILED")
         try:
             with socket.socket(family, socket.SOCK_DGRAM) as client:
+                # A full manager queue must not wedge status publication.
+                client.settimeout(1.0)
                 client.connect(target)
                 client.sendall(value.encode("utf-8"))
         except OSError:
