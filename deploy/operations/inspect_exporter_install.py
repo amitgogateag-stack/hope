@@ -66,6 +66,53 @@ def _open_directory_at(directory_fd: int, name: str, *, owner_uid: int) -> int:
     return fd
 
 
+def _verify_directory_at(
+    parent_fd: int, name: str, opened_fd: int, *, owner_uid: int,
+) -> None:
+    """Prove a directory name still references the safe pinned descriptor."""
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError:
+        raise ValueError("RELEASE_DIRECTORY_CHANGED") from None
+    opened = os.fstat(opened_fd)
+    if (not stat.S_ISDIR(named.st_mode) or named.st_uid != owner_uid
+            or named.st_mode & 0o022
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)):
+        raise ValueError("RELEASE_DIRECTORY_CHANGED")
+
+
+def _verify_directory_path(path: Path, opened_fd: int, *, owner_uid: int) -> None:
+    """Prove the absolute release root still names the pinned descriptor."""
+    try:
+        named = os.stat(path, follow_symlinks=False)
+    except OSError:
+        raise ValueError("RELEASE_DIRECTORY_CHANGED") from None
+    opened = os.fstat(opened_fd)
+    if (not stat.S_ISDIR(named.st_mode) or named.st_uid != owner_uid
+            or named.st_mode & 0o022
+            or (named.st_dev, named.st_ino) != (opened.st_dev, opened.st_ino)):
+        raise ValueError("RELEASE_DIRECTORY_CHANGED")
+
+
+def _current_link_identity(
+    root_fd: int, release_stat: os.stat_result, *, owner_uid: int,
+) -> tuple[int, int, int, int, int, int, int]:
+    """Authenticate the current symlink relative to the pinned release root."""
+    try:
+        link = os.stat("current", dir_fd=root_fd, follow_symlinks=False)
+        target = os.stat("current", dir_fd=root_fd, follow_symlinks=True)
+    except OSError:
+        raise ValueError("SHARED_POINTER_UNVERIFIED") from None
+    if (not stat.S_ISLNK(link.st_mode) or link.st_uid != owner_uid
+            or link.st_nlink != 1):
+        raise ValueError("SHARED_POINTER_UNVERIFIED")
+    if ((target.st_dev, target.st_ino)
+            != (release_stat.st_dev, release_stat.st_ino)):
+        raise ValueError("SHARED_POINTER_MISMATCH")
+    return (link.st_dev, link.st_ino, link.st_uid, link.st_nlink,
+            link.st_size, link.st_mtime_ns, link.st_ctime_ns)
+
+
 def _verify_private_file(path: Path, *, owner_uid: int = 0) -> None:
     flags = os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
     flags |= getattr(os, "O_NONBLOCK", 0)
@@ -134,12 +181,9 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
         release_fd = _open_directory_at(releases_fd, expected, owner_uid=owner_uid)
         release = os.fstat(release_fd)
 
-        current = ROOT / "current"
-        if not current.is_symlink():
-            raise ValueError("SHARED_POINTER_UNVERIFIED")
-        current_stat = current.stat()
-        if (current_stat.st_dev, current_stat.st_ino) != (release.st_dev, release.st_ino):
-            raise ValueError("SHARED_POINTER_MISMATCH")
+        current_identity = _current_link_identity(
+            root_fd, release, owner_uid=owner_uid,
+        )
 
         deployed = _read_regular_at(root_fd, "deployed.env", owner_uid=owner_uid)
         if deployed != f"HOPE_DEPLOYED_COMMIT={expected}\n".encode("ascii"):
@@ -155,15 +199,30 @@ def verify_release(expected: str, *, owner_uid: int = 0) -> None:
                 payload = _read_regular_at(operations_fd, name, owner_uid=owner_uid)
                 if hashlib.sha256(payload).hexdigest() != expected_hash:
                     raise ValueError("TEMPLATE_IDENTITY_MISMATCH")
+            _verify_directory_at(
+                deploy_fd, "operations", operations_fd, owner_uid=owner_uid,
+            )
+            _verify_directory_at(
+                release_fd, "deploy", deploy_fd, owner_uid=owner_uid,
+            )
         finally:
             if operations_fd >= 0:
                 os.close(operations_fd)
             if deploy_fd >= 0:
                 os.close(deploy_fd)
 
-        final_current = current.stat()
-        if (final_current.st_dev, final_current.st_ino) != (release.st_dev, release.st_ino):
+        _verify_directory_at(
+            releases_fd, expected, release_fd, owner_uid=owner_uid,
+        )
+        _verify_directory_at(
+            root_fd, "releases", releases_fd, owner_uid=owner_uid,
+        )
+        final_current_identity = _current_link_identity(
+            root_fd, release, owner_uid=owner_uid,
+        )
+        if final_current_identity != current_identity:
             raise ValueError("SHARED_POINTER_CHANGED")
+        _verify_directory_path(ROOT, root_fd, owner_uid=owner_uid)
     finally:
         if release_fd >= 0:
             os.close(release_fd)
