@@ -23,6 +23,12 @@ installer = load(
 )
 
 
+def installed_metadata(name,unit_dir):
+    service = name.endswith(".service")
+    return dict(LoadState="loaded",ActiveState="inactive",UnitFileState="static" if service else "disabled",
+                FragmentPath=str(unit_dir/name),DropInPaths="")
+
+
 @pytest.fixture
 def layout(tmp_path):
     inspector = load(
@@ -49,17 +55,28 @@ def layout(tmp_path):
         name: hashlib.sha256((operations / name).read_bytes()).hexdigest()
         for name in installer.NAMES
     }
+    inspector._test_reloaded = False
+    def observed_state(name):
+        if not inspector._test_reloaded:
+            return dict(inspector.ABSENT_UNIT)
+        return installed_metadata(name, unit_dir)
+    inspector.unit_metadata = observed_state
     return inspector, root, unit_dir, sha
 
 
 def install(layout, reload=lambda: None):
     inspector, root, unit_dir, sha = layout
+    def simulated_reload():
+        try:
+            reload()
+        finally:
+            inspector._test_reloaded = True
     return installer.install_exporter_units(
         sha,
         root=root,
         unit_dir=unit_dir,
         owner_uid=os.getuid(),
-        daemon_reload=reload,
+        daemon_reload=simulated_reload,
         inspector=inspector,
     )
 
@@ -138,3 +155,38 @@ def test_cli_requires_root_and_explicit_approval(monkeypatch, capsys):
     monkeypatch.setattr(installer.os, "geteuid", lambda: 1000)
     assert installer.main(["--expected-shared", "1" * 40]) == 2
     assert "EXPLICIT_ROOT_APPROVAL_REQUIRED" in capsys.readouterr().out
+
+
+
+def test_runtime_unit_appearing_before_publication_aborts_and_cleans_staging(layout,monkeypatch):
+    inspector,_,unit_dir,_=layout
+    original=inspector._verify_directory_path
+    calls=0
+    reloads=[]
+    def after_staging(path,fd,*,owner_uid):
+        nonlocal calls
+        calls+=1
+        result=original(path,fd,owner_uid=owner_uid)
+        if calls==2:
+            inspector.unit_metadata=lambda name:dict(inspector.ABSENT_UNIT,ActiveState="active")
+        return result
+    monkeypatch.setattr(inspector,"_verify_directory_path",after_staging)
+    with pytest.raises(installer.InstallError,match="UNIT_NOT_ABSENT"):
+        install(layout,lambda:reloads.append(True))
+    assert reloads==[]
+    assert list(unit_dir.iterdir())==[]
+
+
+@pytest.mark.parametrize("name,change",[(installer.NAMES[0],dict(ActiveState="active")),
+    (installer.NAMES[1],dict(UnitFileState="enabled")),
+    (installer.NAMES[0],dict(FragmentPath="/usr/lib/vendor.service"))])
+def test_post_reload_conflict_is_not_reported_success_or_deleted(layout,name,change):
+    inspector,_,unit_dir,_=layout
+    def conflicting_reload():
+        inspector.unit_metadata=lambda unit:(installed_metadata(unit,unit_dir)|change
+            if unit==name else installed_metadata(unit,unit_dir))
+    with pytest.raises(installer.InstallError,match="^EXPORTER_ROLLBACK_UNVERIFIED$"):
+        install(layout,conflicting_reload)
+    assert (unit_dir/name).is_file()
+    assert (unit_dir/name).read_bytes()
+    assert not any(path.name.endswith(".next") for path in unit_dir.iterdir())

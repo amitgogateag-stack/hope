@@ -64,6 +64,33 @@ def _named_identity(name: str, directory_fd: int) -> tuple[int, int]:
     return value.st_dev, value.st_ino
 
 
+def _unit_state(inspector, name: str) -> dict[str, str]:
+    if name not in NAMES:
+        raise InstallError("EXPORTER_UNIT_NAME_UNVERIFIED")
+    try:
+        return inspector.unit_metadata(name)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        raise InstallError("EXPORTER_UNIT_STATE_UNVERIFIED") from None
+
+
+def _assert_units_absent(inspector) -> None:
+    for name in NAMES:
+        if _unit_state(inspector, name) != inspector.ABSENT_UNIT:
+            raise InstallError("EXPORTER_UNIT_NOT_ABSENT:" + name)
+
+
+def _expected_installed_state(name: str, unit_dir: Path) -> dict[str, str]:
+    return {"LoadState": "loaded", "ActiveState": "inactive",
+            "UnitFileState": "static" if name.endswith(".service") else "disabled",
+            "FragmentPath": str(unit_dir / name), "DropInPaths": ""}
+
+
+def _assert_installed_quiescent(inspector, unit_dir: Path) -> None:
+    for name in NAMES:
+        if _unit_state(inspector, name) != _expected_installed_state(name, unit_dir):
+            raise InstallError("EXPORTER_INSTALLED_STATE_UNVERIFIED:" + name)
+
+
 def _rollback(
     directory_fd: int,
     installed: list[tuple[str, tuple[int, int], str]],
@@ -71,10 +98,15 @@ def _rollback(
     inspector,
     *,
     owner_uid: int,
+    unit_dir: Path = UNIT_DIR,
 ) -> None:
     unsafe = False
     for name, identity, digest in reversed(installed):
         try:
+            observed = _unit_state(inspector, name)
+            if observed not in (inspector.ABSENT_UNIT, _expected_installed_state(name, unit_dir)):
+                unsafe = True
+                continue
             current = inspector._read_regular_at(
                 directory_fd, name, owner_uid=owner_uid
             )
@@ -104,6 +136,7 @@ def install_exporter_units(
     inspector = inspector or _load_inspector()
     inspector.ROOT = root
     inspector.verify_release(expected, owner_uid=owner_uid)
+    _assert_units_absent(inspector)
 
     root_fd = inspector._open_directory(root, owner_uid=owner_uid)
     releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
@@ -160,6 +193,7 @@ def install_exporter_units(
             if not _absent(name, unit_fd):
                 raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
 
+        _assert_units_absent(inspector)
         for name, temporary in zip(NAMES, tuple(staged), strict=True):
             # link() is an atomic no-replace publication within the pinned
             # directory. rename() would overwrite a concurrently created unit.
@@ -191,13 +225,14 @@ def install_exporter_units(
                 stderr=subprocess.DEVNULL,
             )
         daemon_reload()
+        _assert_installed_quiescent(inspector, unit_dir)
         return NAMES
     except Exception as exc:
         if unit_fd >= 0 and installed:
             try:
                 _rollback(
                     unit_fd, installed, payloads, inspector,
-                    owner_uid=owner_uid,
+                    owner_uid=owner_uid, unit_dir=unit_dir,
                 )
             except InstallError as rollback_exc:
                 raise rollback_exc from exc

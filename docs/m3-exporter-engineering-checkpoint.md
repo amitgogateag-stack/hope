@@ -169,3 +169,32 @@ dangling symlink), other directory entry, or unobservable pathname blocks with
 both regular unit files and symlinks after the initial observation; both cases
 failed before this correction. This remains a read-only diagnostic snapshot,
 not an installation or activation authorization.
+
+
+## Exporter installer runtime-state gates — 2026-10-21
+
+The exporter-only installer must not infer runtime absence from two missing
+`/etc/systemd/system` files: vendor, runtime or generated units may still exist.
+It now obtains complete canonical absence metadata for both names before staging
+and again immediately before publication. After daemon reload, success requires
+both units loaded and inactive, with exact installed fragment paths and no
+unknown drop-ins: the service must be static, the timer disabled. Unknown,
+contradictory, active or activating states fail closed.
+
+Rollback retains its inode/content checks and additionally requires canonical
+absence or exact installed inactive metadata before deleting a file. Active or
+unverified units are preserved with EXPORTER_ROLLBACK_UNVERIFIED for operator
+review; the installer does not stop them or try to repair unexpected host state.
+These observations are not protection against a separately authorized root actor
+changing runtime state after a check, nor proof that PAPER is isolated.
+
+Seven regressions reproduced the prior missing runtime gate before filesystem
+staging. Portable state-contract tests and native filesystem fixtures cover
+prepublication changes, post-reload conflicts and rollback refusal. The native
+fixtures replace systemd operations with API doubles; they are not AWS acceptance.
+No start/enable command, PAPER unit, database grant or shared pointer is changed.
+
+This is source engineering, not installation approval. Durable installation
+journaling, interrupted-install recovery, host execution-isolation evidence and
+real staging/systemd/rollback acceptance remain prerequisites before an operator
+may treat the installer as deployment-ready. No AWS installation was performed.
