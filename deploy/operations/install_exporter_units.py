@@ -301,7 +301,10 @@ def install_exporter_units(
         daemon_reload()
         _assert_installed_quiescent(inspector, unit_dir)
         return NAMES
-    except Exception as exc:
+    except BaseException as exc:
+        # Transactional cleanup must also run for Python-level termination
+        # requests. KeyboardInterrupt and SystemExit do not inherit Exception;
+        # without this boundary they could strand a published unit.
         cleanup_error = None
         if unit_fd >= 0 and staged:
             try:
