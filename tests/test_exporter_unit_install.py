@@ -57,7 +57,7 @@ def layout(tmp_path):
     }
     inspector._test_reloaded = False
     def observed_state(name):
-        if not inspector._test_reloaded:
+        if not inspector._test_reloaded or not (unit_dir / name).exists():
             return dict(inspector.ABSENT_UNIT)
         return installed_metadata(name, unit_dir)
     inspector.unit_metadata = observed_state
@@ -190,3 +190,21 @@ def test_post_reload_conflict_is_not_reported_success_or_deleted(layout,name,cha
     assert (unit_dir/name).is_file()
     assert (unit_dir/name).read_bytes()
     assert not any(path.name.endswith(".next") for path in unit_dir.iterdir())
+
+
+def test_exception_after_atomic_publish_rolls_back_tracked_inode(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    original_link = installer.os.link
+    calls = 0
+
+    def publish_then_fail(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        original_link(*args, **kwargs)
+        if calls == 1:
+            raise RuntimeError("synthetic post-publish interruption")
+
+    monkeypatch.setattr(installer.os, "link", publish_then_fail)
+    with pytest.raises(RuntimeError, match="post-publish interruption"):
+        install(layout)
+    assert list(unit_dir.iterdir()) == []

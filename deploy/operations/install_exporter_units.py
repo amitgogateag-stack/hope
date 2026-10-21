@@ -111,16 +111,24 @@ def _verify_rollback_entry(
     *,
     owner_uid: int,
     unit_dir: Path,
-) -> None:
+) -> bool:
     name, identity, digest = entry
     observed = _unit_state(inspector, name)
     if observed not in (inspector.ABSENT_UNIT, _expected_installed_state(name, unit_dir)):
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
-    current = inspector._read_regular_at(directory_fd, name, owner_uid=owner_uid)
+    try:
+        current = inspector._read_regular_at(
+            directory_fd, name, owner_uid=owner_uid
+        )
+    except FileNotFoundError:
+        if observed == inspector.ABSENT_UNIT:
+            return False
+        raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED") from None
     if (_named_identity(name, directory_fd) != identity
             or hashlib.sha256(current).hexdigest() != digest
             or current != payloads[name]):
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+    return True
 
 
 def _rollback(
@@ -152,13 +160,14 @@ def _rollback(
     for entry in reversed(installed):
         try:
             # Recheck immediately before each unlink to reject replacements.
-            _verify_rollback_entry(
+            present = _verify_rollback_entry(
                 directory_fd, entry, payloads, inspector,
                 owner_uid=owner_uid, unit_dir=unit_dir,
             )
-            os.unlink(entry[0], dir_fd=directory_fd)
-            removed = True
-            os.fsync(directory_fd)
+            if present:
+                os.unlink(entry[0], dir_fd=directory_fd)
+                removed = True
+                os.fsync(directory_fd)
         except (OSError, ValueError, InstallError, KeyError):
             unsafe = True
             break
@@ -176,6 +185,21 @@ def _rollback(
             unsafe = True
     if unsafe:
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+
+
+def _cleanup_staged(directory_fd: int, staged: list[str]) -> None:
+    unsafe = False
+    for temporary in tuple(staged):
+        try:
+            os.unlink(temporary, dir_fd=directory_fd)
+            staged.remove(temporary)
+            os.fsync(directory_fd)
+        except FileNotFoundError:
+            staged.remove(temporary)
+        except OSError:
+            unsafe = True
+    if unsafe:
+        raise InstallError("EXPORTER_STAGE_CLEANUP_UNVERIFIED")
 
 
 def install_exporter_units(
@@ -252,6 +276,12 @@ def install_exporter_units(
 
         _assert_units_absent(inspector)
         for name, temporary in zip(NAMES, tuple(staged), strict=True):
+            # Record the staging inode before publication. If link() succeeds
+            # and any following operation raises, rollback can still identify
+            # and remove exactly the published inode.
+            identity = _named_identity(temporary, unit_fd)
+            digest = hashlib.sha256(payloads[name]).hexdigest()
+            installed.append((name, identity, digest))
             # link() is an atomic no-replace publication within the pinned
             # directory. rename() would overwrite a concurrently created unit.
             os.link(
@@ -264,9 +294,6 @@ def install_exporter_units(
             os.unlink(temporary, dir_fd=unit_fd)
             staged.remove(temporary)
             os.fsync(unit_fd)
-            identity = _named_identity(name, unit_fd)
-            digest = hashlib.sha256(payloads[name]).hexdigest()
-            installed.append((name, identity, digest))
             inspector._verify_directory_path(
                 unit_dir, unit_fd, owner_uid=owner_uid
             )
@@ -275,6 +302,14 @@ def install_exporter_units(
         _assert_installed_quiescent(inspector, unit_dir)
         return NAMES
     except Exception as exc:
+        cleanup_error = None
+        if unit_fd >= 0 and staged:
+            try:
+                # Break any staging hard link before rollback authenticates
+                # published files; reviewed release files must have one link.
+                _cleanup_staged(unit_fd, staged)
+            except InstallError as staged_exc:
+                cleanup_error = staged_exc
         if unit_fd >= 0 and installed:
             try:
                 _rollback(
@@ -284,6 +319,8 @@ def install_exporter_units(
                 )
             except InstallError as rollback_exc:
                 raise rollback_exc from exc
+        if cleanup_error is not None:
+            raise cleanup_error from exc
         raise
     finally:
         if unit_fd >= 0:
