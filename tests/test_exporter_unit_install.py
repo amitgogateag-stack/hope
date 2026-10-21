@@ -96,6 +96,57 @@ def test_installs_only_exporter_units_disabled(layout):
 
 
 @pytest.mark.parametrize("kind", ["regular", "symlink"])
+def test_staging_inodes_have_no_cleanup_pathnames(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    original_publish = installer._publish_unnamed
+    observations = []
+
+    def inspect_then_publish(fd, directory_fd, name):
+        observations.append(
+            (os.fstat(fd).st_nlink, sorted(path.name for path in unit_dir.iterdir()))
+        )
+        original_publish(fd, directory_fd, name)
+
+    monkeypatch.setattr(installer, "_publish_unnamed", inspect_then_publish)
+    install(layout)
+    assert observations == [
+        (0, []),
+        (0, [installer.NAMES[0]]),
+    ]
+    assert not any(path.name.startswith(".") for path in unit_dir.iterdir())
+
+
+def test_missing_unnamed_inode_support_fails_before_publication(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    monkeypatch.setattr(installer.os, "O_TMPFILE", 0)
+    with pytest.raises(
+        installer.InstallError, match="^EXPORTER_UNNAMED_STAGE_UNAVAILABLE$"
+    ):
+        install(layout)
+    assert list(unit_dir.iterdir()) == []
+
+
+def test_concurrent_final_name_is_preserved_without_overwrite(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    original_publish = installer._publish_unnamed
+    foreign = b"foreign concurrent unit\n"
+    injected = False
+
+    def conflict_then_publish(fd, directory_fd, name):
+        nonlocal injected
+        if not injected:
+            injected = True
+            (unit_dir / name).write_bytes(foreign)
+            (unit_dir / name).chmod(0o644)
+        original_publish(fd, directory_fd, name)
+
+    monkeypatch.setattr(installer, "_publish_unnamed", conflict_then_publish)
+    with pytest.raises(installer.InstallError, match="ROLLBACK_UNVERIFIED"):
+        install(layout)
+    assert (unit_dir / installer.NAMES[0]).read_bytes() == foreign
+    assert not (unit_dir / installer.NAMES[1]).exists()
+
+
 def test_existing_unit_path_blocks_without_partial_install(layout, kind):
     _, _, unit_dir, _ = layout
     target = unit_dir / installer.NAMES[1]
@@ -200,17 +251,17 @@ def test_python_unwind_after_atomic_publish_rolls_back_tracked_inode(
     layout, monkeypatch, interruption_type
 ):
     _, _, unit_dir, _ = layout
-    original_link = installer.os.link
+    original_publish = installer._publish_unnamed
     calls = 0
 
-    def publish_then_fail(*args, **kwargs):
+    def publish_then_fail(fd, directory_fd, name):
         nonlocal calls
         calls += 1
-        original_link(*args, **kwargs)
+        original_publish(fd, directory_fd, name)
         if calls == 1:
             raise interruption_type("synthetic post-publish interruption")
 
-    monkeypatch.setattr(installer.os, "link", publish_then_fail)
+    monkeypatch.setattr(installer, "_publish_unnamed", publish_then_fail)
     with pytest.raises(interruption_type, match="post-publish interruption"):
         install(layout)
     assert list(unit_dir.iterdir()) == []
