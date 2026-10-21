@@ -106,10 +106,17 @@ upgrade and backup, not an automatic repair.
 
 After approval, `sudo bash .../deploy/operations/install_operations.sh SHA`
 installs **disabled** units and refuses existing units or an occupied 8788 port.
-Failure rolls back only newly installed unit files. It does not create users,
-change the database, enable PAPER or touch existing dashboard units. Installation
-also uses fixed system binaries and a minimal child environment; do not modify it
-to preserve the caller environment.
+Failure rolls back only newly installed unit files. Before either exporter unit
+is published, the installer durably records both anonymous inode identities in
+`/opt/hope-operations/.exporter-unit-install.json`. A later invocation with the
+same approved release authenticates and removes only those exact interrupted
+inodes, reloads systemd, verifies absence, and then retries. A changed, malformed
+or different-release journal and any inode replacement fail closed for operator
+review; never delete the journal or unit files merely to bypass that gate. The
+journal is removed durably after verified success or verified in-process rollback.
+Installation does not create users, change the database, enable PAPER or touch
+existing dashboard units. It also uses fixed system binaries and a minimal child
+environment; do not modify it to preserve the caller environment.
 
 Before enabling, run an authorized PAPER `--once` with the reviewed factory,
 inspect the sanitized health and durable database outcome, and perform the
