@@ -123,7 +123,7 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     root = Path(__file__).parents[2] / "deploy/operations"
     paper = (root / "hope-paper.service").read_text()
     for required in ("User=hope-paper", "Type=notify", "NotifyAccess=main", "WatchdogSec=15min",
-                     "Restart=on-failure", "KillSignal=SIGTERM",
+                     "Restart=always", "KillSignal=SIGTERM",
                      "TimeoutStartSec=15min", "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
                      "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
         assert required in paper
@@ -132,6 +132,19 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     assert "EnvironmentFile" not in web
     timer = (root / "hope-ops-dashboard-export.timer").read_text()
     assert "OnBootSec=30s" in timer and "OnUnitInactiveSec=60s" in timer
+
+
+
+def test_paper_worker_cannot_remain_down_after_unexpected_clean_exit():
+    paper = (
+        Path(__file__).parents[2] / "deploy/operations/hope-paper.service"
+    ).read_text()
+    restart_lines = [
+        line for line in paper.splitlines() if line.startswith("Restart=")
+    ]
+    assert restart_lines == ["Restart=always"]
+    assert "StartLimitIntervalSec=300" in paper
+    assert "StartLimitBurst=5" in paper
 
 
 @pytest.mark.parametrize("name,python_path", [

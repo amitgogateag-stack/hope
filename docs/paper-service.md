@@ -36,7 +36,11 @@ stop deadline may terminate a hung process, after which database transaction
 and existing recovery proofs remain authoritative.
 
 The systemd unit uses `Type=notify` with a 15-minute startup deadline and
-15-minute watchdog. The main Python process withholds `READY=1` until the first
+15-minute watchdog. It also uses `Restart=always`, so an unexpected clean worker
+exit cannot strand autonomous PAPER inactive. An explicit operator
+`systemctl stop` remains a manager-level stop and is not restarted; the existing
+start-rate limits still bound repeated failures. The main Python process withholds
+`READY=1` until the first
 complete successful cycle has durably published CURRENT health. Failed initial
 cycles publish their fail-closed health but cannot make systemd report the worker
 ready or refresh its watchdog. After readiness, the process pings only after a
