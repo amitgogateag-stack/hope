@@ -116,6 +116,21 @@ def test_staging_inodes_have_no_cleanup_pathnames(layout, monkeypatch):
     assert not any(path.name.startswith(".") for path in unit_dir.iterdir())
 
 
+def test_unnamed_publication_rejects_unreviewed_unit_name(layout):
+    _, _, unit_dir, _ = layout
+    directory_fd = os.open(unit_dir, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    fd = installer._open_unnamed_stage(directory_fd)
+    try:
+        with pytest.raises(
+            installer.InstallError, match="^EXPORTER_UNIT_NAME_UNVERIFIED$"
+        ):
+            installer._publish_unnamed(fd, directory_fd, "hope-paper.service")
+    finally:
+        os.close(fd)
+        os.close(directory_fd)
+    assert list(unit_dir.iterdir()) == []
+
+
 def test_missing_unnamed_inode_support_fails_before_publication(layout, monkeypatch):
     _, _, unit_dir, _ = layout
     monkeypatch.setattr(installer.os, "O_TMPFILE", 0)
