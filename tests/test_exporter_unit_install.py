@@ -113,7 +113,7 @@ def test_daemon_reload_failure_rolls_back_exact_installed_inodes(layout):
     _, _, unit_dir, _ = layout
     def fail():
         raise RuntimeError("synthetic reload failure")
-    with pytest.raises(RuntimeError, match="reload failure"):
+    with pytest.raises(installer.InstallError, match="^EXPORTER_ROLLBACK_UNVERIFIED$"):
         install(layout, fail)
     assert list(unit_dir.iterdir()) == []
 

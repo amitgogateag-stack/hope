@@ -91,6 +91,38 @@ def _assert_installed_quiescent(inspector, unit_dir: Path) -> None:
             raise InstallError("EXPORTER_INSTALLED_STATE_UNVERIFIED:" + name)
 
 
+def _daemon_reload() -> None:
+    subprocess.run(
+        ["/usr/bin/systemctl", "daemon-reload"],
+        check=True,
+        timeout=90,
+        env=COMMAND_ENVIRONMENT,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _verify_rollback_entry(
+    directory_fd: int,
+    entry: tuple[str, tuple[int, int], str],
+    payloads: dict[str, bytes],
+    inspector,
+    *,
+    owner_uid: int,
+    unit_dir: Path,
+) -> None:
+    name, identity, digest = entry
+    observed = _unit_state(inspector, name)
+    if observed not in (inspector.ABSENT_UNIT, _expected_installed_state(name, unit_dir)):
+        raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+    current = inspector._read_regular_at(directory_fd, name, owner_uid=owner_uid)
+    if (_named_identity(name, directory_fd) != identity
+            or hashlib.sha256(current).hexdigest() != digest
+            or current != payloads[name]):
+        raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+
+
 def _rollback(
     directory_fd: int,
     installed: list[tuple[str, tuple[int, int], str]],
@@ -99,25 +131,48 @@ def _rollback(
     *,
     owner_uid: int,
     unit_dir: Path = UNIT_DIR,
+    daemon_reload=None,
 ) -> None:
-    unsafe = False
-    for name, identity, digest in reversed(installed):
-        try:
-            observed = _unit_state(inspector, name)
-            if observed not in (inspector.ABSENT_UNIT, _expected_installed_state(name, unit_dir)):
-                unsafe = True
-                continue
-            current = inspector._read_regular_at(
-                directory_fd, name, owner_uid=owner_uid
+    if not installed:
+        return
+    reload_units = daemon_reload or _daemon_reload
+    # Validate the entire pair before deleting either unit. A known unsafe
+    # peer must never cause a partial rollback of the verified peer.
+    try:
+        for entry in reversed(installed):
+            _verify_rollback_entry(
+                directory_fd, entry, payloads, inspector,
+                owner_uid=owner_uid, unit_dir=unit_dir,
             )
-            if (_named_identity(name, directory_fd) != identity
-                    or hashlib.sha256(current).hexdigest() != digest
-                    or current != payloads[name]):
-                unsafe = True
-                continue
-            os.unlink(name, dir_fd=directory_fd)
+    except (OSError, ValueError, InstallError, KeyError):
+        raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED") from None
+
+    unsafe = False
+    removed = False
+    for entry in reversed(installed):
+        try:
+            # Recheck immediately before each unlink to reject replacements.
+            _verify_rollback_entry(
+                directory_fd, entry, payloads, inspector,
+                owner_uid=owner_uid, unit_dir=unit_dir,
+            )
+            os.unlink(entry[0], dir_fd=directory_fd)
+            removed = True
             os.fsync(directory_fd)
-        except (OSError, ValueError, InstallError):
+        except (OSError, ValueError, InstallError, KeyError):
+            unsafe = True
+            break
+
+    if removed:
+        try:
+            # Filesystem rollback alone leaves systemd's cached unit state
+            # stale. Reconcile it even if an intervening removal failed.
+            reload_units()
+            for name, _, _ in installed:
+                if not _absent(name, directory_fd):
+                    raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
+            _assert_units_absent(inspector)
+        except Exception:
             unsafe = True
     if unsafe:
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
@@ -143,6 +198,8 @@ def install_exporter_units(
     staged: list[str] = []
     installed: list[tuple[str, tuple[int, int], str]] = []
     payloads: dict[str, bytes] = {}
+    if daemon_reload is None:
+        daemon_reload = _daemon_reload
     try:
         releases_fd = inspector._open_directory_at(
             root_fd, "releases", owner_uid=owner_uid
@@ -214,16 +271,6 @@ def install_exporter_units(
                 unit_dir, unit_fd, owner_uid=owner_uid
             )
 
-        if daemon_reload is None:
-            daemon_reload = lambda: subprocess.run(
-                ["/usr/bin/systemctl", "daemon-reload"],
-                check=True,
-                timeout=90,
-                env=COMMAND_ENVIRONMENT,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
         daemon_reload()
         _assert_installed_quiescent(inspector, unit_dir)
         return NAMES
@@ -233,6 +280,7 @@ def install_exporter_units(
                 _rollback(
                     unit_fd, installed, payloads, inspector,
                     owner_uid=owner_uid, unit_dir=unit_dir,
+                    daemon_reload=daemon_reload,
                 )
             except InstallError as rollback_exc:
                 raise rollback_exc from exc
