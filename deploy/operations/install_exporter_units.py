@@ -7,6 +7,7 @@ import ctypes
 import errno
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import stat
@@ -22,6 +23,8 @@ COMMAND_ENVIRONMENT = {
     "HOME": "/nonexistent",
 }
 AT_EMPTY_PATH = 0x1000
+JOURNAL_NAME = ".exporter-unit-install.json"
+JOURNAL_SCHEMA = 1
 
 
 class InstallError(RuntimeError):
@@ -189,6 +192,150 @@ def _rollback(
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
 
 
+def _file_identity(value) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev, value.st_ino, value.st_size,
+        value.st_mtime_ns, value.st_ctime_ns,
+    )
+
+
+def _load_journal(
+    root_fd: int,
+    expected: str,
+    payloads: dict[str, bytes],
+    inspector,
+    *,
+    owner_uid: int,
+) -> tuple[list[tuple[str, tuple[int, int], str]], tuple[int, ...]] | None:
+    try:
+        before = os.stat(JOURNAL_NAME, dir_fd=root_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError:
+        raise InstallError("EXPORTER_JOURNAL_UNVERIFIED") from None
+    try:
+        raw = inspector._read_regular_at(
+            root_fd, JOURNAL_NAME, owner_uid=owner_uid
+        )
+        after = os.stat(JOURNAL_NAME, dir_fd=root_fd, follow_symlinks=False)
+        if (not stat.S_ISREG(after.st_mode) or after.st_uid != owner_uid
+                or stat.S_IMODE(after.st_mode) != 0o600
+                or _file_identity(before) != _file_identity(after)):
+            raise InstallError("EXPORTER_JOURNAL_UNVERIFIED")
+        document = json.loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+        raise InstallError("EXPORTER_JOURNAL_UNVERIFIED") from None
+    if (not isinstance(document, dict)
+            or set(document) != {"schema_version", "expected", "entries"}
+            or document["schema_version"] != JOURNAL_SCHEMA
+            or document["expected"] != expected
+            or not isinstance(document["entries"], list)
+            or len(document["entries"]) != len(NAMES)):
+        raise InstallError("EXPORTER_JOURNAL_UNVERIFIED")
+    result = []
+    for name, entry in zip(NAMES, document["entries"], strict=True):
+        if (not isinstance(entry, dict)
+                or set(entry) != {"name", "device", "inode", "sha256"}
+                or entry["name"] != name
+                or not isinstance(entry["device"], int)
+                or isinstance(entry["device"], bool)
+                or entry["device"] < 0
+                or not isinstance(entry["inode"], int)
+                or isinstance(entry["inode"], bool)
+                or entry["inode"] <= 0
+                or entry["sha256"]
+                != hashlib.sha256(payloads[name]).hexdigest()):
+            raise InstallError("EXPORTER_JOURNAL_UNVERIFIED")
+        result.append((
+            name, (entry["device"], entry["inode"]), entry["sha256"],
+        ))
+    return result, _file_identity(after)
+
+
+def _create_journal(
+    root_fd: int,
+    expected: str,
+    planned: list[tuple[str, tuple[int, int], str]],
+) -> tuple[int, ...]:
+    document = {
+        "schema_version": JOURNAL_SCHEMA,
+        "expected": expected,
+        "entries": [
+            {"name": name, "device": identity[0], "inode": identity[1],
+             "sha256": digest}
+            for name, identity, digest in planned
+        ],
+    }
+    payload = (
+        json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode("ascii")
+    try:
+        fd = os.open(
+            JOURNAL_NAME,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
+            | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=root_fd,
+        )
+    except OSError:
+        raise InstallError("EXPORTER_JOURNAL_CREATE_FAILED") from None
+    try:
+        _write_all(fd, payload)
+        os.fchmod(fd, 0o600)
+        os.fsync(fd)
+        opened = os.fstat(fd)
+        named = os.stat(JOURNAL_NAME, dir_fd=root_fd, follow_symlinks=False)
+        if (_file_identity(opened) != _file_identity(named)
+                or not stat.S_ISREG(named.st_mode)
+                or named.st_nlink != 1
+                or stat.S_IMODE(named.st_mode) != 0o600):
+            raise InstallError("EXPORTER_JOURNAL_UNVERIFIED")
+        os.fsync(root_fd)
+        return _file_identity(named)
+    finally:
+        os.close(fd)
+
+
+def _remove_journal(root_fd: int, identity: tuple[int, ...]) -> None:
+    try:
+        current = os.stat(JOURNAL_NAME, dir_fd=root_fd, follow_symlinks=False)
+        if (_file_identity(current) != identity
+                or not stat.S_ISREG(current.st_mode)
+                or current.st_nlink != 1
+                or stat.S_IMODE(current.st_mode) != 0o600):
+            raise InstallError("EXPORTER_JOURNAL_CHANGED")
+        os.unlink(JOURNAL_NAME, dir_fd=root_fd)
+        os.fsync(root_fd)
+    except (OSError, InstallError):
+        raise InstallError("EXPORTER_JOURNAL_CHANGED") from None
+
+
+def _recover_journal(
+    root_fd: int,
+    unit_fd: int,
+    expected: str,
+    payloads: dict[str, bytes],
+    inspector,
+    *,
+    owner_uid: int,
+    unit_dir: Path,
+    daemon_reload,
+) -> bool:
+    loaded = _load_journal(
+        root_fd, expected, payloads, inspector, owner_uid=owner_uid
+    )
+    if loaded is None:
+        return False
+    entries, identity = loaded
+    _rollback(
+        unit_fd, entries, payloads, inspector,
+        owner_uid=owner_uid, unit_dir=unit_dir,
+        daemon_reload=daemon_reload,
+    )
+    _remove_journal(root_fd, identity)
+    return True
+
+
 def _open_unnamed_stage(directory_fd: int) -> int:
     """Create a temporary regular inode with no directory entry."""
     temporary_flag = getattr(os, "O_TMPFILE", 0)
@@ -246,13 +393,13 @@ def install_exporter_units(
     inspector = inspector or _load_inspector()
     inspector.ROOT = root
     inspector.verify_release(expected, owner_uid=owner_uid)
-    _assert_units_absent(inspector)
 
     root_fd = inspector._open_directory(root, owner_uid=owner_uid)
     releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
     staged: list[int] = []
     installed: list[tuple[str, tuple[int, int], str]] = []
     payloads: dict[str, bytes] = {}
+    journal_identity: tuple[int, ...] | None = None
     if daemon_reload is None:
         daemon_reload = _daemon_reload
     try:
@@ -272,8 +419,6 @@ def install_exporter_units(
         inspector._verify_directory_path(unit_dir, unit_fd, owner_uid=owner_uid)
 
         for name in NAMES:
-            if not _absent(name, unit_fd):
-                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
             payload = inspector._read_regular_at(
                 operations_fd, name, owner_uid=owner_uid
             )
@@ -295,7 +440,28 @@ def install_exporter_units(
             if not _absent(name, unit_fd):
                 raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
 
+        _recover_journal(
+            root_fd, unit_fd, expected, payloads, inspector,
+            owner_uid=owner_uid, unit_dir=unit_dir,
+            daemon_reload=daemon_reload,
+        )
+        for name in NAMES:
+            if not _absent(name, unit_fd):
+                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
         _assert_units_absent(inspector)
+
+        planned = []
+        for name, fd in zip(NAMES, tuple(staged), strict=True):
+            value = os.fstat(fd)
+            planned.append((
+                name, (value.st_dev, value.st_ino),
+                hashlib.sha256(payloads[name]).hexdigest(),
+            ))
+        # Persist both unnamed inode identities before either can acquire a
+        # final pathname. A subsequent invocation can authenticate and undo a
+        # SIGKILL/power-loss interruption without guessing at ownership.
+        journal_identity = _create_journal(root_fd, expected, planned)
+
         for name, fd in zip(NAMES, tuple(staged), strict=True):
             # Record the unnamed inode before publication. If linkat() succeeds
             # and any following operation raises, rollback can still identify
@@ -317,6 +483,8 @@ def install_exporter_units(
 
         daemon_reload()
         _assert_installed_quiescent(inspector, unit_dir)
+        _remove_journal(root_fd, journal_identity)
+        journal_identity = None
         return NAMES
     except BaseException as exc:
         # Transactional cleanup must also run for Python-level termination
@@ -342,6 +510,12 @@ def install_exporter_units(
                 )
             except InstallError as rollback_exc:
                 raise rollback_exc from exc
+        if journal_identity is not None:
+            try:
+                _remove_journal(root_fd, journal_identity)
+                journal_identity = None
+            except InstallError as journal_exc:
+                raise journal_exc from exc
         if cleanup_error is not None:
             raise cleanup_error from exc
         raise
