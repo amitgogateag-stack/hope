@@ -280,3 +280,59 @@ def test_python_unwind_after_atomic_publish_rolls_back_tracked_inode(
     with pytest.raises(interruption_type, match="post-publish interruption"):
         install(layout)
     assert list(unit_dir.iterdir()) == []
+
+
+
+def _strand_first_publication(layout, monkeypatch):
+    original_publish = installer._publish_unnamed
+    original_rollback = installer._rollback
+    calls = 0
+
+    def publish_then_interrupt(fd, directory_fd, name):
+        nonlocal calls
+        calls += 1
+        original_publish(fd, directory_fd, name)
+        if calls == 1:
+            raise KeyboardInterrupt("synthetic abrupt process loss")
+
+    def unavailable_process_cleanup(*args, **kwargs):
+        raise installer.InstallError("SIMULATED_PROCESS_LOSS")
+
+    monkeypatch.setattr(installer, "_publish_unnamed", publish_then_interrupt)
+    monkeypatch.setattr(installer, "_rollback", unavailable_process_cleanup)
+    with pytest.raises(installer.InstallError, match="^SIMULATED_PROCESS_LOSS$"):
+        install(layout)
+    monkeypatch.setattr(installer, "_publish_unnamed", original_publish)
+    monkeypatch.setattr(installer, "_rollback", original_rollback)
+
+
+def test_next_invocation_recovers_durable_partial_publication(layout, monkeypatch):
+    _, root, unit_dir, _ = layout
+    _strand_first_publication(layout, monkeypatch)
+    assert (root / installer.JOURNAL_NAME).is_file()
+    assert (unit_dir / installer.NAMES[0]).is_file()
+    assert not (unit_dir / installer.NAMES[1]).exists()
+
+    assert install(layout) == installer.NAMES
+    assert not (root / installer.JOURNAL_NAME).exists()
+    assert sorted(path.name for path in unit_dir.iterdir()) == sorted(
+        installer.NAMES
+    )
+
+
+def test_recovery_refuses_byte_identical_replacement_inode(layout, monkeypatch):
+    _, root, unit_dir, _ = layout
+    _strand_first_publication(layout, monkeypatch)
+    path = unit_dir / installer.NAMES[0]
+    reviewed = path.read_bytes()
+    path.unlink()
+    path.write_bytes(reviewed)
+    path.chmod(0o644)
+
+    with pytest.raises(
+        installer.InstallError, match="^EXPORTER_ROLLBACK_UNVERIFIED$"
+    ):
+        install(layout)
+    assert path.read_bytes() == reviewed
+    assert (root / installer.JOURNAL_NAME).is_file()
+    assert not (unit_dir / installer.NAMES[1]).exists()
