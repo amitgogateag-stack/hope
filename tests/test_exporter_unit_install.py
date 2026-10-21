@@ -95,7 +95,6 @@ def test_installs_only_exporter_units_disabled(layout):
     assert not (unit_dir / "hope-paper.service").exists()
 
 
-@pytest.mark.parametrize("kind", ["regular", "symlink"])
 def test_staging_inodes_have_no_cleanup_pathnames(layout, monkeypatch):
     _, _, unit_dir, _ = layout
     original_publish = installer._publish_unnamed
@@ -162,6 +161,7 @@ def test_concurrent_final_name_is_preserved_without_overwrite(layout, monkeypatc
     assert not (unit_dir / installer.NAMES[1]).exists()
 
 
+@pytest.mark.parametrize("kind", ["regular", "symlink"])
 def test_existing_unit_path_blocks_without_partial_install(layout, kind):
     _, _, unit_dir, _ = layout
     target = unit_dir / installer.NAMES[1]
