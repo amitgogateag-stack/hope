@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import hashlib
 import importlib.util
 import os
 from pathlib import Path
-import secrets
 import stat
 import subprocess
 
@@ -20,6 +21,7 @@ COMMAND_ENVIRONMENT = {
     "LC_ALL": "C",
     "HOME": "/nonexistent",
 }
+AT_EMPTY_PATH = 0x1000
 
 
 class InstallError(RuntimeError):
@@ -187,19 +189,48 @@ def _rollback(
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
 
 
-def _cleanup_staged(directory_fd: int, staged: list[str]) -> None:
-    unsafe = False
-    for temporary in tuple(staged):
-        try:
-            os.unlink(temporary, dir_fd=directory_fd)
-            staged.remove(temporary)
-            os.fsync(directory_fd)
-        except FileNotFoundError:
-            staged.remove(temporary)
-        except OSError:
-            unsafe = True
-    if unsafe:
-        raise InstallError("EXPORTER_STAGE_CLEANUP_UNVERIFIED")
+def _open_unnamed_stage(directory_fd: int) -> int:
+    """Create a temporary regular inode with no directory entry."""
+    temporary_flag = getattr(os, "O_TMPFILE", 0)
+    if not temporary_flag:
+        raise InstallError("EXPORTER_UNNAMED_STAGE_UNAVAILABLE")
+    try:
+        fd = os.open(
+            ".",
+            os.O_WRONLY | os.O_CLOEXEC | temporary_flag,
+            0o600,
+            dir_fd=directory_fd,
+        )
+    except OSError:
+        raise InstallError("EXPORTER_UNNAMED_STAGE_UNAVAILABLE") from None
+    value = os.fstat(fd)
+    if not stat.S_ISREG(value.st_mode) or value.st_nlink != 0:
+        os.close(fd)
+        raise InstallError("EXPORTER_UNNAMED_STAGE_UNVERIFIED")
+    return fd
+
+
+def _publish_unnamed(fd: int, directory_fd: int, name: str) -> None:
+    """Atomically give an unnamed inode its reviewed final name."""
+    if name not in NAMES:
+        raise InstallError("EXPORTER_UNIT_NAME_UNVERIFIED")
+    linkat = ctypes.CDLL(None, use_errno=True).linkat
+    linkat.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+    ]
+    linkat.restype = ctypes.c_int
+    if linkat(fd, b"", directory_fd, os.fsencode(name), AT_EMPTY_PATH) == 0:
+        return
+    error = ctypes.get_errno()
+    if error == errno.EEXIST:
+        raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
+    raise InstallError("EXPORTER_UNIT_PUBLICATION_FAILED") from OSError(
+        error, os.strerror(error)
+    )
 
 
 def install_exporter_units(
@@ -219,7 +250,7 @@ def install_exporter_units(
 
     root_fd = inspector._open_directory(root, owner_uid=owner_uid)
     releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
-    staged: list[str] = []
+    staged: list[int] = []
     installed: list[tuple[str, tuple[int, int], str]] = []
     payloads: dict[str, bytes] = {}
     if daemon_reload is None:
@@ -250,21 +281,11 @@ def install_exporter_units(
             if hashlib.sha256(payload).hexdigest() != expected_digest:
                 raise InstallError("EXPORTER_TEMPLATE_IDENTITY_MISMATCH")
             payloads[name] = payload
-            temporary = f".{name}.{secrets.token_hex(16)}.next"
-            fd = os.open(
-                temporary,
-                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC
-                | getattr(os, "O_NOFOLLOW", 0),
-                0o600,
-                dir_fd=unit_fd,
-            )
-            try:
-                _write_all(fd, payload)
-                os.fchmod(fd, 0o644)
-                os.fsync(fd)
-            finally:
-                os.close(fd)
-            staged.append(temporary)
+            fd = _open_unnamed_stage(unit_fd)
+            staged.append(fd)
+            _write_all(fd, payload)
+            os.fchmod(fd, 0o644)
+            os.fsync(fd)
 
         inspector._verify_directory_at(
             deploy_fd, "operations", operations_fd, owner_uid=owner_uid
@@ -275,24 +296,20 @@ def install_exporter_units(
                 raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
 
         _assert_units_absent(inspector)
-        for name, temporary in zip(NAMES, tuple(staged), strict=True):
-            # Record the staging inode before publication. If link() succeeds
+        for name, fd in zip(NAMES, tuple(staged), strict=True):
+            # Record the unnamed inode before publication. If linkat() succeeds
             # and any following operation raises, rollback can still identify
             # and remove exactly the published inode.
-            identity = _named_identity(temporary, unit_fd)
+            value = os.fstat(fd)
+            identity = (value.st_dev, value.st_ino)
             digest = hashlib.sha256(payloads[name]).hexdigest()
             installed.append((name, identity, digest))
-            # link() is an atomic no-replace publication within the pinned
-            # directory. rename() would overwrite a concurrently created unit.
-            os.link(
-                temporary,
-                name,
-                src_dir_fd=unit_fd,
-                dst_dir_fd=unit_fd,
-                follow_symlinks=False,
-            )
-            os.unlink(temporary, dir_fd=unit_fd)
-            staged.remove(temporary)
+            # AT_EMPTY_PATH publishes directly from the open descriptor. There
+            # is no staging pathname for a concurrent process to replace and
+            # no cleanup pathname that could target an untrusted inode.
+            _publish_unnamed(fd, unit_fd, name)
+            staged.remove(fd)
+            os.close(fd)
             os.fsync(unit_fd)
             inspector._verify_directory_path(
                 unit_dir, unit_fd, owner_uid=owner_uid
@@ -306,13 +323,16 @@ def install_exporter_units(
         # requests. KeyboardInterrupt and SystemExit do not inherit Exception;
         # without this boundary they could strand a published unit.
         cleanup_error = None
-        if unit_fd >= 0 and staged:
+        for fd in tuple(staged):
+            staged.remove(fd)
             try:
-                # Break any staging hard link before rollback authenticates
-                # published files; reviewed release files must have one link.
-                _cleanup_staged(unit_fd, staged)
-            except InstallError as staged_exc:
-                cleanup_error = staged_exc
+                # Closing the last descriptor drops an unpublished unnamed
+                # inode; no directory entry exists to authenticate or unlink.
+                os.close(fd)
+            except OSError:
+                cleanup_error = InstallError(
+                    "EXPORTER_STAGE_CLEANUP_UNVERIFIED"
+                )
         if unit_fd >= 0 and installed:
             try:
                 _rollback(
@@ -326,14 +346,11 @@ def install_exporter_units(
             raise cleanup_error from exc
         raise
     finally:
-        if unit_fd >= 0:
-            for temporary in staged:
-                try:
-                    os.unlink(temporary, dir_fd=unit_fd)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
+        for fd in tuple(staged):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         for fd in (unit_fd, operations_fd, deploy_fd, release_fd, releases_fd, root_fd):
             if fd >= 0:
                 os.close(fd)
