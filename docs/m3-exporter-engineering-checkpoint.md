@@ -198,3 +198,39 @@ This is source engineering, not installation approval. Durable installation
 journaling, interrupted-install recovery, host execution-isolation evidence and
 real staging/systemd/rollback acceptance remain prerequisites before an operator
 may treat the installer as deployment-ready. No AWS installation was performed.
+
+## Installation journal and interruption evidence - 2026-10-21
+
+The exporter-only installer now holds a nonblocking private flock for its full
+transaction and writes a private, bounded installation journal under the existing
+trusted operations root. It syncs each snapshot and its directory before unit
+publication or daemon reload. Publication intent includes the exact staged inode,
+device and payload hash before linkat; completion requires the existing exact
+inactive/static/disabled metadata checks. Verified Python-unwind rollback and
+uncertain rollback have distinct phases. Journal failure still attempts the
+existing authenticated rollback and cannot report success.
+
+Any existing journal, including a completed or aborted one, blocks a fresh
+installation. Do not delete, edit or rename it to bypass this check. No automated
+host-crash rollback, archive or retry is authorized by this batch. An advisory
+lock serializes cooperating installers; it cannot constrain another root actor.
+Atomic replacement and fsync require a local filesystem with those semantics;
+source tests do not certify an EC2 filesystem or actual power-loss durability.
+
+Operator procedure addition (read-only, using a separately reviewed checkout
+containing these scripts; do not change the current release pointer):
+
+```bash
+sudo python3.13 /path/to/reviewed-checkout/deploy/operations/inspect_exporter_install_journal.py \
+  --expected-shared "$EXPECTED_SHARED_SHA"
+```
+
+The expected SHA must be independently verified against the existing shared
+release. The inspector always exits 2, reporting REVIEW_REQUIRED with phase and
+unit count, or a fixed BLOCKED result. It creates no files, runs no systemctl
+command and never authorizes recovery. Missing, unreadable, mutable or conflicting
+evidence remains blocked. Preserve the journal for operator review. Existing
+dashboard activation, PAPER absence and execution-isolation requirements remain
+in force. No PAPER start/enable, shared pointer change, database operation or AWS
+installation was performed. Full interrupted-install recovery engineering and
+real staging/systemd acceptance remain prerequisites for deployment readiness.

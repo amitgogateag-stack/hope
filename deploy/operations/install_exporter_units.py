@@ -38,6 +38,16 @@ def _load_inspector():
     return module
 
 
+def _load_journal():
+    path = Path(__file__).with_name("exporter_install_journal.py")
+    spec = importlib.util.spec_from_file_location("hope_exporter_journal", path)
+    if spec is None or spec.loader is None:
+        raise InstallError("EXPORTER_JOURNAL_UNAVAILABLE")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _write_all(fd: int, payload: bytes) -> None:
     view = memoryview(payload)
     while view:
@@ -253,6 +263,7 @@ def install_exporter_units(
     staged: list[int] = []
     installed: list[tuple[str, tuple[int, int], str]] = []
     payloads: dict[str, bytes] = {}
+    journal = None
     if daemon_reload is None:
         daemon_reload = _daemon_reload
     try:
@@ -274,6 +285,14 @@ def install_exporter_units(
         for name in NAMES:
             if not _absent(name, unit_fd):
                 raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
+        journal = _load_journal().InstallJournal(
+            root_fd, root, expected, unit_dir, owner_uid=owner_uid
+        )
+        journal.start()
+
+        for name in NAMES:
+            if not _absent(name, unit_fd):
+                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
             payload = inspector._read_regular_at(
                 operations_fd, name, owner_uid=owner_uid
             )
@@ -286,6 +305,8 @@ def install_exporter_units(
             _write_all(fd, payload)
             os.fchmod(fd, 0o644)
             os.fsync(fd)
+
+        journal.record("STAGED", [])
 
         inspector._verify_directory_at(
             deploy_fd, "operations", operations_fd, owner_uid=owner_uid
@@ -304,6 +325,7 @@ def install_exporter_units(
             identity = (value.st_dev, value.st_ino)
             digest = hashlib.sha256(payloads[name]).hexdigest()
             installed.append((name, identity, digest))
+            journal.record("PUBLISHING", installed)
             # AT_EMPTY_PATH publishes directly from the open descriptor. There
             # is no staging pathname for a concurrent process to replace and
             # no cleanup pathname that could target an untrusted inode.
@@ -315,14 +337,21 @@ def install_exporter_units(
                 unit_dir, unit_fd, owner_uid=owner_uid
             )
 
+        journal.record("RELOAD_PENDING", installed)
         daemon_reload()
         _assert_installed_quiescent(inspector, unit_dir)
+        journal.record("COMMITTED", installed)
         return NAMES
     except BaseException as exc:
         # Transactional cleanup must also run for Python-level termination
         # requests. KeyboardInterrupt and SystemExit do not inherit Exception;
         # without this boundary they could strand a published unit.
         cleanup_error = None
+        if journal is not None and journal.active:
+            try:
+                journal.record("ROLLBACK_PENDING" if installed else "ABORTED", installed)
+            except Exception:
+                cleanup_error = InstallError("EXPORTER_JOURNAL_UNVERIFIED")
         for fd in tuple(staged):
             staged.remove(fd)
             try:
@@ -341,11 +370,23 @@ def install_exporter_units(
                     daemon_reload=daemon_reload,
                 )
             except InstallError as rollback_exc:
+                if journal is not None and journal.active and journal.healthy:
+                    try:
+                        journal.record("ROLLBACK_UNVERIFIED", installed)
+                    except Exception:
+                        pass
                 raise rollback_exc from exc
+            if journal is not None and journal.active and journal.healthy:
+                try:
+                    journal.record("ROLLED_BACK", installed)
+                except Exception:
+                    cleanup_error = InstallError("EXPORTER_JOURNAL_UNVERIFIED")
         if cleanup_error is not None:
             raise cleanup_error from exc
         raise
     finally:
+        if journal is not None:
+            journal.close()
         for fd in tuple(staged):
             try:
                 os.close(fd)

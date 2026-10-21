@@ -1,6 +1,7 @@
 """Adversarial tests for exporter-only unit installation."""
 import hashlib
 import importlib.util
+import json
 import os
 from pathlib import Path
 import shutil
@@ -280,3 +281,51 @@ def test_python_unwind_after_atomic_publish_rolls_back_tracked_inode(
     with pytest.raises(interruption_type, match="post-publish interruption"):
         install(layout)
     assert list(unit_dir.iterdir()) == []
+
+
+def test_install_journals_intent_before_each_publication(layout, monkeypatch):
+    _, root, _, _ = layout
+    original = installer._publish_unnamed
+    observed = []
+    def publish(fd, directory_fd, name):
+        value = json.loads((root / ".exporter-install.json").read_bytes())
+        assert value["phase"] == "PUBLISHING"
+        entry = value["units"][-1]
+        assert (entry["name"], entry["device"], entry["inode"]) == (
+            name, os.fstat(fd).st_dev, os.fstat(fd).st_ino)
+        observed.append(name)
+        return original(fd, directory_fd, name)
+    monkeypatch.setattr(installer, "_publish_unnamed", publish)
+    install(layout)
+    assert observed == list(installer.NAMES)
+    value = json.loads((root / ".exporter-install.json").read_bytes())
+    assert value["phase"] == "COMMITTED"
+    assert value["sequence"] == 5
+
+
+def test_existing_journal_blocks_before_staging(layout, monkeypatch):
+    _, root, unit_dir, _ = layout
+    evidence = root / ".exporter-install.json"
+    evidence.write_bytes(b"unverified interrupted installation")
+    def forbidden(*args):
+        pytest.fail("staging reached despite recovery evidence")
+    monkeypatch.setattr(installer, "_open_unnamed_stage", forbidden)
+    with pytest.raises(RuntimeError, match="RECOVERY_REQUIRED"):
+        install(layout)
+    assert evidence.read_bytes() == b"unverified interrupted installation"
+    assert list(unit_dir.iterdir()) == []
+
+
+def test_unwind_records_verified_rollback(layout, monkeypatch):
+    _, root, unit_dir, _ = layout
+    original = installer._publish_unnamed
+    def interrupted(fd, directory_fd, name):
+        original(fd, directory_fd, name)
+        raise KeyboardInterrupt("injected unwind")
+    monkeypatch.setattr(installer, "_publish_unnamed", interrupted)
+    with pytest.raises(KeyboardInterrupt):
+        install(layout)
+    assert list(unit_dir.iterdir()) == []
+    value = json.loads((root / ".exporter-install.json").read_bytes())
+    assert value["phase"] == "ROLLED_BACK"
+    assert len(value["units"]) == 1
