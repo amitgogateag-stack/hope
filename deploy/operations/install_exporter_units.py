@@ -391,6 +391,9 @@ def install_exporter_units(
 ) -> tuple[str, ...]:
     """Install two disabled exporter units from one verified shared release."""
     inspector = inspector or _load_inspector()
+    # Reject conflicting runtime state before opening any installation directory.
+    # A durable recovery journal is handled below after authenticating its inodes.
+    _assert_units_absent(inspector)
     inspector.ROOT = root
     inspector.verify_release(expected, owner_uid=owner_uid)
 
@@ -436,10 +439,8 @@ def install_exporter_units(
             deploy_fd, "operations", operations_fd, owner_uid=owner_uid
         )
         inspector._verify_directory_path(unit_dir, unit_fd, owner_uid=owner_uid)
-        for name in NAMES:
-            if not _absent(name, unit_fd):
-                raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
-
+        # Recovery must precede the final-name absence gate: a journal can
+        # authenticate a partially published unit that must first be removed.
         _recover_journal(
             root_fd, unit_fd, expected, payloads, inspector,
             owner_uid=owner_uid, unit_dir=unit_dir,
