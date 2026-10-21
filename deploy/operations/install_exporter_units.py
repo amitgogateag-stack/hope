@@ -187,16 +187,23 @@ def _rollback(
         raise InstallError("EXPORTER_ROLLBACK_UNVERIFIED")
 
 
-def _cleanup_staged(directory_fd: int, staged: list[str]) -> None:
+def _cleanup_staged(
+    directory_fd: int,
+    staged: list[tuple[str, tuple[int, int]]],
+) -> None:
     unsafe = False
-    for temporary in tuple(staged):
+    for entry in tuple(staged):
+        temporary, identity = entry
         try:
+            if _named_identity(temporary, directory_fd) != identity:
+                unsafe = True
+                continue
             os.unlink(temporary, dir_fd=directory_fd)
-            staged.remove(temporary)
+            staged.remove(entry)
             os.fsync(directory_fd)
         except FileNotFoundError:
-            staged.remove(temporary)
-        except OSError:
+            staged.remove(entry)
+        except (OSError, InstallError):
             unsafe = True
     if unsafe:
         raise InstallError("EXPORTER_STAGE_CLEANUP_UNVERIFIED")
@@ -219,7 +226,7 @@ def install_exporter_units(
 
     root_fd = inspector._open_directory(root, owner_uid=owner_uid)
     releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
-    staged: list[str] = []
+    staged: list[tuple[str, tuple[int, int]]] = []
     installed: list[tuple[str, tuple[int, int], str]] = []
     payloads: dict[str, bytes] = {}
     if daemon_reload is None:
@@ -262,9 +269,11 @@ def install_exporter_units(
                 _write_all(fd, payload)
                 os.fchmod(fd, 0o644)
                 os.fsync(fd)
+                staged_stat = os.fstat(fd)
+                staged_identity = (staged_stat.st_dev, staged_stat.st_ino)
             finally:
                 os.close(fd)
-            staged.append(temporary)
+            staged.append((temporary, staged_identity))
 
         inspector._verify_directory_at(
             deploy_fd, "operations", operations_fd, owner_uid=owner_uid
@@ -275,11 +284,12 @@ def install_exporter_units(
                 raise InstallError("EXPORTER_UNIT_ALREADY_EXISTS:" + name)
 
         _assert_units_absent(inspector)
-        for name, temporary in zip(NAMES, tuple(staged), strict=True):
-            # Record the staging inode before publication. If link() succeeds
-            # and any following operation raises, rollback can still identify
-            # and remove exactly the published inode.
-            identity = _named_identity(temporary, unit_fd)
+        for name, staged_entry in zip(NAMES, tuple(staged), strict=True):
+            temporary, identity = staged_entry
+            # Authenticate the staging pathname against the inode created
+            # through O_EXCL. Never publish or clean up a replacement.
+            if _named_identity(temporary, unit_fd) != identity:
+                raise InstallError("EXPORTER_STAGE_IDENTITY_CHANGED")
             digest = hashlib.sha256(payloads[name]).hexdigest()
             installed.append((name, identity, digest))
             # link() is an atomic no-replace publication within the pinned
@@ -291,8 +301,11 @@ def install_exporter_units(
                 dst_dir_fd=unit_fd,
                 follow_symlinks=False,
             )
+            # A privileged replacement racing publication must be preserved.
+            if _named_identity(temporary, unit_fd) != identity:
+                raise InstallError("EXPORTER_STAGE_IDENTITY_CHANGED")
             os.unlink(temporary, dir_fd=unit_fd)
-            staged.remove(temporary)
+            staged.remove(staged_entry)
             os.fsync(unit_fd)
             inspector._verify_directory_path(
                 unit_dir, unit_fd, owner_uid=owner_uid
@@ -326,14 +339,13 @@ def install_exporter_units(
             raise cleanup_error from exc
         raise
     finally:
-        if unit_fd >= 0:
-            for temporary in staged:
-                try:
-                    os.unlink(temporary, dir_fd=unit_fd)
-                except FileNotFoundError:
-                    pass
-                except OSError:
-                    pass
+        if unit_fd >= 0 and staged:
+            try:
+                # Best effort must remain identity-safe: an unexpected
+                # replacement is retained even while another error unwinds.
+                _cleanup_staged(unit_fd, staged)
+            except InstallError:
+                pass
         for fd in (unit_fd, operations_fd, deploy_fd, release_fd, releases_fd, root_fd):
             if fd >= 0:
                 os.close(fd)

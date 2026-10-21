@@ -214,3 +214,78 @@ def test_python_unwind_after_atomic_publish_rolls_back_tracked_inode(
     with pytest.raises(interruption_type, match="post-publish interruption"):
         install(layout)
     assert list(unit_dir.iterdir()) == []
+
+
+def test_staging_replacement_before_publication_is_preserved(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    original_absence_check = installer._assert_units_absent
+    calls = 0
+    replacement = b"unexpected staging replacement\n"
+    replaced_path = None
+
+    def replace_after_staging(inspector):
+        nonlocal calls, replaced_path
+        calls += 1
+        result = original_absence_check(inspector)
+        if calls == 2:
+            replaced_path = next(unit_dir.glob(".*.next"))
+            replaced_path.unlink()
+            replaced_path.write_bytes(replacement)
+            replaced_path.chmod(0o644)
+        return result
+
+    monkeypatch.setattr(installer, "_assert_units_absent", replace_after_staging)
+    with pytest.raises(
+        installer.InstallError,
+        match="^EXPORTER_STAGE_CLEANUP_UNVERIFIED$",
+    ):
+        install(layout)
+    assert replaced_path is not None
+    assert replaced_path.read_bytes() == replacement
+    assert not any((unit_dir / name).exists() for name in installer.NAMES)
+
+
+def test_staging_replacement_after_publication_is_preserved(layout, monkeypatch):
+    _, _, unit_dir, _ = layout
+    original_link = installer.os.link
+    replacement = b"post-publication staging replacement\n"
+    replaced_path = None
+
+    def publish_then_replace(source, destination, **kwargs):
+        nonlocal replaced_path
+        original_link(source, destination, **kwargs)
+        if replaced_path is None:
+            replaced_path = unit_dir / source
+            replaced_path.unlink()
+            replaced_path.write_bytes(replacement)
+            replaced_path.chmod(0o644)
+
+    monkeypatch.setattr(installer.os, "link", publish_then_replace)
+    with pytest.raises(installer.InstallError, match="STAGE_CLEANUP_UNVERIFIED"):
+        install(layout)
+    assert replaced_path is not None
+    assert replaced_path.read_bytes() == replacement
+    assert not any((unit_dir / name).exists() for name in installer.NAMES)
+
+
+def test_cleanup_refuses_replaced_staging_inode(layout):
+    _, _, unit_dir, _ = layout
+    path = unit_dir / ".untrusted.next"
+    path.write_bytes(b"created by installer")
+    original = path.stat()
+    entry = (path.name, (original.st_dev, original.st_ino))
+    path.unlink()
+    path.write_bytes(b"replacement")
+
+    staged = [entry]
+    directory_fd = os.open(unit_dir, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(
+            installer.InstallError,
+            match="^EXPORTER_STAGE_CLEANUP_UNVERIFIED$",
+        ):
+            installer._cleanup_staged(directory_fd, staged)
+    finally:
+        os.close(directory_fd)
+    assert path.read_bytes() == b"replacement"
+    assert staged == [entry]
