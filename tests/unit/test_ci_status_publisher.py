@@ -49,13 +49,21 @@ def marker(login="github-actions[bot]", **fields):
 
 
 @pytest.mark.parametrize("case", [dict(ref="refs/heads/engineering/review"),
-    dict(ref="refs/tags/release"),dict(event="pull_request"),dict(event="workflow_dispatch")])
+    dict(ref="refs/tags/release"),dict(event="pull_request"),
+    dict(ref="refs/heads/engineering/review",event="workflow_dispatch")])
 def test_unrelated_runs_cannot_read_or_write_authoritative_marker(case):
     assert publish(**case) == []
 
 
-def test_stale_authoritative_push_cannot_overwrite_current_marker():
-    assert [call[0] for call in publish(stale=True)] == ["branch"]
+def test_authoritative_manual_dispatch_publishes_exact_head_result():
+    calls = publish(event="workflow_dispatch", comments=[marker()])
+    assert [call[0] for call in calls] == ["branch", "paginate", "update"]
+    assert "event=workflow_dispatch" in calls[-1][1]["body"]
+
+
+@pytest.mark.parametrize("event", ["push", "workflow_dispatch"])
+def test_stale_authoritative_event_cannot_overwrite_current_marker(event):
+    assert [call[0] for call in publish(stale=True, event=event)] == ["branch"]
 
 
 @pytest.mark.parametrize("fields", [dict(run_number=43),dict(run_number=42,run_attempt=3)])
@@ -83,7 +91,8 @@ def test_missing_marker_is_created_without_adopting_other_bot_comment():
 
 
 def test_workflow_job_is_scoped_to_authoritative_branch_even_on_failure():
-    assert "always() && github.event_name == 'push' && github.ref == 'refs/heads/p0-pit-context'" in WORKFLOW.read_text()
+    assert "(github.event_name == 'push' || github.event_name == 'workflow_dispatch')" in WORKFLOW.read_text()
+    assert "github.ref == 'refs/heads/p0-pit-context'" in WORKFLOW.read_text()
 
 
 def test_current_branch_evidence_replaces_unrelated_branch_marker():

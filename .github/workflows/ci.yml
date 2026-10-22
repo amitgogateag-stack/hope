@@ -62,7 +62,7 @@ jobs:
     permissions:
       contents: read
       issues: write
-    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/p0-pit-context' }}
+    if: ${{ always() && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/p0-pit-context' }}
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -74,7 +74,8 @@ jobs:
         with:
           script: |
             // The single issue marker belongs only to the authoritative branch.
-            if (context.eventName !== 'push' || context.ref !== 'refs/heads/p0-pit-context') return;
+            if (!['push', 'workflow_dispatch'].includes(context.eventName) ||
+                context.ref !== 'refs/heads/p0-pit-context') return;
             const { data: branch } = await github.rest.repos.getBranch({
               ...context.repo, branch: 'p0-pit-context',
             });
