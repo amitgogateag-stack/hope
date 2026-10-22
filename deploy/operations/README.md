@@ -272,9 +272,28 @@ templates, journal and unit directory, and removes only exact inactive journaled
 inodes. It writes `RECOVERY_PENDING` before mutation and `RECOVERED` only after
 daemon reload and canonical absence verification. Replacement, active, legacy-v1,
 ambiguous or changed evidence blocks without deleting the path. The terminal
-journal is deliberately retained, so reinstall remains blocked pending a separate
-reviewed archival/finalization design. The command never starts/enables a unit,
-changes the database, retries installation, touches PAPER or enables LIVE.
+journal is deliberately retained, so reinstall remains blocked until a separate
+operator review confirms the recovery result and runs finalization:
+
+```bash
+sudo python3.13 deploy/operations/finalize_exporter_recovery.py \
+  --expected-shared "$EXPECTED_SHARED_SHA" \
+  --expected-attempt "$EXPECTED_ATTEMPT" \
+  --approve-exporter-finalization
+```
+
+Finalization accepts only exact version-2 `RECOVERED` evidence while the reviewed
+release is still current and both exporter path and runtime states are canonically
+absent. Under the same private lock it hard-links the exact journal inode to a
+private attempt-specific archive, syncs the directory, verifies both names and
+then removes only the live journal name. A process loss after archive publication
+is resumable; an archive collision, changed evidence, nonterminal phase or unit
+conflict blocks without clearing the journal. A completed archive is retained and
+the operation is idempotent for the same release and attempt.
+
+Recovery and finalization never start/enable a unit, change the database, retry
+installation, touch PAPER or enable LIVE. Finalization merely permits a later,
+separately approved installer attempt; it does not perform that attempt.
 
 ## M2 upgrade prerequisites (separate approval required)
 
