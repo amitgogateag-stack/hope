@@ -15,11 +15,13 @@ NAMES = ("hope-ops-dashboard-export.service", "hope-ops-dashboard-export.timer")
 TRANSITIONS = {
     "PREPARED": {"STAGED", "ABORTED"},
     "STAGED": {"PUBLISHING", "ABORTED"},
-    "PUBLISHING": {"PUBLISHING", "RELOAD_PENDING", "ROLLBACK_PENDING"},
-    "RELOAD_PENDING": {"COMMITTED", "ROLLBACK_PENDING"},
-    "ROLLBACK_PENDING": {"ROLLED_BACK", "ROLLBACK_UNVERIFIED"},
+    "PUBLISHING": {"PUBLISHING", "RELOAD_PENDING", "ROLLBACK_PENDING", "RECOVERY_PENDING"},
+    "RELOAD_PENDING": {"COMMITTED", "ROLLBACK_PENDING", "RECOVERY_PENDING"},
+    "ROLLBACK_PENDING": {"ROLLED_BACK", "ROLLBACK_UNVERIFIED", "RECOVERY_PENDING"},
     "COMMITTED": set(), "ABORTED": set(), "ROLLED_BACK": set(),
-    "ROLLBACK_UNVERIFIED": set(),
+    "ROLLBACK_UNVERIFIED": {"RECOVERY_PENDING"},
+    "RECOVERY_PENDING": {"RECOVERED", "ROLLBACK_UNVERIFIED"},
+    "RECOVERED": set(),
 }
 
 
@@ -31,7 +33,7 @@ def validate_record(value):
     keys = {"version", "attempt", "sha", "unit_directory", "sequence", "phase", "units"}
     if not isinstance(value, dict) or set(value) != keys:
         raise JournalError("EXPORTER_JOURNAL_INVALID")
-    if (type(value["version"]) is not int or value["version"] != 1
+    if (type(value["version"]) is not int or value["version"] not in {1, 2}
             or not isinstance(value["attempt"], str) or not re.fullmatch(r"[0-9a-f]{32}", value["attempt"])
             or not isinstance(value["sha"], str) or not re.fullmatch(r"[0-9a-f]{40}", value["sha"])
             or not isinstance(value["unit_directory"], str) or not value["unit_directory"].startswith("/")
@@ -41,14 +43,39 @@ def validate_record(value):
             or not isinstance(value["units"], list) or len(value["units"]) > 2):
         raise JournalError("EXPORTER_JOURNAL_INVALID")
     seen = set()
+    ordered_names = []
+    publication_flags = []
     for unit in value["units"]:
-        if (not isinstance(unit, dict) or set(unit) != {"name", "device", "inode", "sha256"}
+        identity_keys = ({"name", "device", "inode", "sha256"}
+                         if value["version"] == 1 else
+                         {"name", "device", "inode", "size", "mtime_ns", "ctime_ns", "published", "sha256"})
+        if (not isinstance(unit, dict) or set(unit) != identity_keys
                 or unit["name"] not in NAMES or unit["name"] in seen
                 or type(unit["device"]) is not int or unit["device"] < 0
                 or type(unit["inode"]) is not int or unit["inode"] <= 0
+                or (value["version"] == 2 and
+                    (type(unit["size"]) is not int or unit["size"] < 0
+                     or type(unit["mtime_ns"]) is not int or unit["mtime_ns"] < 0
+                     or type(unit["ctime_ns"]) is not int or unit["ctime_ns"] < 0
+                     or type(unit["published"]) is not bool))
                 or not isinstance(unit["sha256"], str) or not re.fullmatch(r"[0-9a-f]{64}", unit["sha256"])):
             raise JournalError("EXPORTER_JOURNAL_INVALID")
         seen.add(unit["name"])
+        ordered_names.append(unit["name"])
+        if value["version"] == 2:
+            publication_flags.append(unit["published"])
+    if ordered_names != list(NAMES[:len(ordered_names)]):
+        raise JournalError("EXPORTER_JOURNAL_INVALID")
+    if (value["phase"] == "PUBLISHING" and not ordered_names
+            or value["version"] == 2
+            and publication_flags not in (
+                [True] * len(publication_flags),
+                [True] * (len(publication_flags) - 1) + [False],
+            )
+            or value["version"] == 2
+            and value["phase"] != "PUBLISHING"
+            and not all(publication_flags)):
+        raise JournalError("EXPORTER_JOURNAL_INVALID")
     if value["phase"] in {"RELOAD_PENDING", "COMMITTED"} and seen != set(NAMES):
         raise JournalError("EXPORTER_JOURNAL_INVALID")
     return value
@@ -116,7 +143,7 @@ class InstallJournal:
         self.active = False
         self.healthy = True
         self.named = None
-        self.data = dict(version=1, attempt=secrets.token_hex(16), sha=expected,
+        self.data = dict(version=2, attempt=secrets.token_hex(16), sha=expected,
                          unit_directory=str(unit_dir), sequence=0, phase="PREPARED", units=[])
 
     def _root(self):
@@ -205,9 +232,51 @@ class InstallJournal:
     def record(self, phase, installed):
         if not self.active or not self.healthy or phase not in TRANSITIONS[self.data["phase"]]:
             raise JournalError("EXPORTER_JOURNAL_TRANSITION_INVALID")
-        units = [dict(name=name, device=identity[0], inode=identity[1], sha256=digest)
-                 for name, identity, digest in installed]
+        units = []
+        for entry in installed:
+            name, identity, digest = entry[:3]
+            published = entry[3] if len(entry) == 4 else True
+            units.append(dict(name=name, device=identity[0], inode=identity[1],
+                              size=identity[2], mtime_ns=identity[3],
+                              ctime_ns=identity[4], published=published,
+                              sha256=digest))
         self._write(dict(self.data, phase=phase, sequence=self.data["sequence"] + 1, units=units))
+
+    @classmethod
+    def open_recovery(cls, root_fd, root, expected, unit_dir, attempt, *, owner_uid=0):
+        """Exclusively reopen exact v2 evidence; never infer recovery authority."""
+        import fcntl
+        journal = cls(root_fd, root, expected, unit_dir, owner_uid=owner_uid)
+        journal._root()
+        try:
+            journal.guard = os.open(GUARD, os.O_RDWR | _flags(), dir_fd=root_fd)
+            guard = os.fstat(journal.guard)
+            _private(guard, owner_uid)
+            named_guard = os.stat(GUARD, dir_fd=root_fd, follow_symlinks=False)
+            if _identity(guard) != _identity(named_guard):
+                raise JournalError("EXPORTER_JOURNAL_GUARD_CHANGED")
+            try:
+                fcntl.flock(journal.guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise JournalError("EXPORTER_INSTALL_CONCURRENT") from None
+            value, identity = _read_at(root_fd, owner_uid)
+            if (value["version"] != 2 or value["sha"] != expected
+                    or value["unit_directory"] != str(unit_dir)
+                    or value["attempt"] != attempt
+                    or value["phase"] not in {
+                        "PUBLISHING", "RELOAD_PENDING", "ROLLBACK_PENDING",
+                        "ROLLBACK_UNVERIFIED", "RECOVERY_PENDING",
+                    }
+                    or not value["units"]):
+                raise JournalError("EXPORTER_RECOVERY_EVIDENCE_MISMATCH")
+            journal.data = value
+            journal.named = identity
+            journal.active = True
+            journal.healthy = True
+            return journal
+        except BaseException:
+            journal.close()
+            raise
 
     def close(self):
         if self.guard >= 0:

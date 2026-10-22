@@ -300,7 +300,7 @@ def test_install_journals_intent_before_each_publication(layout, monkeypatch):
     assert observed == list(installer.NAMES)
     value = json.loads((root / ".exporter-install.json").read_bytes())
     assert value["phase"] == "COMMITTED"
-    assert value["sequence"] == 5
+    assert value["sequence"] == 7
 
 
 def test_existing_journal_blocks_before_staging(layout, monkeypatch):
