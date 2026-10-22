@@ -258,3 +258,29 @@ therefore remains blocked: archival/finalization, AWS systemd/power-loss accepta
 host execution isolation and separate operator authorization are still required.
 No automatic retry, unit start/enable, PAPER action, database change, shared pointer
 change or LIVE authority is introduced by this source engineering.
+
+## Terminal recovery evidence finalization - 2026-10-22
+
+The prior terminal state intentionally blocked every later installation but had
+no authenticated way to preserve the recovered evidence and clear only its live
+journal name. Manual deletion would discard incident provenance and bypass the
+installer's serialization and exact-attempt checks.
+
+`finalize_exporter_recovery.py` now requires explicit root approval, the exact
+reviewed current release SHA and the exact recovered attempt. It locks the shared
+installer guard, accepts only version-2 `RECOVERED` evidence, and proves both
+exporter path and systemd runtime states are canonically absent immediately before
+mutation. The journal inode is hard-linked to a private attempt-specific archive,
+the directory is synced, both names and decoded records are reauthenticated, and
+only then is the live journal name removed and the directory synced again.
+
+If execution stops after archive linkage, the two-name/two-link state is recognized
+only when both names identify the same safe inode and exact record; finalization can
+then resume. A completed archive makes same-attempt finalization idempotent. Foreign
+archive collisions, changed or nonterminal evidence, wrong attempts, unsafe links,
+existing unit paths and non-absent runtime metadata preserve the blocking journal.
+
+This closes the source-level recovery dead end but is not AWS acceptance. It does
+not install, retry, start or enable units and grants no PAPER or LIVE authority.
+Real systemd state, filesystem power-loss behavior, host execution isolation and
+separate operator authorization remain deployment gates.
