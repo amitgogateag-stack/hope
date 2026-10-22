@@ -112,7 +112,7 @@ def test_lifecycle_and_readonly_inspection(native):
     journal.record("STAGED", [])
     entries = []
     for i, name in enumerate(mod.NAMES):
-        entries.append((name, (1, i+1), "a"*64))
+        entries.append((name, (1, i+1, 1, 1, 1), "a"*64))
         journal.record("PUBLISHING", entries)
     journal.record("RELOAD_PENDING", entries)
     journal.record("COMMITTED", entries)
@@ -183,7 +183,7 @@ s=importlib.util.spec_from_file_location("j",sys.argv[1]);m=importlib.util.modul
 r=Path(sys.argv[2]);fd=os.open(r,os.O_RDONLY|os.O_DIRECTORY)
 j=m.InstallJournal(fd,r,"1"*40,Path("/etc/systemd/system"),owner_uid=os.getuid()).start()
 j.record("STAGED",[])
-j.record("PUBLISHING",[(m.NAMES[0],(1,2),"a"*64)])
+j.record("PUBLISHING",[(m.NAMES[0],(1,2,1,1,1),"a"*64)])
 os._exit(137)
 '''
     result = subprocess.run([sys.executable, "-c", script, str(SOURCE), str(root)], timeout=10,

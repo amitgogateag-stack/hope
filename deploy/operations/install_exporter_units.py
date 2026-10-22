@@ -69,11 +69,12 @@ def _absent(name: str, directory_fd: int) -> bool:
     return False
 
 
-def _named_identity(name: str, directory_fd: int) -> tuple[int, int]:
+def _named_identity(name: str, directory_fd: int) -> tuple[int, int, int, int, int]:
     value = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
     if not stat.S_ISREG(value.st_mode):
         raise InstallError("EXPORTER_UNIT_PATH_UNVERIFIED")
-    return value.st_dev, value.st_ino
+    return (value.st_dev, value.st_ino, value.st_size,
+            value.st_mtime_ns, value.st_ctime_ns)
 
 
 def _unit_state(inspector, name: str) -> dict[str, str]:
@@ -117,7 +118,7 @@ def _daemon_reload() -> None:
 
 def _verify_rollback_entry(
     directory_fd: int,
-    entry: tuple[str, tuple[int, int], str],
+    entry: tuple[str, tuple[int, int, int, int, int], str],
     payloads: dict[str, bytes],
     inspector,
     *,
@@ -145,7 +146,7 @@ def _verify_rollback_entry(
 
 def _rollback(
     directory_fd: int,
-    installed: list[tuple[str, tuple[int, int], str]],
+    installed: list[tuple[str, tuple[int, int, int, int, int], str]],
     payloads: dict[str, bytes],
     inspector,
     *,
@@ -261,7 +262,7 @@ def install_exporter_units(
     root_fd = inspector._open_directory(root, owner_uid=owner_uid)
     releases_fd = release_fd = deploy_fd = operations_fd = unit_fd = -1
     staged: list[int] = []
-    installed: list[tuple[str, tuple[int, int], str]] = []
+    installed: list[tuple[str, tuple[int, int, int, int, int], str]] = []
     payloads: dict[str, bytes] = {}
     journal = None
     if daemon_reload is None:
@@ -322,14 +323,44 @@ def install_exporter_units(
             # and any following operation raises, rollback can still identify
             # and remove exactly the published inode.
             value = os.fstat(fd)
-            identity = (value.st_dev, value.st_ino)
+            identity = (value.st_dev, value.st_ino, value.st_size,
+                        value.st_mtime_ns, value.st_ctime_ns)
             digest = hashlib.sha256(payloads[name]).hexdigest()
-            installed.append((name, identity, digest))
-            journal.record("PUBLISHING", installed)
+            intent = (name, identity, digest)
+            journal.record("PUBLISHING", [*installed, (*intent, False)])
             # AT_EMPTY_PATH publishes directly from the open descriptor. There
             # is no staging pathname for a concurrent process to replace and
             # no cleanup pathname that could target an untrusted inode.
-            _publish_unnamed(fd, unit_fd, name)
+            try:
+                _publish_unnamed(fd, unit_fd, name)
+            except BaseException as publication_error:
+                # If linkat completed before Python was interrupted, the still
+                # open descriptor gives us the post-link ctime needed for an
+                # authenticated in-process rollback. A foreign final name is
+                # never adopted or deleted.
+                opened = os.fstat(fd)
+                if opened.st_nlink == 1:
+                    try:
+                        named = _named_identity(name, unit_fd)
+                    except (FileNotFoundError, OSError, InstallError):
+                        named = None
+                    current = (opened.st_dev, opened.st_ino, opened.st_size,
+                               opened.st_mtime_ns, opened.st_ctime_ns)
+                    if named == current:
+                        installed.append((name, current, digest))
+                    else:
+                        raise InstallError(
+                            "EXPORTER_ROLLBACK_UNVERIFIED"
+                        ) from publication_error
+                elif not _absent(name, unit_fd):
+                    raise InstallError(
+                        "EXPORTER_ROLLBACK_UNVERIFIED"
+                    ) from publication_error
+                raise
+            # Linking changes ctime. Persist the authenticated named identity
+            # before it may be used by a later interrupted-install recovery.
+            installed.append((name, _named_identity(name, unit_fd), digest))
+            journal.record("PUBLISHING", installed)
             staged.remove(fd)
             os.close(fd)
             os.fsync(unit_fd)
@@ -349,7 +380,14 @@ def install_exporter_units(
         cleanup_error = None
         if journal is not None and journal.active:
             try:
-                journal.record("ROLLBACK_PENDING" if installed else "ABORTED", installed)
+                interrupted_publication = journal.data["phase"] in {
+                    "PUBLISHING", "RELOAD_PENDING"
+                }
+                journal.record(
+                    "ROLLBACK_PENDING"
+                    if installed or interrupted_publication else "ABORTED",
+                    installed,
+                )
             except Exception:
                 cleanup_error = InstallError("EXPORTER_JOURNAL_UNVERIFIED")
         for fd in tuple(staged):

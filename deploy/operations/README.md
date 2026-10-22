@@ -249,6 +249,33 @@ Do not manually remove metadata or run old unguarded scripts to bypass that gate
 The canonical procedure preserves existing web/export service identities and
 never installs or enables the historical M3 unit.
 
+## Interrupted exporter installation recovery
+
+Exporter installation journals are versioned recovery evidence, not automatic
+permission to delete unit files. Version 2 records the full device, inode, size,
+mtime and ctime identity after each successful publication. A crash between
+`linkat` and that confirmed-identity record is intentionally ambiguous and cannot
+be recovered automatically when the final path exists.
+
+After separately reviewing the read-only journal output, an operator may run the
+reviewed recovery command with the exact release SHA and journal attempt ID:
+
+```bash
+sudo python3.13 deploy/operations/recover_exporter_install.py \
+  --expected-shared "$EXPECTED_SHARED_SHA" \
+  --expected-attempt "$EXPECTED_ATTEMPT" \
+  --approve-exporter-recovery
+```
+
+The command holds the private installer lock, reauthenticates the current release,
+templates, journal and unit directory, and removes only exact inactive journaled
+inodes. It writes `RECOVERY_PENDING` before mutation and `RECOVERED` only after
+daemon reload and canonical absence verification. Replacement, active, legacy-v1,
+ambiguous or changed evidence blocks without deleting the path. The terminal
+journal is deliberately retained, so reinstall remains blocked pending a separate
+reviewed archival/finalization design. The command never starts/enables a unit,
+changes the database, retries installation, touches PAPER or enables LIVE.
+
 ## M2 upgrade prerequisites (separate approval required)
 
 Before activating M2, stop admission, back up and restore-test the database, then

@@ -234,3 +234,27 @@ dashboard activation, PAPER absence and execution-isolation requirements remain
 in force. No PAPER start/enable, shared pointer change, database operation or AWS
 installation was performed. Full interrupted-install recovery engineering and
 real staging/systemd acceptance remain prerequisites for deployment readiness.
+
+## Authenticated interrupted-install rollback engineering - 2026-10-22
+
+The journal schema now records full post-publication inode identity (device,
+inode, size, mtime and ctime) and an explicit publication-confirmation flag.
+This closes the inode-reuse weakness demonstrated in PR #12 CI: device/inode plus
+byte equality could accept a byte-identical replacement inode. A crash after the
+link but before the post-link identity record is conservatively ambiguous and
+cannot authorize deletion when the final path exists.
+
+`recover_exporter_install.py` is a separate, explicit-root-approval rollback
+command. It binds the independently reviewed release SHA and journal attempt,
+holds the existing private lock, authenticates current release/templates and
+unit directory again immediately before mutation, writes durable recovery intent,
+and uses the existing all-before-any rollback verification. Only exact inactive
+journaled inodes can be removed; daemon reload and canonical absence must pass.
+Recovery after process loss resumes from `RECOVERY_PENDING`. Replacement, active,
+legacy-v1, changed, malformed or ambiguous evidence remains blocked and preserved.
+
+Successful recovery leaves a terminal `RECOVERED` journal. Fresh installation
+therefore remains blocked: archival/finalization, AWS systemd/power-loss acceptance,
+host execution isolation and separate operator authorization are still required.
+No automatic retry, unit start/enable, PAPER action, database change, shared pointer
+change or LIVE authority is introduced by this source engineering.

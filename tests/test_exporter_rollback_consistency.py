@@ -32,7 +32,9 @@ def pair(tmp_path):
     for name, data in payloads.items():
         path = tmp_path / name
         path.write_bytes(data)
-        entries.append((name, (path.stat().st_dev, path.stat().st_ino),
+        info = path.stat()
+        entries.append((name, (info.st_dev, info.st_ino, info.st_size,
+                               info.st_mtime_ns, info.st_ctime_ns),
                         hashlib.sha256(data).hexdigest()))
     fd = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
     yield tmp_path, fd, entries, payloads
