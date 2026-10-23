@@ -1,6 +1,7 @@
 """Persistent kernel guard prevents lease-path replacement races."""
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -59,6 +60,23 @@ def test_shared_observations_overlap_but_exclude_mutation(tmp_path):
                 pytest.fail("observation entered during mutation")
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Production cross-privilege flock is Linux-only")
+def test_shared_observation_never_opens_private_root_guard(tmp_path, monkeypatch):
+    private = tmp_path / ".activation.guard"
+    with module._activation_guard(tmp_path, shared=True):
+        assert not private.exists()
+    with module._activation_guard(tmp_path):
+        pass
+    original = module.os.open
+    def open_without_private_guard(path, *args, **kwargs):
+        if Path(path) == private:
+            raise AssertionError("read-only service tried to open root-owned guard")
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(module.os, "open", open_without_private_guard)
+    with module._activation_guard(tmp_path, shared=True):
+        assert private.stat().st_mode & 0o777 == 0o600
+
+
 @pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
 def test_guard_releases_on_every_exit_without_removing_inode(tmp_path, guard_platform, failure):
     with pytest.raises(failure):
@@ -96,6 +114,8 @@ def test_guard_rejects_untrusted_inode(tmp_path, guard_platform, monkeypatch, ch
     original = module.os.fstat
     def untrusted(fd):
         info = original(fd)
+        if stat.S_ISDIR(info.st_mode):
+            return info
         return SimpleNamespace(st_mode=0o100622 if changed=="mode" else 0o040600 if changed=="type" else info.st_mode,
             st_uid=module.os.geteuid()+1 if changed=="owner" else info.st_uid,
             st_nlink=2 if changed=="links" else info.st_nlink)
