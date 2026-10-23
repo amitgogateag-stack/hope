@@ -11,6 +11,7 @@ from re import fullmatch
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import BoundedSemaphore
 
 from hope.api.dashboard_projection import verified_projections
 from hope.infrastructure.durable_file import bounded_regular_read
@@ -201,13 +202,16 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
                  activation_check=None, activation_view=None,
-                 client_io_timeout_seconds: float = 5.0):
+                 client_io_timeout_seconds: float = 5.0,
+                 max_concurrent_clients: int = 32):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         if (isinstance(client_io_timeout_seconds, bool)
                 or not isinstance(client_io_timeout_seconds, (int, float))
                 or not 0 < client_io_timeout_seconds <= 60):
             raise ValueError("HOPE_DASHBOARD_CLIENT_TIMEOUT_INVALID")
+        if type(max_concurrent_clients) is not int or not 1 <= max_concurrent_clients <= 256:
+            raise ValueError("HOPE_DASHBOARD_CLIENT_LIMIT_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
         if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
@@ -217,6 +221,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.activation_check=activation_check
         self.activation_view=activation_view
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
+        self.max_concurrent_clients=max_concurrent_clients
+        self._client_slots=BoundedSemaphore(max_concurrent_clients)
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
@@ -232,6 +238,23 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             request.close()
             raise
         return request,address
+
+    def process_request(self, request, client_address):
+        """Reject excess clients before allocating another handler thread."""
+        if not self._client_slots.acquire(blocking=False):
+            self.shutdown_request(request)
+            return
+        try:
+            super().process_request(request, client_address)
+        except BaseException:
+            self._client_slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._client_slots.release()
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
