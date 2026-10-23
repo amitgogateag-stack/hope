@@ -6,6 +6,53 @@ import stat
 from pathlib import Path
 
 
+def bounded_regular_read(path: str | Path, limit: int) -> bytes:
+    """Read one unchanged, private regular-file inode through a pinned descriptor.
+
+    Operational HTTP inputs are replaced atomically by trusted producers, but
+    their pathnames remain an input boundary.  Pin the inode before reading so
+    a pathname swap cannot redirect the consumer to a FIFO, device, symlink or
+    different regular file after metadata validation.
+    """
+    if type(limit) is not int or limit < 0:
+        raise ValueError("BOUNDED_READ_INVALID_LIMIT")
+    path = Path(path)
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode):
+        raise ValueError("BOUNDED_READ_NOT_REGULAR")
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    if os.name == "posix":
+        flags |= os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+
+        def identity(value: os.stat_result) -> tuple[int, int, int, int, int, int]:
+            return (value.st_dev, value.st_ino, value.st_mode, value.st_size,
+                    value.st_mtime_ns, value.st_ctime_ns)
+
+        if (not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1
+                or opened.st_mode & 0o022 or opened.st_size > limit
+                or identity(before) != identity(opened)):
+            raise ValueError("BOUNDED_READ_UNTRUSTED_FILE")
+        payload = bytearray()
+        while len(payload) <= limit:
+            block = os.read(descriptor, min(8192, limit + 1 - len(payload)))
+            if not block:
+                break
+            payload.extend(block)
+        if len(payload) > limit:
+            raise ValueError("BOUNDED_READ_LIMIT")
+        after = os.fstat(descriptor)
+        named = path.lstat()
+        if (len(payload) != opened.st_size or identity(after) != identity(opened)
+                or identity(named) != identity(opened)):
+            raise ValueError("BOUNDED_READ_FILE_CHANGED")
+        return bytes(payload)
+    finally:
+        os.close(descriptor)
+
+
 def durable_replace(source: str | Path, target: str | Path) -> None:
     """Publish a verified regular file inside a pinned, synced directory.
 

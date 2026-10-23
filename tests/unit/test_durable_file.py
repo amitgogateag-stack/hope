@@ -1,9 +1,83 @@
 """Crash-durability contract for operational file replacement."""
+import os
 from pathlib import Path
 
 import pytest
 
 from hope.infrastructure import durable_file
+
+
+def test_bounded_read_returns_one_private_regular_inode(tmp_path):
+    path = tmp_path / "snapshot.json"
+    path.write_bytes(b"complete")
+
+    assert durable_file.bounded_regular_read(path, 8) == b"complete"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native inode types require POSIX")
+@pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo", "directory"])
+def test_bounded_read_rejects_redirectable_or_blocking_inode(tmp_path, kind):
+    path = tmp_path / "snapshot.json"
+    target = tmp_path / "target"
+    target.write_bytes(b"complete")
+    if kind == "symlink":
+        path.symlink_to(target)
+    elif kind == "hardlink":
+        os.link(target, path)
+    elif kind == "fifo":
+        os.mkfifo(path)
+    else:
+        path.mkdir()
+
+    with pytest.raises((OSError, ValueError)):
+        durable_file.bounded_regular_read(path, 32)
+
+
+def test_bounded_read_rejects_path_swap_between_check_and_open(tmp_path, monkeypatch):
+    path = tmp_path / "snapshot.json"
+    replacement = tmp_path / "replacement"
+    path.write_bytes(b"reviewed")
+    replacement.write_bytes(b"substituted")
+    real_open = durable_file.os.open
+    swapped = False
+
+    def swap_then_open(candidate, flags):
+        nonlocal swapped
+        if Path(candidate) == path and not swapped:
+            swapped = True
+            os.replace(replacement, path)
+        return real_open(candidate, flags)
+
+    monkeypatch.setattr(durable_file.os, "open", swap_then_open)
+    with pytest.raises(ValueError, match="BOUNDED_READ_UNTRUSTED_FILE"):
+        durable_file.bounded_regular_read(path, 32)
+
+
+def test_bounded_read_rejects_in_place_change_during_read(tmp_path, monkeypatch):
+    path = tmp_path / "snapshot.json"
+    path.write_bytes(b"reviewed")
+    real_read = durable_file.os.read
+    changed = False
+
+    def mutate_after_read(descriptor, size):
+        nonlocal changed
+        block = real_read(descriptor, size)
+        if block and not changed:
+            changed = True
+            path.write_bytes(b"altered!")
+        return block
+
+    monkeypatch.setattr(durable_file.os, "read", mutate_after_read)
+    with pytest.raises(ValueError, match="BOUNDED_READ_FILE_CHANGED"):
+        durable_file.bounded_regular_read(path, 32)
+
+
+@pytest.mark.parametrize("limit", [-1, True, 3])
+def test_bounded_read_rejects_invalid_or_exceeded_limit(tmp_path, limit):
+    path = tmp_path / "snapshot.json"
+    path.write_bytes(b"four")
+    with pytest.raises(ValueError):
+        durable_file.bounded_regular_read(path, limit)
 
 
 def test_replace_opens_directory_before_rename_and_syncs_after(monkeypatch, tmp_path):

@@ -1,5 +1,6 @@
 """Private dashboard HTTP surface: loopback, read-only and no path traversal."""
 import json
+import os
 from datetime import datetime, timedelta, timezone
 import threading
 from contextlib import contextmanager
@@ -56,6 +57,29 @@ def test_m2_html_budget_is_independent_of_json_snapshot_budget(tmp_path, size, e
     with dashboard(tmp_path) as server:
         server.preview.write_bytes(b"x" * size)
         assert request(server, "/")[0] == expected
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native inode types require POSIX")
+@pytest.mark.parametrize("surface", ["preview", "snapshot", "legacy", "operations"])
+def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
+    with dashboard(tmp_path, valid_snapshot()) as server:
+        paths = {
+            "preview": (server.preview, "/"),
+            "snapshot": (server.snapshot, "/snapshot.json"),
+            "legacy": (server.legacy, "/legacy-research.json"),
+            "operations": (server.operations, "/operations.json"),
+        }
+        path, endpoint = paths[surface]
+        target = tmp_path / f"{surface}.target"
+        if surface == "preview":
+            target.write_text("<h1>substitute</h1>")
+        elif surface == "snapshot":
+            target.write_bytes(valid_snapshot())
+        else:
+            target.write_text("{}")
+        path.unlink(missing_ok=True)
+        path.symlink_to(target)
+        assert request(server, endpoint)[0] == 503
 
 
 @pytest.mark.parametrize("path", ["/snapshot.json", "/index.html", "/../secrets", "/?x=1", "/unknown"])
