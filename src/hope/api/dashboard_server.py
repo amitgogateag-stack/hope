@@ -12,6 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from hope.api.dashboard_projection import verified_projections
+from hope.infrastructure.durable_file import bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
         None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
@@ -28,11 +29,7 @@ OPERATIONS_ERROR_CODES = {
 
 def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tuple[bytes, datetime]:
     """Reject malformed, partial, future-dated or oversized snapshot files."""
-    if path.stat().st_size > 32768:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
-    payload = path.read_bytes()
-    if len(payload) > 32768:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
+    payload = bounded_regular_read(path, 32768)
     data = json.loads(payload)
     if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1 or data.get("source") != "hope_postgresql":
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
@@ -105,11 +102,7 @@ def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tup
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
     """Return only a sanitized legacy registration inventory, never PAPER data."""
-    if path.stat().st_size > 8192:
-        raise ValueError("HOPE_LEGACY_INVENTORY_TOO_LARGE")
-    raw = path.read_bytes()
-    if len(raw) > 8192:
-        raise ValueError("HOPE_LEGACY_INVENTORY_TOO_LARGE")
+    raw = bounded_regular_read(path, 8192)
     data = json.loads(raw)
     if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1:
         raise ValueError("HOPE_LEGACY_INVENTORY_INVALID")
@@ -143,11 +136,7 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
 
 def _verified_operations(path: Path, *, expected_commit: str | None = None) -> bytes:
     """Sanitize an optional local service heartbeat, never expose exception text."""
-    if path.stat().st_size > 8192:
-        raise ValueError("HOPE_OPERATIONS_STATUS_TOO_LARGE")
-    raw = path.read_bytes()
-    if len(raw) > 8192:
-        raise ValueError("HOPE_OPERATIONS_STATUS_TOO_LARGE")
+    raw = bounded_regular_read(path, 8192)
     data = json.loads(raw)
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
             or data["schema_version"] != 1 or data.get("paper_only") is not True
@@ -271,11 +260,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
         if self.path in {"/", "/index.html"}:
             try:
-                if self.server.preview.stat().st_size > 65536:
-                    raise ValueError("HOPE_DASHBOARD_PAGE_TOO_LARGE")
-                payload = self.server.preview.read_bytes()
-                if len(payload) > 65536:
-                    raise ValueError("HOPE_DASHBOARD_PAGE_TOO_LARGE")
+                payload = bounded_regular_read(self.server.preview, 65536)
             except (OSError, ValueError):
                 self._respond(503, b"Dashboard unavailable")
                 return

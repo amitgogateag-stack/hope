@@ -77,6 +77,10 @@ to identify the exact reviewed dashboard SHA; a different or unsafe release clai
 is an invalid response. PAPER-component audits do not equate the independently
 deployed dashboard and worker releases. None of these observations constitutes
 AWS acceptance.
+Dashboard HTML, snapshot, heartbeat, and legacy-inventory inputs are read through
+bounded no-follow descriptors and must remain the same private single-link regular
+inode for the whole read; pathname swaps, links, FIFOs, devices, writable files,
+and concurrent in-place changes fail closed.
 
 The dashboard Safety view shows these distinctions, last successful service poll,
 last successful persisted PAPER job when its projection is available, and last
