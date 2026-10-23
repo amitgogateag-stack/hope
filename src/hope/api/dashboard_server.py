@@ -11,7 +11,8 @@ from re import fullmatch
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import BoundedSemaphore
+from socket import SHUT_RDWR
+from threading import BoundedSemaphore, Timer
 
 from hope.api.dashboard_projection import verified_projections
 from hope.infrastructure.durable_file import bounded_regular_read
@@ -203,6 +204,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
                  activation_check=None, activation_view=None,
                  client_io_timeout_seconds: float = 5.0,
+                 client_total_timeout_seconds: float = 15.0,
                  max_concurrent_clients: int = 32):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
@@ -210,6 +212,10 @@ class DashboardHTTPServer(ThreadingHTTPServer):
                 or not isinstance(client_io_timeout_seconds, (int, float))
                 or not 0 < client_io_timeout_seconds <= 60):
             raise ValueError("HOPE_DASHBOARD_CLIENT_TIMEOUT_INVALID")
+        if (isinstance(client_total_timeout_seconds, bool)
+                or not isinstance(client_total_timeout_seconds, (int, float))
+                or not 0 < client_total_timeout_seconds <= 300):
+            raise ValueError("HOPE_DASHBOARD_CLIENT_TOTAL_TIMEOUT_INVALID")
         if type(max_concurrent_clients) is not int or not 1 <= max_concurrent_clients <= 256:
             raise ValueError("HOPE_DASHBOARD_CLIENT_LIMIT_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
@@ -221,6 +227,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.activation_check=activation_check
         self.activation_view=activation_view
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
+        self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
         self._client_slots=BoundedSemaphore(max_concurrent_clients)
         self.preview = Path(preview)
@@ -251,10 +258,22 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             raise
 
     def process_request_thread(self, request, client_address):
+        deadline=Timer(self.client_total_timeout_seconds,self._expire_request,args=(request,))
+        deadline.daemon=True
         try:
+            deadline.start()
             super().process_request_thread(request, client_address)
         finally:
+            deadline.cancel()
             self._client_slots.release()
+
+    @staticmethod
+    def _expire_request(request):
+        """Interrupt all client I/O when the total wall-clock budget expires."""
+        try:
+            request.shutdown(SHUT_RDWR)
+        except OSError:
+            pass
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
