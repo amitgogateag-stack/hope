@@ -1,4 +1,4 @@
-from unittest.mock import Mock
+from unittest.mock import MagicMock,Mock
 from urllib.error import HTTPError
 from datetime import UTC,datetime,timedelta
 import json
@@ -56,6 +56,36 @@ def test_http_success_filters_raw_metadata(monkeypatch):
     monkeypatch.setattr(module,"build_opener",lambda *a:opener)
     assert module._endpoint("/status.json")=={"http_status":200,"service":"RUNNING","data_feed":"UNAVAILABLE"}
     assert opener.open.call_args.args[0]=="http://127.0.0.1:8788/status.json"
+
+
+def test_dashboard_release_endpoint_requires_exact_expected_identity(monkeypatch):
+    expected="a"*40
+    response_for(monkeypatch,json.dumps({"schema":"hope.dashboard-release.v1",
+        "dashboard_commit":expected,"paper_only":True,"live_enabled":False,
+        "execution_authorized":False,"password":"secret"}).encode())
+    result=module._endpoint("/release.json",expected_commit=expected)
+    assert result=={"http_status":200,"dashboard_release":"MATCHED","paper_only":True,
+        "live_enabled":False,"execution_authorized":False}
+    assert "secret" not in json.dumps(result)
+
+
+@pytest.mark.parametrize("change",[
+    {"schema":"secret"},{"dashboard_commit":"b"*40},{"paper_only":False},
+    {"live_enabled":True},{"execution_authorized":True},
+])
+def test_dashboard_release_endpoint_rejects_cross_release_or_unsafe_claims(monkeypatch,change):
+    expected="a"*40
+    value={"schema":"hope.dashboard-release.v1","dashboard_commit":expected,
+        "paper_only":True,"live_enabled":False,"execution_authorized":False,**change}
+    response_for(monkeypatch,json.dumps(value).encode())
+    assert module._endpoint("/release.json",expected_commit=expected)=={
+        "http_status":200,"status":"INVALID_RESPONSE"}
+
+
+def test_dashboard_release_endpoint_cannot_be_queried_without_expected_identity(monkeypatch):
+    opener=Mock();monkeypatch.setattr(module,"build_opener",opener)
+    assert module._endpoint("/release.json")=={"http_status":None,"status":"INVALID_ENDPOINT"}
+    opener.assert_not_called()
 
 
 def test_readiness_failure_details_survive_audit_without_raw_metadata(tmp_path,monkeypatch):
@@ -190,3 +220,52 @@ def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
             assert result["execution_authorized"] is False
             assert module._endpoint("/operations.json")["http_status"]==operations_status
         finally:server.shutdown();thread.join(timeout=5)
+
+
+def test_audit_matches_actual_dashboard_http_release_identity(tmp_path,monkeypatch):
+    expected="a"*40
+    page=tmp_path/"preview.html";page.write_text("HOPE")
+    opener=build_opener(ProxyHandler({}),module._NoRedirect())
+    with DashboardHTTPServer(0,page,tmp_path/"snapshot.json",deployed_commit=expected) as server:
+        thread=Thread(target=server.serve_forever,daemon=True);thread.start()
+        local=f"http://127.0.0.1:{server.server_port}"
+        adapter=Mock();adapter.open.side_effect=lambda url,**kw:opener.open(
+            url.replace("http://127.0.0.1:8788",local),**kw)
+        monkeypatch.setattr(module,"build_opener",lambda *a:adapter)
+        try:
+            assert module._endpoint("/release.json",expected_commit=expected)[
+                "dashboard_release"]=="MATCHED"
+            assert module._endpoint("/release.json",expected_commit="b"*40)=={
+                "http_status":200,"status":"INVALID_RESPONSE"}
+        finally:server.shutdown();thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("component,includes_release",[("dashboard",True),("paper",False)])
+def test_audit_scopes_http_release_identity_to_dashboard_component(
+        tmp_path,monkeypatch,component,includes_release):
+    expected="a"*40
+    monkeypatch.setattr(module,"inspect_release",Mock())
+    monkeypatch.setattr(module,"verify_database_role",Mock())
+    monkeypatch.setattr(module,"verify_schema_compatibility",Mock())
+    monkeypatch.setattr(module,"_unit",lambda unit:{"status":"UNAVAILABLE"})
+    observed=[]
+    def endpoint(path,**kwargs):
+        observed.append((path,kwargs))
+        return {"http_status":200}
+    monkeypatch.setattr(module,"_endpoint",endpoint)
+    connection=MagicMock()
+    connection.execute.return_value.scalar_one.side_effect=[
+        "hope_m3_restore_test","170000",233,
+    ]
+    engine=MagicMock();engine.connect.return_value.__enter__.return_value=connection
+
+    result=module.audit(engine,release=tmp_path,sha=expected,component=component,
+        attestation={"sha":expected})
+
+    release_calls=[call for call in observed if call[0]=="/release.json"]
+    assert bool(release_calls) is includes_release
+    if includes_release:
+        assert release_calls==[("/release.json",{"expected_commit":expected})]
+        assert "/release.json" in result["endpoints"]
+    else:
+        assert "/release.json" not in result["endpoints"]

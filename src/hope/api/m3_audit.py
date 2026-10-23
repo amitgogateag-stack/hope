@@ -17,6 +17,7 @@ from hope.infrastructure.paper_service import verify_schema_compatibility
 
 UNITS=("hope-paper.service","hope-ops-dashboard-web.service","hope-ops-dashboard-export.timer")
 ENDPOINTS=("/status.json","/snapshot.json","/operations.json","/readiness.json")
+RELEASE_ENDPOINT="/release.json"
 READINESS_FIELDS={
     "server":{"RUNNING"},
     "paper_health":{"READY","HALTED","UNAVAILABLE"},
@@ -96,8 +97,12 @@ def _unit(unit):
         return {"status":"UNAVAILABLE"}
 
 
-def _endpoint(path):
-    if path not in ENDPOINTS:
+def _endpoint(path, *, expected_commit=None):
+    if path == RELEASE_ENDPOINT:
+        if not isinstance(expected_commit,str) or len(expected_commit)!=40 \
+                or any(character not in "0123456789abcdef" for character in expected_commit):
+            return {"http_status":None,"status":"INVALID_ENDPOINT"}
+    elif path not in ENDPOINTS:
         return {"http_status":None,"status":"INVALID_ENDPOINT"}
     http_status=None
     try:
@@ -109,6 +114,15 @@ def _endpoint(path):
             if not isinstance(value,dict):raise ValueError("shape")
             if path=="/readiness.json":
                 return {"http_status":http_status,**_readiness(value)}
+            if path==RELEASE_ENDPOINT:
+                if (value.get("schema")!="hope.dashboard-release.v1"
+                        or value.get("dashboard_commit")!=expected_commit
+                        or value.get("paper_only") is not True
+                        or value.get("live_enabled") is not False
+                        or value.get("execution_authorized") is not False):
+                    raise ValueError("release identity")
+                return {"http_status":http_status,"dashboard_release":"MATCHED",
+                    "paper_only":True,"live_enabled":False,"execution_authorized":False}
             observed={"http_status":response.status}
             allowed={"service":{"RUNNING"},"data_feed":{"CURRENT","STALE","UNAVAILABLE"},
                 "state":{"STARTING","CURRENT","HALTED","UNAVAILABLE","STOPPED"},
@@ -134,11 +148,14 @@ def audit(engine,*,release,sha,component,attestation):
         verify_schema_compatibility(connection,Path(release)/"migrations")
         version=connection.execute(text("SHOW server_version_num")).scalar_one()
         migrations=connection.execute(text("SELECT count(*) FROM hope_schema_migrations")).scalar_one()
+    endpoints={path:_endpoint(path) for path in ENDPOINTS}
+    if component=="dashboard":
+        endpoints[RELEASE_ENDPOINT]=_endpoint(RELEASE_ENDPOINT,expected_commit=sha)
     return dict(schema="hope.m3-audit.v1",release=attestation,database="hope_m3_restore_test",
         postgres_version_num=int(version),migrations=migrations,
         role="SCOPED_PREFLIGHT_PASSED",component=component,
         units={unit:_unit(unit) for unit in UNITS},
-        endpoints={path:_endpoint(path) for path in ENDPOINTS},
+        endpoints=endpoints,
         host_changes=False,paper_execution=False,operational_acceptance="NOT_ESTABLISHED")
 
 
