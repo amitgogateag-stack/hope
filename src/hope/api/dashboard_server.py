@@ -5,6 +5,7 @@ Use an authenticated SSH tunnel to reach it; never expose this port publicly.
 from __future__ import annotations
 
 import argparse
+from contextlib import ExitStack
 import json
 from re import fullmatch
 from datetime import datetime, timezone
@@ -199,7 +200,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
-                 activation_check=None):
+                 activation_check=None, activation_view=None):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
@@ -209,6 +210,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.deployed_commit=deployed_commit
         self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
+        self.activation_view=activation_view
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
@@ -253,11 +255,19 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if not self._host_allowed():
             self._respond(403, b"Forbidden")
             return
-        if self.server.activation_check is not None:
-            try:self.server.activation_check()
-            except Exception:
-                self._respond(503,b"Dashboard activation requires recovery")
-                return
+        stack=ExitStack()
+        try:
+            if self.server.activation_view is not None:
+                stack.enter_context(self.server.activation_view())
+            elif self.server.activation_check is not None:
+                self.server.activation_check()
+        except Exception:
+            stack.close()
+            self._respond(503,b"Dashboard activation requires recovery")
+            return
+        with stack:self._dispatch_GET()
+
+    def _dispatch_GET(self) -> None:
         if self.path in {"/", "/index.html"}:
             try:
                 payload = bounded_regular_read(self.server.preview, 65536)
@@ -361,18 +371,18 @@ def main() -> None:
     parser.add_argument("--deployed-commit")
     parser.add_argument("--activation-gate",action="store_true")
     args = parser.parse_args()
-    check=None
     paper_deployed_commit=None
     if args.activation_gate:
         if args.deployed_commit is None:parser.error("--activation-gate requires --deployed-commit")
-        from hope.api.dashboard_activation import Layout,runtime_gate
+        from hope.api.dashboard_activation import Layout,runtime_gate,runtime_view
         layout=Layout()
         paper_deployed_commit=runtime_gate(layout,args.deployed_commit)["paper_commit"]
-        check=lambda:runtime_gate(layout,args.deployed_commit)
+        view=lambda:runtime_view(layout,args.deployed_commit)
+    else:view=None
     with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file,
                              deployed_commit=args.deployed_commit,
                              paper_deployed_commit=paper_deployed_commit,
-                             activation_check=check) as server:
+                             activation_view=view) as server:
         server.serve_forever(poll_interval=0.5)
 
 

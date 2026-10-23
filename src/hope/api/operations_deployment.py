@@ -112,11 +112,13 @@ def _process_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, s
 
 
 @contextmanager
-def _activation_guard(root: Path):
-    """Serialize lease creation/removal on a persistent, never-unlinked inode.
+def _activation_guard(root: Path, *, shared: bool = False):
+    """Fence activation state on a persistent, never-unlinked inode.
 
     Fingerprints cannot make pathname unlink conditional. Both activation and
     stale recovery must hold this kernel lock across every lease operation.
+    Read-only consumers may hold a shared lock across a complete observation;
+    activation and recovery retain the default exclusive, nonblocking lock.
     Process death releases flock; the separate authenticated lease survives.
     """
     try:
@@ -131,7 +133,8 @@ def _activation_guard(root: Path):
                 or info.st_mode & 0o022 or info.st_nlink != 1):
             raise DeploymentError("OPERATIONS_ACTIVATION_GUARD_UNTRUSTED")
         try:
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+            fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
         yield
