@@ -113,33 +113,56 @@ def _process_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, s
 
 @contextmanager
 def _activation_guard(root: Path, *, shared: bool = False):
-    """Fence activation state on a persistent, never-unlinked inode.
+    """Fence activation state across privileged and read-only processes.
 
     Fingerprints cannot make pathname unlink conditional. Both activation and
-    stale recovery must hold this kernel lock across every lease operation.
-    Read-only consumers may hold a shared lock across a complete observation;
-    activation and recovery retain the default exclusive, nonblocking lock.
-    Process death releases flock; the separate authenticated lease survives.
+    stale recovery exclusively lock both the trusted deployment directory and
+    the private, persistent guard inode across every lease operation. A
+    read-only service only takes a shared lock on the directory it can already
+    traverse, so it never needs access to the root-owned 0600 guard file.
+    Process death releases both flocks; the authenticated lease survives.
     """
     try:
         import fcntl
     except ImportError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_POSIX_REQUIRED") from exc
-    path = root.resolve(strict=True) / ".activation.guard"
-    descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+    root = root.resolve(strict=True)
+    directory_descriptor = None
+    descriptor = None
     try:
+        # The production contract is Linux. Retain the file-only emulation used
+        # by Windows orchestration tests, which do not exercise shared flock.
+        if os.name == "posix":
+            directory_descriptor = os.open(
+                root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            )
+            info = os.fstat(directory_descriptor)
+            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+                raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_UNTRUSTED")
+            try:
+                mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
+                fcntl.flock(directory_descriptor, mode | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
+            if shared:
+                yield
+                return
+        path = root / ".activation.guard"
+        descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                 or info.st_mode & 0o022 or info.st_nlink != 1):
             raise DeploymentError("OPERATIONS_ACTIVATION_GUARD_UNTRUSTED")
         try:
-            mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
-            fcntl.flock(descriptor, mode | fcntl.LOCK_NB)
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
         yield
     finally:
-        os.close(descriptor)
+        if descriptor is not None:
+            os.close(descriptor)
+        if directory_descriptor is not None:
+            os.close(directory_descriptor)
 
 
 @contextmanager
