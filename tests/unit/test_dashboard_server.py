@@ -10,6 +10,7 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 import pytest
 
+from hope.api import dashboard_server as module
 from hope.api.dashboard_server import DashboardHTTPServer
 
 
@@ -50,6 +51,34 @@ def test_server_is_loopback_only_and_serves_private_preview(tmp_path):
         assert headers["Cache-Control"].startswith("no-store")
         assert headers["X-Content-Type-Options"] == "nosniff"
         assert "default-src 'none'" in headers["Content-Security-Policy"]
+
+
+def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,monkeypatch):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    entered=threading.Event();reading=threading.Event();release=threading.Event();exited=threading.Event()
+    @contextmanager
+    def activation_view():
+        entered.set()
+        try:yield
+        finally:exited.set()
+    original=module.bounded_regular_read
+    def blocked_read(path,limit):
+        if path==preview:
+            assert entered.is_set() and not exited.is_set()
+            reading.set();assert release.wait(5)
+        return original(path,limit)
+    monkeypatch.setattr(module,"bounded_regular_read",blocked_read)
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            activation_view=activation_view) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        response=[]
+        client=threading.Thread(target=lambda:response.append(request(server,"/")),daemon=True);client.start()
+        try:
+            assert reading.wait(5) and not exited.is_set()
+            release.set();client.join(timeout=5)
+            assert response[0][0]==200 and response[0][2]==b"HOPE" and exited.wait(5)
+        finally:
+            release.set();server.shutdown();serving.join(timeout=5);client.join(timeout=5)
 
 
 @pytest.mark.parametrize("size,expected", [(40000, 200), (65537, 503)])

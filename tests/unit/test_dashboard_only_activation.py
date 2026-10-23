@@ -204,6 +204,19 @@ def test_concurrent_guard_blocks_dashboard_and_full_release_before_callbacks(set
             accept=lambda:pytest.fail("accepted"),before_switch=lambda:pytest.fail("stopped PAPER"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Production shared flock is exercised on Linux CI")
+def test_runtime_view_fences_activation_for_complete_observation(setup):
+    layout,host=setup;activate(layout,host);host.calls.clear()
+    with module.runtime_view(layout,NEW) as result:
+        assert result["status"]=="GATE_PASSED"
+        with pytest.raises(operations.DeploymentError,match="ACTIVATION_LOCKED"):
+            activate(layout,host,target=THIRD)
+    assert host.calls==[] and module._pointer(layout,"dashboard-current")==NEW
+    with operations._activation_guard(layout.root):
+        with pytest.raises(operations.DeploymentError,match="ACTIVATION_LOCKED"):
+            with module.runtime_view(layout,NEW):pytest.fail("request entered during activation")
+
+
 def test_legacy_recovery_and_canonical_activation_share_one_guard(setup):
     from hope.api import dashboard_deployment as legacy
     layout,host=setup

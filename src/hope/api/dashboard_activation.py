@@ -6,6 +6,7 @@ interrupted operation remains blocked until explicit dashboard-only recovery.
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC,datetime
 import json
@@ -265,6 +266,13 @@ def runtime_gate(layout,target):
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
     return {"status":"GATE_PASSED","dashboard_commit":target,
         "paper_commit":record["shared"],"execution_authorized":False}
+
+
+@contextmanager
+def runtime_view(layout,target):
+    """Hold a stable activation-state observation for one dashboard request."""
+    with operations._activation_guard(layout.root,shared=True):
+        yield runtime_gate(layout,target)
 
 
 def gate(layout,target,host):

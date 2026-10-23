@@ -46,6 +46,19 @@ def test_guard_excludes_independent_descriptors_and_reuses_same_inode(tmp_path, 
     assert (tmp_path / ".activation.guard").is_file()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Production shared flock is exercised on Linux CI")
+def test_shared_observations_overlap_but_exclude_mutation(tmp_path):
+    with module._activation_guard(tmp_path, shared=True):
+        with module._activation_guard(tmp_path, shared=True):
+            with pytest.raises(module.DeploymentError, match="ACTIVATION_LOCKED"):
+                with module._activation_guard(tmp_path):
+                    pytest.fail("exclusive mutation entered during observation")
+    with module._activation_guard(tmp_path):
+        with pytest.raises(module.DeploymentError, match="ACTIVATION_LOCKED"):
+            with module._activation_guard(tmp_path, shared=True):
+                pytest.fail("observation entered during mutation")
+
+
 @pytest.mark.parametrize("failure", [RuntimeError, KeyboardInterrupt])
 def test_guard_releases_on_every_exit_without_removing_inode(tmp_path, guard_platform, failure):
     with pytest.raises(failure):
