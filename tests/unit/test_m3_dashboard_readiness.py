@@ -37,6 +37,40 @@ def test_observations_distinguish_unavailable_causes_without_authorization(tmp_p
     assert "secret" not in json.dumps(result)
 
 
+@pytest.mark.parametrize("snapshot_commit", [None, "b" * 40])
+@pytest.mark.parametrize("environment_state", ["RUNNING", "HALTED"])
+def test_managed_readiness_rejects_fresh_snapshot_from_other_release(
+    tmp_path, snapshot_commit, environment_state
+):
+    expected = "a" * 40
+    snapshot, operations = tmp_path / "snapshot.json", tmp_path / "health.json"
+    data = json.loads(valid_snapshot())
+    data["paper"]["environment_state"] = environment_state
+    data["deployed_commit"] = snapshot_commit
+    snapshot.write_text(json.dumps(data))
+    operations.write_text(json.dumps(health()))
+
+    result = dashboard_readiness(snapshot, operations, expected_commit=expected)
+
+    assert result["paper_health"] == "UNAVAILABLE"
+    assert result["reason"] == "SNAPSHOT_IDENTITY_UNVERIFIED"
+    assert result["database"] == "UNVERIFIED"
+    assert result["execution_authorized"] is False
+
+
+def test_managed_readiness_accepts_exact_snapshot_release(tmp_path):
+    expected = "a" * 40
+    snapshot, operations = tmp_path / "snapshot.json", tmp_path / "health.json"
+    data = json.loads(valid_snapshot())
+    data["paper"]["environment_state"] = "RUNNING"
+    data["deployed_commit"] = expected
+    snapshot.write_text(json.dumps(data))
+    operations.write_text(json.dumps(health()))
+    assert dashboard_readiness(
+        snapshot, operations, expected_commit=expected
+    )["paper_health"] == "READY"
+
+
 def test_failure_history_is_bounded_and_retained_after_later_success(tmp_path,monkeypatch):
     from hope.infrastructure import paper_service as service
     from threading import Event

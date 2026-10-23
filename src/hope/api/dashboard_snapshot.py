@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -92,11 +93,15 @@ def _optional_projections(connection: Connection, generated: datetime) -> dict:
 
 def build_dashboard_snapshot(
     connection: Connection, *, statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
+    deployed_commit: str | None = None,
 ) -> dict[str, object]:
     """Read a transactionally consistent snapshot; fail closed on missing state."""
     # The first SQL statement establishes a read-only repeatable-read snapshot.
     # No lock, broker credential or mutation is required by the dashboard.
     _validate_read_budget(statement_timeout_ms, lock_timeout_ms)
+    if deployed_commit is not None and (not isinstance(deployed_commit, str)
+            or not re.fullmatch(r"[0-9a-f]{40}", deployed_commit)):
+        raise ValueError("HOPE_DASHBOARD_DEPLOYED_COMMIT_INVALID")
     connection.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
     # Transaction-local limits protect the exporter from DDL locks and expensive
     # reads without modifying the authenticated role or leaking settings into a
@@ -141,6 +146,7 @@ def build_dashboard_snapshot(
     return {
         "schema_version": 1,
         "source": "hope_postgresql",
+        "deployed_commit": deployed_commit,
         "generated_at": timestamp.astimezone(timezone.utc).isoformat(),
         "research": {"run_count": research_runs},
         "projections": _optional_projections(connection, timestamp),
@@ -165,6 +171,7 @@ def build_dashboard_snapshot(
 def export_dashboard_snapshot(
     output: Path, database_url: str, *, connect_timeout_seconds: int = 10,
     statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
+    deployed_commit: str | None = None,
 ) -> Path:
     """Atomically publish only a complete snapshot; never publish partial reads."""
     if not database_url:
@@ -177,6 +184,7 @@ def export_dashboard_snapshot(
         with engine.connect() as connection:
             snapshot = build_dashboard_snapshot(
                 connection, statement_timeout_ms=statement_timeout_ms, lock_timeout_ms=lock_timeout_ms,
+                deployed_commit=deployed_commit,
             )
             connection.rollback()
     finally:
@@ -203,5 +211,9 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Export local read-only HOPE dashboard metrics")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--deployed-commit")
     args = parser.parse_args()
-    export_dashboard_snapshot(args.output, os.environ.get("HOPE_DATABASE_URL", ""))
+    export_dashboard_snapshot(
+        args.output, os.environ.get("HOPE_DATABASE_URL", ""),
+        deployed_commit=args.deployed_commit,
+    )

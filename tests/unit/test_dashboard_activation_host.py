@@ -110,7 +110,14 @@ def test_host_stop_and_start_preserve_timer_enablement_and_never_touch_paper():
     commands=[c.args for c in host.run.call_args_list]
     assert commands==[("systemctl","stop",module.TIMER,module.EXPORT,module.WEB),
         ("systemctl","daemon-reload"),("systemctl","reset-failed",*module.DASHBOARD_UNITS),
-        ("systemctl","start",module.WEB),("systemctl","start",module.TIMER)]
+        ("systemctl","start",module.EXPORT),("systemctl","start",module.WEB),
+        ("systemctl","start",module.TIMER)]
+
+
+def test_target_export_command_is_release_bound():
+    override = module._configs(module.Layout(), NEW)[module.EXPORT]
+    assert f"--deployed-commit {NEW}" in override
+    assert override.count("--deployed-commit") == 1
 
 
 def test_privileged_commands_use_minimal_environment_and_reject_injection(monkeypatch):
@@ -135,7 +142,8 @@ def test_http_verification_accepts_missing_paper_health_without_inventing_ready(
     layout,_=setup;host=module.Host(layout);host.paper_safe=Mock();host.listener=Mock()
     page=layout.root/"releases"/NEW/"docs/dashboard/preview.html"
     page.parent.mkdir(parents=True);page.write_bytes(b"HOPE")
-    layout.snapshot.write_bytes(valid_snapshot())
+    snapshot=json.loads(valid_snapshot());snapshot["deployed_commit"]=NEW
+    layout.snapshot.write_text(json.dumps(snapshot))
     ready=dashboard_readiness(layout.snapshot,layout.health)
     identity=dict(schema="hope.dashboard-release.v1",dashboard_commit=NEW,
         paper_only=True,live_enabled=False,execution_authorized=False)
@@ -146,8 +154,15 @@ def test_http_verification_accepts_missing_paper_health_without_inventing_ready(
     replies["/snapshot.json"]=(503,b"")
     host.verify(NEW,managed=True,require_fresh=False)
     replies["/snapshot.json"]=(200,module._verified_snapshot(layout.snapshot)[0])
-    replies["/release.json"]=(200,b'{"dashboard_commit":"secret"}')
+    old_snapshot=json.loads(valid_snapshot());old_snapshot["deployed_commit"]=OLD
+    layout.snapshot.write_text(json.dumps(old_snapshot))
+    replies["/snapshot.json"]=(200,module._verified_snapshot(layout.snapshot)[0])
     monkeypatch.setattr(module.time,"sleep",lambda *a:None)
+    with pytest.raises(RuntimeError,match="VERIFICATION_TIMEOUT"):host.verify(NEW,managed=True)
+    exact_snapshot=json.loads(valid_snapshot());exact_snapshot["deployed_commit"]=NEW
+    layout.snapshot.write_text(json.dumps(exact_snapshot))
+    replies["/snapshot.json"]=(200,module._verified_snapshot(layout.snapshot)[0])
+    replies["/release.json"]=(200,b'{"dashboard_commit":"secret"}')
     with pytest.raises(RuntimeError,match="VERIFICATION_TIMEOUT"):host.verify(NEW,managed=True)
 
 

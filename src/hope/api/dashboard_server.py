@@ -36,6 +36,9 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     data = json.loads(payload)
     if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1 or data.get("source") != "hope_postgresql":
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
+    commit = data.get("deployed_commit")
+    if commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None):
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_COMMIT_INVALID")
     research = data.get("research")
     paper = data.get("paper")
     if not isinstance(research, dict) or not isinstance(paper, dict):
@@ -89,6 +92,8 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
             },
         },
     }
+    if commit is not None:
+        safe["deployed_commit"] = commit
     if recovery is not None:
         safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
     if "projections" in data:
@@ -308,7 +313,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/readiness.json":
             from hope.api.dashboard_readiness import dashboard_readiness
-            payload = json.dumps(dashboard_readiness(self.server.snapshot,self.server.operations),separators=(",",":")).encode("utf-8")
+            payload = json.dumps(dashboard_readiness(
+                self.server.snapshot, self.server.operations,
+                expected_commit=self.server.deployed_commit,
+            ),separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path == "/release.json":

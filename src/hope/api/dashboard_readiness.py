@@ -1,11 +1,14 @@
 """Safe local observations; endpoint reachability never implies PAPER readiness."""
 from datetime import UTC,datetime
 import json
+import re
 
 from hope.api.dashboard_server import _verified_operations, _verified_snapshot
 
 
-def dashboard_readiness(snapshot,operations):
+def dashboard_readiness(snapshot,operations,*,expected_commit=None):
+    if expected_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        raise ValueError("HOPE_DASHBOARD_EXPECTED_COMMIT_INVALID")
     now = datetime.now(UTC)
     result = dict(schema="hope.operational-readiness.v1",generated_at=now.isoformat(),server="RUNNING",
         paper_health="UNAVAILABLE",reason="HEALTH_MISSING",worker_report="UNKNOWN",snapshot="UNAVAILABLE",
@@ -13,14 +16,21 @@ def dashboard_readiness(snapshot,operations):
         last_successful_paper_at=None,last_failure_at=None,last_failure_code=None,
         execution_authorized=False,paper_only=True,live_enabled=False)
     data = None
+    snapshot_identity = expected_commit is None
     try:
         raw,generated = _verified_snapshot(snapshot)
         age = (now-generated).total_seconds()
         result["snapshot"] = "CURRENT" if 0<=age<=3600 else "STALE" if age>3600 else "UNAVAILABLE"
-        result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
+        candidate = json.loads(raw) if result["snapshot"]=="CURRENT" else None
+        snapshot_identity = (expected_commit is None or
+            (candidate is not None and candidate.get("deployed_commit") == expected_commit))
+        if snapshot_identity:
+            result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
+        elif result["snapshot"] == "CURRENT":
+            result["reason"] = "SNAPSHOT_IDENTITY_UNVERIFIED"
         # Historical/future snapshots cannot establish a current HALT, claim
         # count or activity observation. They also cannot authorize execution.
-        data = json.loads(raw) if result["snapshot"]=="CURRENT" else None
+        data = candidate if snapshot_identity else None
         if data and data["paper"]["environment_state"]=="HALTED":
             result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
         activity = (data or {}).get("projections",{}).get("paper_activity",{})
@@ -61,6 +71,8 @@ def dashboard_readiness(snapshot,operations):
         result["reason"] = "WORKER_STATUS_INCONSISTENT"
     elif (now-datetime.fromisoformat(health["last_success_at"])).total_seconds()>300:
         result["reason"] = "POLL_NOT_CURRENT"
+    elif not snapshot_identity:
+        result["reason"] = "SNAPSHOT_IDENTITY_UNVERIFIED"
     elif result["snapshot"]!="CURRENT":
         result["reason"] = "SNAPSHOT_NOT_CURRENT"
     elif health["schema_compatibility"]!="COMPATIBLE" or health["deployed_commit"] is None:

@@ -240,6 +240,19 @@ performed by this tool. Recheck real AWS after any independently approved reboot
 
 ## Automatic rollback and explicit crash recovery
 
+### Release-bound snapshot refresh
+
+Managed dashboard activation synchronously runs the target release's read-only
+exporter before starting the web service. The resulting snapshot carries the
+exact dashboard release SHA. The server preserves that identity through its
+sanitized snapshot boundary, and managed readiness remains `UNAVAILABLE` with
+`SNAPSHOT_IDENTITY_UNVERIFIED` unless the snapshot SHA matches the server's
+pinned dashboard SHA. A still-fresh snapshot left by the previous exporter can
+therefore neither satisfy activation verification nor appear as current
+database readiness. This binding does not authorize PAPER execution and does
+not require the independently deployed PAPER worker SHA to equal the dashboard
+release SHA.
+
 Ordinary exceptions/interrupts trigger dashboard-only rollback under the same
 guard. Previous release/runtime/schema are checked; previous pointer/drop-ins,
 web and prior timer activity are restored. Existing enablement/config/env files

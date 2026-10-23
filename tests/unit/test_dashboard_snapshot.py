@@ -79,6 +79,7 @@ def test_dashboard_snapshot_counts_and_transaction_is_read_only():
     }
     assert snapshot["research"]["run_count"] == 3
     assert snapshot["generated_at"] == "2026-10-12T00:00:00+00:00"
+    assert snapshot["deployed_commit"] is None
     assert snapshot["paper"]["recovery"] == {
         "claimed_with_effects": 1, "claimed_without_effects": 0,
         "claims_older_than_one_hour": 0, "reconciliation_receipts": 1,
@@ -87,6 +88,15 @@ def test_dashboard_snapshot_counts_and_transaction_is_read_only():
         stmt.lstrip().upper().startswith(("INSERT", "UPDATE", "DELETE", "CREATE"))
         for stmt in connection.statements
     )
+
+
+def test_snapshot_binds_reviewed_release_and_rejects_ambiguous_identity():
+    commit = "a" * 40
+    snapshot = build_dashboard_snapshot(_Connection(), deployed_commit=commit)
+    assert snapshot["deployed_commit"] == commit
+    for invalid in ("", "A" * 40, "a" * 39, "credentials", True):
+        with pytest.raises(ValueError, match="DEPLOYED_COMMIT_INVALID"):
+            build_dashboard_snapshot(_Connection(), deployed_commit=invalid)
 
 
 @pytest.mark.parametrize("state", [None, "UNKNOWN", ""])

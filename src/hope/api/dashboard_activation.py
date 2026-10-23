@@ -169,7 +169,8 @@ def _legacy_configs(layout,sha):
         WEB:common+(f"ExecStart={layout.python} -B -s -P -m hope.api.dashboard_server --port 8788 "
             f"--preview {base}/docs/dashboard/preview.html --snapshot {layout.snapshot} "
             f"--operations-status-file {layout.health} --deployed-commit {sha} --activation-gate\n"),
-        EXPORT:common+(f"ExecStart={layout.python} -B -s -P -m hope.api.dashboard_snapshot --output {layout.snapshot}\n"),
+        EXPORT:common+(f"ExecStart={layout.python} -B -s -P -m hope.api.dashboard_snapshot --output {layout.snapshot} "
+            f"--deployed-commit {sha}\n"),
     }
 
 
@@ -432,7 +433,10 @@ class Host:
     def reload(self):self.run("systemctl","daemon-reload")
 
     def start(self,timer_active):
-        self.paper_safe();self.control("reset-failed",*DASHBOARD_UNITS);self.control("start",WEB)
+        self.paper_safe();self.control("reset-failed",*DASHBOARD_UNITS)
+        # Force a target-release read-only export before the web process can
+        # represent the prior release's still-fresh snapshot as current.
+        self.control("start",EXPORT);self.control("start",WEB)
         if timer_active:self.control("start",TIMER)
 
     def release(self,sha):
@@ -582,7 +586,10 @@ class Host:
                 else:
                     snapshot,generated=_verified_snapshot(self.layout.snapshot)
                     _require(status==200 and payload==snapshot,"HTTP_SNAPSHOT_UNAVAILABLE")
-                    if require_fresh:_require(0<=(datetime.now(UTC)-generated).total_seconds()<=3600,"SNAPSHOT_NOT_CURRENT")
+                    if require_fresh:
+                        _require(0<=(datetime.now(UTC)-generated).total_seconds()<=3600,"SNAPSHOT_NOT_CURRENT")
+                        _require(json.loads(snapshot).get("deployed_commit")==sha,
+                            "SNAPSHOT_RELEASE_MISMATCH")
                 _require(self.request("/operations.json")[0] in {200,503},"HTTP_OPERATIONS_INVALID")
                 if managed:
                     status,payload=self.request("/release.json")
