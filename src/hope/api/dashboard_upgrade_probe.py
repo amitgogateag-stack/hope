@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import time
 from datetime import datetime, timezone
 from hope.api.dashboard_projection import verified_projections
@@ -94,7 +95,12 @@ def _validate_paper(value: dict) -> None:
     valid_paper_keys = (isinstance(paper, dict)
                         and set(paper) in (paper_keys, paper_keys | {"recovery"}))
     outer = {"schema_version", "source", "generated_at", "research", "paper"}
-    if (set(value) not in (outer, outer | {"projections"})
+    allowed_outer = (outer, outer | {"projections"}, outer | {"deployed_commit"},
+                     outer | {"projections", "deployed_commit"})
+    commit = value.get("deployed_commit")
+    if (set(value) not in allowed_outer
+            or (commit is not None and (not isinstance(commit, str)
+                or re.fullmatch(r"[0-9a-f]{40}", commit) is None))
             or type(value["schema_version"]) is not int or value["schema_version"] != 1
             or value["source"] != "hope_postgresql"
             or not _timestamp(value["generated_at"])
