@@ -13,13 +13,13 @@ from hope.api.dashboard_server import DashboardHTTPServer
 
 
 @contextmanager
-def dashboard(tmp_path: Path, snapshot: bytes | None = None):
+def dashboard(tmp_path: Path, snapshot: bytes | None = None, *, deployed_commit: str | None = None):
     preview = tmp_path / "preview.html"
     preview.write_text("<h1>HOPE</h1>", encoding="utf-8")
     output = tmp_path / "snapshot.json"
     if snapshot is not None:
         output.write_bytes(snapshot)
-    with DashboardHTTPServer(0, preview, output) as server:
+    with DashboardHTTPServer(0, preview, output, deployed_commit=deployed_commit) as server:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -181,6 +181,38 @@ def test_server_marks_old_snapshot_stale(tmp_path):
         status, _, body = request(server, "/status.json")
         assert status == 200
         assert json.loads(body)["data_feed"] == "STALE"
+
+
+def test_managed_server_refuses_snapshot_from_another_release(tmp_path):
+    expected = "a" * 40
+    for actual in (None, "b" * 40):
+        data = json.loads(valid_snapshot())
+        if actual is not None:
+            data["deployed_commit"] = actual
+        with dashboard(
+            tmp_path, json.dumps(data).encode("utf-8"), deployed_commit=expected,
+        ) as server:
+            status, _, body = request(server, "/snapshot.json")
+            assert status == 503 and body == b"Verified snapshot unavailable"
+            status, _, body = request(server, "/status.json")
+            assert status == 200
+            assert json.loads(body) == {
+                "schema_version": 1, "service": "RUNNING",
+                "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+            }
+
+
+def test_managed_server_serves_only_snapshot_from_exact_release(tmp_path):
+    expected = "a" * 40
+    data = json.loads(valid_snapshot())
+    data["deployed_commit"] = expected
+    with dashboard(
+        tmp_path, json.dumps(data).encode("utf-8"), deployed_commit=expected,
+    ) as server:
+        status, _, body = request(server, "/snapshot.json")
+        assert status == 200 and json.loads(body)["deployed_commit"] == expected
+        status, _, body = request(server, "/status.json")
+        assert status == 200 and json.loads(body)["data_feed"] == "CURRENT"
 
 
 @pytest.mark.parametrize("invalid", [
