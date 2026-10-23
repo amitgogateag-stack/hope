@@ -108,12 +108,57 @@ def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
             client.close();server.shutdown();serving.join(timeout=5)
 
 
+def test_concurrent_client_limit_rejects_excess_and_recovers_capacity(tmp_path):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            client_io_timeout_seconds=2,max_concurrent_clients=2) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        clients=[]
+        try:
+            for _ in range(2):
+                client=socket.create_connection(server.server_address,timeout=1)
+                client.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n")
+                clients.append(client)
+            deadline=datetime.now(timezone.utc)+timedelta(seconds=1)
+            while server._client_slots._value and datetime.now(timezone.utc)<deadline:
+                threading.Event().wait(0.01)
+            assert server._client_slots._value==0
+
+            excess=socket.create_connection(server.server_address,timeout=1)
+            try:
+                excess.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+                excess.settimeout(1)
+                try:
+                    assert excess.recv(1)==b""
+                except ConnectionResetError:
+                    pass
+            finally:
+                excess.close()
+
+            clients.pop().close()
+            deadline=datetime.now(timezone.utc)+timedelta(seconds=1)
+            while server._client_slots._value==0 and datetime.now(timezone.utc)<deadline:
+                threading.Event().wait(0.01)
+            assert request(server,"/")[0]==200
+        finally:
+            for client in clients:client.close()
+            server.shutdown();serving.join(timeout=5)
+
+
 @pytest.mark.parametrize("value",[0,-1,True,61,"5"])
 def test_invalid_client_io_timeout_is_rejected(tmp_path,value):
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
     with pytest.raises(ValueError,match="CLIENT_TIMEOUT_INVALID"):
         DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             client_io_timeout_seconds=value)
+
+
+@pytest.mark.parametrize("value",[0,-1,True,257,1.5,"2"])
+def test_invalid_concurrent_client_limit_is_rejected(tmp_path,value):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with pytest.raises(ValueError,match="CLIENT_LIMIT_INVALID"):
+        DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            max_concurrent_clients=value)
 
 
 @pytest.mark.parametrize("size,expected", [(40000, 200), (65537, 503)])
