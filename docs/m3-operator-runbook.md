@@ -71,8 +71,12 @@ status is reported separately: HTTP 200 with INVALID_RESPONSE means the body
 failed validation; STALE_RESPONSE means its generation time is over five minutes
 old and its health claims were discarded. Missing/invalid health still leaves
 /operations.json at 503 even when /readiness.json returns a useful diagnosis.
-Redirects are refused, responses are size/time bounded and only the four fixed
-loopback paths are queried. None of these observations constitutes AWS acceptance.
+Redirects are refused, responses are size/time bounded and only fixed loopback
+paths are queried. Dashboard-component audits additionally require `/release.json`
+to identify the exact reviewed dashboard SHA; a different or unsafe release claim
+is an invalid response. PAPER-component audits do not equate the independently
+deployed dashboard and worker releases. None of these observations constitutes
+AWS acceptance.
 
 The dashboard Safety view shows these distinctions, last successful service poll,
 last successful persisted PAPER job when its projection is available, and last
