@@ -71,6 +71,25 @@ def test_managed_readiness_accepts_exact_snapshot_release(tmp_path):
     )["paper_health"] == "READY"
 
 
+def test_managed_readiness_rejects_fresh_heartbeat_from_other_paper_release(tmp_path):
+    dashboard = "a" * 40
+    paper = "b" * 40
+    snapshot, operations = tmp_path / "snapshot.json", tmp_path / "health.json"
+    data = json.loads(valid_snapshot())
+    data["paper"]["environment_state"] = "RUNNING"
+    data["deployed_commit"] = dashboard
+    snapshot.write_text(json.dumps(data))
+    operations.write_text(json.dumps({**health(), "deployed_commit": "c" * 40}))
+
+    result = dashboard_readiness(
+        snapshot, operations, expected_commit=dashboard, expected_paper_commit=paper,
+    )
+
+    assert result["paper_health"] == "UNAVAILABLE"
+    assert result["reason"] == "WORKER_IDENTITY_UNVERIFIED"
+    assert result["execution_authorized"] is False
+
+
 def test_failure_history_is_bounded_and_retained_after_later_success(tmp_path,monkeypatch):
     from hope.infrastructure import paper_service as service
     from threading import Event

@@ -79,7 +79,8 @@ def test_activation_preserves_shared_pointer_and_boot_gate_then_rolls_back(setup
     assert module._pointer(layout,"current")==OLD
     assert module._pointer(layout,"dashboard-current")==NEW
     assert module._record(layout)["phase"]=="COMMITTED"
-    assert module.gate(layout,NEW,host)["status"]=="GATE_PASSED"
+    gate = module.gate(layout,NEW,host)
+    assert gate["status"]=="GATE_PASSED" and gate["paper_commit"]==OLD
     for content in module._configs(layout,NEW).values():
         assert "dashboard-current" in content and "ExecStartPre=" in content
         assert "hope-paper.service" not in content

@@ -141,7 +141,7 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 
 
-def _verified_operations(path: Path) -> bytes:
+def _verified_operations(path: Path, *, expected_commit: str | None = None) -> bytes:
     """Sanitize an optional local service heartbeat, never expose exception text."""
     if path.stat().st_size > 8192:
         raise ValueError("HOPE_OPERATIONS_STATUS_TOO_LARGE")
@@ -174,6 +174,8 @@ def _verified_operations(path: Path) -> bytes:
     compatibility = data.get("schema_compatibility", "UNKNOWN")
     if (commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None)):
         raise ValueError("HOPE_OPERATIONS_COMMIT_INVALID")
+    if expected_commit is not None and commit != expected_commit:
+        raise ValueError("HOPE_OPERATIONS_COMMIT_MISMATCH")
     if compatibility not in {"UNKNOWN", "COMPATIBLE", "INCOMPATIBLE"}:
         raise ValueError("HOPE_OPERATIONS_SCHEMA_INVALID")
     # A closed vocabulary prevents a valid-looking file from leaking arbitrary
@@ -207,12 +209,16 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     allow_reuse_address = True
 
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
-                 *, deployed_commit: str | None = None, activation_check=None):
+                 *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
+                 activation_check=None):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
+        if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
+            raise ValueError("HOPE_PAPER_COMMIT_INVALID")
         self.deployed_commit=deployed_commit
+        self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
@@ -309,7 +315,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/operations.json":
             try:
-                payload = _verified_operations(self.server.operations)
+                payload = _verified_operations(
+                    self.server.operations, expected_commit=self.server.paper_deployed_commit,
+                )
             except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified operations status unavailable")
                 return
@@ -320,6 +328,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             payload = json.dumps(dashboard_readiness(
                 self.server.snapshot, self.server.operations,
                 expected_commit=self.server.deployed_commit,
+                expected_paper_commit=self.server.paper_deployed_commit,
             ),separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return
@@ -368,12 +377,17 @@ def main() -> None:
     parser.add_argument("--activation-gate",action="store_true")
     args = parser.parse_args()
     check=None
+    paper_deployed_commit=None
     if args.activation_gate:
         if args.deployed_commit is None:parser.error("--activation-gate requires --deployed-commit")
         from hope.api.dashboard_activation import Layout,runtime_gate
-        check=lambda:runtime_gate(Layout(),args.deployed_commit)
+        layout=Layout()
+        paper_deployed_commit=runtime_gate(layout,args.deployed_commit)["paper_commit"]
+        check=lambda:runtime_gate(layout,args.deployed_commit)
     with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file,
-                             deployed_commit=args.deployed_commit,activation_check=check) as server:
+                             deployed_commit=args.deployed_commit,
+                             paper_deployed_commit=paper_deployed_commit,
+                             activation_check=check) as server:
         server.serve_forever(poll_interval=0.5)
 
 
