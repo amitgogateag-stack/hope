@@ -26,7 +26,7 @@ OPERATIONS_ERROR_CODES = {
 }
 
 
-def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
+def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tuple[bytes, datetime]:
     """Reject malformed, partial, future-dated or oversized snapshot files."""
     if path.stat().st_size > 32768:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TOO_LARGE")
@@ -39,6 +39,8 @@ def _verified_snapshot(path: Path) -> tuple[bytes, datetime]:
     commit = data.get("deployed_commit")
     if commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None):
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_COMMIT_INVALID")
+    if expected_commit is not None and commit != expected_commit:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_COMMIT_MISMATCH")
     research = data.get("research")
     paper = data.get("paper")
     if not isinstance(research, dict) or not isinstance(paper, dict):
@@ -279,7 +281,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             state = "UNAVAILABLE"
             generated_at = None
             try:
-                _, generated = _verified_snapshot(self.server.snapshot)
+                _, generated = _verified_snapshot(
+                    self.server.snapshot, expected_commit=self.server.deployed_commit,
+                )
                 generated_at = generated.isoformat()
                 state = (
                     "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > 3600
@@ -327,7 +331,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/snapshot.json":
             try:
-                payload, _ = _verified_snapshot(self.server.snapshot)
+                payload, _ = _verified_snapshot(
+                    self.server.snapshot, expected_commit=self.server.deployed_commit,
+                )
             except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified snapshot unavailable")
                 return
