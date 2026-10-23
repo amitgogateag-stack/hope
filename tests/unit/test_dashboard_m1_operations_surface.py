@@ -33,6 +33,13 @@ def test_operations_projection_whitelists_fields_and_normalizes_unknown_error(tm
     assert safe["jobs_executed"] == 0
 
 
+def test_operations_projection_rejects_heartbeat_from_other_expected_release(tmp_path):
+    path = tmp_path / "operations.json"
+    path.write_text(json.dumps(health()))
+    with pytest.raises(ValueError, match="HOPE_OPERATIONS_COMMIT_MISMATCH"):
+        _verified_operations(path, expected_commit="b" * 40)
+
+
 @pytest.mark.parametrize("code", ["PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED", "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID", "PAPER_CERTIFIED_INPUT_UNAVAILABLE"])
 def test_m2_certified_admission_error_codes_are_preserved_without_raw_errors(tmp_path, code):
     path = tmp_path / "operations.json"
@@ -102,6 +109,28 @@ def test_real_operations_endpoint_is_optional_sanitized_and_read_only(tmp_path):
             operations.write_text("partial{")
             with opener.open(base + "/status.json") as response:
                 assert json.loads(response.read())["service"] == "RUNNING"
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+
+def test_real_operations_endpoint_rejects_cross_release_heartbeat(tmp_path):
+    page = tmp_path / "preview.html"
+    page.write_text("HOPE")
+    operations = tmp_path / "health.json"
+    operations.write_text(json.dumps(health()))
+    opener = build_opener(ProxyHandler({}))
+    with DashboardHTTPServer(
+        0, page, tmp_path / "snapshot.json", operations,
+        paper_deployed_commit="b" * 40,
+    ) as server:
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            with pytest.raises(HTTPError) as error:
+                opener.open(f"http://127.0.0.1:{server.server_port}/operations.json")
+            assert error.value.code == 503
+            error.value.close()
         finally:
             server.shutdown()
             thread.join(timeout=5)

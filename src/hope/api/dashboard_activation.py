@@ -263,7 +263,8 @@ def runtime_gate(layout,target):
         and _pointer(layout,"dashboard-current")==target,"GATE_POINTER_MISMATCH")
     _check_configs(layout,target)
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
-    return {"status":"GATE_PASSED","dashboard_commit":target,"execution_authorized":False}
+    return {"status":"GATE_PASSED","dashboard_commit":target,
+        "paper_commit":record["shared"],"execution_authorized":False}
 
 
 def gate(layout,target,host):

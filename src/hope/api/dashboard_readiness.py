@@ -6,9 +6,11 @@ import re
 from hope.api.dashboard_server import _verified_operations, _verified_snapshot
 
 
-def dashboard_readiness(snapshot,operations,*,expected_commit=None):
+def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_paper_commit=None):
     if expected_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise ValueError("HOPE_DASHBOARD_EXPECTED_COMMIT_INVALID")
+    if expected_paper_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_paper_commit):
+        raise ValueError("HOPE_PAPER_EXPECTED_COMMIT_INVALID")
     now = datetime.now(UTC)
     result = dict(schema="hope.operational-readiness.v1",generated_at=now.isoformat(),server="RUNNING",
         paper_health="UNAVAILABLE",reason="HEALTH_MISSING",worker_report="UNKNOWN",snapshot="UNAVAILABLE",
@@ -63,6 +65,8 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None):
         pass  # A current durable snapshot HALT survives missing/stale health.
     elif (now-generated).total_seconds()>300:
         result["reason"] = "HEALTH_STALE"
+    elif expected_paper_commit is not None and health["deployed_commit"] != expected_paper_commit:
+        result["reason"] = "WORKER_IDENTITY_UNVERIFIED"
     elif health["state"]=="HALTED" or (data and data["paper"]["environment_state"]=="HALTED"):
         result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
     elif health["state"]!="CURRENT":
