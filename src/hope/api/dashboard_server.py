@@ -200,9 +200,14 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
-                 activation_check=None, activation_view=None):
+                 activation_check=None, activation_view=None,
+                 client_io_timeout_seconds: float = 5.0):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
+        if (isinstance(client_io_timeout_seconds, bool)
+                or not isinstance(client_io_timeout_seconds, (int, float))
+                or not 0 < client_io_timeout_seconds <= 60):
+            raise ValueError("HOPE_DASHBOARD_CLIENT_TIMEOUT_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
         if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
@@ -211,11 +216,22 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
         self.activation_view=activation_view
+        self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
         self.operations = Path(operations) if operations is not None else self.snapshot.parent / 'operations.json'
         super().__init__(("127.0.0.1", port), DashboardHandler)
+
+    def get_request(self):
+        """Bound client header and response I/O, including activation leases."""
+        request,address=super().get_request()
+        try:
+            request.settimeout(self.client_io_timeout_seconds)
+        except BaseException:
+            request.close()
+            raise
+        return request,address
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -265,7 +281,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             stack.close()
             self._respond(503,b"Dashboard activation requires recovery")
             return
-        with stack:self._dispatch_GET()
+        try:
+            with stack:self._dispatch_GET()
+        except (BrokenPipeError,ConnectionResetError,TimeoutError):
+            # A local client cannot retain an activation lease by abandoning or
+            # indefinitely stalling a response. The context exits before return.
+            return
 
     def _dispatch_GET(self) -> None:
         if self.path in {"/", "/index.html"}:

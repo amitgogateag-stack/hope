@@ -1,6 +1,7 @@
 """Private dashboard HTTP surface: loopback, read-only and no path traversal."""
 import json
 import os
+import socket
 from datetime import datetime, timedelta, timezone
 import threading
 from contextlib import contextmanager
@@ -79,6 +80,40 @@ def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,mo
             assert response[0][0]==200 and response[0][2]==b"HOPE" and exited.wait(5)
         finally:
             release.set();server.shutdown();serving.join(timeout=5);client.join(timeout=5)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Native socket backpressure is exercised on Linux CI")
+def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
+    preview=tmp_path/"preview.html";preview.write_bytes(b"x"*65536)
+    entered=threading.Event();exited=threading.Event()
+    @contextmanager
+    def activation_view():
+        entered.set()
+        try:yield
+        finally:exited.set()
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            activation_view=activation_view,client_io_timeout_seconds=0.2) as server:
+        # Force response backpressure without relying on host socket defaults.
+        server.socket.setsockopt(socket.SOL_SOCKET,socket.SO_SNDBUF,1024)
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        client=socket.socket()
+        client.setsockopt(socket.SOL_SOCKET,socket.SO_RCVBUF,1024)
+        try:
+            client.connect(server.server_address)
+            client.sendall(b"GET / HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n")
+            assert entered.wait(2)
+            assert exited.wait(2),"stalled client retained activation lease"
+            assert request(server,"/")[0]==200
+        finally:
+            client.close();server.shutdown();serving.join(timeout=5)
+
+
+@pytest.mark.parametrize("value",[0,-1,True,61,"5"])
+def test_invalid_client_io_timeout_is_rejected(tmp_path,value):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with pytest.raises(ValueError,match="CLIENT_TIMEOUT_INVALID"):
+        DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            client_io_timeout_seconds=value)
 
 
 @pytest.mark.parametrize("size,expected", [(40000, 200), (65537, 503)])
