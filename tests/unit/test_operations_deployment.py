@@ -119,6 +119,51 @@ def test_atomic_release_switch_restores_previous_on_acceptance_failure(tmp_path,
         module.switch_release(root, new, expected_current="3" * 40, accept=lambda: pytest.fail("no activation"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")
+def test_release_pointer_is_directory_synced_before_acceptance(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+    synced = []
+
+    def observe_sync(directory):
+        synced.append((directory / "current").resolve().name)
+
+    monkeypatch.setattr(module, "_sync_activation_directory", observe_sync)
+    module._switch_release(root, new, expected_current=old,
+                           accept=lambda: synced.append("accepted"),
+                           before_switch=lambda: None)
+    assert synced == [new, "accepted"]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")
+def test_release_pointer_sync_failure_restores_durable_previous_pointer(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+    calls = []
+
+    def fail_first_sync(directory):
+        calls.append((directory / "current").resolve().name)
+        if len(calls) == 1:
+            raise module.DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED")
+
+    monkeypatch.setattr(module, "_sync_activation_directory", fail_first_sync)
+    with pytest.raises(module.DeploymentError, match="LEASE_DURABILITY_FAILED"):
+        module._switch_release(root, new, expected_current=old,
+                               accept=lambda: pytest.fail("unsynced pointer must not be accepted"),
+                               before_switch=lambda: None)
+    assert calls == [new, old]
+    assert (root / "current").resolve().name == old
+    assert not (root / ".current.next").exists()
+
+
 def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     root = Path(__file__).parents[2] / "deploy/operations"
     paper = (root / "hope-paper.service").read_text()
