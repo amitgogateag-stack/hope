@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socket import SHUT_RDWR
-from threading import BoundedSemaphore, Timer
+from threading import BoundedSemaphore, Lock, Timer
 
 from hope.api.dashboard_projection import verified_projections
 from hope.infrastructure.durable_file import bounded_regular_read
@@ -230,6 +230,10 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
         self._client_slots=BoundedSemaphore(max_concurrent_clients)
+        self._transport_lock=Lock()
+        self._active_clients=0
+        self._rejected_clients_total=0
+        self._expired_clients_total=0
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.legacy = self.snapshot.parent / 'legacy-research.json'
@@ -249,31 +253,57 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     def process_request(self, request, client_address):
         """Reject excess clients before allocating another handler thread."""
         if not self._client_slots.acquire(blocking=False):
+            self._change_transport(rejected=1)
             self.shutdown_request(request)
             return
+        self._change_transport(active=1)
         try:
             super().process_request(request, client_address)
         except BaseException:
+            self._change_transport(active=-1)
             self._client_slots.release()
             raise
 
     def process_request_thread(self, request, client_address):
-        deadline=Timer(self.client_total_timeout_seconds,self._expire_request,args=(request,))
+        lifecycle_lock=Lock()
+        lifecycle={"finished":False}
+        deadline=Timer(self.client_total_timeout_seconds,self._expire_request,
+            args=(request,lifecycle_lock,lifecycle))
         deadline.daemon=True
         try:
             deadline.start()
             super().process_request_thread(request, client_address)
         finally:
+            with lifecycle_lock:lifecycle["finished"]=True
             deadline.cancel()
+            self._change_transport(active=-1)
             self._client_slots.release()
 
-    @staticmethod
-    def _expire_request(request):
+    def _expire_request(self,request,lifecycle_lock,lifecycle):
         """Interrupt all client I/O when the total wall-clock budget expires."""
+        with lifecycle_lock:
+            if lifecycle["finished"]:return
+            self._change_transport(expired=1)
         try:
             request.shutdown(SHUT_RDWR)
         except OSError:
             pass
+
+    def _change_transport(self,*,active=0,rejected=0,expired=0):
+        with self._transport_lock:
+            self._active_clients+=active
+            self._rejected_clients_total+=rejected
+            self._expired_clients_total+=expired
+
+    def transport_status(self):
+        """Return a consistent, aggregate-only transport observation."""
+        with self._transport_lock:
+            return {
+                "active_clients":self._active_clients,
+                "max_concurrent_clients":self.max_concurrent_clients,
+                "rejected_clients_total":self._rejected_clients_total,
+                "expired_clients_total":self._expired_clients_total,
+            }
 
 
 class DashboardHandler(BaseHTTPRequestHandler):
@@ -362,6 +392,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "snapshot_generated_at": generated_at,
             }, separators=(",", ":")).encode("utf-8")
             self._respond(200, payload, "application/json; charset=utf-8")
+            return
+        if self.path == "/transport.json":
+            payload=json.dumps({
+                "schema_version":1,**self.server.transport_status(),
+            },separators=(",", ":")).encode("utf-8")
+            self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path == "/legacy-research.json":
             try:
