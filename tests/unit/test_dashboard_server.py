@@ -2,6 +2,7 @@
 import json
 import os
 import socket
+import time
 from datetime import datetime, timedelta, timezone
 import threading
 from contextlib import contextmanager
@@ -145,12 +146,48 @@ def test_concurrent_client_limit_rejects_excess_and_recovers_capacity(tmp_path):
             server.shutdown();serving.join(timeout=5)
 
 
+def test_total_client_deadline_rejects_slow_drip_and_recovers_capacity(tmp_path):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            client_io_timeout_seconds=0.15,client_total_timeout_seconds=0.35,
+            max_concurrent_clients=1) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        client=socket.create_connection(server.server_address,timeout=1)
+        stop=threading.Event()
+        def drip():
+            while not stop.wait(0.03):
+                try:client.sendall(b"G")
+                except OSError:return
+        dripping=threading.Thread(target=drip,daemon=True);dripping.start()
+        try:
+            deadline=time.monotonic()+1
+            while server._client_slots._value and time.monotonic()<deadline:
+                time.sleep(0.01)
+            assert server._client_slots._value==0
+            started=time.monotonic()
+            while server._client_slots._value==0 and time.monotonic()-started<1:
+                time.sleep(0.01)
+            assert time.monotonic()-started<0.8
+            assert request(server,"/")[0]==200
+        finally:
+            stop.set();client.close();dripping.join(timeout=1)
+            server.shutdown();serving.join(timeout=5)
+
+
 @pytest.mark.parametrize("value",[0,-1,True,61,"5"])
 def test_invalid_client_io_timeout_is_rejected(tmp_path,value):
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
     with pytest.raises(ValueError,match="CLIENT_TIMEOUT_INVALID"):
         DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             client_io_timeout_seconds=value)
+
+
+@pytest.mark.parametrize("value",[0,-1,True,301,"15"])
+def test_invalid_total_client_timeout_is_rejected(tmp_path,value):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with pytest.raises(ValueError,match="CLIENT_TOTAL_TIMEOUT_INVALID"):
+        DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+            client_total_timeout_seconds=value)
 
 
 @pytest.mark.parametrize("value",[0,-1,True,257,1.5,"2"])
