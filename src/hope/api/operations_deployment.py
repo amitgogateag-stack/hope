@@ -173,10 +173,26 @@ def activation_lock(root: Path, *, expected_current: str, target_sha: str):
             yield
 
 
+def _sync_activation_directory(root: Path) -> None:
+    """Make a lease pathname transition durable on the production Linux host."""
+    if os.name != "posix":
+        return
+    descriptor = None
+    try:
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        os.fsync(descriptor)
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 @contextmanager
 def _create_activation_lease(root: Path, *, expected_current: str, target_sha: str):
     expected_current, target_sha = _sha(expected_current), _sha(target_sha)
-    path = root.resolve(strict=True) / ".activation.lock"
+    root = root.resolve(strict=True)
+    path = root / ".activation.lock"
     boot_id, started = _process_identity(os.getpid())
     record = json.dumps({
         "schema_version": 1, "pid": os.getpid(), "boot_id": boot_id,
@@ -188,12 +204,29 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
     except FileExistsError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
     try:
-        os.write(descriptor, record)
-        os.fsync(descriptor)
+        offset = 0
+        while offset < len(record):
+            written = os.write(descriptor, record[offset:])
+            if written <= 0:
+                raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED")
+            offset += written
+        try:
+            os.fsync(descriptor)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED") from exc
+        # File fsync alone does not make the newly created directory entry
+        # crash-durable. Recovery intent must survive before pointer work begins.
+        _sync_activation_directory(root)
         yield
     finally:
         os.close(descriptor)
-        path.unlink()
+        try:
+            path.unlink()
+            # A clean operation must durably clear its lease as well; otherwise
+            # a reboot can resurrect stale recovery evidence after success.
+            _sync_activation_directory(root)
+        except FileNotFoundError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED") from exc
 
 
 def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:

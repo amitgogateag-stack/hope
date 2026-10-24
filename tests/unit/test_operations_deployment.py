@@ -202,6 +202,42 @@ def test_activation_lock_serializes_complete_operation_and_cleans_after_failure(
     assert not (tmp_path / ".activation.lock").exists()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")
+def test_activation_lease_directory_entry_is_durable_before_work_and_after_cleanup(tmp_path, monkeypatch):
+    events = []
+    original_fsync = module.os.fsync
+
+    def observe_fsync(descriptor):
+        mode = module.os.fstat(descriptor).st_mode
+        events.append("directory" if module.stat.S_ISDIR(mode) else "file")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", observe_fsync)
+    with module.activation_lock(tmp_path, expected_current="1" * 40, target_sha="2" * 40):
+        assert events == ["file", "directory"]
+        assert (tmp_path / ".activation.lock").is_file()
+    assert events == ["file", "directory", "directory"]
+    assert not (tmp_path / ".activation.lock").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")
+def test_activation_never_starts_when_lease_directory_sync_fails(tmp_path, monkeypatch):
+    original_fsync = module.os.fsync
+    entered = []
+
+    def fail_directory_sync(descriptor):
+        if module.stat.S_ISDIR(module.os.fstat(descriptor).st_mode):
+            raise OSError("host-specific sync detail")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(module.os, "fsync", fail_directory_sync)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED$"):
+        with module.activation_lock(tmp_path, expected_current="1" * 40, target_sha="2" * 40):
+            entered.append(True)
+    assert entered == []
+    assert not (tmp_path / ".activation.lock").exists()
+
+
 def _proc_fixture(root, pid, *, boot="11111111-1111-1111-1111-111111111111", started="42"):
     (root / "sys/kernel/random").mkdir(parents=True)
     (root / "sys/kernel/random/boot_id").write_text(boot)
