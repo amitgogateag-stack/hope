@@ -377,6 +377,39 @@ def test_recovery_inspection_authenticates_active_process_identity(tmp_path, mon
     assert result["state"] == "STALE" and result["recovery_safe"] is True
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux no-follow descriptor binding; exercised in Linux CI")
+def test_recovery_snapshot_never_reads_replacement_deployed_metadata(tmp_path, monkeypatch):
+    old, new, _, proc = _interrupted_activation(tmp_path, monkeypatch)
+    deployed = tmp_path / "deployed.env"
+    replacement = tmp_path / "replacement-deployed.env"
+    replacement.write_text(f"HOPE_DEPLOYED_COMMIT={new}\n")
+    original_is_symlink = Path.is_symlink
+    swapped = False
+
+    def swap_after_symlink_check(path):
+        nonlocal swapped
+        result = original_is_symlink(path)
+        if path == deployed and not swapped:
+            swapped = True
+            deployed.unlink()
+            os.symlink(replacement, deployed)
+        return result
+
+    monkeypatch.setattr(Path, "is_symlink", swap_after_symlink_check)
+    result = module.inspect_activation_recovery(tmp_path, proc_root=proc)
+    assert result["deployed_metadata"] == "EXPECTED"
+    assert result["recovery_safe"] is False
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux trusted metadata inode; exercised in Linux CI")
+def test_recovery_snapshot_rejects_multiply_linked_deployed_metadata(tmp_path, monkeypatch):
+    _, _, _, proc = _interrupted_activation(tmp_path, monkeypatch)
+    os.link(tmp_path / "deployed.env", tmp_path / "deployed-alias")
+    result = module.inspect_activation_recovery(tmp_path, proc_root=proc)
+    assert result["deployed_metadata"] == "OTHER"
+    assert result["recovery_safe"] is False
+
+
 @pytest.mark.parametrize("pointer,metadata,pending", [
     ("TARGET", "EXPECTED", False), ("EXPECTED", "TARGET", False),
     ("TARGET", "TARGET", False), ("EXPECTED", "EXPECTED", True),

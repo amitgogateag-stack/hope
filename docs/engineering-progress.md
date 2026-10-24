@@ -1576,3 +1576,16 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Adversarial tests assert syscall ordering and durable rollback after a target
   sync failure. No AWS, service, database, PAPER cycle, strategy, risk, or LIVE
   state is changed.
+
+## 2026-10-24 — Descriptor-bound deployed-metadata recovery snapshot
+
+- Reproduced that recovery checked `deployed.env` as a regular non-symlink and
+  then reopened its pathname, allowing a replacement symlink to be parsed as
+  deployment truth. Multiply linked metadata was also accepted.
+- Recovery now opens metadata once with no-follow and nonblocking flags,
+  validates ownership, type, permissions, single-link identity, and a 128-byte
+  bound, then revalidates device/inode/size/mtime/ctime after the bounded read.
+  Invalid, changed, special, linked, or replacement inputs classify as `OTHER`
+  and cannot make stale recovery safe.
+- Adversarial tests demonstrate the former replacement and hard-link behavior.
+  No AWS, service, database, PAPER cycle, strategy, risk, or LIVE state changes.
