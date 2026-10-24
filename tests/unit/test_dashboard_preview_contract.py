@@ -78,6 +78,17 @@ def test_preview_displays_independent_server_and_database_health():
     assert "HOPE CI #1162 PASS" not in html
 
 
+def test_preview_displays_bounded_transport_observations_without_readiness_claims():
+    html = PREVIEW.read_text(encoding="utf-8")
+    for marker in ('id="transport-state"', 'id="transport-capacity"',
+                   'id="transport-rejected"', 'id="transport-expired"'):
+        assert marker in html
+    assert "refreshFeed('/transport.json',1024,applyTransport,clearTransport)" in html
+    assert "Object.keys(data||{}).sort()" in html
+    assert "data.active_clients>data.max_concurrent_clients" in html
+    assert "Transport counters do not establish database, PAPER worker, broker or execution readiness" in html
+
+
 
 def test_preview_legacy_counts_are_separate_from_paper_and_performance():
     html = PREVIEW.read_text(encoding="utf-8")

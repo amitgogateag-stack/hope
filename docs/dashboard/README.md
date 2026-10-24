@@ -44,6 +44,13 @@ The private web service now serves `GET /status.json` with separate `service: RU
 
 The dashboard no longer displays a hard-coded old CI success as if it were current. GitHub Actions remains authoritative for release CI.
 
+The Safety view also checks the loopback-only `GET /transport.json` endpoint every
+minute. It shows sampled active clients versus the configured cap and cumulative
+rejection/total-deadline-expiry counts for the current web process. The browser
+accepts only the fixed aggregate schema and resets the panel to unknown on an
+invalid or unavailable response. These counters are transport diagnostics, not
+database, PAPER worker, broker, or execution-readiness evidence.
+
 ## Recovery observations (v0.6, development only)
 
 The same read-only PostgreSQL transaction now exports aggregate claims with and

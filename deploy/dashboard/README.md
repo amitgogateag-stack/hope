@@ -84,6 +84,12 @@ Open `http://127.0.0.1:8787/` in Chrome/Edge. SSH tunnel authentication is the a
 
 With the service running, `curl --noproxy '*' -fsS http://127.0.0.1:8787/status.json` should return `service: RUNNING`. `data_feed: UNAVAILABLE` is expected on EC2 until all five required source tables exist and the read-only exporter is configured; do **not** manufacture database records or apply migrations just to turn this indicator green. The health endpoint does not report PAPER engine or broker readiness.
 
+`curl --noproxy '*' -fsS http://127.0.0.1:8787/transport.json` returns only
+aggregate active/configured client capacity and process-lifetime rejected/expired
+client counters. The Safety view refreshes this endpoint once per minute. Counts
+reset on web-process restart and do not establish database, PAPER worker, broker,
+or execution readiness.
+
 ## Read-only EC2 readiness diagnostic
 
 To inspect the installed web service and database compatibility before attempting any database exporter setup, run the **reviewed** `deploy/dashboard/inspect_ec2_readiness.sh` from a verified GitHub release on EC2. The diagnostic requires no credentials to be pasted into ChatGPT. It checks the local dashboard service, `/status.json`, presence of the snapshot file, the five required PostgreSQL tables and (if accessible) the separate `hope_dashboard` database role and effective table privileges. It displays **metadata only**, not table records or passwords.
