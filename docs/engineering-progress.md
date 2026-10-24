@@ -1547,3 +1547,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Adversarial tests cover disappearance, replacement with independent bytes, and
   a hard-link alias. No deployment, service, database, PAPER, strategy, risk, AWS,
   or LIVE state is changed.
+
+## 2026-10-24 — Descriptor-bound activation recovery inspection
+
+- Reproduced a check/open race where recovery inspection validated metadata for
+  one `.activation.lock` inode and then reopened the pathname, allowing a
+  replacement file to be parsed as authenticated recovery evidence.
+- Recovery now opens the lease once with no-follow and nonblocking flags,
+  validates ownership, type, permissions, link count, and the 4096-byte bound,
+  reads through that descriptor, and revalidates inode metadata after the read.
+  Changed or untrusted records fail closed with fixed error codes.
+- Activation setup also preserves the pathname when descriptor identity cannot
+  be established, rather than deleting unverified replacement evidence during
+  exception cleanup. Regression tests demonstrate both former deletion/read
+  paths before the fixes. No AWS, service, database, PAPER cycle, strategy, risk,
+  or LIVE state is changed.
