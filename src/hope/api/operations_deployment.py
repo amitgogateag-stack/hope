@@ -248,6 +248,39 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
             os.close(descriptor)
 
 
+def _read_deployed_metadata(path: Path) -> str:
+    """Read one small trusted metadata inode without reopening its pathname."""
+    descriptor = None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or before.st_size > 128):
+            return ""
+        content = b""
+        while len(content) <= 128:
+            chunk = os.read(descriptor, 129 - len(content))
+            if not chunk:
+                break
+            content += chunk
+        after = os.fstat(descriptor)
+        before_identity = (before.st_dev, before.st_ino, before.st_size,
+                           before.st_mtime_ns, before.st_ctime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size,
+                          after.st_mtime_ns, after.st_ctime_ns)
+        if (before_identity != after_identity or after.st_nlink != 1
+                or len(content) != after.st_size or len(content) > 128):
+            return ""
+        return content.decode("ascii")
+    except (OSError, UnicodeError):
+        return ""
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:
     """Diagnose an interrupted activation without removing locks or changing services."""
     root = root.resolve(strict=True)
@@ -285,10 +318,7 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
         resolved = None
     pointer = "EXPECTED" if resolved == releases / expected else "TARGET" if resolved == releases / target else "OTHER"
     deployed = root / "deployed.env"
-    try:
-        content = deployed.read_text() if deployed.is_file() and not deployed.is_symlink() else ""
-    except OSError:
-        content = ""
+    content = _read_deployed_metadata(deployed)
     metadata = ("EXPECTED" if content == f"HOPE_DEPLOYED_COMMIT={expected}\n" else
                 "TARGET" if content == f"HOPE_DEPLOYED_COMMIT={target}\n" else "OTHER")
     pending = "PRESENT" if (root / ".current.next").exists() or (root / ".current.next").is_symlink() else "ABSENT"
