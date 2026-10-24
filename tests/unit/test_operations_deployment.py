@@ -409,7 +409,8 @@ def _interrupted_activation(tmp_path, monkeypatch):
               "boot_id": "11111111-1111-1111-1111-111111111111",
               "process_start_ticks": "42", "expected_current": old, "target_sha": new}
     (tmp_path / ".activation.lock").write_text(json.dumps(record))
-    monkeypatch.setattr(module.os, "geteuid", lambda: (tmp_path / ".activation.lock").stat().st_uid)
+    lease_uid = (tmp_path / ".activation.lock").stat().st_uid
+    monkeypatch.setattr(module.os, "geteuid", lambda: lease_uid)
     return old, new, pid, proc
 
 
@@ -519,11 +520,12 @@ def test_recovery_inspection_never_reads_replacement_path_after_validation(tmp_p
     assert replacement.is_file() and replacement.read_text().startswith("{")
 
 
-def test_safe_stale_recovery_stops_services_and_removes_only_unchanged_lock(tmp_path, monkeypatch):
+def test_safe_stale_recovery_stops_services_and_archives_unchanged_lock(tmp_path, monkeypatch):
     old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
     (proc / str(pid) / "stat").unlink()
     before_pointer = os.readlink(tmp_path / "current")
     before_metadata = (tmp_path / "deployed.env").read_bytes()
+    before_lease = (tmp_path / ".activation.lock").read_bytes()
     calls = []
     result = module.recover_stale_activation(
         tmp_path, expected_current=old, target_sha=new,
@@ -532,8 +534,44 @@ def test_safe_stale_recovery_stops_services_and_removes_only_unchanged_lock(tmp_
     assert result == {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
                       "expected_current": old, "target_sha": new}
     assert calls == ["stopped"] and not (tmp_path / ".activation.lock").exists()
+    archives = list(tmp_path.glob(".activation.recovered-*"))
+    assert len(archives) == 1
+    assert (archives[0] / "lease.json").read_bytes() == before_lease
     assert os.readlink(tmp_path / "current") == before_pointer
     assert (tmp_path / "deployed.env").read_bytes() == before_metadata
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux atomic recovery quarantine; exercised in Linux CI")
+def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    lease = tmp_path / ".activation.lock"
+    replacement = tmp_path / "independent-recovery-evidence"
+    replacement_payload = json.dumps({
+        "schema_version": 1, "pid": pid, "boot_id": "f" * 32,
+        "process_start_ticks": "999", "expected_current": old,
+        "target_sha": new,
+    }, sort_keys=True).encode()
+    replacement.write_bytes(replacement_payload)
+    replacement.chmod(0o600)
+    original_replace = os.replace
+
+    def swap_before_quarantine(source, destination):
+        if Path(source) == lease:
+            lease.unlink()
+            original_replace(replacement, lease)
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", swap_before_quarantine)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_STATE_CHANGED$"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=lambda: None, proc_root=proc,
+        )
+    assert not lease.exists()
+    archives = list(tmp_path.glob(".activation.recovered-*"))
+    assert len(archives) == 1
+    assert (archives[0] / "lease.json").read_bytes() == replacement_payload
 
 
 @pytest.mark.parametrize("failure", ["active", "expected", "target", "mixed", "pending"])
