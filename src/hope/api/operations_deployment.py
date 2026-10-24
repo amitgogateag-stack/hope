@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 from pathlib import Path
@@ -330,9 +331,8 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
     }
 
 
-def _read_activation_lock(root: Path) -> tuple[bytes, tuple[int, int, int, int, str]]:
+def _read_activation_record(path: Path) -> tuple[bytes, tuple[int, int, int, int, str]]:
     """Validate and read one bounded lease inode through a no-follow descriptor."""
-    path = root / ".activation.lock"
     descriptor = None
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
@@ -367,9 +367,57 @@ def _read_activation_lock(root: Path) -> tuple[bytes, tuple[int, int, int, int, 
             os.close(descriptor)
 
 
+def _read_activation_lock(root: Path) -> tuple[bytes, tuple[int, int, int, int, str]]:
+    return _read_activation_record(root / ".activation.lock")
+
+
 def _activation_lock_fingerprint(root: Path) -> tuple[int, int, int, int, str]:
     """Bind recovery to the exact regular-file lease that was inspected."""
     return _read_activation_lock(root)[1]
+
+
+def _quarantine_activation_lock(
+    root: Path, fingerprint: tuple[int, int, int, int, str],
+) -> None:
+    """Durably archive recovery evidence without conditionally unlinking a pathname."""
+    archive = None
+    for _ in range(8):
+        candidate = root / f".activation.recovered-{secrets.token_hex(16)}"
+        try:
+            candidate.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        archive = candidate
+        break
+    if archive is None:
+        raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNAVAILABLE")
+
+    # Persist the unique empty directory before moving the only lease name into
+    # it. A raced replacement is moved rather than destroyed and will fail the
+    # fingerprint check below while remaining available for forensic review.
+    _sync_activation_directory(root)
+    destination = archive / "lease.json"
+    try:
+        os.replace(root / ".activation.lock", destination)
+    except FileNotFoundError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    _sync_activation_directory(archive)
+    _sync_activation_directory(root)
+
+    try:
+        moved_fingerprint = _read_activation_record(destination)[1]
+    except FileNotFoundError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    try:
+        (root / ".activation.lock").lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+    if moved_fingerprint != fingerprint:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
 
 
 def recover_stale_activation(
@@ -410,12 +458,7 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
         repeated = inspect_activation_recovery(root, proc_root=proc_root)
         if repeated != diagnosis or _activation_lock_fingerprint(root) != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
-        (root / ".activation.lock").unlink()
-        descriptor = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
+        _quarantine_activation_lock(root, fingerprint)
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
     return {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",

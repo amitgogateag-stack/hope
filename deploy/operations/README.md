@@ -351,11 +351,14 @@ completion and process death. Do not remove, replace or rotate it: all activatio
 and recovery writers must use this guarded implementation and the same root.
 Read-only diagnosis does not acquire or create the guard.
 
-This closes a reproduced recovery race between the final lease fingerprint read
-and unlink: another recovery could remove the stale inode, allowing a new
-activation lease to be created and then incorrectly deleted by the first
-recovery. Fingerprint checks remain defense in depth; they are not atomic unlink.
-The guard is held across quiescence, final checks, unlink and directory fsync.
+This closes reproduced recovery races at the final lease transition. The guard
+is held across quiescence, final checks, quarantine and directory fsync.
+Recovery never unlinks `.activation.lock` by pathname. It atomically moves the
+entry into a unique mode-0700 `.activation.recovered-*` directory, durably syncs
+both directories, and authenticates the moved `lease.json` against the inspected
+fingerprint. A raced replacement is preserved in that archive and fails closed
+as changed state. Successful recovery also retains its authenticated archive as
+an audit artifact; operators must not treat its presence as a new active lease.
 Contenders fail before stopping services or writing leases. Process death releases
 the kernel guard but preserves the separate lease for explicit operator recovery.
 Symlink, hard-link, foreign-owner and writable-by-others guard files are rejected.

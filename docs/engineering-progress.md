@@ -1589,3 +1589,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   and cannot make stale recovery safe.
 - Adversarial tests demonstrate the former replacement and hard-link behavior.
   No AWS, service, database, PAPER cycle, strategy, risk, or LIVE state changes.
+
+## 2026-10-24 — Durable stale-lease evidence quarantine
+
+- Reproduced that stale recovery authenticated `.activation.lock` and later
+  unlinked the pathname, so a replacement introduced at that final boundary
+  could be destroyed while recovery incorrectly reported success.
+- Recovery now creates a unique mode-0700 archive, persists it, atomically moves
+  the lease to `lease.json`, syncs both source and archive directories, and
+  authenticates the moved record against the original bounded fingerprint.
+- Successful recovery retains the authenticated record for audit. A raced
+  replacement is also retained but returns
+  `OPERATIONS_ACTIVATION_STATE_CHANGED`; no recovery evidence is pathname-deleted.
+- Regression-first tests cover both authenticated archival and replacement at
+  the quarantine boundary. No AWS, service, database, PAPER cycle, strategy,
+  risk, or LIVE state changes.
