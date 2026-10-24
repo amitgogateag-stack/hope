@@ -554,15 +554,28 @@ def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monk
     }, sort_keys=True).encode()
     replacement.write_bytes(replacement_payload)
     replacement.chmod(0o600)
-    original_replace = os.replace
+    original_replace, original_rename = os.replace, os.rename
+    swapped = False
 
-    def swap_before_quarantine(source, destination):
-        if Path(source) == lease:
+    def install_replacement():
+        nonlocal swapped
+        if not swapped:
+            swapped = True
             lease.unlink()
             original_replace(replacement, lease)
+
+    def swap_before_quarantine(source, destination, *args, **kwargs):
+        if Path(source) == lease:
+            install_replacement()
         return original_replace(source, destination)
 
+    def swap_before_descriptor_quarantine(source, destination, *args, **kwargs):
+        if source == ".activation.lock":
+            install_replacement()
+        return original_rename(source, destination, *args, **kwargs)
+
     monkeypatch.setattr(module.os, "replace", swap_before_quarantine)
+    monkeypatch.setattr(module.os, "rename", swap_before_descriptor_quarantine)
     with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_STATE_CHANGED$"):
         module.recover_stale_activation(
             tmp_path, expected_current=old, target_sha=new,
@@ -572,6 +585,48 @@ def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monk
     archives = list(tmp_path.glob(".activation.recovered-*"))
     assert len(archives) == 1
     assert (archives[0] / "lease.json").read_bytes() == replacement_payload
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux directory descriptor binding; exercised in Linux CI")
+def test_stale_recovery_never_moves_lease_through_replaced_archive_path(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    outside_lease = outside / "lease.json"
+    outside_payload = b"independent evidence\n"
+    outside_lease.write_bytes(outside_payload)
+    original_replace, original_rename = os.replace, os.rename
+    attacked = False
+
+    def replace_archive_path():
+        nonlocal attacked
+        if attacked:
+            return
+        attacked = True
+        archive, = tmp_path.glob(".activation.recovered-*")
+        archive.rmdir()
+        os.symlink(outside, archive, target_is_directory=True)
+
+    def attacked_replace(source, destination, *args, **kwargs):
+        if Path(source) == tmp_path / ".activation.lock":
+            replace_archive_path()
+        return original_replace(source, destination, *args, **kwargs)
+
+    def attacked_rename(source, destination, *args, **kwargs):
+        if source == ".activation.lock" or Path(source) == tmp_path / ".activation.lock":
+            replace_archive_path()
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "replace", attacked_replace)
+    monkeypatch.setattr(module.os, "rename", attacked_rename)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_STATE_CHANGED$"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=lambda: None, proc_root=proc,
+        )
+    assert attacked is True
+    assert outside_lease.read_bytes() == outside_payload
 
 
 @pytest.mark.parametrize("failure", ["active", "expected", "target", "mixed", "pending"])
