@@ -40,6 +40,7 @@ const metric = (id, value) => {
  el(id).classList.toggle('unknown', value === 'Not connected');
 };
 const tag = (id, value, tone='neutral') => { el(id).textContent = value; el(id).className = 'tag ' + tone; };
+el('safety').insertAdjacentHTML('afterbegin','<div class="panel"><h2>Dashboard transport observations</h2><p>Aggregate loopback request capacity only; the active sample includes this telemetry request. Totals reset when the web process restarts.</p><div class="status-row"><span>Transport capacity</span><span id="transport-state" class="tag neutral">UNKNOWN</span></div><div class="status-row"><span>Sampled active / configured clients</span><span id="transport-capacity" class="mono">Not connected</span></div><div class="status-row"><span>Rejected clients (this process)</span><span id="transport-rejected" class="mono">Not connected</span></div><div class="status-row"><span>Expired clients (this process)</span><span id="transport-expired" class="mono">Not connected</span></div><p class="footer">Transport counters do not establish database, PAPER worker, broker or execution readiness.</p></div>');
 const recoveryMetrics = [
  ['recovery-with-effects', 'claimed_with_effects'], ['recovery-without-effects', 'claimed_without_effects'],
  ['recovery-stale', 'claims_older_than_one_hour'], ['recovery-receipts', 'reconciliation_receipts']
@@ -228,6 +229,23 @@ const applyHealth = data => {
  const time = data.data_feed === 'UNAVAILABLE' ? null : stamp(data.snapshot_generated_at);
  healthCache = {data,time,received:Date.now()}; renderHealth();
 };
+const clearTransport = () => {
+ tag('transport-state','UNKNOWN');
+ for (const id of ['transport-capacity','transport-rejected','transport-expired']) metric(id,'Not connected');
+};
+const applyTransport = data => {
+ const keys=['active_clients','max_concurrent_clients','rejected_clients_total','expired_clients_total'];
+ const fields=['schema_version',...keys].sort();
+ if (JSON.stringify(Object.keys(data||{}).sort())!==JSON.stringify(fields) ||
+     data?.schema_version!==1 || !keys.every(k=>integer(data[k])) ||
+     data.max_concurrent_clients<1 || data.max_concurrent_clients>256 ||
+     data.active_clients>data.max_concurrent_clients) throw Error('Invalid transport status');
+ const available=data.active_clients<data.max_concurrent_clients;
+ tag('transport-state',available?'AVAILABLE':'AT CAPACITY',available?'':'off');
+ metric('transport-capacity',data.active_clients.toLocaleString()+' / '+data.max_concurrent_clients.toLocaleString());
+ metric('transport-rejected',data.rejected_clients_total.toLocaleString());
+ metric('transport-expired',data.expired_clients_total.toLocaleString());
+};
 const operationsErrorCodes = ['PAPER_ENVIRONMENT_HALTED','PAPER_SERVICE_DATABASE_UNAVAILABLE','PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE','PAPER_SERVICE_SCHEMA_INCOMPATIBLE','PAPER_SERVICE_PLAN_UNAVAILABLE','PAPER_SERVICE_RUN_LIMIT_EXCEEDED','PAPER_SERVICE_CLOCK_INVALID','PAPER_SCHEDULER_CONCURRENT_RUN','PAPER_JOB_INCOMPLETE_PRIOR_CLAIM','PAPER_MARKET_DATA_STALE','PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT','PAPER_SERVICE_CYCLE_FAILED','PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED','PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE','PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID','PAPER_CERTIFIED_INPUT_UNAVAILABLE'];
 const clearOperations = () => {
  operationsCache = null;
@@ -334,10 +352,11 @@ if (location.protocol === 'http:' && ['127.0.0.1','localhost'].includes(location
  const refresh = () => refreshFeed('/snapshot.json',32768,data=>applySnapshot(data,'automatic refresh'),retainSnapshotAfterFailure);
  const refreshLegacy = () => refreshFeed('/legacy-research.json',8192,applyLegacy,()=>clearLegacy('Legacy research inventory unavailable · no counts inferred'));
  const refreshHealth = () => refreshFeed('/status.json',4096,applyHealth,clearHealth);
+ const refreshTransport = () => refreshFeed('/transport.json',1024,applyTransport,clearTransport);
  const refreshOperations = () => refreshFeed('/operations.json',8192,applyOperations,clearOperations);
  const refreshReadiness = () => refreshFeed('/readiness.json',8192,applyReadiness,clearReadiness);
- refresh(); refreshLegacy(); refreshHealth(); refreshOperations(); refreshReadiness();
- setInterval(refresh, 60000); setInterval(refreshLegacy, 60000); setInterval(refreshHealth, 60000); setInterval(refreshOperations, 60000); setInterval(refreshReadiness, 60000);
+ refresh(); refreshLegacy(); refreshHealth(); refreshTransport(); refreshOperations(); refreshReadiness();
+ setInterval(refresh, 60000); setInterval(refreshLegacy, 60000); setInterval(refreshHealth, 60000); setInterval(refreshTransport, 60000); setInterval(refreshOperations, 60000); setInterval(refreshReadiness, 60000);
 }
 </script>
 </body></html>

@@ -15,7 +15,7 @@ function browser() {
  const elements=new Map(), timers=new Map(), calls=[];
  class Clock extends Date { static now() { return now; } }
  const document={querySelectorAll:()=>[],getElementById:id=>{
-  if (!elements.has(id)) elements.set(id,{textContent:'Not connected',className:'',style:{},files:[],listeners:{},classList:{toggle(){}},addEventListener(name,fn){this.listeners[name]=fn;}});
+  if (!elements.has(id)) elements.set(id,{textContent:'Not connected',className:'',style:{},files:[],listeners:{},classList:{toggle(){}},addEventListener(name,fn){this.listeners[name]=fn;},insertAdjacentHTML(){}});
   return elements.get(id);
  }};
  const context=vm.createContext({document,location:{protocol:'file:'},Date:Clock,AbortController,console,
@@ -25,7 +25,7 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyOperations,applyReadiness,clearReadiness,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
@@ -122,6 +122,22 @@ async function main() {
   assert.equal(b.element('web-service').textContent,'UNKNOWN');
   assert.equal(b.element('feed-health').textContent,'UNKNOWN');
   assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null}));
+ }
+ {
+  const b=browser();
+  b.api.applyTransport({schema_version:1,active_clients:1,max_concurrent_clients:32,rejected_clients_total:2,expired_clients_total:3});
+  assert.equal(b.element('transport-state').textContent,'AVAILABLE');
+  assert.equal(b.element('transport-capacity').textContent,'1 / 32');
+  assert.equal(b.element('transport-rejected').textContent,'2');
+  assert.equal(b.element('transport-expired').textContent,'3');
+  b.api.applyTransport({schema_version:1,active_clients:2,max_concurrent_clients:2,rejected_clients_total:0,expired_clients_total:0});
+  assert.equal(b.element('transport-state').textContent,'AT CAPACITY');
+  for(const change of [{active_clients:3},{active_clients:true},{max_concurrent_clients:0},{max_concurrent_clients:257},{rejected_clients_total:-1},{expired_clients_total:1.5},{private_detail:'secret'}]) {
+   assert.throws(()=>b.api.applyTransport({schema_version:1,active_clients:1,max_concurrent_clients:2,rejected_clients_total:0,expired_clients_total:0,...change}));
+  }
+  b.api.clearTransport();
+  assert.equal(b.element('transport-state').textContent,'UNKNOWN');
+  assert.equal(b.element('transport-capacity').textContent,'Not connected');
  }
  {
   const b=browser(); b.api.applyOperations(ops());
