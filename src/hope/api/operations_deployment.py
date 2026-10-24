@@ -203,7 +203,17 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
         descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
+    lease_identity = None
     try:
+        if os.name == "posix":
+            try:
+                created = os.fstat(descriptor)
+            except OSError as exc:
+                raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_UNTRUSTED") from exc
+            if (not stat.S_ISREG(created.st_mode) or created.st_uid != os.geteuid()
+                    or created.st_mode & 0o022 or created.st_nlink != 1):
+                raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_UNTRUSTED")
+            lease_identity = (created.st_dev, created.st_ino)
         offset = 0
         while offset < len(record):
             written = os.write(descriptor, record[offset:])
@@ -219,14 +229,20 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
         _sync_activation_directory(root)
         yield
     finally:
-        os.close(descriptor)
         try:
+            if lease_identity is not None:
+                named = path.lstat()
+                if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                        or (named.st_dev, named.st_ino) != lease_identity):
+                    raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED")
             path.unlink()
             # A clean operation must durably clear its lease as well; otherwise
             # a reboot can resurrect stale recovery evidence after success.
             _sync_activation_directory(root)
         except FileNotFoundError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED") from exc
+        finally:
+            os.close(descriptor)
 
 
 def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:
