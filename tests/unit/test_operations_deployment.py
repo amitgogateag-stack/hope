@@ -238,6 +238,32 @@ def test_activation_never_starts_when_lease_directory_sync_fails(tmp_path, monke
     assert not (tmp_path / ".activation.lock").exists()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux inode identity; exercised in Linux CI")
+@pytest.mark.parametrize("change", ["missing", "replacement", "hardlink"])
+def test_activation_cleanup_never_deletes_changed_lease_path(tmp_path, change):
+    lease = tmp_path / ".activation.lock"
+    alias = tmp_path / "lease-alias"
+    replacement = b"independent recovery evidence"
+
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_LEASE_CHANGED$"):
+        with module.activation_lock(tmp_path, expected_current="1" * 40, target_sha="2" * 40):
+            original = lease.read_bytes()
+            if change == "hardlink":
+                os.link(lease, alias)
+            else:
+                lease.unlink()
+            if change == "replacement":
+                lease.write_bytes(replacement)
+                lease.chmod(0o600)
+
+    if change == "missing":
+        assert not lease.exists()
+    elif change == "replacement":
+        assert lease.read_bytes() == replacement
+    else:
+        assert lease.read_bytes() == alias.read_bytes() == original
+
+
 def _proc_fixture(root, pid, *, boot="11111111-1111-1111-1111-111111111111", started="42"):
     (root / "sys/kernel/random").mkdir(parents=True)
     (root / "sys/kernel/random/boot_id").write_text(boot)

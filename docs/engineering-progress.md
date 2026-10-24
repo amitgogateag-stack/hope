@@ -1533,3 +1533,17 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Added adversarial syscall-order and directory-sync-failure tests. This changes
   no release pointer, service state, database, strategy, risk rule, PAPER cycle,
   AWS resource, or LIVE policy.
+
+## 2026-10-24 — Activation lease inode-bound cleanup
+
+- Reproduced that clean activation teardown deleted `.activation.lock` by
+  pathname even when the path had been replaced after lease creation. That could
+  remove independent recovery evidence and falsely make the next activation look
+  unfenced.
+- The activation lease now records its created device/inode identity and removes
+  only that same, singly linked regular file. Missing, replaced, special, or
+  multiply linked paths fail closed as `OPERATIONS_ACTIVATION_LEASE_CHANGED` and
+  remain available for operator review.
+- Adversarial tests cover disappearance, replacement with independent bytes, and
+  a hard-link alias. No deployment, service, database, PAPER, strategy, risk, AWS,
+  or LIVE state is changed.
