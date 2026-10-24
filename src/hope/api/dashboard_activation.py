@@ -569,7 +569,7 @@ class Host:
         return self.show(TIMER)["ActiveState"]=="active"
 
     def request(self,path):
-        _require(path in {"/","/status.json","/snapshot.json","/operations.json","/readiness.json","/release.json"},"HTTP_PATH_DENIED")
+        _require(path in {"/","/status.json","/snapshot.json","/operations.json","/readiness.json","/release.json","/transport.json"},"HTTP_PATH_DENIED")
         try:
             with build_opener(ProxyHandler({}),_NoRedirect()).open("http://127.0.0.1:8788"+path,timeout=5) as response:
                 payload=response.read(2*1024*1024+1)
@@ -600,6 +600,19 @@ class Host:
                         _require(json.loads(snapshot).get("deployed_commit")==sha,
                             "SNAPSHOT_RELEASE_MISMATCH")
                 _require(self.request("/operations.json")[0] in {200,503},"HTTP_OPERATIONS_INVALID")
+                if require_fresh:
+                    status,payload=self.request("/transport.json");transport=json.loads(payload)
+                    fields={"schema_version","active_clients","max_concurrent_clients",
+                        "rejected_clients_total","expired_clients_total"}
+                    _require(status==200 and set(transport)==fields
+                        and type(transport.get("schema_version")) is int
+                        and transport["schema_version"]==1,"HTTP_TRANSPORT_INVALID")
+                    for key in fields-{"schema_version"}:
+                        _require(type(transport.get(key)) is int and transport[key]>=0,
+                            "HTTP_TRANSPORT_INVALID")
+                    _require(1<=transport["max_concurrent_clients"]<=256
+                        and transport["active_clients"]<=transport["max_concurrent_clients"],
+                        "HTTP_TRANSPORT_INVALID")
                 if managed:
                     status,payload=self.request("/release.json")
                     _require(status==200 and json.loads(payload)==dict(schema="hope.dashboard-release.v1",

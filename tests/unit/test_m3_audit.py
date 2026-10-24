@@ -58,6 +58,29 @@ def test_http_success_filters_raw_metadata(monkeypatch):
     assert opener.open.call_args.args[0]=="http://127.0.0.1:8788/status.json"
 
 
+def test_transport_endpoint_returns_only_validated_aggregate_counts(monkeypatch):
+    value={"schema_version":1,"active_clients":1,"max_concurrent_clients":32,
+        "rejected_clients_total":2,"expired_clients_total":3}
+    response_for(monkeypatch,json.dumps(value).encode())
+    assert module._endpoint("/transport.json")=={"http_status":200,
+        "active_clients":1,"max_concurrent_clients":32,
+        "rejected_clients_total":2,"expired_clients_total":3}
+
+
+@pytest.mark.parametrize("change",[
+    {"schema_version":True},{"active_clients":True},{"active_clients":33},
+    {"max_concurrent_clients":0},{"max_concurrent_clients":257},
+    {"rejected_clients_total":-1},{"expired_clients_total":1.5},
+    {"private_detail":"secret"},
+])
+def test_transport_endpoint_rejects_malformed_or_extended_contract(monkeypatch,change):
+    value={"schema_version":1,"active_clients":1,"max_concurrent_clients":32,
+        "rejected_clients_total":0,"expired_clients_total":0,**change}
+    response_for(monkeypatch,json.dumps(value).encode())
+    assert module._endpoint("/transport.json")=={
+        "http_status":200,"status":"INVALID_RESPONSE"}
+
+
 def test_dashboard_release_endpoint_requires_exact_expected_identity(monkeypatch):
     expected="a"*40
     response_for(monkeypatch,json.dumps({"schema":"hope.dashboard-release.v1",
@@ -219,6 +242,11 @@ def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
             assert result["paper_health"]==expected and result["reason"]==reason
             assert result["execution_authorized"] is False
             assert module._endpoint("/operations.json")["http_status"]==operations_status
+            transport=module._endpoint("/transport.json")
+            assert transport["http_status"]==200
+            assert 1<=transport["active_clients"]<=transport["max_concurrent_clients"]
+            assert transport["rejected_clients_total"]==0
+            assert transport["expired_clients_total"]==0
         finally:server.shutdown();thread.join(timeout=5)
 
 
