@@ -1601,6 +1601,10 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Successful recovery retains the authenticated record for audit. A raced
   replacement is also retained but returns
   `OPERATIONS_ACTIVATION_STATE_CHANGED`; no recovery evidence is pathname-deleted.
+- The Linux quarantine transition, directory syncs, and bounded record read are
+  bound to validated open root/archive directory descriptors. Replacing the
+  archive pathname cannot redirect the lease into an external directory;
+  archive identity is revalidated before recovery reports success.
 - Regression-first tests cover both authenticated archival and replacement at
-  the quarantine boundary. No AWS, service, database, PAPER cycle, strategy,
-  risk, or LIVE state changes.
+  the quarantine boundary, including archive-parent replacement. No AWS,
+  service, database, PAPER cycle, strategy, risk, or LIVE state changes.

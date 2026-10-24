@@ -331,12 +331,14 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
     }
 
 
-def _read_activation_record(path: Path) -> tuple[bytes, tuple[int, int, int, int, str]]:
+def _read_activation_record(
+    path: Path | str, *, directory_descriptor: int | None = None,
+) -> tuple[bytes, tuple[int, int, int, int, str]]:
     """Validate and read one bounded lease inode through a no-follow descriptor."""
     descriptor = None
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path, flags, dir_fd=directory_descriptor)
         before = os.fstat(descriptor)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
                 or before.st_mode & 0o022 or before.st_nlink != 1
@@ -393,31 +395,60 @@ def _quarantine_activation_lock(
         raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNAVAILABLE")
 
     # Persist the unique empty directory before moving the only lease name into
-    # it. A raced replacement is moved rather than destroyed and will fail the
-    # fingerprint check below while remaining available for forensic review.
-    _sync_activation_directory(root)
-    destination = archive / "lease.json"
-    try:
-        os.replace(root / ".activation.lock", destination)
-    except FileNotFoundError as exc:
-        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
-    except OSError as exc:
-        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
-    _sync_activation_directory(archive)
-    _sync_activation_directory(root)
-
-    try:
+    # it. Linux binds the transition and subsequent read to open directory
+    # descriptors so replacing the archive pathname cannot redirect the move.
+    if os.name != "posix":
+        _sync_activation_directory(root)
+        destination = archive / "lease.json"
+        try:
+            os.replace(root / ".activation.lock", destination)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
         moved_fingerprint = _read_activation_record(destination)[1]
-    except FileNotFoundError as exc:
-        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+        if moved_fingerprint != fingerprint:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        return
+
+    root_descriptor = archive_descriptor = None
     try:
-        (root / ".activation.lock").lstat()
-    except FileNotFoundError:
-        pass
-    else:
-        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
-    if moved_fingerprint != fingerprint:
-        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        root_descriptor = os.open(root, flags)
+        archive_descriptor = os.open(archive, flags)
+        created = os.fstat(archive_descriptor)
+        archive_identity = (created.st_dev, created.st_ino)
+        if (not stat.S_ISDIR(created.st_mode) or created.st_uid != os.geteuid()
+                or stat.S_IMODE(created.st_mode) != 0o700):
+            raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNTRUSTED")
+        try:
+            os.fsync(root_descriptor)
+            os.rename(".activation.lock", "lease.json",
+                      src_dir_fd=root_descriptor, dst_dir_fd=archive_descriptor)
+            os.fsync(archive_descriptor)
+            os.fsync(root_descriptor)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+        moved_fingerprint = _read_activation_record(
+            "lease.json", directory_descriptor=archive_descriptor,
+        )[1]
+        try:
+            os.stat(".activation.lock", dir_fd=root_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        try:
+            named_archive = archive.lstat()
+        except FileNotFoundError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+        if (not stat.S_ISDIR(named_archive.st_mode)
+                or (named_archive.st_dev, named_archive.st_ino) != archive_identity
+                or moved_fingerprint != fingerprint):
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+    finally:
+        if archive_descriptor is not None:
+            os.close(archive_descriptor)
+        if root_descriptor is not None:
+            os.close(root_descriptor)
 
 
 def recover_stale_activation(
