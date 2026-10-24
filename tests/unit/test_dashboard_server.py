@@ -140,6 +140,10 @@ def test_concurrent_client_limit_rejects_excess_and_recovers_capacity(tmp_path):
             deadline=datetime.now(timezone.utc)+timedelta(seconds=1)
             while server._client_slots._value==0 and datetime.now(timezone.utc)<deadline:
                 threading.Event().wait(0.01)
+            assert server.transport_status()=={
+                "active_clients":1,"max_concurrent_clients":2,
+                "rejected_clients_total":1,"expired_clients_total":0,
+            }
             assert request(server,"/")[0]==200
         finally:
             for client in clients:client.close()
@@ -168,6 +172,10 @@ def test_total_client_deadline_rejects_slow_drip_and_recovers_capacity(tmp_path)
             while server._client_slots._value==0 and time.monotonic()-started<1:
                 time.sleep(0.01)
             assert time.monotonic()-started<0.8
+            assert server.transport_status()=={
+                "active_clients":0,"max_concurrent_clients":1,
+                "rejected_clients_total":0,"expired_clients_total":1,
+            }
             assert request(server,"/")[0]==200
         finally:
             stop.set();client.close();dripping.join(timeout=1)
@@ -331,6 +339,16 @@ def test_server_reports_liveness_separately_from_missing_data(tmp_path):
         assert json.loads(body) == {
             "schema_version": 1, "service": "RUNNING",
             "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+        }
+
+
+def test_server_reports_aggregate_transport_status_separately(tmp_path):
+    with dashboard(tmp_path) as server:
+        status,headers,body=request(server,"/transport.json")
+        assert status==200 and headers["Cache-Control"].startswith("no-store")
+        assert json.loads(body)=={
+            "schema_version":1,"active_clients":1,"max_concurrent_clients":32,
+            "rejected_clients_total":0,"expired_clients_total":0,
         }
 
 
