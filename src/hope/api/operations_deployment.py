@@ -210,10 +210,10 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
                 created = os.fstat(descriptor)
             except OSError as exc:
                 raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_UNTRUSTED") from exc
+            lease_identity = (created.st_dev, created.st_ino)
             if (not stat.S_ISREG(created.st_mode) or created.st_uid != os.geteuid()
                     or created.st_mode & 0o022 or created.st_nlink != 1):
                 raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_UNTRUSTED")
-            lease_identity = (created.st_dev, created.st_ino)
         offset = 0
         while offset < len(record):
             written = os.write(descriptor, record[offset:])
@@ -230,15 +230,18 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
         yield
     finally:
         try:
-            if lease_identity is not None:
-                named = path.lstat()
-                if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
-                        or (named.st_dev, named.st_ino) != lease_identity):
-                    raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED")
-            path.unlink()
-            # A clean operation must durably clear its lease as well; otherwise
-            # a reboot can resurrect stale recovery evidence after success.
-            _sync_activation_directory(root)
+            # If identity acquisition failed, the pathname cannot safely be
+            # attributed to this descriptor. Preserve it for recovery review.
+            if os.name != "posix" or lease_identity is not None:
+                if lease_identity is not None:
+                    named = path.lstat()
+                    if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
+                            or (named.st_dev, named.st_ino) != lease_identity):
+                        raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED")
+                path.unlink()
+                # A clean operation must durably clear its lease as well; otherwise
+                # a reboot can resurrect stale recovery evidence after success.
+                _sync_activation_directory(root)
         except FileNotFoundError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED") from exc
         finally:
@@ -248,16 +251,13 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
 def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:
     """Diagnose an interrupted activation without removing locks or changing services."""
     root = root.resolve(strict=True)
-    path = root / ".activation.lock"
-    if not path.exists() and not path.is_symlink():
-        return {"schema_version": 1, "state": "ABSENT", "recovery_safe": True}
-    info = path.lstat()
-    if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-            or info.st_mode & 0o022 or info.st_size > 4096):
-        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_UNTRUSTED")
     try:
-        record = json.loads(path.read_text())
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        content, _ = _read_activation_lock(root)
+    except FileNotFoundError:
+        return {"schema_version": 1, "state": "ABSENT", "recovery_safe": True}
+    try:
+        record = json.loads(content.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_INVALID") from exc
     fields = {"schema_version", "pid", "boot_id", "process_start_ticks", "expected_current", "target_sha"}
     if (not isinstance(record, dict) or set(record) != fields or record["schema_version"] != 1
@@ -300,13 +300,46 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
     }
 
 
+def _read_activation_lock(root: Path) -> tuple[bytes, tuple[int, int, int, int, str]]:
+    """Validate and read one bounded lease inode through a no-follow descriptor."""
+    path = root / ".activation.lock"
+    descriptor = None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(path, flags)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or before.st_size > 4096):
+            raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_UNTRUSTED")
+        content = b""
+        while len(content) <= 4096:
+            chunk = os.read(descriptor, 4097 - len(content))
+            if not chunk:
+                break
+            content += chunk
+        after = os.fstat(descriptor)
+        before_identity = (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        after_identity = (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+        if (before_identity != after_identity or after.st_nlink != 1
+                or len(content) != after.st_size or len(content) > 4096):
+            raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_CHANGED")
+        fingerprint = (*after_identity, hashlib.sha256(content).hexdigest())
+        return content, fingerprint
+    except FileNotFoundError:
+        raise
+    except DeploymentError:
+        raise
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_UNTRUSTED") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
 def _activation_lock_fingerprint(root: Path) -> tuple[int, int, int, int, str]:
     """Bind recovery to the exact regular-file lease that was inspected."""
-    path = root / ".activation.lock"
-    info = path.lstat()
-    content = path.read_bytes()
-    return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
-            hashlib.sha256(content).hexdigest())
+    return _read_activation_lock(root)[1]
 
 
 def recover_stale_activation(

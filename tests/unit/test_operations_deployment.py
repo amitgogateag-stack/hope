@@ -264,6 +264,31 @@ def test_activation_cleanup_never_deletes_changed_lease_path(tmp_path, change):
         assert lease.read_bytes() == alias.read_bytes() == original
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux inode identity; exercised in Linux CI")
+def test_activation_setup_failure_never_deletes_unverified_replacement(tmp_path, monkeypatch):
+    lease = tmp_path / ".activation.lock"
+    replacement = b"independent recovery evidence"
+    original_fstat = module.os.fstat
+    failed = False
+
+    def fail_created_lease_identity(descriptor):
+        nonlocal failed
+        info = original_fstat(descriptor)
+        if module.stat.S_ISREG(info.st_mode) and lease.exists() and not failed:
+            failed = True
+            lease.unlink()
+            lease.write_bytes(replacement)
+            lease.chmod(0o600)
+            raise OSError("host-specific identity failure")
+        return info
+
+    monkeypatch.setattr(module.os, "fstat", fail_created_lease_identity)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_LEASE_UNTRUSTED$"):
+        with module.activation_lock(tmp_path, expected_current="1" * 40, target_sha="2" * 40):
+            pytest.fail("unverified lease must never admit activation")
+    assert lease.read_bytes() == replacement
+
+
 def _proc_fixture(root, pid, *, boot="11111111-1111-1111-1111-111111111111", started="42"):
     (root / "sys/kernel/random").mkdir(parents=True)
     (root / "sys/kernel/random/boot_id").write_text(boot)
@@ -333,6 +358,38 @@ def test_recovery_inspection_rejects_untrusted_or_malformed_lock(tmp_path, paylo
     (tmp_path / ".activation.lock").write_text(payload)
     with pytest.raises(module.DeploymentError, match="LOCK_INVALID"):
         module.inspect_activation_recovery(tmp_path)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux no-follow descriptor binding; exercised in Linux CI")
+def test_recovery_inspection_never_reads_replacement_path_after_validation(tmp_path, monkeypatch):
+    """A pathname swap after metadata validation must not authenticate another file."""
+    lease = tmp_path / ".activation.lock"
+    lease.write_text("{}")
+    replacement = tmp_path / "replacement-record"
+    replacement.write_text(json.dumps({
+        "schema_version": 1,
+        "pid": 1,
+        "boot_id": "11111111-1111-1111-1111-111111111111",
+        "process_start_ticks": "1",
+        "expected_current": "1" * 40,
+        "target_sha": "2" * 40,
+    }))
+    original_lstat = Path.lstat
+    swapped = False
+
+    def swap_after_lstat(path):
+        nonlocal swapped
+        result = original_lstat(path)
+        if path == lease and not swapped:
+            swapped = True
+            lease.unlink()
+            os.symlink(replacement, lease)
+        return result
+
+    monkeypatch.setattr(Path, "lstat", swap_after_lstat)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_ACTIVATION_LOCK_INVALID$"):
+        module.inspect_activation_recovery(tmp_path)
+    assert replacement.is_file() and replacement.read_text().startswith("{")
 
 
 def test_safe_stale_recovery_stops_services_and_removes_only_unchanged_lock(tmp_path, monkeypatch):
