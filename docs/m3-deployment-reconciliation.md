@@ -21,26 +21,33 @@ existing compatibility verifier checks the exact filenames and checksums rather
 than accepting a count. No migration is added or applied to AWS by this batch.
 Frozen day29 SHA remains 7e9d341742818a97accce3e2301b1c7f96596795.
 
-## Historical AWS evidence supplied by the operator
+## Current AWS evidence supplied by the operator (October 24, 2026)
 
 | Item | Historical observation | Current AWS status in this batch |
 | --- | --- | --- |
-| Release | f17a54929a8ecb7745a62c118893b55494aeb2f1 | Not rechecked on host |
-| PostgreSQL | 16, isolated hope_m3_restore_test | Not rechecked on host |
+| Release | f17a54929a8ecb7745a62c118893b55494aeb2f1 | Rechecked; behind reviewed GitHub HEAD b9eeeb67b0b70fc71f4d782f046a3706b59a76bd |
+| PostgreSQL | Active and enabled | Rechecked through read-only systemd metadata; database contents were not read |
 | Schema | 233 applied migrations | Counts/checksums not rechecked on host |
 | Tests | 62 PostgreSQL integration passes | Not rerun on AWS |
-| Dashboard | Active and enabled at boot | Not rechecked on host |
-| HTTP | /, /status.json, /snapshot.json returned 200 | Not rechecked on host |
-| Operations | /operations.json returned 503 | Current cause not verified |
-| PAPER | Inactive | Not changed or rechecked on host |
+| Dashboard | Both legacy and operations web units active, zero reported restarts | Rechecked; ports 8787 and 8788 answer 200 at `/` |
+| HTTP | Operations `/status.json` on 8788 returns 200 | Rechecked; other tested paths correctly remain unproven/404 |
+| Operations | schema 1, service RUNNING, data_feed STALE | Snapshot timestamp is 2026-10-17T18:35:14.543100+00:00 |
+| PAPER | `hope-paper.service` not found | Not active; no service activation attempted |
+| Export scheduler | operations exporter service/timer not found | No timer installation or activation attempted |
 | Authentication | Scoped PostgreSQL authentication/export verified | Current grants/connectivity not rechecked |
 
-The operator confirmed AWS Console → EC2 Instance Connect as the approved access
-method. No SSH alias/autonomous terminal access was confirmed. Browser inventory
-in this session contained no authenticated AWS Console tab. No private key,
+The operator used AWS Console → EC2 Instance Connect for the approved read-only
+checks. No autonomous terminal access was granted. No private key,
 credential file, environment contents, database dump or operational secret was
 read or committed. The actual PAPER factory has not been identified or approved;
 reviewed_module:factory is only a placeholder and must not be substituted.
+
+`python -m hope.api.aws_readiness APPROVED_SHA` is the bounded reconciliation
+probe for this pre-deployment state. It authenticates `current` as one direct
+40-hex child of `releases`, reads only fixed systemd properties and the private
+loopback `8788/status.json` document, emits only allow-listed fields, and returns
+3 while readiness blockers remain. It does not read configuration values, query
+PostgreSQL, install units, restart services, deploy a release, or execute PAPER.
 
 ## Operations 503 diagnosis and resolution boundaries
 
