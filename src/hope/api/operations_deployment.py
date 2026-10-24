@@ -456,9 +456,18 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
     temporary = root / ".current.next"
     if temporary.exists() or temporary.is_symlink():
         raise DeploymentError("OPERATIONS_SWITCH_ALREADY_PENDING")
+    temporary_identity = None
 
     def point(path: Path) -> None:
+        nonlocal temporary_identity
+        temporary_identity = None
         os.symlink(path, temporary, target_is_directory=True)
+        if os.name == "posix":
+            created = temporary.lstat()
+            if not stat.S_ISLNK(created.st_mode) or created.st_nlink != 1:
+                raise DeploymentError("OPERATIONS_SWITCH_TEMP_UNTRUSTED")
+            temporary_identity = (created.st_dev, created.st_ino, created.st_size,
+                                  created.st_mtime_ns, created.st_ctime_ns, str(path))
         os.replace(temporary, current)
         # Acceptance may only observe a pointer whose rename is durable. This
         # also makes a failed-acceptance rollback durable before it is reported.
@@ -487,8 +496,22 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
             point(previous)
             raise
     finally:
-        if temporary.is_symlink():
-            temporary.unlink()
+        # A failed rename can leave the temporary pathname behind. Never unlink
+        # it by name: another process can replace that pathname between failure
+        # and cleanup. Preserve both our pending pointer and any replacement for
+        # explicit recovery review; successful atomic renames leave no entry.
+        try:
+            pending = temporary.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if (temporary_identity is None or not stat.S_ISLNK(pending.st_mode)
+                    or pending.st_nlink != 1
+                    or (pending.st_dev, pending.st_ino, pending.st_size,
+                        pending.st_mtime_ns, pending.st_ctime_ns,
+                        os.readlink(temporary)) != temporary_identity):
+                raise DeploymentError("OPERATIONS_SWITCH_TEMP_CHANGED")
+            raise DeploymentError("OPERATIONS_SWITCH_TEMP_PRESERVED")
 
 
 def main() -> None:

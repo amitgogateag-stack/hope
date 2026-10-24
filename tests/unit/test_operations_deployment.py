@@ -164,6 +164,55 @@ def test_release_pointer_sync_failure_restores_durable_previous_pointer(tmp_path
     assert not (root / ".current.next").exists()
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux symlink identity; exercised in Linux CI")
+def test_failed_pointer_rename_preserves_replacement_temporary_symlink(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+    original_replace = os.replace
+    replacement = root / "independent-release-pointer"
+    os.symlink(root / "releases" / old, replacement, target_is_directory=True)
+
+    def replace_with_independent_symlink(source, destination):
+        if Path(source) == root / ".current.next":
+            Path(source).unlink()
+            os.symlink(replacement, source)
+            raise OSError("synthetic rename failure")
+        return original_replace(source, destination)
+
+    monkeypatch.setattr(module.os, "replace", replace_with_independent_symlink)
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_SWITCH_TEMP_CHANGED$"):
+        module._switch_release(root, new, expected_current=old,
+                               accept=lambda: pytest.fail("rename failed"),
+                               before_switch=lambda: None)
+    assert (root / ".current.next").is_symlink()
+    assert os.readlink(root / ".current.next") == str(replacement)
+    assert (root / "current").resolve().name == old
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux symlink identity; exercised in Linux CI")
+def test_failed_pointer_rename_preserves_authenticated_pending_symlink(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+    monkeypatch.setattr(module.os, "replace",
+                        lambda *a: (_ for _ in ()).throw(OSError("synthetic rename failure")))
+
+    with pytest.raises(module.DeploymentError, match="^OPERATIONS_SWITCH_TEMP_PRESERVED$"):
+        module._switch_release(root, new, expected_current=old,
+                               accept=lambda: pytest.fail("rename failed"),
+                               before_switch=lambda: None)
+    assert (root / ".current.next").is_symlink()
+    assert os.readlink(root / ".current.next") == str(root / "releases" / new)
+    assert (root / "current").resolve().name == old
+
+
 def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     root = Path(__file__).parents[2] / "deploy/operations"
     paper = (root / "hope-paper.service").read_text()
