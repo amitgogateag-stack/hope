@@ -168,6 +168,8 @@ def test_http_verification_accepts_missing_paper_health_without_inventing_ready(
 
 
 @pytest.mark.parametrize("transport",[
+    {"schema_version":1,"active_clients":0,"max_concurrent_clients":32,
+        "rejected_clients_total":0,"expired_clients_total":0},
     {"schema_version":True,"active_clients":1,"max_concurrent_clients":32,
         "rejected_clients_total":0,"expired_clients_total":0},
     {"schema_version":1,"active_clients":33,"max_concurrent_clients":32,

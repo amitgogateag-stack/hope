@@ -85,6 +85,7 @@ def test_preview_displays_bounded_transport_observations_without_readiness_claim
         assert marker in html
     assert "refreshFeed('/transport.json',1024,applyTransport,clearTransport)" in html
     assert "Object.keys(data||{}).sort()" in html
+    assert "data.active_clients<1" in html
     assert "data.active_clients>data.max_concurrent_clients" in html
     assert "Transport counters do not establish database, PAPER worker, broker or execution readiness" in html
 
