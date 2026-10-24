@@ -132,7 +132,7 @@ async function main() {
   assert.equal(b.element('transport-expired').textContent,'3');
   b.api.applyTransport({schema_version:1,active_clients:2,max_concurrent_clients:2,rejected_clients_total:0,expired_clients_total:0});
   assert.equal(b.element('transport-state').textContent,'AT CAPACITY');
-  for(const change of [{active_clients:3},{active_clients:true},{max_concurrent_clients:0},{max_concurrent_clients:257},{rejected_clients_total:-1},{expired_clients_total:1.5},{private_detail:'secret'}]) {
+  for(const change of [{active_clients:0},{active_clients:3},{active_clients:true},{max_concurrent_clients:0},{max_concurrent_clients:257},{rejected_clients_total:-1},{expired_clients_total:1.5},{private_detail:'secret'}]) {
    assert.throws(()=>b.api.applyTransport({schema_version:1,active_clients:1,max_concurrent_clients:2,rejected_clients_total:0,expired_clients_total:0,...change}));
   }
   b.api.clearTransport();

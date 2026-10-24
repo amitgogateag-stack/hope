@@ -68,7 +68,7 @@ def test_transport_endpoint_returns_only_validated_aggregate_counts(monkeypatch)
 
 
 @pytest.mark.parametrize("change",[
-    {"schema_version":True},{"active_clients":True},{"active_clients":33},
+    {"schema_version":True},{"active_clients":0},{"active_clients":True},{"active_clients":33},
     {"max_concurrent_clients":0},{"max_concurrent_clients":257},
     {"rejected_clients_total":-1},{"expired_clients_total":1.5},
     {"private_detail":"secret"},

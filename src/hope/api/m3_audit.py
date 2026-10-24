@@ -13,6 +13,7 @@ from sqlalchemy import create_engine,text
 from hope.api.operations_deployment import inspect_release,verify_database_role
 from hope.api.dashboard_server import OPERATIONS_ERROR_CODES
 from hope.api.release_attestation import _NoRedirect,verify_exact_ci
+from hope.api.dashboard_transport import validate_live_transport
 from hope.infrastructure.paper_service import verify_schema_compatibility
 
 UNITS=("hope-paper.service","hope-ops-dashboard-web.service","hope-ops-dashboard-export.timer")
@@ -35,24 +36,6 @@ READINESS_FIELDS={
 SYSTEMCTL="/usr/bin/systemctl"
 COMMAND_ENVIRONMENT={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C","LC_ALL":"C",
     "HOME":"/nonexistent"}
-
-
-def _transport(value):
-    """Return only the fixed aggregate transport contract."""
-    fields={"schema_version","active_clients","max_concurrent_clients",
-        "rejected_clients_total","expired_clients_total"}
-    if set(value)!=fields or type(value.get("schema_version")) is not int \
-            or value["schema_version"]!=1:
-        raise ValueError("transport schema")
-    for key in fields-{"schema_version"}:
-        if type(value.get(key)) is not int or value[key]<0:
-            raise ValueError("transport count")
-    if not 1<=value["max_concurrent_clients"]<=256 \
-            or value["active_clients"]>value["max_concurrent_clients"]:
-        raise ValueError("transport capacity")
-    return {key:value[key] for key in (
-        "active_clients","max_concurrent_clients","rejected_clients_total",
-        "expired_clients_total")}
 
 
 def _readiness(value):
@@ -133,7 +116,7 @@ def _endpoint(path, *, expected_commit=None):
             if path=="/readiness.json":
                 return {"http_status":http_status,**_readiness(value)}
             if path=="/transport.json":
-                return {"http_status":http_status,**_transport(value)}
+                return {"http_status":http_status,**validate_live_transport(value)}
             if path==RELEASE_ENDPOINT:
                 if (value.get("schema")!="hope.dashboard-release.v1"
                         or value.get("dashboard_commit")!=expected_commit

@@ -26,6 +26,7 @@ from uuid import uuid4
 from sqlalchemy import create_engine,text
 
 from hope.api import operations_deployment as operations
+from hope.api.dashboard_transport import validate_live_transport
 from hope.api import paper_absence_audit
 from hope.api.diagnostic_io import bounded_capture
 from hope.api.dashboard_server import _verified_snapshot
@@ -602,17 +603,8 @@ class Host:
                 _require(self.request("/operations.json")[0] in {200,503},"HTTP_OPERATIONS_INVALID")
                 if require_fresh:
                     status,payload=self.request("/transport.json");transport=json.loads(payload)
-                    fields={"schema_version","active_clients","max_concurrent_clients",
-                        "rejected_clients_total","expired_clients_total"}
-                    _require(status==200 and set(transport)==fields
-                        and type(transport.get("schema_version")) is int
-                        and transport["schema_version"]==1,"HTTP_TRANSPORT_INVALID")
-                    for key in fields-{"schema_version"}:
-                        _require(type(transport.get(key)) is int and transport[key]>=0,
-                            "HTTP_TRANSPORT_INVALID")
-                    _require(1<=transport["max_concurrent_clients"]<=256
-                        and transport["active_clients"]<=transport["max_concurrent_clients"],
-                        "HTTP_TRANSPORT_INVALID")
+                    _require(status==200,"HTTP_TRANSPORT_INVALID")
+                    validate_live_transport(transport)
                 if managed:
                     status,payload=self.request("/release.json")
                     _require(status==200 and json.loads(payload)==dict(schema="hope.dashboard-release.v1",

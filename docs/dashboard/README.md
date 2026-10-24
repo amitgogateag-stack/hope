@@ -48,7 +48,9 @@ The Safety view also checks the loopback-only `GET /transport.json` endpoint eve
 minute. It shows sampled active clients versus the configured cap and cumulative
 rejection/total-deadline-expiry counts for the current web process. The browser
 accepts only the fixed aggregate schema and resets the panel to unknown on an
-invalid or unavailable response. These counters are transport diagnostics, not
+invalid or unavailable response. Because the telemetry request is itself counted,
+a successful live sample must report at least one active client; zero is rejected
+as internally inconsistent. These counters are transport diagnostics, not
 database, PAPER worker, broker, or execution-readiness evidence.
 
 ## Recovery observations (v0.6, development only)

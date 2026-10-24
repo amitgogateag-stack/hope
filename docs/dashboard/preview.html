@@ -238,7 +238,7 @@ const applyTransport = data => {
  const fields=['schema_version',...keys].sort();
  if (JSON.stringify(Object.keys(data||{}).sort())!==JSON.stringify(fields) ||
      data?.schema_version!==1 || !keys.every(k=>integer(data[k])) ||
-     data.max_concurrent_clients<1 || data.max_concurrent_clients>256 ||
+     data.active_clients<1 || data.max_concurrent_clients<1 || data.max_concurrent_clients>256 ||
      data.active_clients>data.max_concurrent_clients) throw Error('Invalid transport status');
  const available=data.active_clients<data.max_concurrent_clients;
  tag('transport-state',available?'AVAILABLE':'AT CAPACITY',available?'':'off');
