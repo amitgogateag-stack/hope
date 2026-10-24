@@ -149,6 +149,7 @@ def test_http_verification_accepts_missing_paper_health_without_inventing_ready(
         paper_only=True,live_enabled=False,execution_authorized=False)
     replies={"/":(200,b"HOPE"),"/status.json":(200,b'{"service":"RUNNING"}'),
         "/snapshot.json":(200,module._verified_snapshot(layout.snapshot)[0]),"/operations.json":(503,b''),
+        "/transport.json":(200,b'{"schema_version":1,"active_clients":1,"max_concurrent_clients":32,"rejected_clients_total":0,"expired_clients_total":0}'),
         "/release.json":(200,json.dumps(identity).encode()),"/readiness.json":(200,json.dumps(ready).encode())}
     host.request=Mock(side_effect=lambda p:replies[p]);host.verify(NEW,managed=True)
     replies["/snapshot.json"]=(503,b"")
@@ -166,6 +167,52 @@ def test_http_verification_accepts_missing_paper_health_without_inventing_ready(
     with pytest.raises(RuntimeError,match="VERIFICATION_TIMEOUT"):host.verify(NEW,managed=True)
 
 
+@pytest.mark.parametrize("transport",[
+    {"schema_version":True,"active_clients":1,"max_concurrent_clients":32,
+        "rejected_clients_total":0,"expired_clients_total":0},
+    {"schema_version":1,"active_clients":33,"max_concurrent_clients":32,
+        "rejected_clients_total":0,"expired_clients_total":0},
+    {"schema_version":1,"active_clients":1,"max_concurrent_clients":32,
+        "rejected_clients_total":0,"expired_clients_total":0,"private_detail":"secret"},
+])
+def test_fresh_activation_rejects_invalid_transport_contract(setup,monkeypatch,transport):
+    layout,_=setup;host=module.Host(layout);host.paper_safe=Mock();host.listener=Mock()
+    page=layout.root/"releases"/NEW/"docs/dashboard/preview.html"
+    page.parent.mkdir(parents=True);page.write_bytes(b"HOPE")
+    snapshot=json.loads(valid_snapshot());snapshot["deployed_commit"]=NEW
+    layout.snapshot.write_text(json.dumps(snapshot))
+    identity=dict(schema="hope.dashboard-release.v1",dashboard_commit=NEW,
+        paper_only=True,live_enabled=False,execution_authorized=False)
+    ready=dashboard_readiness(layout.snapshot,layout.health)
+    replies={"/":(200,b"HOPE"),"/status.json":(200,b'{"service":"RUNNING"}'),
+        "/snapshot.json":(200,module._verified_snapshot(layout.snapshot)[0]),
+        "/operations.json":(503,b''),"/transport.json":(200,json.dumps(transport).encode()),
+        "/release.json":(200,json.dumps(identity).encode()),
+        "/readiness.json":(200,json.dumps(ready).encode())}
+    host.request=Mock(side_effect=lambda path:replies[path])
+    monkeypatch.setattr(module.time,"sleep",lambda *a:None)
+    with pytest.raises(RuntimeError,match="VERIFICATION_TIMEOUT"):
+        host.verify(NEW,managed=True)
+
+
+def test_rollback_verification_does_not_require_new_transport_endpoint(setup):
+    layout,_=setup;host=module.Host(layout);host.paper_safe=Mock();host.listener=Mock()
+    page=layout.root/"releases"/NEW/"docs/dashboard/preview.html"
+    page.parent.mkdir(parents=True);page.write_bytes(b"HOPE")
+    snapshot=json.loads(valid_snapshot());snapshot["deployed_commit"]=NEW
+    layout.snapshot.write_text(json.dumps(snapshot))
+    identity=dict(schema="hope.dashboard-release.v1",dashboard_commit=NEW,
+        paper_only=True,live_enabled=False,execution_authorized=False)
+    ready=dashboard_readiness(layout.snapshot,layout.health)
+    replies={"/":(200,b"HOPE"),"/status.json":(200,b'{"service":"RUNNING"}'),
+        "/snapshot.json":(200,module._verified_snapshot(layout.snapshot)[0]),
+        "/operations.json":(503,b''),"/release.json":(200,json.dumps(identity).encode()),
+        "/readiness.json":(200,json.dumps(ready).encode())}
+    host.request=Mock(side_effect=lambda path:replies[path])
+    host.verify(NEW,managed=True,require_fresh=False)
+    assert "/transport.json" not in [call.args[0] for call in host.request.call_args_list]
+
+
 @pytest.mark.parametrize("body",[b"body",b"x"*(2*1024*1024+1)],ids=["bounded","oversize"])
 def test_fixed_http_transport_bounds_response_and_refuses_unknown_path(monkeypatch,body):
     response=Mock();response.status=200;response.read.return_value=body
@@ -180,6 +227,16 @@ def test_fixed_http_transport_bounds_response_and_refuses_unknown_path(monkeypat
     with pytest.raises(RuntimeError,match="HTTP_PATH_DENIED"):host.request("http://private")
     opener.open.side_effect=HTTPError("private",503,"secret",{},None)
     assert host.request("/operations.json")== (503,b"")
+
+
+def test_fixed_http_transport_allows_only_reviewed_transport_path(monkeypatch):
+    response=Mock();response.status=200;response.read.return_value=b"{}"
+    response.__enter__=Mock(return_value=response);response.__exit__=Mock(return_value=False)
+    opener=Mock();opener.open.return_value=response
+    monkeypatch.setattr(module,"build_opener",lambda *a:opener)
+    host=module.Host(module.Layout())
+    assert host.request("/transport.json")== (200,b"{}")
+    assert opener.open.call_args.args[0]=="http://127.0.0.1:8788/transport.json"
 
 
 def test_release_identity_endpoint_is_unavailable_until_pinned_and_is_read_only(tmp_path):
