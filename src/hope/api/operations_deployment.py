@@ -430,10 +430,27 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
     def point(path: Path) -> None:
         os.symlink(path, temporary, target_is_directory=True)
         os.replace(temporary, current)
+        # Acceptance may only observe a pointer whose rename is durable. This
+        # also makes a failed-acceptance rollback durable before it is reported.
+        _sync_activation_directory(root)
 
     try:
         before_switch()
-        point(target)
+        try:
+            point(target)
+        except BaseException:
+            # Directory fsync can fail after the atomic rename changed the
+            # visible pointer. Restore and sync the prior pointer before
+            # exposing the failure; never run acceptance on an unsynced target.
+            try:
+                visible = current.resolve(strict=True)
+            except OSError as exc:
+                raise DeploymentError("OPERATIONS_RELEASE_POINTER_UNTRUSTED") from exc
+            if visible == target:
+                point(previous)
+            elif visible != previous:
+                raise DeploymentError("OPERATIONS_RELEASE_POINTER_UNTRUSTED")
+            raise
         try:
             accept()
         except BaseException:

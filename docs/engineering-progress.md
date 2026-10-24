@@ -1562,3 +1562,17 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   exception cleanup. Regression tests demonstrate both former deletion/read
   paths before the fixes. No AWS, service, database, PAPER cycle, strategy, risk,
   or LIVE state is changed.
+
+## 2026-10-24 — Crash-durable release-pointer switching
+
+- Demonstrated that `current` was atomically replaced but its containing
+  deployment directory was not synced before acceptance. A host power loss
+  could therefore acknowledge a release whose selected pointer was not durable.
+- Every target and rollback pointer rename is now followed by a trusted
+  directory fsync before acceptance or failure is reported. If target fsync
+  fails after the visible rename, the previous pointer is restored and synced;
+  acceptance is never called for the unsynced target. An unexpected visible
+  pointer fails closed instead of being overwritten.
+- Adversarial tests assert syscall ordering and durable rollback after a target
+  sync failure. No AWS, service, database, PAPER cycle, strategy, risk, or LIVE
+  state is changed.
