@@ -1519,3 +1519,17 @@ the dashboard snapshot, legacy research inventory, and PAPER health publishers.
 No AWS/service action, production database mutation, migration, PAPER execution,
 strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 `7e9d341742818a97accce3e2301b1c7f96596795` remains unchanged.
+
+## 2026-10-24 — Crash-durable activation lease pathname transitions
+
+- Demonstrated that activation fsynced the `.activation.lock` contents but did
+  not fsync the containing deployment directory after creating or removing the
+  lease. A host power loss could therefore lose recovery intent before release
+  pointer work, or resurrect a lease after a clean operation reported success.
+- Activation now completes bounded writes, fsyncs the lease, and fsyncs the
+  trusted deployment directory before entering pointer work. Clean removal also
+  fsyncs that directory. Directory durability failures expose only a fixed code
+  and cannot admit activation work.
+- Added adversarial syscall-order and directory-sync-failure tests. This changes
+  no release pointer, service state, database, strategy, risk rule, PAPER cycle,
+  AWS resource, or LIVE policy.
