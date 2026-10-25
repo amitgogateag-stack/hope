@@ -1745,3 +1745,19 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   and JSON boolean/version confusion. This is repository readiness code only:
   no AWS write, deployment, service action, credential/database access, PAPER
   cycle, strategy/risk change, public exposure, or LIVE enablement occurred.
+
+## 2026-10-25 — Release-storage trust and replacement binding
+
+- Demonstrated that AWS readiness authenticated a release's Git contents but
+  still accepted a symlinked `releases` store or group/world-writable release
+  directories. A redirected or mutable code store could therefore satisfy the
+  content checks without satisfying the deployment storage boundary.
+- Readiness now requires direct, non-group/world-writable directories for both
+  the release store and selected release. It captures their device/inode
+  identities and revalidates the directories plus `current` selection after Git
+  authentication and after all systemd/HTTP probes.
+- Adversarial tests cover external-store redirection, writable store/release
+  directories, missing-store error sanitization, and release replacement during
+  both authentication and status collection. Every case fails closed. This is
+  GitHub code readiness only; no AWS, service, credential, database, PAPER,
+  strategy/risk, public exposure, or LIVE change occurred.

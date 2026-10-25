@@ -103,6 +103,82 @@ def test_exact_release_current_status_and_loaded_units_are_ready(tmp_path):
     assert "secret" not in report["operations_status"]
 
 
+def test_symlinked_release_store_cannot_claim_readiness(tmp_path):
+    root = tmp_path / "hope-operations"
+    external = tmp_path / "external-releases"
+    release = external / EXPECTED
+    release.mkdir(parents=True)
+    root.mkdir()
+    (root / "releases").symlink_to(external, target_is_directory=True)
+    (root / "current").symlink_to(release)
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+@pytest.mark.parametrize("writable", ["releases", "release"])
+def test_mutable_release_storage_cannot_claim_readiness(tmp_path, writable):
+    root = _root(tmp_path)
+    path = root / "releases"
+    if writable == "release":
+        path /= EXPECTED
+    path.chmod(0o777)
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+def test_missing_release_store_fails_with_sanitized_error(tmp_path):
+    root = tmp_path / "hope-operations"
+    root.mkdir()
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_UNAVAILABLE$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+def test_release_directory_replacement_during_authentication_fails_closed(tmp_path):
+    root = _root(tmp_path)
+    release = root / "releases" / EXPECTED
+    retained = tmp_path / "retained-release"
+
+    def replace_release(_release, _sha):
+        release.rename(retained)
+        release.mkdir()
+        return {"status": "COMPATIBLE_CODE"}
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=replace_release,
+        )
+
+
+def test_release_directory_replacement_during_status_fails_closed(tmp_path):
+    root = _root(tmp_path)
+    release = root / "releases" / EXPECTED
+    retained = tmp_path / "retained-release"
+
+    def replace_release(_url, *, timeout):
+        release.rename(retained)
+        release.mkdir()
+        return _status()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=replace_release, release_probe=_release_ok,
+        )
+
+
 def test_healthy_old_dashboard_process_cannot_claim_release_readiness(tmp_path):
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
