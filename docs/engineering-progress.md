@@ -1654,3 +1654,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   boundary and that an already-active mutation prevents all observation. This
   adds no host write, deployment, service activation, credential/database access,
   PAPER cycle, strategy/risk change, or LIVE capability.
+
+## 2026-10-25 — Reboot-persistent autonomous unit readiness
+
+- Demonstrated that readiness collected but ignored systemd `UnitFileState` and
+  `SubState`. A transiently started but disabled PAPER worker/timer, or a service
+  marked `active/exited` with no running process, could therefore report READY.
+- PostgreSQL, both web services, the export timer, and PAPER must now be enabled;
+  PostgreSQL/web/PAPER must also be `active/running`. The timer-triggered oneshot
+  exporter remains correctly accepted as static rather than falsely requiring it
+  to run continuously.
+- Nine adversarial state combinations reproduce the former false-positive paths.
+  Systemd observations also require every allow-listed property and a bounded
+  numeric restart count. No unit is installed, enabled, started, or modified;
+  AWS, credentials, database, PAPER execution, strategies/risk and LIVE remain
+  unchanged.

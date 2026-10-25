@@ -53,6 +53,10 @@ post-switch service or dashboard state. It reads only fixed systemd properties a
 loopback `8788/status.json` document, emits only allow-listed fields, and returns
 3 while readiness blockers remain. It does not read configuration values, query
 PostgreSQL, install units, restart services, deploy a release, or execute PAPER.
+Operational readiness requires PostgreSQL, both web services, the export timer,
+and PAPER to be enabled for reboot persistence. Long-running services must be
+both active and `running`; an `active/exited` unit is not a worker. The oneshot
+export service is intentionally static and is activated only by its enabled timer.
 
 ## Operations 503 diagnosis and resolution boundaries
 
