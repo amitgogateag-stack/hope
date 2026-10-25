@@ -1608,3 +1608,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Regression-first tests cover both authenticated archival and replacement at
   the quarantine boundary, including archive-parent replacement. No AWS,
   service, database, PAPER cycle, strategy, risk, or LIVE state changes.
+
+## 2026-10-24 — Crash-durable deployed metadata publication
+
+- Demonstrated that activation synced the staged `deployed.env` contents but
+  never synced the deployment directory after renaming it. A host power loss
+  could therefore acknowledge a selected commit whose metadata name was not
+  durable.
+- Publication now validates the exact lowercase commit, creates a private
+  single-link regular file, authenticates its inode and bounded content before
+  and after fsync, renames it relative to a no-follow root descriptor, reopens
+  the published inode without following links, and fsyncs the root directory.
+- A staged sync failure retains the previous metadata and removes only the
+  authenticated unpublished temporary inode. Regression tests cover ordering,
+  cleanup, permissions, and malformed commit rejection. No AWS, service,
+  database, PAPER cycle, strategy, risk, or LIVE state changes.

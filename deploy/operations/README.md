@@ -58,6 +58,11 @@ prerequisites are unavailable, leave PAPER disabled and report UNAVAILABLE.
    dedicated SELECT-only reader. `/opt/hope-operations/deployed.env` contains
    only `HOPE_DEPLOYED_COMMIT=APPROVED_40_HEX_SHA`. systemd reads these files
    before dropping privileges. The web service receives no database credential.
+   The activation wrapper publishes `deployed.env` as a private authenticated
+   inode, verifies the published file without following links, and syncs both
+   file contents and the deployment directory before reporting success. A
+   storage or identity failure aborts activation instead of acknowledging
+   metadata that may disappear after a host crash.
    Python and dynamic-loader control variables are not configuration: the reviewed
    units remove them after system-manager and environment-file variables are
    assembled, then supply the exact release `PYTHONPATH` directly to the
