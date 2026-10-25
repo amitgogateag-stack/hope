@@ -5,9 +5,9 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import stat
 import subprocess
-import tempfile
 import time
 
 from hope.api.operations_deployment import inspect_release, switch_release
@@ -42,6 +42,41 @@ def _metadata_file(fd, expected_uid, expected_payload, expected_identity=None):
     return identity
 
 
+def _metadata_root(fd):
+    """Prove the configured root still names one safe pinned directory."""
+    opened = os.fstat(fd)
+    try:
+        named = os.stat(ROOT, follow_symlinks=False)
+    except OSError:
+        raise RuntimeError("OPERATIONS_METADATA_ROOT_CHANGED") from None
+    if (not stat.S_ISDIR(opened.st_mode) or not stat.S_ISDIR(named.st_mode)
+            or opened.st_uid != named.st_uid or opened.st_mode & 0o022
+            or (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino)):
+        raise RuntimeError("OPERATIONS_METADATA_ROOT_CHANGED")
+    return opened.st_uid
+
+
+def _metadata_stage(root_descriptor):
+    """Create one private staging inode relative to the pinned root."""
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC
+    for _ in range(16):
+        name = ".deployed.env." + secrets.token_hex(12)
+        try:
+            return name, os.open(name, flags, 0o600, dir_fd=root_descriptor)
+        except FileExistsError:
+            continue
+    raise RuntimeError("OPERATIONS_METADATA_STAGE_EXHAUSTED")
+
+
+def _write_metadata(fd, payload):
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError("metadata write made no progress")
+        view = view[written:]
+
+
 def metadata(sha):
     """Durably publish authenticated deployment metadata inside the trusted root."""
     if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
@@ -49,32 +84,33 @@ def metadata(sha):
     payload = f"HOPE_DEPLOYED_COMMIT={sha}\n".encode("ascii")
     expected_uid = None
     root_descriptor = None
-    staged_path = None
+    staged_name = None
     staged_identity = None
     published = False
     try:
         root_descriptor = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
-        with tempfile.NamedTemporaryFile(
-            mode="w+b", dir=ROOT, prefix=".deployed.env.", delete=False
-        ) as stream:
-            staged_path = Path(stream.name)
-            value = os.fstat(stream.fileno())
+        expected_uid = _metadata_root(root_descriptor)
+        staged_name, staged_descriptor = _metadata_stage(root_descriptor)
+        try:
+            value = os.fstat(staged_descriptor)
             staged_identity = (value.st_dev, value.st_ino)
-            expected_uid = value.st_uid
-            os.fchmod(stream.fileno(), 0o600)
-            stream.write(payload)
-            stream.flush()
+            if value.st_uid != expected_uid:
+                raise RuntimeError("OPERATIONS_METADATA_IDENTITY_INVALID")
+            os.fchmod(staged_descriptor, 0o600)
+            _write_metadata(staged_descriptor, payload)
             _metadata_file(
-                stream.fileno(), expected_uid, payload, expected_identity=staged_identity
+                staged_descriptor, expected_uid, payload, expected_identity=staged_identity
             )
-            os.fsync(stream.fileno())
+            os.fsync(staged_descriptor)
             _metadata_file(
-                stream.fileno(), expected_uid, payload, expected_identity=staged_identity
+                staged_descriptor, expected_uid, payload, expected_identity=staged_identity
             )
-        staged_name = staged_path.name
+        finally:
+            os.close(staged_descriptor)
         value = os.stat(staged_name, dir_fd=root_descriptor, follow_symlinks=False)
         if (value.st_dev, value.st_ino) != staged_identity:
             raise RuntimeError("OPERATIONS_METADATA_STAGING_REPLACED")
+        _metadata_root(root_descriptor)
         os.rename(
             staged_name,
             "deployed.env",
@@ -95,19 +131,20 @@ def metadata(sha):
         finally:
             os.close(published_descriptor)
         os.fsync(root_descriptor)
+        _metadata_root(root_descriptor)
     except OSError as error:
         raise RuntimeError("OPERATIONS_METADATA_DURABILITY_FAILED") from error
     finally:
         if root_descriptor is not None:
-            if staged_path is not None and not published:
+            if staged_name is not None and not published:
                 try:
                     value = os.stat(
-                        staged_path.name,
+                        staged_name,
                         dir_fd=root_descriptor,
                         follow_symlinks=False,
                     )
                     if (value.st_dev, value.st_ino) == staged_identity:
-                        os.unlink(staged_path.name, dir_fd=root_descriptor)
+                        os.unlink(staged_name, dir_fd=root_descriptor)
                 except FileNotFoundError:
                     pass
             os.close(root_descriptor)

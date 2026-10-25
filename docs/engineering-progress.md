@@ -1623,3 +1623,19 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   authenticated unpublished temporary inode. Regression tests cover ordering,
   cleanup, permissions, and malformed commit rejection. No AWS, service,
   database, PAPER cycle, strategy, risk, or LIVE state changes.
+
+## 2026-10-25 — Deployment-root-bound metadata publication
+
+- Reproduced that `deployed.env` staging still reopened the configured root by
+  absolute pathname after a root descriptor was acquired, and publication
+  never proved the pathname still named that descriptor. A concurrent root
+  replacement could make the function sync and report success for a detached
+  directory.
+- Staging, inspection, rename, cleanup, reopen, and directory sync are now all
+  relative to one no-follow root descriptor. The root must be a non-writable
+  directory and its pathname/device/inode identity is checked before publication
+  and again after the directory sync.
+- Adversarial tests replace the deployment root before staging and during the
+  final sync. Both fail closed, never touch the replacement root, and preserve
+  authenticated evidence without reporting false success. No AWS, service,
+  database, PAPER cycle, strategy, risk, or LIVE state changes.

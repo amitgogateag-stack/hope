@@ -121,6 +121,63 @@ def test_metadata_staged_permission_failure_cleans_exact_temp(activation, monkey
     assert list(activation.ROOT.iterdir()) == []
 
 
+def test_metadata_root_replacement_before_publish_fails_without_touching_replacement(
+    activation, monkeypatch, tmp_path,
+):
+    root = tmp_path / "root"
+    detached = tmp_path / "detached"
+    root.mkdir()
+    activation.ROOT = root
+    real_token = activation.secrets.token_hex
+    replaced = False
+
+    def replace_root(length):
+        nonlocal replaced
+        if not replaced:
+            root.rename(detached)
+            root.mkdir()
+            replaced = True
+        return real_token(length)
+
+    monkeypatch.setattr(activation.secrets, "token_hex", replace_root)
+    with pytest.raises(RuntimeError, match="OPERATIONS_METADATA_ROOT_CHANGED"):
+        activation.metadata("4" * 40)
+    assert list(root.iterdir()) == []
+    assert list(detached.iterdir()) == []
+
+
+def test_metadata_root_replacement_during_directory_sync_cannot_report_success(
+    activation, monkeypatch, tmp_path,
+):
+    root = tmp_path / "root"
+    detached = tmp_path / "detached"
+    root.mkdir()
+    activation.ROOT = root
+    real_fsync = activation.os.fsync
+    replaced = False
+
+    def replace_during_sync(fd):
+        nonlocal replaced
+        if not replaced and os.path.isdir(f"/proc/self/fd/{fd}"):
+            root.rename(detached)
+            root.mkdir()
+            replaced = True
+        real_fsync(fd)
+
+    monkeypatch.setattr(activation.os, "fsync", replace_during_sync)
+    with pytest.raises(RuntimeError, match="OPERATIONS_METADATA_ROOT_CHANGED"):
+        activation.metadata("5" * 40)
+    assert list(root.iterdir()) == []
+    assert (detached / "deployed.env").read_text().endswith("5" * 40 + "\n")
+
+
+def test_metadata_rejects_writable_deployment_root_before_staging(activation):
+    activation.ROOT.chmod(0o777)
+    with pytest.raises(RuntimeError, match="OPERATIONS_METADATA_ROOT_CHANGED"):
+        activation.metadata("6" * 40)
+    assert list(activation.ROOT.iterdir()) == []
+
+
 @pytest.mark.parametrize("value", ["a" * 39, "A" * 40, "../" + "a" * 40, None])
 def test_metadata_rejects_invalid_commit_before_creating_files(activation, value):
     with pytest.raises(ValueError, match="OPERATIONS_METADATA_COMMIT_INVALID"):
