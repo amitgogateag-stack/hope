@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -36,7 +37,12 @@ def _units(*, missing: str | None = None):
             }
         return {
             "LoadState": "loaded", "ActiveState": "active",
-            "SubState": "running", "UnitFileState": "enabled", "NRestarts": "0",
+            "SubState": "running",
+            "UnitFileState": (
+                "static" if unit == "hope-ops-dashboard-export.service"
+                else "enabled"
+            ),
+            "NRestarts": "0",
         }
     return probe
 
@@ -152,6 +158,55 @@ def test_autonomous_units_must_be_active_for_operational_readiness(tmp_path, uni
     assert "UNIT_NOT_ACTIVE:" + unit in report["blockers"]
 
 
+@pytest.mark.parametrize("unit", (
+    "postgresql.service",
+    "hope-dashboard-web.service",
+    "hope-ops-dashboard-web.service",
+    "hope-ops-dashboard-export.timer",
+    "hope-paper.service",
+))
+def test_transiently_active_but_disabled_unit_cannot_claim_reboot_readiness(
+    tmp_path, unit,
+):
+    base = _units()
+
+    def disabled_probe(observed_unit):
+        values = base(observed_unit)
+        if observed_unit == unit:
+            values = {**values, "UnitFileState": "disabled"}
+        return values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=disabled_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert "UNIT_NOT_ENABLED:" + unit in report["blockers"]
+
+
+@pytest.mark.parametrize("unit", (
+    "postgresql.service",
+    "hope-dashboard-web.service",
+    "hope-ops-dashboard-web.service",
+    "hope-paper.service",
+))
+def test_active_unit_without_running_process_cannot_claim_readiness(tmp_path, unit):
+    base = _units()
+
+    def exited_probe(observed_unit):
+        values = base(observed_unit)
+        if observed_unit == unit:
+            values = {**values, "SubState": "exited"}
+        return values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=exited_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert "UNIT_NOT_RUNNING:" + unit in report["blockers"]
+
+
 def test_release_directory_name_cannot_substitute_for_authenticated_git_head(tmp_path):
     observed = []
 
@@ -204,6 +259,29 @@ def test_systemd_timeout_is_sanitized(monkeypatch):
     with pytest.raises(
         ReadinessError,
         match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-paper.service$",
+    ):
+        aws_readiness._systemd_probe("hope-paper.service")
+
+
+@pytest.mark.parametrize("stdout", [
+    "LoadState=loaded\nActiveState=active\n",
+    (
+        "LoadState=loaded\nActiveState=active\nSubState=running\n"
+        "UnitFileState=enabled\nNRestarts=not-a-number\n"
+    ),
+    (
+        "LoadState=loaded\nActiveState=active\nSubState=running\n"
+        "UnitFileState=enabled\nNRestarts=123456789012345678901\n"
+    ),
+])
+def test_systemd_observation_requires_complete_bounded_state(monkeypatch, stdout):
+    monkeypatch.setattr(
+        aws_readiness.subprocess, "run",
+        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=stdout),
+    )
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_OBSERVATION_INVALID:hope-paper.service$",
     ):
         aws_readiness._systemd_probe("hope-paper.service")
 

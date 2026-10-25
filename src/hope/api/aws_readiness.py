@@ -30,6 +30,19 @@ REQUIRED_UNITS = (
     "hope-ops-dashboard-export.timer",
     "hope-paper.service",
 )
+RUNNING_UNITS = (
+    "postgresql.service",
+    "hope-dashboard-web.service",
+    "hope-ops-dashboard-web.service",
+    "hope-paper.service",
+)
+PERSISTENT_UNITS = (
+    "postgresql.service",
+    "hope-dashboard-web.service",
+    "hope-ops-dashboard-web.service",
+    "hope-ops-dashboard-export.timer",
+    "hope-paper.service",
+)
 
 
 class ReadinessError(RuntimeError):
@@ -77,7 +90,10 @@ def _systemd_probe(unit: str) -> dict[str, str]:
         }
         if separator and key in allowed:
             values[key] = value
-    if "LoadState" not in values or "ActiveState" not in values:
+    required = {
+        "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
+    }
+    if set(values) != required or not re.fullmatch(r"[0-9]{1,20}", values["NRestarts"]):
         raise ReadinessError("AWS_SYSTEMD_OBSERVATION_INVALID:" + unit)
     return values
 
@@ -168,17 +184,25 @@ def _inspect_stable_readiness(
         units[unit] = values
         if values["LoadState"] != "loaded":
             blockers.append("UNIT_NOT_LOADED:" + unit)
-    active_units = (
-        "postgresql.service",
-        "hope-dashboard-web.service",
-        "hope-ops-dashboard-web.service",
-    )
-    for unit in active_units:
+
+    # A process that happens to be active now is not autonomous after reboot if
+    # its unit is disabled.  The exporter service is intentionally static and
+    # timer-triggered; every long-running unit and that timer must be enabled.
+    for unit in PERSISTENT_UNITS:
+        if (units[unit]["LoadState"] == "loaded"
+                and units[unit]["UnitFileState"] != "enabled"):
+            blockers.append("UNIT_NOT_ENABLED:" + unit)
+
+    for unit in RUNNING_UNITS:
+        if units[unit]["LoadState"] != "loaded":
+            continue
         if units[unit]["ActiveState"] != "active":
             blockers.append("UNIT_NOT_ACTIVE:" + unit)
-    for unit in ("hope-ops-dashboard-export.timer", "hope-paper.service"):
-        if units[unit]["LoadState"] == "loaded" and units[unit]["ActiveState"] != "active":
-            blockers.append("UNIT_NOT_ACTIVE:" + unit)
+        elif units[unit]["SubState"] != "running":
+            blockers.append("UNIT_NOT_RUNNING:" + unit)
+    timer = "hope-ops-dashboard-export.timer"
+    if units[timer]["LoadState"] == "loaded" and units[timer]["ActiveState"] != "active":
+        blockers.append("UNIT_NOT_ACTIVE:" + timer)
 
     status = status_probe(status_url)
     safe_status = {
