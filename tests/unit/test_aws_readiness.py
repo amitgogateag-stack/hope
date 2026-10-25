@@ -7,7 +7,10 @@ import pytest
 
 from hope.api import aws_readiness
 from hope.api import operations_deployment
-from hope.api.aws_readiness import REQUIRED_UNITS, ReadinessError, inspect_aws_readiness
+from hope.api.aws_readiness import (
+    REQUIRED_UNITS, SERVICE_RECOVERY_POLICIES, ReadinessError,
+    inspect_aws_readiness,
+)
 from hope.api.operations_deployment import DeploymentError
 
 
@@ -31,19 +34,21 @@ def _units(*, missing: str | None = None):
     def probe(unit: str) -> dict[str, str]:
         assert unit in REQUIRED_UNITS
         if unit == missing:
-            return {
+            values = {
                 "LoadState": "not-found", "ActiveState": "inactive",
                 "SubState": "dead", "UnitFileState": "", "NRestarts": "0",
             }
-        return {
-            "LoadState": "loaded", "ActiveState": "active",
-            "SubState": "running",
-            "UnitFileState": (
-                "static" if unit == "hope-ops-dashboard-export.service"
-                else "enabled"
-            ),
-            "NRestarts": "0",
-        }
+        else:
+            values = {
+                "LoadState": "loaded", "ActiveState": "active",
+                "SubState": "running",
+                "UnitFileState": (
+                    "static" if unit == "hope-ops-dashboard-export.service"
+                    else "enabled"
+                ),
+                "NRestarts": "0",
+            }
+        return {**values, **SERVICE_RECOVERY_POLICIES.get(unit, {})}
     return probe
 
 
@@ -207,6 +212,63 @@ def test_active_unit_without_running_process_cannot_claim_readiness(tmp_path, un
     assert "UNIT_NOT_RUNNING:" + unit in report["blockers"]
 
 
+@pytest.mark.parametrize(("unit", "property_name", "unsafe_value"), (
+    ("hope-dashboard-web.service", "Type", "oneshot"),
+    ("hope-dashboard-web.service", "Restart", "no"),
+    ("hope-dashboard-web.service", "RestartUSec", "0"),
+    ("hope-ops-dashboard-web.service", "Type", "oneshot"),
+    ("hope-ops-dashboard-web.service", "Restart", "no"),
+    ("hope-ops-dashboard-web.service", "RestartUSec", "0"),
+    ("hope-paper.service", "Type", "simple"),
+    ("hope-paper.service", "Restart", "no"),
+    ("hope-paper.service", "RestartUSec", "0"),
+    ("hope-paper.service", "WatchdogUSec", "0"),
+))
+def test_running_service_without_reviewed_crash_recovery_cannot_claim_readiness(
+    tmp_path, unit, property_name, unsafe_value,
+):
+    base = _units()
+
+    def nonrecovering_probe(observed_unit):
+        values = base(observed_unit)
+        if observed_unit == unit:
+            values = {**values, property_name: unsafe_value}
+        return values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=nonrecovering_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert "UNIT_RECOVERY_POLICY_MISMATCH:" + unit in report["blockers"]
+
+
+def test_recovery_policies_match_the_reviewed_systemd_units():
+    repository = Path(__file__).parents[2]
+    paths = {
+        "hope-dashboard-web.service":
+            repository / "deploy/dashboard/hope-dashboard-web.service",
+        "hope-ops-dashboard-web.service":
+            repository / "deploy/operations/hope-ops-dashboard-web.service",
+        "hope-paper.service":
+            repository / "deploy/operations/hope-paper.service",
+    }
+    for unit, expected in SERVICE_RECOVERY_POLICIES.items():
+        configured = {}
+        for line in paths[unit].read_text().splitlines():
+            key, separator, value = line.partition("=")
+            if separator and key in {"Type", "Restart", "RestartSec", "WatchdogSec"}:
+                configured[key] = value
+        observed = {
+            "Type": configured.get("Type"),
+            "Restart": configured.get("Restart"),
+            "RestartUSec": configured.get("RestartSec"),
+        }
+        if "WatchdogUSec" in expected:
+            observed["WatchdogUSec"] = configured.get("WatchdogSec")
+        assert observed == expected
+
+
 def test_release_directory_name_cannot_substitute_for_authenticated_git_head(tmp_path):
     observed = []
 
@@ -261,6 +323,33 @@ def test_systemd_timeout_is_sanitized(monkeypatch):
         match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-paper.service$",
     ):
         aws_readiness._systemd_probe("hope-paper.service")
+
+
+def test_systemd_probe_collects_effective_paper_recovery_policy(monkeypatch):
+    observed = []
+    policy = SERVICE_RECOVERY_POLICIES["hope-paper.service"]
+    stdout = "\n".join((
+        "LoadState=loaded", "ActiveState=active", "SubState=running",
+        "UnitFileState=enabled", "NRestarts=0",
+        *(key + "=" + value for key, value in policy.items()),
+    )) + "\n"
+
+    def run(command, **kwargs):
+        observed.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout=stdout)
+
+    monkeypatch.setattr(aws_readiness.subprocess, "run", run)
+    assert aws_readiness._systemd_probe("hope-paper.service") == {
+        "LoadState": "loaded", "ActiveState": "active", "SubState": "running",
+        "UnitFileState": "enabled", "NRestarts": "0", **policy,
+    }
+    command, kwargs = observed[0]
+    assert command[:4] == [
+        "/usr/bin/systemctl", "show", "hope-paper.service", "--no-pager",
+    ]
+    assert command.count("-p") == 9
+    assert kwargs["timeout"] == 5
+    assert kwargs["env"]["LC_ALL"] == "C"
 
 
 @pytest.mark.parametrize("stdout", [

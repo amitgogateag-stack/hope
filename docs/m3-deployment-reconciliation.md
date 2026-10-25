@@ -57,6 +57,11 @@ Operational readiness requires PostgreSQL, both web services, the export timer,
 and PAPER to be enabled for reboot persistence. Long-running services must be
 both active and `running`; an `active/exited` unit is not a worker. The oneshot
 export service is intentionally static and is activated only by its enabled timer.
+For the managed long-running units, readiness also verifies the effective
+systemd recovery contract after all drop-ins: both web services must be
+`Type=simple`, `Restart=on-failure`, with their reviewed 5s/10s delays; PAPER
+must be `Type=notify`, `Restart=always`, with a 15s delay and 15-minute watchdog.
+Merely observing a currently running process cannot substitute for crash recovery.
 
 ## Operations 503 diagnosis and resolution boundaries
 
