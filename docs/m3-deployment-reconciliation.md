@@ -46,6 +46,11 @@ reviewed_module:factory is only a placeholder and must not be substituted.
 probe for this pre-deployment state. It authenticates `current` as one direct
 40-hex child of `releases`, then authenticates that release's Git root, origin,
 HEAD, cleanliness and required artifacts rather than trusting its directory name.
+The `releases` store and selected release must be direct directories, never
+symlinks, and must not be group- or world-writable. Their device/inode identities,
+permissions and the `current` selection are checked again after Git
+authentication and after all unit/HTTP observations, so replacement during a
+readiness run fails closed without exposing host paths.
 The complete release, systemd and dashboard observation holds the deployment
 activation fence in shared mode. A reviewed activation holds the exclusive side,
 so the probe fails closed instead of combining a pre-switch release with

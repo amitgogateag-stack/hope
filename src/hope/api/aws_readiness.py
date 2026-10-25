@@ -13,6 +13,7 @@ import json
 import math
 from pathlib import Path
 import re
+import stat
 import subprocess
 import time
 from typing import Callable
@@ -68,15 +69,49 @@ class ReadinessError(RuntimeError):
     """The observation could not be authenticated or safely bounded."""
 
 
-def _deployed_release(root: Path) -> tuple[Path, str]:
+def _trusted_release_directory(path: Path) -> tuple[int, int]:
+    """Reject redirected or group/world-writable release storage."""
+    try:
+        info = path.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_RELEASE_STORAGE_UNAVAILABLE") from exc
+    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+        raise ReadinessError("AWS_RELEASE_STORAGE_UNTRUSTED")
+    return info.st_dev, info.st_ino
+
+
+def _deployed_release(
+    root: Path,
+) -> tuple[Path, str, tuple[int, int], tuple[int, int]]:
+    try:
+        root = root.resolve(strict=True)
+    except OSError as exc:
+        raise ReadinessError("AWS_RELEASE_STORAGE_UNAVAILABLE") from exc
+    releases = root / "releases"
+    releases_identity = _trusted_release_directory(releases)
     current = root / "current"
     if not current.is_symlink():
         raise ReadinessError("AWS_CURRENT_RELEASE_SYMLINK_REQUIRED")
-    releases = (root / "releases").resolve(strict=True)
-    deployed = current.resolve(strict=True)
+    try:
+        deployed = current.resolve(strict=True)
+    except OSError as exc:
+        raise ReadinessError("AWS_CURRENT_RELEASE_TARGET_UNAVAILABLE") from exc
     if deployed.parent != releases or not SHA_RE.fullmatch(deployed.name):
         raise ReadinessError("AWS_CURRENT_RELEASE_TARGET_UNTRUSTED")
-    return deployed, deployed.name
+    deployed_identity = _trusted_release_directory(deployed)
+    return deployed, deployed.name, releases_identity, deployed_identity
+
+
+def _require_same_release_storage(
+    root: Path,
+    expected: tuple[Path, str, tuple[int, int], tuple[int, int]],
+) -> None:
+    try:
+        observed = _deployed_release(root)
+    except ReadinessError as exc:
+        raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED") from exc
+    if observed != expected:
+        raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED")
 
 
 def _systemd_probe(
@@ -279,11 +314,14 @@ def _inspect_stable_readiness(
     monotonic: Callable[[], float],
 ) -> dict[str, object]:
     """Observe one generation while the caller holds the shared fence."""
-    deployed_release, deployed_sha = _deployed_release(root)
+    release_storage = _deployed_release(root)
+    (deployed_release, deployed_sha, _releases_identity,
+     _deployed_identity) = release_storage
     try:
         release_probe(deployed_release, deployed_sha)
     except (OSError, DeploymentError) as exc:
         raise ReadinessError("AWS_DEPLOYED_RELEASE_UNVERIFIED") from exc
+    _require_same_release_storage(root, release_storage)
     blockers: list[str] = []
     if deployed_sha != expected_sha:
         blockers.append("DEPLOYED_SHA_MISMATCH")
@@ -386,6 +424,7 @@ def _inspect_stable_readiness(
         elif observed_at - generated > timedelta(minutes=15):
             blockers.append("OPERATIONS_SNAPSHOT_STALE")
 
+    _require_same_release_storage(root, release_storage)
     return {
         "schema_version": 1,
         "observed_at": observed_at.isoformat(),
