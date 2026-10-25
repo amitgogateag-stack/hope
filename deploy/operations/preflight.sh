@@ -16,7 +16,7 @@ done < <(/usr/bin/env)
 [[ $# == 1 && "$1" =~ ^[0-9a-f]{40}$ ]] || { echo 'OPERATIONS_EXPECTED_SHA_REQUIRED' >&2; exit 2; }
 ROOT=/opt/hope-operations
 [[ $(/usr/bin/uname -s) == Linux && -d /run/systemd/system ]] || { echo 'OPERATIONS_SYSTEMD_HOST_REQUIRED' >&2; exit 2; }
-for command in /usr/bin/git /usr/bin/systemctl /usr/bin/systemd-analyze /usr/bin/ss \
+for command in /usr/bin/curl /usr/bin/git /usr/bin/systemctl /usr/bin/systemd-analyze /usr/bin/ss \
     /usr/bin/stat /usr/sbin/runuser /usr/bin/find /usr/bin/readlink /usr/bin/id; do
     [[ -x $command ]] || { echo 'OPERATIONS_REQUIRED_SYSTEM_BINARY_MISSING' >&2; exit 2; }
 done

@@ -151,6 +151,82 @@ def test_status_probe_is_pinned_to_private_operations_endpoint(tmp_path):
         )
 
 
+def test_status_probe_uses_fixed_bounded_curl_without_ambient_credentials():
+    observed = []
+    body = (
+        '{"schema_version":1,"service":"RUNNING","data_feed":"CURRENT",'
+        '"snapshot_generated_at":"2026-10-24T22:55:00+00:00"}'
+    )
+
+    def capture(command, **kwargs):
+        observed.append((command, kwargs))
+        return body + "\n200"
+
+    assert aws_readiness._status_probe(
+        "http://127.0.0.1:8788/status.json", capture=capture,
+    )["service"] == "RUNNING"
+    command, kwargs = observed[0]
+    assert command == [
+        "/usr/bin/curl", "-q", "--silent", "--show-error",
+        "--noproxy", "*", "--proto", "=http", "--max-time", "5",
+        "--request", "GET", "--header", "Host: 127.0.0.1",
+        "--write-out", "\n%{http_code}",
+        "http://127.0.0.1:8788/status.json",
+    ]
+    assert kwargs == {
+        "timeout": 5,
+        "max_output": aws_readiness.MAX_STATUS_BYTES + 4,
+        "env": {
+            "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+        },
+    }
+
+
+@pytest.mark.parametrize(("failure", "error"), (
+    (RuntimeError("DIAGNOSTIC_TIMEOUT"), "AWS_STATUS_OBSERVATION_TIMEOUT"),
+    (RuntimeError("DIAGNOSTIC_OUTPUT_LIMIT"), "AWS_STATUS_DOCUMENT_TOO_LARGE"),
+    (RuntimeError("DIAGNOSTIC_POSIX_REQUIRED"), "AWS_STATUS_OBSERVATION_FAILED"),
+    (OSError("private host detail"), "AWS_STATUS_OBSERVATION_FAILED"),
+    (
+        aws_readiness.subprocess.CalledProcessError(28, ["curl"]),
+        "AWS_STATUS_OBSERVATION_TIMEOUT",
+    ),
+    (
+        aws_readiness.subprocess.CalledProcessError(7, ["curl"]),
+        "AWS_STATUS_OBSERVATION_FAILED",
+    ),
+    (
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"),
+        "AWS_STATUS_DOCUMENT_INVALID",
+    ),
+))
+def test_status_capture_failures_are_sanitized(failure, error):
+    def fail(*_args, **_kwargs):
+        raise failure
+
+    with pytest.raises(ReadinessError, match="^" + error + "$"):
+        aws_readiness._status_probe(
+            "http://127.0.0.1:8788/status.json", capture=fail,
+        )
+
+
+@pytest.mark.parametrize(("output", "error"), (
+    ('{}', "AWS_STATUS_DOCUMENT_INVALID"),
+    ('{}\nnot-a-status', "AWS_STATUS_DOCUMENT_INVALID"),
+    ('{}\n503', "AWS_STATUS_HTTP_FAILED:503"),
+    ('[]\n200', "AWS_STATUS_DOCUMENT_INVALID"),
+    ('not-json\n200', "AWS_STATUS_DOCUMENT_INVALID"),
+))
+def test_status_capture_requires_valid_http_framing_and_document(output, error):
+    with pytest.raises(ReadinessError, match="^" + error + "$"):
+        aws_readiness._status_probe(
+            "http://127.0.0.1:8788/status.json",
+            capture=lambda *_args, **_kwargs: output,
+        )
+
+
 @pytest.mark.parametrize(
     "unit", ["hope-ops-dashboard-export.timer", "hope-paper.service"],
 )

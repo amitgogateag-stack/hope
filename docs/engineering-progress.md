@@ -1711,3 +1711,20 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   verifies decreasing command deadlines, and proves later systemd and HTTP
   probes are not attempted. This remains read-only and makes no AWS, service,
   credential, database, PAPER execution, strategy/risk, or LIVE change.
+
+## 2026-10-25 — Hard-bounded loopback status observation
+
+- Demonstrated that the readiness status fetch relied on per-socket stdlib
+  timeouts and allowed raw connection exceptions to escape. A slow-trickling
+  loopback peer could repeatedly make progress while retaining the shared
+  deployment fence beyond the intended observation bound.
+- Status collection now runs a fixed `/usr/bin/curl` request through HOPE's
+  hardened process-session collector. Curl configuration, proxies, non-HTTP
+  protocols and ambient credentials are excluded; the complete child session
+  has a five-second deadline and a 16 KiB response ceiling.
+- Adversarial tests cover timeout, output flooding, unsupported host, missing
+  binary/connection failure, curl timeout, invalid UTF-8, malformed status
+  framing, non-200 responses and invalid JSON. Every failure is sanitized. The
+  host preflight now requires the reviewed absolute curl binary. This performs
+  no AWS write, deployment, service action, credential/database access, PAPER
+  cycle, strategy/risk change, public exposure, or LIVE enablement.

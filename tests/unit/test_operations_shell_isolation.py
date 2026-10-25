@@ -31,7 +31,7 @@ def test_privileged_scripts_reexec_with_a_minimal_environment_before_work(script
 @pytest.mark.parametrize("script", SCRIPTS, ids=lambda path: path.name)
 def test_privileged_scripts_do_not_path_resolve_external_commands(script):
     commands = {
-        "bash", "env", "find", "git", "id", "install", "readlink", "rm",
+        "bash", "curl", "env", "find", "git", "id", "install", "readlink", "rm",
         "runuser", "ss", "stat", "systemctl", "systemd-analyze", "uname",
     }
     executable = "\n".join(
@@ -47,6 +47,7 @@ def test_privileged_scripts_do_not_path_resolve_external_commands(script):
 def test_preflight_python_and_systemd_children_have_explicit_clean_environments():
     content = SCRIPTS[0].read_text()
     assert content.count("/usr/bin/env -i") == 3
+    assert "for command in /usr/bin/curl /usr/bin/git" in content
     assert 'PYTHONPATH="$ROOT/current/src" "$ROOT/venv/bin/python" -B -s -P' in content
     assert "-m hope.api.operations_deployment" in content
     assert "/usr/bin/systemd-analyze verify" in content
