@@ -47,7 +47,7 @@ def metadata(sha):
     if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
         raise ValueError("OPERATIONS_METADATA_COMMIT_INVALID")
     payload = f"HOPE_DEPLOYED_COMMIT={sha}\n".encode("ascii")
-    expected_uid = os.geteuid()
+    expected_uid = None
     root_descriptor = None
     staged_path = None
     staged_identity = None
@@ -60,6 +60,7 @@ def metadata(sha):
             staged_path = Path(stream.name)
             value = os.fstat(stream.fileno())
             staged_identity = (value.st_dev, value.st_ino)
+            expected_uid = value.st_uid
             os.fchmod(stream.fileno(), 0o600)
             stream.write(payload)
             stream.flush()

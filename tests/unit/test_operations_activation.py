@@ -89,6 +89,12 @@ def test_metadata_fsyncs_published_file_before_parent_directory(activation, monk
     assert calls == ["file", "directory"]
 
 
+def test_metadata_authenticates_kernel_created_owner_not_preflight_stub(activation, monkeypatch):
+    monkeypatch.setattr(activation.os, "geteuid", lambda: 12345)
+    activation.metadata("c" * 40)
+    assert (activation.ROOT / "deployed.env").read_text().endswith("c" * 40 + "\n")
+
+
 def test_metadata_staged_fsync_failure_preserves_previous_value(activation, monkeypatch):
     previous = activation.ROOT / "deployed.env"
     previous.write_text("HOPE_DEPLOYED_COMMIT=" + "1" * 40 + "\n")
