@@ -16,6 +16,7 @@ import re
 import subprocess
 from typing import Callable
 
+from hope.api import operations_deployment
 from hope.api.operations_deployment import DeploymentError, inspect_release
 
 
@@ -123,6 +124,35 @@ def inspect_aws_readiness(
     if observed_at.tzinfo is None:
         raise ReadinessError("AWS_OBSERVATION_TIME_INVALID")
     observed_at = observed_at.astimezone(timezone.utc)
+
+    # The release pointer, unit state, and dashboard document form one
+    # operational snapshot.  Every supported activation holds the exclusive
+    # side of this fence, so a readiness report must hold the shared side from
+    # release authentication through the final status observation.  Otherwise
+    # it could combine a release from before a switch with services or status
+    # from after it and incorrectly report READY.
+    try:
+        with operations_deployment._activation_guard(root, shared=True):
+            return _inspect_stable_readiness(
+                expected_sha, root=root, observed_at=observed_at,
+                systemd_probe=systemd_probe, status_probe=status_probe,
+                release_probe=release_probe, status_url=status_url,
+            )
+    except DeploymentError as exc:
+        raise ReadinessError("AWS_ACTIVATION_STATE_UNAVAILABLE") from exc
+
+
+def _inspect_stable_readiness(
+    expected_sha: str,
+    *,
+    root: Path,
+    observed_at: datetime,
+    systemd_probe: Callable[[str], dict[str, str]],
+    status_probe: Callable[[str], dict[str, object]],
+    release_probe: Callable[[Path, str], dict[str, object]],
+    status_url: str,
+) -> dict[str, object]:
+    """Observe one generation while the caller holds the shared fence."""
     deployed_release, deployed_sha = _deployed_release(root)
     try:
         release_probe(deployed_release, deployed_sha)

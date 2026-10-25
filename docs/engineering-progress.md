@@ -1639,3 +1639,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   final sync. Both fail closed, never touch the replacement root, and preserve
   authenticated evidence without reporting false success. No AWS, service,
   database, PAPER cycle, strategy, risk, or LIVE state changes.
+
+## 2026-10-25 — Generation-consistent AWS readiness observation
+
+- Reproduced that AWS readiness authenticated the deployed release, observed
+  systemd, and fetched the dashboard status without the deployment activation
+  fence. A legitimate release switch could therefore interleave those steps and
+  produce one report assembled from two deployment generations.
+- The complete read-only observation now holds the existing shared activation
+  fence. Reviewed activation/recovery mutations take its exclusive side, so an
+  in-progress change fails readiness closed before any release, unit, or HTTP
+  probe runs and cannot interleave during an admitted report.
+- Adversarial tests prove that exclusive activation is excluded at every probe
+  boundary and that an already-active mutation prevents all observation. This
+  adds no host write, deployment, service activation, credential/database access,
+  PAPER cycle, strategy/risk change, or LIVE capability.

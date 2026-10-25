@@ -1,9 +1,11 @@
 from datetime import datetime, timezone
+import os
 from pathlib import Path
 
 import pytest
 
 from hope.api import aws_readiness
+from hope.api import operations_deployment
 from hope.api.aws_readiness import REQUIRED_UNITS, ReadinessError, inspect_aws_readiness
 from hope.api.operations_deployment import DeploymentError
 
@@ -204,3 +206,59 @@ def test_systemd_timeout_is_sanitized(monkeypatch):
         match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-paper.service$",
     ):
         aws_readiness._systemd_probe("hope-paper.service")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux flock contract")
+def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
+    root = _root(tmp_path)
+    observations = []
+
+    def assert_mutation_excluded(stage):
+        observations.append(stage)
+        with pytest.raises(
+            DeploymentError, match="^OPERATIONS_ACTIVATION_LOCKED$",
+        ):
+            with operations_deployment._activation_guard(root):
+                pytest.fail("exclusive activation entered a readiness snapshot")
+
+    def release_probe(*_args):
+        assert_mutation_excluded("release")
+        return {"status": "COMPATIBLE_CODE"}
+
+    def systemd_probe(unit):
+        assert_mutation_excluded("systemd:" + unit)
+        return _units()(unit)
+
+    def status_probe(_url):
+        assert_mutation_excluded("status")
+        return _status()(_url)
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=root, now=NOW, systemd_probe=systemd_probe,
+        status_probe=status_probe, release_probe=release_probe,
+    )
+    assert report["ready"] is True
+    assert observations == [
+        "release", *("systemd:" + unit for unit in REQUIRED_UNITS), "status",
+    ]
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux flock contract")
+def test_active_deployment_change_blocks_readiness_before_any_probe(tmp_path):
+    root = _root(tmp_path)
+    observed = []
+
+    def forbidden(*_args):
+        observed.append(True)
+        pytest.fail("locked activation must block the complete observation")
+
+    with operations_deployment._activation_guard(root):
+        with pytest.raises(
+            ReadinessError, match="^AWS_ACTIVATION_STATE_UNAVAILABLE$",
+        ):
+            inspect_aws_readiness(
+                EXPECTED, root=root, now=NOW,
+                systemd_probe=forbidden, status_probe=forbidden,
+                release_probe=forbidden,
+            )
+    assert observed == []
