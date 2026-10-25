@@ -8,7 +8,6 @@ from hope.api import aws_readiness
 from hope.api import operations_deployment
 from hope.api.aws_readiness import (
     REQUIRED_UNITS, SERVICE_RECOVERY_POLICIES, ReadinessError,
-    inspect_aws_readiness,
 )
 from hope.api.operations_deployment import DeploymentError
 
@@ -65,13 +64,33 @@ def _inactive(unit_name: str):
 
 
 def _status(timestamp: str = "2026-10-24T22:55:00+00:00"):
-    return lambda _: {
-        "schema_version": 1,
-        "service": "RUNNING",
-        "data_feed": "CURRENT",
-        "snapshot_generated_at": timestamp,
-        "secret": "must-not-be-reported",
+    def probe(_url, *, timeout=5):
+        assert 0 < timeout <= 5
+        return {
+            "schema_version": 1,
+            "service": "RUNNING",
+            "data_feed": "CURRENT",
+            "snapshot_generated_at": timestamp,
+            "secret": "must-not-be-reported",
+        }
+    return probe
+
+
+def _dashboard_release(commit: str = EXPECTED, **changes):
+    value = {
+        "schema": "hope.dashboard-release.v1",
+        "dashboard_commit": commit,
+        "paper_only": True,
+        "live_enabled": False,
+        "execution_authorized": False,
+        **changes,
     }
+    return lambda _url, *, timeout=5: value
+
+
+def inspect_aws_readiness(*args, **kwargs):
+    kwargs.setdefault("dashboard_release_probe", _dashboard_release())
+    return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
 
 def test_exact_release_current_status_and_loaded_units_are_ready(tmp_path):
@@ -84,6 +103,49 @@ def test_exact_release_current_status_and_loaded_units_are_ready(tmp_path):
     assert "secret" not in report["operations_status"]
 
 
+def test_healthy_old_dashboard_process_cannot_claim_release_readiness(tmp_path):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        dashboard_release_probe=_dashboard_release("a" * 40),
+    )
+    assert report["ready"] is False
+    assert "DASHBOARD_RELEASE_MISMATCH" in report["blockers"]
+    assert report["dashboard_release"] == {
+        "schema": "hope.dashboard-release.v1",
+        "dashboard_commit": "a" * 40,
+        "paper_only": True,
+        "live_enabled": False,
+        "execution_authorized": False,
+    }
+
+
+def test_dashboard_release_identity_is_exact_and_sanitized(tmp_path):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        dashboard_release_probe=_dashboard_release(secret="must-not-be-reported"),
+    )
+    assert report["ready"] is False
+    assert "DASHBOARD_RELEASE_IDENTITY_INVALID" in report["blockers"]
+    assert "secret" not in report["dashboard_release"]
+
+
+@pytest.mark.parametrize(("field", "unsafe"), (
+    ("paper_only", False),
+    ("live_enabled", True),
+    ("execution_authorized", True),
+))
+def test_dashboard_release_must_attest_paper_only_safety(tmp_path, field, unsafe):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        dashboard_release_probe=_dashboard_release(**{field: unsafe}),
+    )
+    assert report["ready"] is False
+    assert "DASHBOARD_SAFETY_CONTRACT_MISMATCH" in report["blockers"]
+
+
 def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
     deployed = "f17a54929a8ecb7745a62c118893b55494aeb2f1"
     root = _root(tmp_path, deployed)
@@ -92,7 +154,8 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
         EXPECTED, root=root, now=NOW,
         systemd_probe=_units(missing="hope-paper.service"),
         release_probe=_release_ok,
-        status_probe=lambda _: {
+        dashboard_release_probe=_dashboard_release(deployed),
+        status_probe=lambda _, *, timeout: {
             "schema_version": 1,
             "service": "RUNNING",
             "data_feed": "STALE",
@@ -182,6 +245,30 @@ def test_status_probe_uses_fixed_bounded_curl_without_ambient_credentials():
             "LC_ALL": "C",
         },
     }
+
+
+def test_dashboard_release_probe_is_pinned_and_more_tightly_bounded():
+    observed = []
+    body = (
+        '{"schema":"hope.dashboard-release.v1","dashboard_commit":"'
+        + EXPECTED
+        + '","paper_only":true,"live_enabled":false,'
+        '"execution_authorized":false}'
+    )
+
+    def capture(command, **kwargs):
+        observed.append((command, kwargs))
+        return body + "\n200"
+
+    document = aws_readiness._dashboard_release_probe(
+        "http://127.0.0.1:8788/release.json", capture=capture,
+    )
+    assert document["dashboard_commit"] == EXPECTED
+    command, kwargs = observed[0]
+    assert command[-1] == "http://127.0.0.1:8788/release.json"
+    assert kwargs["max_output"] == aws_readiness.MAX_DASHBOARD_RELEASE_BYTES + 4
+    assert "--noproxy" in command
+    assert "--proto" in command
 
 
 @pytest.mark.parametrize(("failure", "error"), (
@@ -375,6 +462,7 @@ def test_release_authentication_uses_deployed_sha_not_requested_target(tmp_path)
         EXPECTED, root=root, now=NOW,
         systemd_probe=_units(), status_probe=_status(),
         release_probe=record_release,
+        dashboard_release_probe=_dashboard_release(deployed),
     )
     assert report["blockers"][0] == "DEPLOYED_SHA_MISMATCH"
     assert observed == [((root / "releases" / deployed).resolve(), deployed)]
@@ -459,6 +547,70 @@ def test_systemd_observations_share_one_total_deadline(tmp_path):
         ("hope-ops-dashboard-web.service", 1),
     ]
     assert status_called == []
+
+
+def test_dashboard_identity_and_status_share_one_total_deadline(tmp_path):
+    clock = [100.0]
+    observed = []
+
+    def monotonic():
+        return clock[0]
+
+    def release_probe(_url, *, timeout):
+        observed.append(("dashboard-release", timeout))
+        clock[0] += 4
+        return _dashboard_release()(_url, timeout=timeout)
+
+    def status_probe(_url, *, timeout):
+        observed.append(("status", timeout))
+        return _status()(_url, timeout=timeout)
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=status_probe,
+        dashboard_release_probe=release_probe, release_probe=_release_ok,
+        monotonic=monotonic,
+    )
+    assert report["ready"] is True
+    assert observed == [("dashboard-release", 5), ("status", 1)]
+
+
+def test_exhausted_dashboard_identity_deadline_prevents_status_probe(tmp_path):
+    clock = [100.0]
+    status_called = []
+
+    def monotonic():
+        return clock[0]
+
+    def release_probe(_url, *, timeout):
+        clock[0] += timeout
+        return _dashboard_release()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_STATUS_OBSERVATION_TIMEOUT$"):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=_units(),
+            status_probe=lambda *_args, **_kwargs: status_called.append(True),
+            dashboard_release_probe=release_probe, release_probe=_release_ok,
+            monotonic=monotonic,
+        )
+    assert status_called == []
+
+
+def test_boolean_status_schema_cannot_impersonate_version_one(tmp_path):
+    def boolean_schema(_url, *, timeout):
+        return {
+            **_status()(_url, timeout=timeout),
+            "schema_version": True,
+        }
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=boolean_schema,
+        release_probe=_release_ok,
+    )
+    assert report["ready"] is False
+    assert "OPERATIONS_STATUS_NOT_RUNNING" in report["blockers"]
 
 
 @pytest.mark.parametrize(("failure", "error"), (
@@ -559,17 +711,23 @@ def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
         assert_mutation_excluded("systemd:" + unit)
         return _units()(unit, timeout=timeout)
 
-    def status_probe(_url):
+    def dashboard_release_probe(_url, *, timeout):
+        assert_mutation_excluded("dashboard-release")
+        return _dashboard_release()(_url, timeout=timeout)
+
+    def status_probe(_url, *, timeout):
         assert_mutation_excluded("status")
-        return _status()(_url)
+        return _status()(_url, timeout=timeout)
 
     report = inspect_aws_readiness(
         EXPECTED, root=root, now=NOW, systemd_probe=systemd_probe,
         status_probe=status_probe, release_probe=release_probe,
+        dashboard_release_probe=dashboard_release_probe,
     )
     assert report["ready"] is True
     assert observations == [
-        "release", *("systemd:" + unit for unit in REQUIRED_UNITS), "status",
+        "release", *("systemd:" + unit for unit in REQUIRED_UNITS),
+        "dashboard-release", "status",
     ]
 
 
