@@ -49,9 +49,13 @@ HEAD, cleanliness and required artifacts rather than trusting its directory name
 The complete release, systemd and dashboard observation holds the deployment
 activation fence in shared mode. A reviewed activation holds the exclusive side,
 so the probe fails closed instead of combining a pre-switch release with
-post-switch service or dashboard state. It reads only fixed systemd properties and the private
-loopback `8788/status.json` document, emits only allow-listed fields, and returns
-3 while readiness blockers remain. It does not read configuration values, query
+post-switch service or dashboard state. It reads only fixed systemd properties
+and the private loopback `8788/release.json` and `8788/status.json` documents,
+emits only allow-listed fields, and returns 3 while readiness blockers remain.
+The running dashboard must attest the authenticated deployed commit and the
+exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
+`execution_authorized=false`); a healthy process from an older release cannot
+claim readiness after the `current` pointer advances. It does not read configuration values, query
 PostgreSQL, install units, restart services, deploy a release, or execute PAPER.
 Operational readiness requires PostgreSQL, both web services, the export timer,
 and PAPER to be enabled for reboot persistence. Long-running services must be
@@ -68,12 +72,12 @@ held. Each call receives only the remaining budget and uses HOPE's fixed-binary,
 no-shell diagnostic collector with a 4 KiB stdout ceiling. Stderr is discarded,
 ambient credentials are not inherited, and timeout, output flooding, nonzero
 exit, spawn and decoding failures become fixed sanitized readiness errors.
-The loopback status request uses the same hardened collector around a fixed
-`/usr/bin/curl` command. Curl configuration and proxies are disabled, only HTTP
-is permitted, and one five-second process-session deadline plus a 16 KiB output
-ceiling covers connection, headers and body. The HTTP status trailer is parsed
-separately from the JSON body; timeout, connection, overflow, non-UTF-8 and
-malformed-framing failures expose only fixed readiness codes.
+Both loopback requests use the same hardened collector around fixed
+`/usr/bin/curl` commands and share one five-second aggregate deadline. Curl
+configuration and proxies are disabled, only HTTP is permitted, and output is
+limited to 1 KiB for release identity and 16 KiB for status. The HTTP status
+trailer is parsed separately from the JSON body; timeout, connection, overflow,
+non-UTF-8 and malformed-framing failures expose only fixed readiness codes.
 
 ## Operations 503 diagnosis and resolution boundaries
 

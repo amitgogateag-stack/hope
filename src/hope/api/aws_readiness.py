@@ -24,7 +24,9 @@ from hope.api.operations_deployment import DeploymentError, inspect_release
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
+MAX_DASHBOARD_RELEASE_BYTES = 1_024
 MAX_SYSTEMD_BYTES = 4_096
+LOOPBACK_OBSERVATION_TIMEOUT = 5.0
 STATUS_OBSERVATION_TIMEOUT = 5.0
 SYSTEMD_OBSERVATION_TIMEOUT = 5.0
 REQUIRED_UNITS = (
@@ -128,25 +130,33 @@ def _systemd_probe(
     return values
 
 
-def _status_probe(
+def _loopback_json_probe(
     url: str,
     *,
+    approved_url: str,
+    max_bytes: int,
+    error_scope: str,
+    timeout: float,
     capture: Callable[..., str] = bounded_capture,
 ) -> dict[str, object]:
-    if url != "http://127.0.0.1:8788/status.json":
-        raise ReadinessError("AWS_STATUS_URL_NOT_APPROVED")
+    if url != approved_url:
+        raise ReadinessError("AWS_" + error_scope + "_URL_NOT_APPROVED")
+    if (not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0):
+        raise ReadinessError("AWS_" + error_scope + "_OBSERVATION_TIMEOUT")
+    timeout = min(float(timeout), LOOPBACK_OBSERVATION_TIMEOUT)
     command = [
         "/usr/bin/curl", "-q", "--silent", "--show-error",
         "--noproxy", "*", "--proto", "=http",
-        "--max-time", str(int(STATUS_OBSERVATION_TIMEOUT)),
+        "--max-time", f"{timeout:g}",
         "--request", "GET", "--header", "Host: 127.0.0.1",
         "--write-out", "\n%{http_code}", url,
     ]
     try:
         output = capture(
             command,
-            timeout=STATUS_OBSERVATION_TIMEOUT,
-            max_output=MAX_STATUS_BYTES + 4,
+            timeout=timeout,
+            max_output=max_bytes + 4,
             env={
                 "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG": "C",
@@ -155,32 +165,64 @@ def _status_probe(
         )
     except RuntimeError as exc:
         if str(exc) == "DIAGNOSTIC_TIMEOUT":
-            raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT") from exc
+            raise ReadinessError(
+                "AWS_" + error_scope + "_OBSERVATION_TIMEOUT",
+            ) from exc
         if str(exc) == "DIAGNOSTIC_OUTPUT_LIMIT":
-            raise ReadinessError("AWS_STATUS_DOCUMENT_TOO_LARGE") from exc
-        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+            raise ReadinessError(
+                "AWS_" + error_scope + "_DOCUMENT_TOO_LARGE",
+            ) from exc
+        raise ReadinessError("AWS_" + error_scope + "_OBSERVATION_FAILED") from exc
     except subprocess.CalledProcessError as exc:
         if exc.returncode == 28:
-            raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT") from exc
-        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+            raise ReadinessError(
+                "AWS_" + error_scope + "_OBSERVATION_TIMEOUT",
+            ) from exc
+        raise ReadinessError("AWS_" + error_scope + "_OBSERVATION_FAILED") from exc
     except OSError as exc:
-        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+        raise ReadinessError("AWS_" + error_scope + "_OBSERVATION_FAILED") from exc
     except UnicodeError as exc:
-        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID") from exc
+        raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID") from exc
     raw, separator, status = output.rpartition("\n")
     if not separator or not re.fullmatch(r"[0-9]{3}", status):
-        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID")
+        raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID")
     if status != "200":
-        raise ReadinessError("AWS_STATUS_HTTP_FAILED:" + status)
-    if len(raw.encode("utf-8")) > MAX_STATUS_BYTES:
-        raise ReadinessError("AWS_STATUS_DOCUMENT_TOO_LARGE")
+        raise ReadinessError("AWS_" + error_scope + "_HTTP_FAILED:" + status)
+    if len(raw.encode("utf-8")) > max_bytes:
+        raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_TOO_LARGE")
     try:
         document = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID") from exc
+        raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID") from exc
     if not isinstance(document, dict):
-        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID")
+        raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID")
     return document
+
+
+def _status_probe(
+    url: str,
+    *,
+    timeout: float = STATUS_OBSERVATION_TIMEOUT,
+    capture: Callable[..., str] = bounded_capture,
+) -> dict[str, object]:
+    return _loopback_json_probe(
+        url, approved_url="http://127.0.0.1:8788/status.json",
+        max_bytes=MAX_STATUS_BYTES, error_scope="STATUS", timeout=timeout,
+        capture=capture,
+    )
+
+
+def _dashboard_release_probe(
+    url: str,
+    *,
+    timeout: float = LOOPBACK_OBSERVATION_TIMEOUT,
+    capture: Callable[..., str] = bounded_capture,
+) -> dict[str, object]:
+    return _loopback_json_probe(
+        url, approved_url="http://127.0.0.1:8788/release.json",
+        max_bytes=MAX_DASHBOARD_RELEASE_BYTES,
+        error_scope="DASHBOARD_RELEASE", timeout=timeout, capture=capture,
+    )
 
 
 def inspect_aws_readiness(
@@ -189,7 +231,8 @@ def inspect_aws_readiness(
     root: Path = Path("/opt/hope-operations"),
     now: datetime | None = None,
     systemd_probe: Callable[..., dict[str, str]] = _systemd_probe,
-    status_probe: Callable[[str], dict[str, object]] = _status_probe,
+    status_probe: Callable[..., dict[str, object]] = _status_probe,
+    dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
     status_url: str = "http://127.0.0.1:8788/status.json",
     monotonic: Callable[[], float] = time.monotonic,
@@ -215,6 +258,7 @@ def inspect_aws_readiness(
             return _inspect_stable_readiness(
                 expected_sha, root=root, observed_at=observed_at,
                 systemd_probe=systemd_probe, status_probe=status_probe,
+                dashboard_release_probe=dashboard_release_probe,
                 release_probe=release_probe, status_url=status_url,
                 monotonic=monotonic,
             )
@@ -228,7 +272,8 @@ def _inspect_stable_readiness(
     root: Path,
     observed_at: datetime,
     systemd_probe: Callable[..., dict[str, str]],
-    status_probe: Callable[[str], dict[str, object]],
+    status_probe: Callable[..., dict[str, object]],
+    dashboard_release_probe: Callable[..., dict[str, object]],
     release_probe: Callable[[Path, str], dict[str, object]],
     status_url: str,
     monotonic: Callable[[], float],
@@ -281,13 +326,49 @@ def _inspect_stable_readiness(
     if units[timer]["LoadState"] == "loaded" and units[timer]["ActiveState"] != "active":
         blockers.append("UNIT_NOT_ACTIVE:" + timer)
 
-    status = status_probe(status_url)
+    loopback_deadline = monotonic() + LOOPBACK_OBSERVATION_TIMEOUT
+    remaining = loopback_deadline - monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise ReadinessError("AWS_DASHBOARD_RELEASE_OBSERVATION_TIMEOUT")
+    dashboard_release = dashboard_release_probe(
+        "http://127.0.0.1:8788/release.json", timeout=remaining,
+    )
+    safe_dashboard_release = {
+        key: dashboard_release[key]
+        for key in (
+            "schema", "dashboard_commit", "paper_only", "live_enabled",
+            "execution_authorized",
+        )
+        if key in dashboard_release
+    }
+    identity_keys = {
+        "schema", "dashboard_commit", "paper_only", "live_enabled",
+        "execution_authorized",
+    }
+    if (set(dashboard_release) != identity_keys
+            or dashboard_release.get("schema") != "hope.dashboard-release.v1"
+            or not isinstance(dashboard_release.get("dashboard_commit"), str)
+            or not SHA_RE.fullmatch(dashboard_release["dashboard_commit"])):
+        blockers.append("DASHBOARD_RELEASE_IDENTITY_INVALID")
+    elif dashboard_release["dashboard_commit"] != deployed_sha:
+        blockers.append("DASHBOARD_RELEASE_MISMATCH")
+    if (dashboard_release.get("paper_only") is not True
+            or dashboard_release.get("live_enabled") is not False
+            or dashboard_release.get("execution_authorized") is not False):
+        blockers.append("DASHBOARD_SAFETY_CONTRACT_MISMATCH")
+
+    remaining = loopback_deadline - monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT")
+    status = status_probe(status_url, timeout=remaining)
     safe_status = {
         key: status[key]
         for key in ("schema_version", "service", "data_feed", "snapshot_generated_at")
         if key in status
     }
-    if status.get("schema_version") != 1 or status.get("service") != "RUNNING":
+    if (type(status.get("schema_version")) is not int
+            or status.get("schema_version") != 1
+            or status.get("service") != "RUNNING"):
         blockers.append("OPERATIONS_STATUS_NOT_RUNNING")
     if status.get("data_feed") != "CURRENT":
         blockers.append("OPERATIONS_DATA_FEED_NOT_CURRENT")
@@ -312,6 +393,7 @@ def _inspect_stable_readiness(
         "deployed_sha": deployed_sha,
         "ready": not blockers,
         "blockers": blockers,
+        "dashboard_release": safe_dashboard_release,
         "operations_status": safe_status,
         "units": units,
     }

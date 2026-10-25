@@ -1728,3 +1728,20 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   host preflight now requires the reviewed absolute curl binary. This performs
   no AWS write, deployment, service action, credential/database access, PAPER
   cycle, strategy/risk change, public exposure, or LIVE enablement.
+
+## 2026-10-25 — Running-dashboard release and safety binding
+
+- Reproduced that AWS readiness authenticated the `current` release and a
+  healthy operations status independently. If the pointer advanced while an old
+  dashboard process remained healthy, that old process could falsely satisfy
+  readiness for the new release.
+- Readiness now fetches the private dashboard `/release.json`, requires its
+  exact schema and deployed commit, and requires its explicit PAPER-only safety
+  attestation. Release identity and status requests share one monotonic
+  five-second budget; identity is limited to 1 KiB and reports only allow-listed
+  fields.
+- Adversarial tests cover stale process identity, extra/secret fields, every
+  unsafe safety flag, aggregate deadline exhaustion, fixed loopback curl bounds,
+  and JSON boolean/version confusion. This is repository readiness code only:
+  no AWS write, deployment, service action, credential/database access, PAPER
+  cycle, strategy/risk change, public exposure, or LIVE enablement occurred.
