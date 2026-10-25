@@ -43,6 +43,18 @@ PERSISTENT_UNITS = (
     "hope-ops-dashboard-export.timer",
     "hope-paper.service",
 )
+SERVICE_RECOVERY_POLICIES = {
+    "hope-dashboard-web.service": {
+        "Type": "simple", "Restart": "on-failure", "RestartUSec": "5s",
+    },
+    "hope-ops-dashboard-web.service": {
+        "Type": "simple", "Restart": "on-failure", "RestartUSec": "10s",
+    },
+    "hope-paper.service": {
+        "Type": "notify", "Restart": "always", "RestartUSec": "15s",
+        "WatchdogUSec": "15min",
+    },
+}
 
 
 class ReadinessError(RuntimeError):
@@ -61,13 +73,18 @@ def _deployed_release(root: Path) -> tuple[Path, str]:
 
 
 def _systemd_probe(unit: str) -> dict[str, str]:
+    base_properties = (
+        "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
+    )
+    requested_properties = base_properties + tuple(
+        SERVICE_RECOVERY_POLICIES.get(unit, ())
+    )
+    command = ["/usr/bin/systemctl", "show", unit, "--no-pager"]
+    for property_name in requested_properties:
+        command.extend(("-p", property_name))
     try:
         result = subprocess.run(
-            [
-                "/usr/bin/systemctl", "show", unit, "--no-pager",
-                "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
-                "-p", "UnitFileState", "-p", "NRestarts",
-            ],
+            command,
             check=False,
             capture_output=True,
             text=True,
@@ -85,15 +102,10 @@ def _systemd_probe(unit: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in result.stdout.splitlines():
         key, separator, value = line.partition("=")
-        allowed = {
-            "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
-        }
-        if separator and key in allowed:
+        if separator and key in requested_properties:
             values[key] = value
-    required = {
-        "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
-    }
-    if set(values) != required or not re.fullmatch(r"[0-9]{1,20}", values["NRestarts"]):
+    if (set(values) != set(requested_properties)
+            or not re.fullmatch(r"[0-9]{1,20}", values["NRestarts"])):
         raise ReadinessError("AWS_SYSTEMD_OBSERVATION_INVALID:" + unit)
     return values
 
@@ -200,6 +212,14 @@ def _inspect_stable_readiness(
             blockers.append("UNIT_NOT_ACTIVE:" + unit)
         elif units[unit]["SubState"] != "running":
             blockers.append("UNIT_NOT_RUNNING:" + unit)
+
+    # Current liveness is not crash recovery.  Authenticate the effective
+    # systemd policy, including drop-in overrides, against the reviewed units.
+    for unit, policy in SERVICE_RECOVERY_POLICIES.items():
+        if units[unit]["LoadState"] != "loaded":
+            continue
+        if any(units[unit].get(key) != value for key, value in policy.items()):
+            blockers.append("UNIT_RECOVERY_POLICY_MISMATCH:" + unit)
     timer = "hope-ops-dashboard-export.timer"
     if units[timer]["LoadState"] == "loaded" and units[timer]["ActiveState"] != "active":
         blockers.append("UNIT_NOT_ACTIVE:" + timer)

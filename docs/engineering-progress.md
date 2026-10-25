@@ -1669,3 +1669,17 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   numeric restart count. No unit is installed, enabled, started, or modified;
   AWS, credentials, database, PAPER execution, strategies/risk and LIVE remain
   unchanged.
+
+## 2026-10-25 — Effective crash-recovery policy readiness
+
+- Reproduced that an enabled, active, running dashboard or PAPER unit still
+  reported READY when its effective `Restart` policy was overridden to `no`.
+  Current liveness therefore did not prove autonomous recovery after a crash.
+- The read-only observation now collects the effective service `Type`, restart
+  mode and restart delay after systemd drop-ins. PAPER also must retain its
+  reviewed notify/watchdog contract. Each value must exactly match the shipped
+  units before readiness can be true.
+- Adversarial cases cover unsafe type, disabled restart, zero-delay recovery and
+  disabled PAPER watchdog across all three managed long-running services. The
+  probe still performs no host write, unit reload/restart, deployment, PAPER
+  cycle, credential/database access, strategy/risk change, or LIVE enablement.
