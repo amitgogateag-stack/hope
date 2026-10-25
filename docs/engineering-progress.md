@@ -1683,3 +1683,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   disabled PAPER watchdog across all three managed long-running services. The
   probe still performs no host write, unit reload/restart, deployment, PAPER
   cycle, credential/database access, strategy/risk change, or LIVE enablement.
+
+## 2026-10-25 — Bounded systemd readiness collection
+
+- Demonstrated that the AWS readiness command used
+  `subprocess.run(capture_output=True)`. Its five-second wait was bounded, but a
+  flooding child could allocate unbounded captured stdout before the parsed
+  property set was rejected.
+- Systemd readiness now reuses the hardened POSIX diagnostic collector: fixed
+  binary/arguments, no shell or inherited credential environment, discarded
+  stderr, a five-second process-session deadline, and a 4 KiB stdout ceiling.
+  Hung/flooding command groups are killed and reaped by the shared collector.
+- Tests prove the explicit bounds and sanitize timeout, flood, unsupported-host,
+  nonzero-exit, spawn and invalid-UTF-8 failures. This changes only read-only host
+  observation; AWS, services, credentials, databases, PAPER execution,
+  strategy/risk rules, public exposure and LIVE remain unchanged.

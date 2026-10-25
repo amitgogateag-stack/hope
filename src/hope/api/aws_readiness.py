@@ -17,11 +17,13 @@ import subprocess
 from typing import Callable
 
 from hope.api import operations_deployment
+from hope.api.diagnostic_io import bounded_capture
 from hope.api.operations_deployment import DeploymentError, inspect_release
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
+MAX_SYSTEMD_BYTES = 4_096
 REQUIRED_UNITS = (
     "postgresql.service",
     "hope-dashboard-web.service",
@@ -72,7 +74,11 @@ def _deployed_release(root: Path) -> tuple[Path, str]:
     return deployed, deployed.name
 
 
-def _systemd_probe(unit: str) -> dict[str, str]:
+def _systemd_probe(
+    unit: str,
+    *,
+    capture: Callable[..., str] = bounded_capture,
+) -> dict[str, str]:
     base_properties = (
         "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
     )
@@ -83,24 +89,28 @@ def _systemd_probe(unit: str) -> dict[str, str]:
     for property_name in requested_properties:
         command.extend(("-p", property_name))
     try:
-        result = subprocess.run(
+        stdout = capture(
             command,
-            check=False,
-            capture_output=True,
-            text=True,
             timeout=5,
+            max_output=MAX_SYSTEMD_BYTES,
             env={
                 "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
                 "LANG": "C",
                 "LC_ALL": "C",
             },
         )
-    except subprocess.TimeoutExpired as exc:
-        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TIMEOUT:" + unit) from exc
-    if result.returncode != 0:
-        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_FAILED:" + unit)
+    except RuntimeError as exc:
+        if str(exc) == "DIAGNOSTIC_TIMEOUT":
+            raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TIMEOUT:" + unit) from exc
+        if str(exc) == "DIAGNOSTIC_OUTPUT_LIMIT":
+            raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TOO_LARGE:" + unit) from exc
+        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_FAILED:" + unit) from exc
+    except (OSError, subprocess.CalledProcessError) as exc:
+        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_FAILED:" + unit) from exc
+    except UnicodeError as exc:
+        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_INVALID:" + unit) from exc
     values: dict[str, str] = {}
-    for line in result.stdout.splitlines():
+    for line in stdout.splitlines():
         key, separator, value = line.partition("=")
         if separator and key in requested_properties:
             values[key] = value
