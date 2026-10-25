@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 import json
 import os
 from pathlib import Path
+import re
+import stat
 import subprocess
 import tempfile
 import time
@@ -26,14 +28,89 @@ def systemctl(*arguments):
                    env=COMMAND_ENVIRONMENT)
 
 
+def _metadata_file(fd, expected_uid, expected_payload, expected_identity=None):
+    value = os.fstat(fd)
+    identity = (value.st_dev, value.st_ino)
+    if (not stat.S_ISREG(value.st_mode) or value.st_uid != expected_uid
+            or stat.S_IMODE(value.st_mode) != 0o600 or value.st_nlink != 1
+            or value.st_size != len(expected_payload)
+            or (expected_identity is not None and identity != expected_identity)):
+        raise RuntimeError("OPERATIONS_METADATA_IDENTITY_INVALID")
+    os.lseek(fd, 0, os.SEEK_SET)
+    if os.read(fd, len(expected_payload) + 1) != expected_payload:
+        raise RuntimeError("OPERATIONS_METADATA_CONTENT_INVALID")
+    return identity
+
+
 def metadata(sha):
-    with tempfile.NamedTemporaryFile(mode="w", dir=ROOT, delete=False) as stream:
-        path = Path(stream.name)
-        os.chmod(path, 0o600)
-        stream.write(f"HOPE_DEPLOYED_COMMIT={sha}\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(path, ROOT / "deployed.env")
+    """Durably publish authenticated deployment metadata inside the trusted root."""
+    if not isinstance(sha, str) or re.fullmatch(r"[0-9a-f]{40}", sha) is None:
+        raise ValueError("OPERATIONS_METADATA_COMMIT_INVALID")
+    payload = f"HOPE_DEPLOYED_COMMIT={sha}\n".encode("ascii")
+    expected_uid = None
+    root_descriptor = None
+    staged_path = None
+    staged_identity = None
+    published = False
+    try:
+        root_descriptor = os.open(ROOT, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        with tempfile.NamedTemporaryFile(
+            mode="w+b", dir=ROOT, prefix=".deployed.env.", delete=False
+        ) as stream:
+            staged_path = Path(stream.name)
+            value = os.fstat(stream.fileno())
+            staged_identity = (value.st_dev, value.st_ino)
+            expected_uid = value.st_uid
+            os.fchmod(stream.fileno(), 0o600)
+            stream.write(payload)
+            stream.flush()
+            _metadata_file(
+                stream.fileno(), expected_uid, payload, expected_identity=staged_identity
+            )
+            os.fsync(stream.fileno())
+            _metadata_file(
+                stream.fileno(), expected_uid, payload, expected_identity=staged_identity
+            )
+        staged_name = staged_path.name
+        value = os.stat(staged_name, dir_fd=root_descriptor, follow_symlinks=False)
+        if (value.st_dev, value.st_ino) != staged_identity:
+            raise RuntimeError("OPERATIONS_METADATA_STAGING_REPLACED")
+        os.rename(
+            staged_name,
+            "deployed.env",
+            src_dir_fd=root_descriptor,
+            dst_dir_fd=root_descriptor,
+        )
+        published = True
+        published_descriptor = os.open(
+            "deployed.env", os.O_RDONLY | os.O_NOFOLLOW, dir_fd=root_descriptor
+        )
+        try:
+            _metadata_file(
+                published_descriptor,
+                expected_uid,
+                payload,
+                expected_identity=staged_identity,
+            )
+        finally:
+            os.close(published_descriptor)
+        os.fsync(root_descriptor)
+    except OSError as error:
+        raise RuntimeError("OPERATIONS_METADATA_DURABILITY_FAILED") from error
+    finally:
+        if root_descriptor is not None:
+            if staged_path is not None and not published:
+                try:
+                    value = os.stat(
+                        staged_path.name,
+                        dir_fd=root_descriptor,
+                        follow_symlinks=False,
+                    )
+                    if (value.st_dev, value.st_ino) == staged_identity:
+                        os.unlink(staged_path.name, dir_fd=root_descriptor)
+                except FileNotFoundError:
+                    pass
+            os.close(root_descriptor)
 
 
 def accepted_health(value, target, started):

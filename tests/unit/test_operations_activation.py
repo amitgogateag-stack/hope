@@ -2,6 +2,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import stat
 import sys
 from datetime import UTC, datetime, timedelta
 
@@ -71,7 +72,60 @@ def test_activation_preflight_and_failed_acceptance_leave_services_safe(activati
 def test_metadata_is_atomically_published_with_no_secret_or_extra_fields(activation):
     activation.metadata("a" * 40)
     assert (activation.ROOT / "deployed.env").read_text() == "HOPE_DEPLOYED_COMMIT=" + "a" * 40 + "\n"
+    assert stat.S_IMODE((activation.ROOT / "deployed.env").stat().st_mode) == 0o600
     assert sorted(p.name for p in activation.ROOT.iterdir()) == ["deployed.env"]
+
+
+def test_metadata_fsyncs_published_file_before_parent_directory(activation, monkeypatch):
+    calls = []
+    real_fsync = activation.os.fsync
+
+    def fsync(fd):
+        calls.append("directory" if os.path.isdir(f"/proc/self/fd/{fd}") else "file")
+        real_fsync(fd)
+
+    monkeypatch.setattr(activation.os, "fsync", fsync)
+    activation.metadata("b" * 40)
+    assert calls == ["file", "directory"]
+
+
+def test_metadata_authenticates_kernel_created_owner_not_preflight_stub(activation, monkeypatch):
+    monkeypatch.setattr(activation.os, "geteuid", lambda: 12345)
+    activation.metadata("c" * 40)
+    assert (activation.ROOT / "deployed.env").read_text().endswith("c" * 40 + "\n")
+
+
+def test_metadata_staged_fsync_failure_preserves_previous_value(activation, monkeypatch):
+    previous = activation.ROOT / "deployed.env"
+    previous.write_text("HOPE_DEPLOYED_COMMIT=" + "1" * 40 + "\n")
+    previous.chmod(0o600)
+
+    def fail(_fd):
+        raise OSError("simulated storage failure")
+
+    monkeypatch.setattr(activation.os, "fsync", fail)
+    with pytest.raises(RuntimeError, match="OPERATIONS_METADATA_DURABILITY_FAILED"):
+        activation.metadata("2" * 40)
+    assert previous.read_text() == "HOPE_DEPLOYED_COMMIT=" + "1" * 40 + "\n"
+    assert sorted(path.name for path in activation.ROOT.iterdir()) == ["deployed.env"]
+
+
+def test_metadata_staged_permission_failure_cleans_exact_temp(activation, monkeypatch):
+    monkeypatch.setattr(
+        activation.os,
+        "fchmod",
+        lambda _fd, _mode: (_ for _ in ()).throw(OSError("simulated permission failure")),
+    )
+    with pytest.raises(RuntimeError, match="OPERATIONS_METADATA_DURABILITY_FAILED"):
+        activation.metadata("3" * 40)
+    assert list(activation.ROOT.iterdir()) == []
+
+
+@pytest.mark.parametrize("value", ["a" * 39, "A" * 40, "../" + "a" * 40, None])
+def test_metadata_rejects_invalid_commit_before_creating_files(activation, value):
+    with pytest.raises(ValueError, match="OPERATIONS_METADATA_COMMIT_INVALID"):
+        activation.metadata(value)
+    assert list(activation.ROOT.iterdir()) == []
 
 
 def test_service_control_ignores_ambient_path_and_loader_environment(activation, monkeypatch):
