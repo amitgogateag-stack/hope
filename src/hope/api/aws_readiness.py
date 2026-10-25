@@ -11,9 +11,11 @@ import argparse
 from datetime import datetime, timedelta, timezone
 from http.client import HTTPConnection
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
+import time
 from typing import Callable
 
 from hope.api import operations_deployment
@@ -24,6 +26,7 @@ from hope.api.operations_deployment import DeploymentError, inspect_release
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
 MAX_SYSTEMD_BYTES = 4_096
+SYSTEMD_OBSERVATION_TIMEOUT = 5.0
 REQUIRED_UNITS = (
     "postgresql.service",
     "hope-dashboard-web.service",
@@ -77,8 +80,13 @@ def _deployed_release(root: Path) -> tuple[Path, str]:
 def _systemd_probe(
     unit: str,
     *,
+    timeout: float = SYSTEMD_OBSERVATION_TIMEOUT,
     capture: Callable[..., str] = bounded_capture,
 ) -> dict[str, str]:
+    if (not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0):
+        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TIMEOUT:" + unit)
+    timeout = min(float(timeout), SYSTEMD_OBSERVATION_TIMEOUT)
     base_properties = (
         "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
     )
@@ -91,7 +99,7 @@ def _systemd_probe(
     try:
         stdout = capture(
             command,
-            timeout=5,
+            timeout=timeout,
             max_output=MAX_SYSTEMD_BYTES,
             env={
                 "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
@@ -148,10 +156,11 @@ def inspect_aws_readiness(
     *,
     root: Path = Path("/opt/hope-operations"),
     now: datetime | None = None,
-    systemd_probe: Callable[[str], dict[str, str]] = _systemd_probe,
+    systemd_probe: Callable[..., dict[str, str]] = _systemd_probe,
     status_probe: Callable[[str], dict[str, object]] = _status_probe,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
     status_url: str = "http://127.0.0.1:8788/status.json",
+    monotonic: Callable[[], float] = time.monotonic,
 ) -> dict[str, object]:
     """Return a sanitized, deterministic readiness report without host writes."""
     if not SHA_RE.fullmatch(expected_sha):
@@ -175,6 +184,7 @@ def inspect_aws_readiness(
                 expected_sha, root=root, observed_at=observed_at,
                 systemd_probe=systemd_probe, status_probe=status_probe,
                 release_probe=release_probe, status_url=status_url,
+                monotonic=monotonic,
             )
     except DeploymentError as exc:
         raise ReadinessError("AWS_ACTIVATION_STATE_UNAVAILABLE") from exc
@@ -185,10 +195,11 @@ def _inspect_stable_readiness(
     *,
     root: Path,
     observed_at: datetime,
-    systemd_probe: Callable[[str], dict[str, str]],
+    systemd_probe: Callable[..., dict[str, str]],
     status_probe: Callable[[str], dict[str, object]],
     release_probe: Callable[[Path, str], dict[str, object]],
     status_url: str,
+    monotonic: Callable[[], float],
 ) -> dict[str, object]:
     """Observe one generation while the caller holds the shared fence."""
     deployed_release, deployed_sha = _deployed_release(root)
@@ -201,8 +212,12 @@ def _inspect_stable_readiness(
         blockers.append("DEPLOYED_SHA_MISMATCH")
 
     units: dict[str, dict[str, str]] = {}
+    systemd_deadline = monotonic() + SYSTEMD_OBSERVATION_TIMEOUT
     for unit in REQUIRED_UNITS:
-        values = systemd_probe(unit)
+        remaining = systemd_deadline - monotonic()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TIMEOUT:" + unit)
+        values = systemd_probe(unit, timeout=remaining)
         units[unit] = values
         if values["LoadState"] != "loaded":
             blockers.append("UNIT_NOT_LOADED:" + unit)

@@ -62,10 +62,12 @@ systemd recovery contract after all drop-ins: both web services must be
 `Type=simple`, `Restart=on-failure`, with their reviewed 5s/10s delays; PAPER
 must be `Type=notify`, `Restart=always`, with a 15s delay and 15-minute watchdog.
 Merely observing a currently running process cannot substitute for crash recovery.
-Each systemd call uses HOPE's fixed-binary, no-shell diagnostic collector with a
-five-second shared process-session deadline and a 4 KiB stdout ceiling. Stderr is
-discarded, ambient credentials are not inherited, and timeout, output flooding,
-nonzero exit, spawn and decoding failures become fixed sanitized readiness errors.
+Systemd collection has one five-second deadline shared across every required
+unit, rather than a fresh wait for each command while the deployment fence is
+held. Each call receives only the remaining budget and uses HOPE's fixed-binary,
+no-shell diagnostic collector with a 4 KiB stdout ceiling. Stderr is discarded,
+ambient credentials are not inherited, and timeout, output flooding, nonzero
+exit, spawn and decoding failures become fixed sanitized readiness errors.
 
 ## Operations 503 diagnosis and resolution boundaries
 

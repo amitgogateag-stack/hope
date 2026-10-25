@@ -1698,3 +1698,16 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   nonzero-exit, spawn and invalid-UTF-8 failures. This changes only read-only host
   observation; AWS, services, credentials, databases, PAPER execution,
   strategy/risk rules, public exposure and LIVE remain unchanged.
+
+## 2026-10-25 — Aggregate systemd observation deadline
+
+- Reproduced that the six required systemd queries each received a fresh
+  five-second timeout. A degraded host could therefore retain the shared
+  deployment/readiness fence for roughly thirty seconds before failing.
+- The complete systemd phase now has one monotonic five-second deadline. Every
+  command receives only the remaining budget, and budget exhaustion fails
+  closed before another host probe or dashboard request begins.
+- An adversarial clock/probe test consumes the budget across successive units,
+  verifies decreasing command deadlines, and proves later systemd and HTTP
+  probes are not attempted. This remains read-only and makes no AWS, service,
+  credential, database, PAPER execution, strategy/risk, or LIVE change.

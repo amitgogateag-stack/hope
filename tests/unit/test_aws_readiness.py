@@ -30,8 +30,9 @@ def _root(tmp_path: Path, deployed: str = EXPECTED) -> Path:
 
 
 def _units(*, missing: str | None = None):
-    def probe(unit: str) -> dict[str, str]:
+    def probe(unit: str, *, timeout: float = 5) -> dict[str, str]:
         assert unit in REQUIRED_UNITS
+        assert 0 < timeout <= 5
         if unit == missing:
             values = {
                 "LoadState": "not-found", "ActiveState": "inactive",
@@ -54,8 +55,8 @@ def _units(*, missing: str | None = None):
 def _inactive(unit_name: str):
     base = _units()
 
-    def probe(unit: str) -> dict[str, str]:
-        values = base(unit)
+    def probe(unit: str, *, timeout: float = 5) -> dict[str, str]:
+        values = base(unit, timeout=timeout)
         if unit == unit_name:
             values = {**values, "ActiveState": "inactive", "SubState": "dead"}
         return values
@@ -174,8 +175,8 @@ def test_transiently_active_but_disabled_unit_cannot_claim_reboot_readiness(
 ):
     base = _units()
 
-    def disabled_probe(observed_unit):
-        values = base(observed_unit)
+    def disabled_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
         if observed_unit == unit:
             values = {**values, "UnitFileState": "disabled"}
         return values
@@ -197,8 +198,8 @@ def test_transiently_active_but_disabled_unit_cannot_claim_reboot_readiness(
 def test_active_unit_without_running_process_cannot_claim_readiness(tmp_path, unit):
     base = _units()
 
-    def exited_probe(observed_unit):
-        values = base(observed_unit)
+    def exited_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
         if observed_unit == unit:
             values = {**values, "SubState": "exited"}
         return values
@@ -228,8 +229,8 @@ def test_running_service_without_reviewed_crash_recovery_cannot_claim_readiness(
 ):
     base = _units()
 
-    def nonrecovering_probe(observed_unit):
-        values = base(observed_unit)
+    def nonrecovering_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
         if observed_unit == unit:
             values = {**values, property_name: unsafe_value}
         return values
@@ -351,6 +352,39 @@ def test_systemd_probe_uses_explicit_output_and_time_bounds():
     }
 
 
+def test_systemd_observations_share_one_total_deadline(tmp_path):
+    clock = [100.0]
+    observed = []
+    status_called = []
+
+    def monotonic():
+        return clock[0]
+
+    def slow_probe(unit, *, timeout):
+        observed.append((unit, timeout))
+        clock[0] += 2
+        return _units()(unit, timeout=timeout)
+
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-ops-dashboard-export.service$",
+    ):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=slow_probe,
+            status_probe=lambda _url: status_called.append(True),
+            release_probe=_release_ok,
+            monotonic=monotonic,
+        )
+
+    assert observed == [
+        ("postgresql.service", 5),
+        ("hope-dashboard-web.service", 3),
+        ("hope-ops-dashboard-web.service", 1),
+    ]
+    assert status_called == []
+
+
 @pytest.mark.parametrize(("failure", "error"), (
     (
         RuntimeError("DIAGNOSTIC_OUTPUT_LIMIT"),
@@ -445,9 +479,9 @@ def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
         assert_mutation_excluded("release")
         return {"status": "COMPATIBLE_CODE"}
 
-    def systemd_probe(unit):
+    def systemd_probe(unit, *, timeout):
         assert_mutation_excluded("systemd:" + unit)
-        return _units()(unit)
+        return _units()(unit, timeout=timeout)
 
     def status_probe(_url):
         assert_mutation_excluded("status")
