@@ -16,6 +16,8 @@ import re
 import subprocess
 from typing import Callable
 
+from hope.api.operations_deployment import DeploymentError, inspect_release
+
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
@@ -33,7 +35,7 @@ class ReadinessError(RuntimeError):
     """The observation could not be authenticated or safely bounded."""
 
 
-def _deployed_sha(root: Path) -> str:
+def _deployed_release(root: Path) -> tuple[Path, str]:
     current = root / "current"
     if not current.is_symlink():
         raise ReadinessError("AWS_CURRENT_RELEASE_SYMLINK_REQUIRED")
@@ -41,22 +43,29 @@ def _deployed_sha(root: Path) -> str:
     deployed = current.resolve(strict=True)
     if deployed.parent != releases or not SHA_RE.fullmatch(deployed.name):
         raise ReadinessError("AWS_CURRENT_RELEASE_TARGET_UNTRUSTED")
-    return deployed.name
+    return deployed, deployed.name
 
 
 def _systemd_probe(unit: str) -> dict[str, str]:
-    result = subprocess.run(
-        [
-            "/usr/bin/systemctl", "show", unit, "--no-pager",
-            "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
-            "-p", "UnitFileState", "-p", "NRestarts",
-        ],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=5,
-        env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C", "LC_ALL": "C"},
-    )
+    try:
+        result = subprocess.run(
+            [
+                "/usr/bin/systemctl", "show", unit, "--no-pager",
+                "-p", "LoadState", "-p", "ActiveState", "-p", "SubState",
+                "-p", "UnitFileState", "-p", "NRestarts",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+            env={
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise ReadinessError("AWS_SYSTEMD_OBSERVATION_TIMEOUT:" + unit) from exc
     if result.returncode != 0:
         raise ReadinessError("AWS_SYSTEMD_OBSERVATION_FAILED:" + unit)
     values: dict[str, str] = {}
@@ -102,6 +111,7 @@ def inspect_aws_readiness(
     now: datetime | None = None,
     systemd_probe: Callable[[str], dict[str, str]] = _systemd_probe,
     status_probe: Callable[[str], dict[str, object]] = _status_probe,
+    release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
     status_url: str = "http://127.0.0.1:8788/status.json",
 ) -> dict[str, object]:
     """Return a sanitized, deterministic readiness report without host writes."""
@@ -109,8 +119,15 @@ def inspect_aws_readiness(
         raise ReadinessError("AWS_EXPECTED_SHA_REQUIRED")
     if status_url != "http://127.0.0.1:8788/status.json":
         raise ReadinessError("AWS_STATUS_URL_NOT_APPROVED")
-    observed_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-    deployed_sha = _deployed_sha(root)
+    observed_at = now or datetime.now(timezone.utc)
+    if observed_at.tzinfo is None:
+        raise ReadinessError("AWS_OBSERVATION_TIME_INVALID")
+    observed_at = observed_at.astimezone(timezone.utc)
+    deployed_release, deployed_sha = _deployed_release(root)
+    try:
+        release_probe(deployed_release, deployed_sha)
+    except (OSError, DeploymentError) as exc:
+        raise ReadinessError("AWS_DEPLOYED_RELEASE_UNVERIFIED") from exc
     blockers: list[str] = []
     if deployed_sha != expected_sha:
         blockers.append("DEPLOYED_SHA_MISMATCH")

@@ -44,7 +44,9 @@ reviewed_module:factory is only a placeholder and must not be substituted.
 
 `python -m hope.api.aws_readiness APPROVED_SHA` is the bounded reconciliation
 probe for this pre-deployment state. It authenticates `current` as one direct
-40-hex child of `releases`, reads only fixed systemd properties and the private
+40-hex child of `releases`, then authenticates that release's Git root, origin,
+HEAD, cleanliness and required artifacts rather than trusting its directory name.
+It reads only fixed systemd properties and the private
 loopback `8788/status.json` document, emits only allow-listed fields, and returns
 3 while readiness blockers remain. It does not read configuration values, query
 PostgreSQL, install units, restart services, deploy a release, or execute PAPER.

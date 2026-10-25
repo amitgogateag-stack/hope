@@ -3,11 +3,17 @@ from pathlib import Path
 
 import pytest
 
+from hope.api import aws_readiness
 from hope.api.aws_readiness import REQUIRED_UNITS, ReadinessError, inspect_aws_readiness
+from hope.api.operations_deployment import DeploymentError
 
 
 EXPECTED = "b" * 40
 NOW = datetime(2026, 10, 24, 23, 0, tzinfo=timezone.utc)
+
+
+def _release_ok(_release, _sha):
+    return {"status": "COMPATIBLE_CODE"}
 
 
 def _root(tmp_path: Path, deployed: str = EXPECTED) -> Path:
@@ -58,7 +64,7 @@ def _status(timestamp: str = "2026-10-24T22:55:00+00:00"):
 def test_exact_release_current_status_and_loaded_units_are_ready(tmp_path):
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
-        systemd_probe=_units(), status_probe=_status(),
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
     )
     assert report["ready"] is True
     assert report["blockers"] == []
@@ -72,6 +78,7 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
     report = inspect_aws_readiness(
         EXPECTED, root=root, now=NOW,
         systemd_probe=_units(missing="hope-paper.service"),
+        release_probe=_release_ok,
         status_probe=lambda _: {
             "schema_version": 1,
             "service": "RUNNING",
@@ -101,7 +108,7 @@ def test_current_symlink_must_name_one_direct_release_child(tmp_path, target):
     with pytest.raises(ReadinessError, match="^AWS_CURRENT_RELEASE_TARGET_UNTRUSTED$"):
         inspect_aws_readiness(
             EXPECTED, root=root, now=NOW,
-            systemd_probe=_units(), status_probe=_status(),
+            systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
         )
 
 
@@ -117,6 +124,7 @@ def test_snapshot_time_is_bounded_and_timezone_aware(tmp_path, timestamp, blocke
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
         systemd_probe=_units(), status_probe=_status(timestamp),
+        release_probe=_release_ok,
     )
     assert blocker in report["blockers"]
 
@@ -125,7 +133,7 @@ def test_status_probe_is_pinned_to_private_operations_endpoint(tmp_path):
     with pytest.raises(ReadinessError, match="^AWS_STATUS_URL_NOT_APPROVED$"):
         inspect_aws_readiness(
             EXPECTED, root=_root(tmp_path), now=NOW,
-            systemd_probe=_units(), status_probe=_status(),
+            systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
             status_url="http://example.invalid/status.json",
         )
 
@@ -137,5 +145,62 @@ def test_autonomous_units_must_be_active_for_operational_readiness(tmp_path, uni
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
         systemd_probe=_inactive(unit), status_probe=_status(),
+        release_probe=_release_ok,
     )
     assert "UNIT_NOT_ACTIVE:" + unit in report["blockers"]
+
+
+def test_release_directory_name_cannot_substitute_for_authenticated_git_head(tmp_path):
+    observed = []
+
+    def reject_release(release: Path, expected_sha: str):
+        observed.append((release, expected_sha))
+        raise DeploymentError("OPERATIONS_RELEASE_HEAD_MISMATCH")
+
+    root = _root(tmp_path)
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYED_RELEASE_UNVERIFIED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW,
+            systemd_probe=_units(), status_probe=_status(),
+            release_probe=reject_release,
+        )
+    assert observed == [((root / "releases" / EXPECTED).resolve(), EXPECTED)]
+
+
+def test_release_authentication_uses_deployed_sha_not_requested_target(tmp_path):
+    deployed = "a" * 40
+    observed = []
+
+    def record_release(release: Path, expected_sha: str):
+        observed.append((release, expected_sha))
+        return {"status": "COMPATIBLE_CODE"}
+
+    root = _root(tmp_path, deployed)
+    report = inspect_aws_readiness(
+        EXPECTED, root=root, now=NOW,
+        systemd_probe=_units(), status_probe=_status(),
+        release_probe=record_release,
+    )
+    assert report["blockers"][0] == "DEPLOYED_SHA_MISMATCH"
+    assert observed == [((root / "releases" / deployed).resolve(), deployed)]
+
+
+def test_naive_observation_time_is_rejected(tmp_path):
+    with pytest.raises(ReadinessError, match="^AWS_OBSERVATION_TIME_INVALID$"):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW.replace(tzinfo=None),
+            systemd_probe=_units(), status_probe=_status(),
+            release_probe=_release_ok,
+        )
+
+
+def test_systemd_timeout_is_sanitized(monkeypatch):
+    def timeout(*_args, **_kwargs):
+        raise aws_readiness.subprocess.TimeoutExpired("systemctl", 5)
+
+    monkeypatch.setattr(aws_readiness.subprocess, "run", timeout)
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-paper.service$",
+    ):
+        aws_readiness._systemd_probe("hope-paper.service")
