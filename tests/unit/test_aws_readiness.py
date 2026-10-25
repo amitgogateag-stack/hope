@@ -1,7 +1,6 @@
 from datetime import datetime, timezone
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -313,19 +312,76 @@ def test_naive_observation_time_is_rejected(tmp_path):
         )
 
 
-def test_systemd_timeout_is_sanitized(monkeypatch):
+def test_systemd_timeout_is_sanitized():
     def timeout(*_args, **_kwargs):
-        raise aws_readiness.subprocess.TimeoutExpired("systemctl", 5)
+        raise RuntimeError("DIAGNOSTIC_TIMEOUT")
 
-    monkeypatch.setattr(aws_readiness.subprocess, "run", timeout)
     with pytest.raises(
         ReadinessError,
         match="^AWS_SYSTEMD_OBSERVATION_TIMEOUT:hope-paper.service$",
     ):
-        aws_readiness._systemd_probe("hope-paper.service")
+        aws_readiness._systemd_probe("hope-paper.service", capture=timeout)
 
 
-def test_systemd_probe_collects_effective_paper_recovery_policy(monkeypatch):
+def test_systemd_probe_uses_explicit_output_and_time_bounds():
+    observed = []
+    policy = SERVICE_RECOVERY_POLICIES["hope-paper.service"]
+    stdout = "\n".join((
+        "LoadState=loaded", "ActiveState=active", "SubState=running",
+        "UnitFileState=enabled", "NRestarts=0",
+        *(key + "=" + value for key, value in policy.items()),
+    )) + "\n"
+
+    def capture(command, **kwargs):
+        observed.append((command, kwargs))
+        return stdout
+
+    assert aws_readiness._systemd_probe(
+        "hope-paper.service", capture=capture,
+    )["Restart"] == "always"
+    _command, kwargs = observed[0]
+    assert kwargs == {
+        "timeout": 5,
+        "max_output": aws_readiness.MAX_SYSTEMD_BYTES,
+        "env": {
+            "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+            "LANG": "C",
+            "LC_ALL": "C",
+        },
+    }
+
+
+@pytest.mark.parametrize(("failure", "error"), (
+    (
+        RuntimeError("DIAGNOSTIC_OUTPUT_LIMIT"),
+        "AWS_SYSTEMD_OBSERVATION_TOO_LARGE:hope-paper.service",
+    ),
+    (
+        RuntimeError("DIAGNOSTIC_POSIX_REQUIRED"),
+        "AWS_SYSTEMD_OBSERVATION_FAILED:hope-paper.service",
+    ),
+    (
+        OSError("private host detail"),
+        "AWS_SYSTEMD_OBSERVATION_FAILED:hope-paper.service",
+    ),
+    (
+        aws_readiness.subprocess.CalledProcessError(1, ["systemctl"]),
+        "AWS_SYSTEMD_OBSERVATION_FAILED:hope-paper.service",
+    ),
+    (
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"),
+        "AWS_SYSTEMD_OBSERVATION_INVALID:hope-paper.service",
+    ),
+))
+def test_systemd_capture_failures_are_sanitized(failure, error):
+    def fail(*_args, **_kwargs):
+        raise failure
+
+    with pytest.raises(ReadinessError, match="^" + error + "$"):
+        aws_readiness._systemd_probe("hope-paper.service", capture=fail)
+
+
+def test_systemd_probe_collects_effective_paper_recovery_policy():
     observed = []
     policy = SERVICE_RECOVERY_POLICIES["hope-paper.service"]
     stdout = "\n".join((
@@ -336,10 +392,9 @@ def test_systemd_probe_collects_effective_paper_recovery_policy(monkeypatch):
 
     def run(command, **kwargs):
         observed.append((command, kwargs))
-        return SimpleNamespace(returncode=0, stdout=stdout)
+        return stdout
 
-    monkeypatch.setattr(aws_readiness.subprocess, "run", run)
-    assert aws_readiness._systemd_probe("hope-paper.service") == {
+    assert aws_readiness._systemd_probe("hope-paper.service", capture=run) == {
         "LoadState": "loaded", "ActiveState": "active", "SubState": "running",
         "UnitFileState": "enabled", "NRestarts": "0", **policy,
     }
@@ -363,16 +418,14 @@ def test_systemd_probe_collects_effective_paper_recovery_policy(monkeypatch):
         "UnitFileState=enabled\nNRestarts=123456789012345678901\n"
     ),
 ])
-def test_systemd_observation_requires_complete_bounded_state(monkeypatch, stdout):
-    monkeypatch.setattr(
-        aws_readiness.subprocess, "run",
-        lambda *_args, **_kwargs: SimpleNamespace(returncode=0, stdout=stdout),
-    )
+def test_systemd_observation_requires_complete_bounded_state(stdout):
     with pytest.raises(
         ReadinessError,
         match="^AWS_SYSTEMD_OBSERVATION_INVALID:hope-paper.service$",
     ):
-        aws_readiness._systemd_probe("hope-paper.service")
+        aws_readiness._systemd_probe(
+            "hope-paper.service", capture=lambda *_args, **_kwargs: stdout,
+        )
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux flock contract")
