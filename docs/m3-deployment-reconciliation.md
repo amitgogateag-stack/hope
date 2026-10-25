@@ -68,6 +68,12 @@ held. Each call receives only the remaining budget and uses HOPE's fixed-binary,
 no-shell diagnostic collector with a 4 KiB stdout ceiling. Stderr is discarded,
 ambient credentials are not inherited, and timeout, output flooding, nonzero
 exit, spawn and decoding failures become fixed sanitized readiness errors.
+The loopback status request uses the same hardened collector around a fixed
+`/usr/bin/curl` command. Curl configuration and proxies are disabled, only HTTP
+is permitted, and one five-second process-session deadline plus a 16 KiB output
+ceiling covers connection, headers and body. The HTTP status trailer is parsed
+separately from the JSON body; timeout, connection, overflow, non-UTF-8 and
+malformed-framing failures expose only fixed readiness codes.
 
 ## Operations 503 diagnosis and resolution boundaries
 

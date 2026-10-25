@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timedelta, timezone
-from http.client import HTTPConnection
 import json
 import math
 from pathlib import Path
@@ -26,6 +25,7 @@ from hope.api.operations_deployment import DeploymentError, inspect_release
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
 MAX_SYSTEMD_BYTES = 4_096
+STATUS_OBSERVATION_TIMEOUT = 5.0
 SYSTEMD_OBSERVATION_TIMEOUT = 5.0
 REQUIRED_UNITS = (
     "postgresql.service",
@@ -128,23 +128,55 @@ def _systemd_probe(
     return values
 
 
-def _status_probe(url: str) -> dict[str, object]:
+def _status_probe(
+    url: str,
+    *,
+    capture: Callable[..., str] = bounded_capture,
+) -> dict[str, object]:
     if url != "http://127.0.0.1:8788/status.json":
         raise ReadinessError("AWS_STATUS_URL_NOT_APPROVED")
-    connection = HTTPConnection("127.0.0.1", 8788, timeout=5)
+    command = [
+        "/usr/bin/curl", "-q", "--silent", "--show-error",
+        "--noproxy", "*", "--proto", "=http",
+        "--max-time", str(int(STATUS_OBSERVATION_TIMEOUT)),
+        "--request", "GET", "--header", "Host: 127.0.0.1",
+        "--write-out", "\n%{http_code}", url,
+    ]
     try:
-        connection.request("GET", "/status.json", headers={"Host": "127.0.0.1"})
-        response = connection.getresponse()
-        if response.status != 200:
-            raise ReadinessError("AWS_STATUS_HTTP_FAILED:" + str(response.status))
-        raw = response.read(MAX_STATUS_BYTES + 1)
-    finally:
-        connection.close()
-    if len(raw) > MAX_STATUS_BYTES:
+        output = capture(
+            command,
+            timeout=STATUS_OBSERVATION_TIMEOUT,
+            max_output=MAX_STATUS_BYTES + 4,
+            env={
+                "PATH": "/usr/sbin:/usr/bin:/sbin:/bin",
+                "LANG": "C",
+                "LC_ALL": "C",
+            },
+        )
+    except RuntimeError as exc:
+        if str(exc) == "DIAGNOSTIC_TIMEOUT":
+            raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT") from exc
+        if str(exc) == "DIAGNOSTIC_OUTPUT_LIMIT":
+            raise ReadinessError("AWS_STATUS_DOCUMENT_TOO_LARGE") from exc
+        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+    except subprocess.CalledProcessError as exc:
+        if exc.returncode == 28:
+            raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT") from exc
+        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+    except OSError as exc:
+        raise ReadinessError("AWS_STATUS_OBSERVATION_FAILED") from exc
+    except UnicodeError as exc:
+        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID") from exc
+    raw, separator, status = output.rpartition("\n")
+    if not separator or not re.fullmatch(r"[0-9]{3}", status):
+        raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID")
+    if status != "200":
+        raise ReadinessError("AWS_STATUS_HTTP_FAILED:" + status)
+    if len(raw.encode("utf-8")) > MAX_STATUS_BYTES:
         raise ReadinessError("AWS_STATUS_DOCUMENT_TOO_LARGE")
     try:
-        document = json.loads(raw.decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as exc:
+        document = json.loads(raw)
+    except json.JSONDecodeError as exc:
         raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID") from exc
     if not isinstance(document, dict):
         raise ReadinessError("AWS_STATUS_DOCUMENT_INVALID")
