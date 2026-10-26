@@ -11,6 +11,7 @@ import argparse
 from datetime import datetime, timedelta, timezone
 import json
 import math
+import os
 from pathlib import Path
 import re
 import stat
@@ -27,6 +28,7 @@ SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
 MAX_DASHBOARD_RELEASE_BYTES = 1_024
 MAX_SYSTEMD_BYTES = 4_096
+MAX_UNIT_BYTES = 16_384
 LOOPBACK_OBSERVATION_TIMEOUT = 5.0
 STATUS_OBSERVATION_TIMEOUT = 5.0
 SYSTEMD_OBSERVATION_TIMEOUT = 5.0
@@ -68,10 +70,65 @@ HOPE_UNIT_FRAGMENTS = {
     for unit in REQUIRED_UNITS
     if unit != "postgresql.service"
 }
+HOPE_UNIT_TEMPLATES = {
+    unit: (
+        Path("deploy/dashboard/hope-dashboard-web.service")
+        if unit == "hope-dashboard-web.service"
+        else Path("deploy/operations") / unit
+    )
+    for unit in HOPE_UNIT_FRAGMENTS
+}
 
 
 class ReadinessError(RuntimeError):
     """The observation could not be authenticated or safely bounded."""
+
+
+def _bounded_unit_file(path: Path) -> bytes:
+    """Read one direct, immutable-sized unit file without following links."""
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
+    try:
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or before.st_mode & 0o022
+                or before.st_nlink != 1 or before.st_size > MAX_UNIT_BYTES):
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+        chunks: list[bytes] = []
+        remaining = MAX_UNIT_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        after = os.fstat(descriptor)
+    except ReadinessError:
+        raise
+    except OSError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
+    finally:
+        os.close(descriptor)
+    before_identity = (
+        before.st_dev, before.st_ino, before.st_size,
+        before.st_mtime_ns, before.st_ctime_ns,
+    )
+    after_identity = (
+        after.st_dev, after.st_ino, after.st_size,
+        after.st_mtime_ns, after.st_ctime_ns,
+    )
+    if before_identity != after_identity or len(content) != before.st_size:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+    if len(content) > MAX_UNIT_BYTES:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+    return content
+
+
+def _unit_file_matches(installed: Path, reviewed: Path) -> bool:
+    return _bounded_unit_file(installed) == _bounded_unit_file(reviewed)
 
 
 def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
@@ -163,7 +220,7 @@ def _systemd_probe(
     timeout = min(float(timeout), SYSTEMD_OBSERVATION_TIMEOUT)
     base_properties = (
         "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
-        "FragmentPath", "DropInPaths",
+        "FragmentPath", "DropInPaths", "NeedDaemonReload",
     )
     requested_properties = base_properties + tuple(
         SERVICE_RECOVERY_POLICIES.get(unit, ())
@@ -306,6 +363,7 @@ def inspect_aws_readiness(
     systemd_probe: Callable[..., dict[str, str]] = _systemd_probe,
     status_probe: Callable[..., dict[str, object]] = _status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
+    unit_file_probe: Callable[[Path, Path], bool] = _unit_file_matches,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
     status_url: str = "http://127.0.0.1:8788/status.json",
     monotonic: Callable[[], float] = time.monotonic,
@@ -334,6 +392,7 @@ def inspect_aws_readiness(
                 expected_sha, root=root, observed_at=observed_at,
                 systemd_probe=systemd_probe, status_probe=status_probe,
                 dashboard_release_probe=dashboard_release_probe,
+                unit_file_probe=unit_file_probe,
                 release_probe=release_probe, status_url=status_url,
                 monotonic=monotonic,
             )
@@ -351,6 +410,7 @@ def _inspect_stable_readiness(
     systemd_probe: Callable[..., dict[str, str]],
     status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
+    unit_file_probe: Callable[[Path, Path], bool],
     release_probe: Callable[[Path, str], dict[str, object]],
     status_url: str,
     monotonic: Callable[[], float],
@@ -395,7 +455,12 @@ def _inspect_stable_readiness(
         if units[unit]["LoadState"] != "loaded":
             continue
         if (units[unit]["FragmentPath"] != fragment
-                or units[unit]["DropInPaths"] != ""):
+                or units[unit]["DropInPaths"] != ""
+                or units[unit]["NeedDaemonReload"] != "no"):
+            blockers.append("UNIT_CONFIGURATION_MISMATCH:" + unit)
+            continue
+        reviewed = deployed_release / HOPE_UNIT_TEMPLATES[unit]
+        if not unit_file_probe(Path(fragment), reviewed):
             blockers.append("UNIT_CONFIGURATION_MISMATCH:" + unit)
 
     for unit in RUNNING_UNITS:
