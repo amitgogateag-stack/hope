@@ -1850,3 +1850,17 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   mutation. These fail closed without resolving redirected paths. This remains
   read-only GitHub readiness engineering; no AWS, unit, service, database,
   PAPER, strategy/risk or LIVE action occurred.
+
+## 2026-10-26 — Concrete systemd runtime identity
+
+- Demonstrated that readiness accepted every required service as READY when
+  systemd reported `active/running` but exposed `MainPID=0`, no invocation ID,
+  and no main-process start timestamp.
+- Systemd observation now collects bounded `MainPID`, `InvocationID`, and
+  `ExecMainStartTimestampMonotonic` properties. PostgreSQL, both dashboard web
+  services, and PAPER must each have a nonzero PID, a complete lowercase
+  128-bit invocation identity, and a nonzero monotonic start timestamp.
+- Adversarial tests cover every required running unit with zero PID, missing or
+  malformed invocation identity, and zero start time. This strengthens only
+  read-only GitHub readiness evidence; it does not mutate AWS, systemd, services,
+  credentials, databases, PAPER execution, strategy/risk rules, or LIVE state.

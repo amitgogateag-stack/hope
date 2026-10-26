@@ -9,7 +9,7 @@ import pytest
 from hope.api import aws_readiness
 from hope.api import operations_deployment
 from hope.api.aws_readiness import (
-    HOPE_UNIT_FRAGMENTS, HOPE_UNIT_TEMPLATES, REQUIRED_UNITS,
+    HOPE_UNIT_FRAGMENTS, HOPE_UNIT_TEMPLATES, REQUIRED_UNITS, RUNNING_UNITS,
     SERVICE_RECOVERY_POLICIES,
     ReadinessError,
 )
@@ -18,6 +18,7 @@ from hope.api.operations_deployment import DeploymentError
 
 EXPECTED = "b" * 40
 NOW = datetime(2026, 10, 24, 23, 0, tzinfo=timezone.utc)
+INVOCATION_ID = "1" * 32
 
 
 def _release_ok(_release, _sha):
@@ -41,6 +42,8 @@ def _units(*, missing: str | None = None):
                 "LoadState": "not-found", "ActiveState": "inactive",
                 "SubState": "dead", "UnitFileState": "", "NRestarts": "0",
                 "FragmentPath": "", "DropInPaths": "", "NeedDaemonReload": "no",
+                "MainPID": "0", "InvocationID": "",
+                "ExecMainStartTimestampMonotonic": "0",
             }
         else:
             values = {
@@ -51,6 +54,8 @@ def _units(*, missing: str | None = None):
                     else "enabled"
                 ),
                 "NRestarts": "0",
+                "MainPID": "4321", "InvocationID": INVOCATION_ID,
+                "ExecMainStartTimestampMonotonic": "123456789",
                 "FragmentPath": HOPE_UNIT_FRAGMENTS.get(
                     unit, "/usr/lib/systemd/system/postgresql.service",
                 ),
@@ -564,6 +569,30 @@ def test_active_unit_without_running_process_cannot_claim_readiness(tmp_path, un
     assert "UNIT_NOT_RUNNING:" + unit in report["blockers"]
 
 
+@pytest.mark.parametrize("unit", RUNNING_UNITS)
+@pytest.mark.parametrize("change", (
+    {"MainPID": "0"},
+    {"InvocationID": ""},
+    {"InvocationID": "not-an-invocation"},
+    {"ExecMainStartTimestampMonotonic": "0"},
+))
+def test_running_unit_without_concrete_runtime_identity_cannot_claim_readiness(
+    tmp_path, unit, change,
+):
+    base = _units()
+
+    def unidentified_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        return {**values, **change} if observed_unit == unit else values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=unidentified_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert "UNIT_RUNTIME_IDENTITY_INVALID:" + unit in report["blockers"]
+
+
 @pytest.mark.parametrize(("unit", "property_name", "unsafe_value"), (
     ("hope-dashboard-web.service", "Type", "oneshot"),
     ("hope-dashboard-web.service", "Restart", "no"),
@@ -983,6 +1012,8 @@ def test_systemd_probe_uses_explicit_output_and_time_bounds():
         "UnitFileState=enabled", "NRestarts=0",
         "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
         "NeedDaemonReload=no",
+        "MainPID=4321", f"InvocationID={INVOCATION_ID}",
+        "ExecMainStartTimestampMonotonic=123456789",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -1140,6 +1171,8 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
         "UnitFileState=enabled", "NRestarts=0",
         "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
         "NeedDaemonReload=no",
+        "MainPID=4321", f"InvocationID={INVOCATION_ID}",
+        "ExecMainStartTimestampMonotonic=123456789",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -1152,12 +1185,14 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
         "UnitFileState": "enabled", "NRestarts": "0",
         "FragmentPath": "/etc/systemd/system/hope-paper.service",
         "DropInPaths": "", "NeedDaemonReload": "no", **policy,
+        "MainPID": "4321", "InvocationID": INVOCATION_ID,
+        "ExecMainStartTimestampMonotonic": "123456789",
     }
     command, kwargs = observed[0]
     assert command[:4] == [
         "/usr/bin/systemctl", "show", "hope-paper.service", "--no-pager",
     ]
-    assert command.count("-p") == 12
+    assert command.count("-p") == 15
     assert kwargs["timeout"] == 5
     assert kwargs["env"]["LC_ALL"] == "C"
 
