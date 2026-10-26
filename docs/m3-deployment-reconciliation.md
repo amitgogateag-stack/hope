@@ -124,7 +124,10 @@ fragment or override cannot claim readiness even if liveness and restart-policy
 properties appear healthy. The installed fragment bytes must match the
 corresponding template inside the authenticated deployed release, and systemd
 must report `NeedDaemonReload=no`; edited-on-disk or stale loaded definitions
-therefore fail closed. PostgreSQL remains distribution-managed.
+therefore fail closed. Descriptor identities remain bound to both unit
+pathnames through the complete installed-versus-reviewed comparison, so a
+concurrent pathname exchange also fails closed. PostgreSQL remains
+distribution-managed.
 
 1. Authenticated console/instance access and exact target confirmation.
 2. Read-only AWS reconciliation under scoped database environments; resolve

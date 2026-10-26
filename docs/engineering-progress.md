@@ -1819,3 +1819,19 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   writable-file rejection, and in-place mutation during collection. This is
   read-only GitHub readiness code; no AWS, unit, service, database, PAPER,
   strategy/risk or LIVE change occurred.
+
+## 2026-10-26 — Systemd unit comparison race closure
+
+- Reproduced that readiness could read reviewed bytes from an installed unit,
+  close that descriptor, then accept the comparison after the installed
+  pathname was replaced while the release template was being read. The report
+  could therefore authenticate bytes that the fixed pathname no longer named.
+- Unit snapshots now bind descriptor identity to the named file after each
+  bounded read, retain both identities through the two-file comparison, and
+  revalidate both pathnames only after both snapshots exist. Missing, replaced,
+  redirected or mutated evidence raises the fixed fail-closed
+  `AWS_UNIT_CONFIGURATION_CHANGED` error.
+- Adversarial tests exchange the installed pathname during the second read and
+  exchange a pathname immediately after descriptor collection. This is
+  read-only GitHub readiness code; AWS, units, services, databases, PAPER,
+  strategies, risk rules and LIVE remain unchanged.
