@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import stat
 
 import pytest
 
@@ -676,12 +677,90 @@ def test_installed_unit_bytes_must_match_authenticated_release(tmp_path):
     ]
 
 
+def test_default_unit_matcher_uses_system_and_release_trust_anchors(
+    tmp_path, monkeypatch,
+):
+    root = _root(tmp_path)
+    observed = []
+
+    def compare(installed, reviewed, **kwargs):
+        observed.append((installed, reviewed, kwargs))
+        return True
+
+    monkeypatch.setattr(aws_readiness, "_unit_file_matches", compare)
+    report = aws_readiness.inspect_aws_readiness(
+        EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+        status_probe=_status(), dashboard_release_probe=_dashboard_release(),
+        release_probe=_release_ok,
+    )
+
+    assert report["ready"] is True
+    deployed_release = (root / "releases" / EXPECTED).resolve()
+    assert observed == [
+        (
+            Path(HOPE_UNIT_FRAGMENTS[unit]),
+            deployed_release / HOPE_UNIT_TEMPLATES[unit],
+            {"installed_root": Path("/"), "reviewed_root": deployed_release},
+        )
+        for unit in HOPE_UNIT_FRAGMENTS
+    ]
+
+
 def test_unit_file_match_rejects_different_bytes(tmp_path):
     installed = tmp_path / "installed.service"
     reviewed = tmp_path / "reviewed.service"
     installed.write_bytes(b"[Service]\nExecStart=/unreviewed\n")
     reviewed.write_bytes(b"[Service]\nExecStart=/reviewed\n")
     assert aws_readiness._unit_file_matches(installed, reviewed) is False
+
+
+@pytest.mark.parametrize("side", ["installed", "reviewed"])
+def test_unit_file_match_rejects_writable_parent_below_trust_anchor(
+    tmp_path, side,
+):
+    installed_root = tmp_path / "installed-root"
+    reviewed_root = tmp_path / "reviewed-root"
+    installed_parent = installed_root / "etc" / "systemd" / "system"
+    reviewed_parent = reviewed_root / "deploy" / "operations"
+    installed_parent.mkdir(parents=True)
+    reviewed_parent.mkdir(parents=True)
+    installed = installed_parent / "hope-paper.service"
+    reviewed = reviewed_parent / "hope-paper.service"
+    content = b"[Service]\nExecStart=/reviewed\n"
+    installed.write_bytes(content)
+    reviewed.write_bytes(content)
+    (installed_parent if side == "installed" else reviewed_parent).chmod(0o777)
+
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_UNTRUSTED$"):
+        aws_readiness._unit_file_matches(
+            installed, reviewed, installed_root=installed_root,
+            reviewed_root=reviewed_root,
+        )
+
+
+def test_unit_storage_requires_one_owner_from_authenticated_root():
+    filesystem_root = (1, 9, stat.S_IFDIR | 0o755, 0, 0)
+    directory = (1, 10, stat.S_IFDIR | 0o755, 1000, 1000)
+    foreign_directory = (1, 11, stat.S_IFDIR | 0o755, 2000, 2000)
+    unit = (1, 12, stat.S_IFREG | 0o644, 1, 10, 1, 1, 1000, 1000)
+
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_UNTRUSTED$"):
+        aws_readiness._require_trusted_unit_storage(
+            Path("/release/deploy/hope-paper.service"),
+            (filesystem_root, directory, foreign_directory, unit),
+            trust_root=Path("/release"),
+        )
+
+
+def test_installed_unit_storage_requires_root_owner():
+    directory = (1, 10, stat.S_IFDIR | 0o755, 1000, 1000)
+    unit = (1, 11, stat.S_IFREG | 0o644, 1, 10, 1, 1, 1000, 1000)
+
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_UNTRUSTED$"):
+        aws_readiness._require_trusted_unit_storage(
+            Path("/etc/hope-paper.service"), (directory, directory, unit),
+            trust_root=Path("/"), required_owner=0,
+        )
 
 
 def test_unit_file_match_detects_installed_replacement_during_comparison(
