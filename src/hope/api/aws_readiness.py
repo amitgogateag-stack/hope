@@ -368,7 +368,8 @@ def _systemd_probe(
     timeout = min(float(timeout), SYSTEMD_OBSERVATION_TIMEOUT)
     base_properties = (
         "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
-        "FragmentPath", "DropInPaths", "NeedDaemonReload",
+        "FragmentPath", "DropInPaths", "NeedDaemonReload", "MainPID",
+        "InvocationID", "ExecMainStartTimestampMonotonic",
     )
     requested_properties = base_properties + tuple(
         SERVICE_RECOVERY_POLICIES.get(unit, ())
@@ -403,7 +404,12 @@ def _systemd_probe(
         if separator and key in requested_properties:
             values[key] = value
     if (set(values) != set(requested_properties)
-            or not re.fullmatch(r"[0-9]{1,20}", values["NRestarts"])):
+            or not re.fullmatch(r"[0-9]{1,20}", values["NRestarts"])
+            or not re.fullmatch(r"[0-9]{1,20}", values["MainPID"])
+            or not re.fullmatch(
+                r"[0-9]{1,20}", values["ExecMainStartTimestampMonotonic"],
+            )
+            or not re.fullmatch(r"(?:|[0-9a-f]{32})", values["InvocationID"])):
         raise ReadinessError("AWS_SYSTEMD_OBSERVATION_INVALID:" + unit)
     return values
 
@@ -626,6 +632,15 @@ def _inspect_stable_readiness(
             blockers.append("UNIT_NOT_ACTIVE:" + unit)
         elif units[unit]["SubState"] != "running":
             blockers.append("UNIT_NOT_RUNNING:" + unit)
+        elif (not re.fullmatch(r"[1-9][0-9]{0,19}", units[unit]["MainPID"])
+                or not re.fullmatch(
+                    r"[0-9a-f]{32}", units[unit]["InvocationID"],
+                )
+                or not re.fullmatch(
+                    r"[1-9][0-9]{0,19}",
+                    units[unit]["ExecMainStartTimestampMonotonic"],
+                )):
+            blockers.append("UNIT_RUNTIME_IDENTITY_INVALID:" + unit)
 
     # Current liveness is not crash recovery.  Authenticate the effective
     # systemd policy, including drop-in overrides, against the reviewed units.

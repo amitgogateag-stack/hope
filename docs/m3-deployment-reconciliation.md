@@ -70,6 +70,10 @@ Operational readiness requires PostgreSQL, both web services, the export timer,
 and PAPER to be enabled for reboot persistence. Long-running services must be
 both active and `running`; an `active/exited` unit is not a worker. The oneshot
 export service is intentionally static and is activated only by its enabled timer.
+Each required running service must also expose a nonzero `MainPID`, one complete
+lowercase systemd `InvocationID`, and a nonzero monotonic main-process start
+timestamp. An active/running label without this concrete process-generation
+identity cannot claim readiness.
 For the managed long-running units, readiness also verifies the effective
 systemd recovery contract after all drop-ins: both web services must be
 `Type=simple`, `Restart=on-failure`, with their reviewed 5s/10s delays; PAPER
@@ -129,7 +133,10 @@ pathnames through the complete installed-versus-reviewed comparison, so a
 concurrent pathname exchange also fails closed. Every intermediate pathname
 component is opened descriptor-relatively without following links and its
 directory identity is retained through validation, preventing parent-directory
-redirection. PostgreSQL remains distribution-managed.
+redirection. Installed unit storage must remain root-owned and non-group/world-
+writable from `/` through the file. Reviewed templates must remain under the
+authenticated release owner through a non-group/world-writable chain.
+PostgreSQL remains distribution-managed.
 
 1. Authenticated console/instance access and exact target confirmation.
 2. Read-only AWS reconciliation under scoped database environments; resolve
