@@ -1106,6 +1106,73 @@ def test_restart_during_loopback_observation_cannot_claim_readiness(
         )
 
 
+@pytest.mark.parametrize(
+    ("changed_key", "changed_value"),
+    [
+        ("UnitFileState", "disabled"),
+        ("NRestarts", "1"),
+        ("DropInPaths", "/etc/systemd/system/override.conf"),
+        ("NeedDaemonReload", "yes"),
+    ],
+)
+@pytest.mark.parametrize("unit", REQUIRED_UNITS)
+def test_systemd_state_change_during_loopback_observation_fails_closed(
+    tmp_path, unit, changed_key, changed_value,
+):
+    base = _units()
+    observations = {name: 0 for name in REQUIRED_UNITS}
+
+    def changing_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        observations[observed_unit] += 1
+        if observations[observed_unit] == 2 and observed_unit == unit:
+            values = {**values, changed_key: changed_value}
+        return values
+
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_STATE_CHANGED:" + re.escape(unit) + "$",
+    ):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=changing_probe, status_probe=_status(),
+            release_probe=_release_ok,
+        )
+
+
+@pytest.mark.parametrize(
+    ("unit", "changed_key", "changed_value"),
+    [
+        ("hope-dashboard-web.service", "Restart", "no"),
+        ("hope-ops-dashboard-web.service", "RestartUSec", "1s"),
+        ("hope-paper.service", "Type", "simple"),
+        ("hope-paper.service", "WatchdogUSec", "0"),
+    ],
+)
+def test_recovery_policy_change_during_loopback_observation_fails_closed(
+    tmp_path, unit, changed_key, changed_value,
+):
+    base = _units()
+    observations = {name: 0 for name in REQUIRED_UNITS}
+
+    def changing_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        observations[observed_unit] += 1
+        if observations[observed_unit] == 2 and observed_unit == unit:
+            values = {**values, changed_key: changed_value}
+        return values
+
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_STATE_CHANGED:" + re.escape(unit) + "$",
+    ):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=changing_probe, status_probe=_status(),
+            release_probe=_release_ok,
+        )
+
+
 def test_runtime_revalidation_has_one_total_deadline(tmp_path):
     clock = [100.0]
     base = _units()
@@ -1124,7 +1191,7 @@ def test_runtime_revalidation_has_one_total_deadline(tmp_path):
         ReadinessError,
         match=(
             "^AWS_SYSTEMD_REVALIDATION_TIMEOUT:"
-            "hope-paper\\.service$"
+            "hope-ops-dashboard-export\\.service$"
         ),
     ):
         inspect_aws_readiness(
@@ -1321,7 +1388,7 @@ def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
     assert observations == [
         "release", *("systemd:" + unit for unit in REQUIRED_UNITS),
         "dashboard-release", "status",
-        *("systemd:" + unit for unit in RUNNING_UNITS),
+        *("systemd:" + unit for unit in REQUIRED_UNITS),
     ]
 
 

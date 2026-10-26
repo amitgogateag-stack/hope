@@ -1880,3 +1880,21 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   deadline. This remains read-only GitHub readiness engineering; AWS, systemd,
   services, credentials, databases, PAPER execution, strategy/risk rules and
   LIVE state are unchanged.
+
+## 2026-10-26 — Complete systemd-state observation closure
+
+- Reproduced two fail-open cases against the prior green HEAD. Readiness still
+  returned READY when an effective PAPER drop-in appeared during the status
+  fetch, and when the export timer became disabled. The closing pass compared
+  only four process identities, so configuration changes were ignored and the
+  exporter service/timer were not re-observed.
+- The bounded closing pass now re-observes all six required units and requires
+  their complete allow-listed systemd state to equal the initial observation.
+  Runtime identity changes retain their specific error; any other enablement,
+  liveness, restart-count, fragment/drop-in, daemon-reload or recovery-policy
+  drift raises `AWS_SYSTEMD_STATE_CHANGED:<unit>`.
+- Twenty-four adversarial cases cover four state changes on every required
+  unit, with four additional effective recovery-policy changes. Existing
+  runtime-generation and aggregate-deadline cases remain enforced. This is
+  read-only GitHub readiness engineering; no AWS, systemd, service, credential,
+  database, PAPER execution, strategy/risk or LIVE action occurred.
