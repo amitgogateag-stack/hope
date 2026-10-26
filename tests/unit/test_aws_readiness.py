@@ -684,6 +684,55 @@ def test_unit_file_match_rejects_different_bytes(tmp_path):
     assert aws_readiness._unit_file_matches(installed, reviewed) is False
 
 
+def test_unit_file_match_detects_installed_replacement_during_comparison(
+    tmp_path, monkeypatch,
+):
+    installed = tmp_path / "installed.service"
+    reviewed = tmp_path / "reviewed.service"
+    replacement = tmp_path / "attacker.service"
+    reviewed_content = b"[Service]\nExecStart=/reviewed\n"
+    installed.write_bytes(reviewed_content)
+    reviewed.write_bytes(reviewed_content)
+    replacement.write_bytes(b"[Service]\nExecStart=/attacker\n")
+    real_snapshot = aws_readiness._bounded_unit_file_snapshot
+
+    def replace_while_reading_reviewed(path):
+        snapshot = real_snapshot(path)
+        if path == reviewed:
+            replacement.replace(installed)
+        return snapshot
+
+    monkeypatch.setattr(
+        aws_readiness, "_bounded_unit_file_snapshot",
+        replace_while_reading_reviewed,
+    )
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        aws_readiness._unit_file_matches(installed, reviewed)
+    assert b"/attacker" in installed.read_bytes()
+
+
+def test_bounded_unit_snapshot_detects_path_replacement_after_read(
+    tmp_path, monkeypatch,
+):
+    path = tmp_path / "unit.service"
+    replacement = tmp_path / "attacker.service"
+    path.write_bytes(b"[Service]\nExecStart=/reviewed\n")
+    replacement.write_bytes(b"[Service]\nExecStart=/attacker\n")
+    real_fstat = os.fstat
+    calls = [0]
+
+    def replace_after_read(descriptor):
+        info = real_fstat(descriptor)
+        calls[0] += 1
+        if calls[0] == 2:
+            replacement.replace(path)
+        return info
+
+    monkeypatch.setattr(os, "fstat", replace_after_read)
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        aws_readiness._bounded_unit_file_snapshot(path)
+
+
 @pytest.mark.parametrize("unsafe", ["symlink", "writable", "oversized"])
 def test_bounded_unit_file_rejects_untrusted_storage(tmp_path, unsafe):
     target = tmp_path / "target.service"

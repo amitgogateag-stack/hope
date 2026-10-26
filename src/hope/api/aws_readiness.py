@@ -84,8 +84,15 @@ class ReadinessError(RuntimeError):
     """The observation could not be authenticated or safely bounded."""
 
 
-def _bounded_unit_file(path: Path) -> bytes:
-    """Read one direct, immutable-sized unit file without following links."""
+def _unit_file_identity(info: os.stat_result) -> tuple[int, ...]:
+    return (
+        info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
+        info.st_mtime_ns, info.st_ctime_ns,
+    )
+
+
+def _bounded_unit_file_snapshot(path: Path) -> tuple[bytes, tuple[int, ...]]:
+    """Read one stable file and bind the descriptor to its current pathname."""
     flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(path, flags)
@@ -112,23 +119,43 @@ def _bounded_unit_file(path: Path) -> bytes:
         raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
     finally:
         os.close(descriptor)
-    before_identity = (
-        before.st_dev, before.st_ino, before.st_size,
-        before.st_mtime_ns, before.st_ctime_ns,
-    )
-    after_identity = (
-        after.st_dev, after.st_ino, after.st_size,
-        after.st_mtime_ns, after.st_ctime_ns,
-    )
+    before_identity = _unit_file_identity(before)
+    after_identity = _unit_file_identity(after)
     if before_identity != after_identity or len(content) != before.st_size:
         raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
     if len(content) > MAX_UNIT_BYTES:
         raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
-    return content
+    try:
+        named = path.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED") from exc
+    if _unit_file_identity(named) != after_identity:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+    return content, after_identity
+
+
+def _bounded_unit_file(path: Path) -> bytes:
+    return _bounded_unit_file_snapshot(path)[0]
+
+
+def _require_same_unit_file(path: Path, expected: tuple[int, ...]) -> None:
+    try:
+        observed = path.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED") from exc
+    if _unit_file_identity(observed) != expected:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
 
 
 def _unit_file_matches(installed: Path, reviewed: Path) -> bool:
-    return _bounded_unit_file(installed) == _bounded_unit_file(reviewed)
+    installed_content, installed_identity = _bounded_unit_file_snapshot(installed)
+    reviewed_content, reviewed_identity = _bounded_unit_file_snapshot(reviewed)
+    # Reading the second file creates a comparison window in which the first
+    # pathname could otherwise be exchanged after its descriptor was closed.
+    # Revalidate both names only after both immutable snapshots exist.
+    _require_same_unit_file(installed, installed_identity)
+    _require_same_unit_file(reviewed, reviewed_identity)
+    return installed_content == reviewed_content
 
 
 def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
