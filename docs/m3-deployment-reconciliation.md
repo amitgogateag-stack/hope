@@ -74,6 +74,11 @@ Each required running service must also expose a nonzero `MainPID`, one complete
 lowercase systemd `InvocationID`, and a nonzero monotonic main-process start
 timestamp. An active/running label without this concrete process-generation
 identity cannot claim readiness.
+After the dashboard identity and status documents are collected, readiness
+re-observes those four process-generation identities under a separate shared
+five-second deadline. Any stop, restart, PID change, invocation change, or main-
+process start-time change fails closed instead of combining HTTP evidence with
+a different systemd generation.
 For the managed long-running units, readiness also verifies the effective
 systemd recovery contract after all drop-ins: both web services must be
 `Type=simple`, `Restart=on-failure`, with their reviewed 5s/10s delays; PAPER
@@ -85,6 +90,9 @@ held. Each call receives only the remaining budget and uses HOPE's fixed-binary,
 no-shell diagnostic collector with a 4 KiB stdout ceiling. Stderr is discarded,
 ambient credentials are not inherited, and timeout, output flooding, nonzero
 exit, spawn and decoding failures become fixed sanitized readiness errors.
+The post-HTTP generation revalidation has its own five-second aggregate
+deadline, preserving a bounded closing observation without borrowing time from
+the initial systemd inventory.
 Both loopback requests use the same hardened collector around fixed
 `/usr/bin/curl` commands and share one five-second aggregate deadline. Curl
 configuration and proxies are disabled, only HTTP is permitted, and output is

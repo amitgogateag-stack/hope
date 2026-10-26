@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 from pathlib import Path
+import re
 import stat
 
 import pytest
@@ -1069,6 +1070,70 @@ def test_systemd_observations_share_one_total_deadline(tmp_path):
     assert status_called == []
 
 
+@pytest.mark.parametrize(
+    ("changed_key", "changed_value"),
+    [
+        ("ActiveState", "inactive"),
+        ("SubState", "stop-sigterm"),
+        ("MainPID", "9876"),
+        ("InvocationID", "2" * 32),
+        ("ExecMainStartTimestampMonotonic", "987654321"),
+    ],
+)
+@pytest.mark.parametrize("unit", RUNNING_UNITS)
+def test_restart_during_loopback_observation_cannot_claim_readiness(
+    tmp_path, unit, changed_key, changed_value,
+):
+    base = _units()
+    observations = {name: 0 for name in RUNNING_UNITS}
+
+    def restarting_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        if observed_unit in observations:
+            observations[observed_unit] += 1
+            if observations[observed_unit] == 2 and observed_unit == unit:
+                values = {**values, changed_key: changed_value}
+        return values
+
+    with pytest.raises(
+        ReadinessError,
+        match="^AWS_SYSTEMD_RUNTIME_CHANGED:" + re.escape(unit) + "$",
+    ):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=restarting_probe, status_probe=_status(),
+            release_probe=_release_ok,
+        )
+
+
+def test_runtime_revalidation_has_one_total_deadline(tmp_path):
+    clock = [100.0]
+    base = _units()
+    observations = {unit: 0 for unit in REQUIRED_UNITS}
+
+    def monotonic():
+        return clock[0]
+
+    def slow_second_probe(unit, *, timeout):
+        observations[unit] += 1
+        if unit in RUNNING_UNITS and observations[unit] == 2:
+            clock[0] += 2
+        return base(unit, timeout=timeout)
+
+    with pytest.raises(
+        ReadinessError,
+        match=(
+            "^AWS_SYSTEMD_REVALIDATION_TIMEOUT:"
+            "hope-paper\\.service$"
+        ),
+    ):
+        inspect_aws_readiness(
+            EXPECTED, root=_root(tmp_path), now=NOW,
+            systemd_probe=slow_second_probe, status_probe=_status(),
+            release_probe=_release_ok, monotonic=monotonic,
+        )
+
+
 def test_dashboard_identity_and_status_share_one_total_deadline(tmp_path):
     clock = [100.0]
     observed = []
@@ -1256,6 +1321,7 @@ def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
     assert observations == [
         "release", *("systemd:" + unit for unit in REQUIRED_UNITS),
         "dashboard-release", "status",
+        *("systemd:" + unit for unit in RUNNING_UNITS),
     ]
 
 
