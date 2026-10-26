@@ -762,6 +762,14 @@ def _inspect_stable_readiness(
     for path, identity in unit_file_attestations:
         _require_same_unit_file(path, identity)
 
+    # Directory identity proves that the selected release was not exchanged,
+    # but it cannot detect in-place changes to tracked files. Re-run the
+    # repository authentication after every external observation so a release
+    # that becomes dirty during the window cannot claim readiness.
+    try:
+        release_probe(deployed_release, deployed_sha)
+    except (OSError, DeploymentError) as exc:
+        raise ReadinessError("AWS_DEPLOYED_RELEASE_CHANGED") from exc
     _require_same_release_storage(root, release_storage)
     return {
         "schema_version": 1,
