@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import re
 import stat
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,13 @@ from hope.api.operations_deployment import DeploymentError
 EXPECTED = "b" * 40
 NOW = datetime(2026, 10, 24, 23, 0, tzinfo=timezone.utc)
 INVOCATION_ID = "1" * 32
+
+
+@pytest.fixture(autouse=True)
+def _test_deployment_owner(monkeypatch):
+    monkeypatch.setattr(
+        aws_readiness, "TRUSTED_DEPLOYMENT_OWNER", os.geteuid(),
+    )
 
 
 def _release_ok(_release, _sha):
@@ -250,6 +258,82 @@ def test_mutable_release_storage_cannot_claim_readiness(tmp_path, writable):
         inspect_aws_readiness(
             EXPECTED, root=root, now=NOW, systemd_probe=_units(),
             status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+@pytest.mark.parametrize(
+    ("owner_scope", "error"),
+    [
+        ("root", "AWS_DEPLOYMENT_ROOT_UNTRUSTED"),
+        ("releases", "AWS_RELEASE_STORAGE_UNTRUSTED"),
+        ("release", "AWS_RELEASE_STORAGE_UNTRUSTED"),
+    ],
+)
+def test_non_operator_owned_release_storage_cannot_claim_readiness(
+    tmp_path, monkeypatch, owner_scope, error,
+):
+    root = _root(tmp_path)
+    paths = {
+        "root": root,
+        "releases": root / "releases",
+        "release": root / "releases" / EXPECTED,
+    }
+    untrusted = paths[owner_scope]
+    original_lstat = Path.lstat
+
+    def lstat_with_untrusted_owner(path):
+        info = original_lstat(path)
+        if path == untrusted:
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_uid=os.geteuid() + 1,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_untrusted_owner)
+    with pytest.raises(ReadinessError, match="^" + error + "$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+@pytest.mark.parametrize(
+    ("owner_scope", "error"),
+    [
+        ("root", "AWS_DEPLOYMENT_ROOT_CHANGED"),
+        ("release", "AWS_RELEASE_STORAGE_CHANGED"),
+    ],
+)
+def test_storage_owner_change_during_observation_fails_closed(
+    tmp_path, monkeypatch, owner_scope, error,
+):
+    root = _root(tmp_path)
+    observed_path = (
+        root if owner_scope == "root" else root / "releases" / EXPECTED
+    )
+    changed = False
+    original_lstat = Path.lstat
+
+    def lstat_with_owner_change(path):
+        info = original_lstat(path)
+        if changed and path == observed_path:
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_uid=os.geteuid() + 1,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    def change_owner(_url, *, timeout):
+        nonlocal changed
+        changed = True
+        return _status()(_url, timeout=timeout)
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_owner_change)
+    with pytest.raises(ReadinessError, match="^" + error + "$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=change_owner, release_probe=_release_ok,
         )
 
 
