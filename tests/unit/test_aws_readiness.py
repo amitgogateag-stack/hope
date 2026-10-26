@@ -8,7 +8,8 @@ import pytest
 from hope.api import aws_readiness
 from hope.api import operations_deployment
 from hope.api.aws_readiness import (
-    HOPE_UNIT_FRAGMENTS, REQUIRED_UNITS, SERVICE_RECOVERY_POLICIES,
+    HOPE_UNIT_FRAGMENTS, HOPE_UNIT_TEMPLATES, REQUIRED_UNITS,
+    SERVICE_RECOVERY_POLICIES,
     ReadinessError,
 )
 from hope.api.operations_deployment import DeploymentError
@@ -38,7 +39,7 @@ def _units(*, missing: str | None = None):
             values = {
                 "LoadState": "not-found", "ActiveState": "inactive",
                 "SubState": "dead", "UnitFileState": "", "NRestarts": "0",
-                "FragmentPath": "", "DropInPaths": "",
+                "FragmentPath": "", "DropInPaths": "", "NeedDaemonReload": "no",
             }
         else:
             values = {
@@ -53,6 +54,7 @@ def _units(*, missing: str | None = None):
                     unit, "/usr/lib/systemd/system/postgresql.service",
                 ),
                 "DropInPaths": "",
+                "NeedDaemonReload": "no",
             }
         return {**values, **SERVICE_RECOVERY_POLICIES.get(unit, {})}
     return probe
@@ -97,6 +99,7 @@ def _dashboard_release(commit: str = EXPECTED, **changes):
 
 def inspect_aws_readiness(*args, **kwargs):
     kwargs.setdefault("dashboard_release_probe", _dashboard_release())
+    kwargs.setdefault("unit_file_probe", lambda _installed, _reviewed: True)
     return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
 
@@ -629,6 +632,104 @@ def test_unreviewed_hope_unit_configuration_cannot_claim_readiness(
     assert "UNIT_CONFIGURATION_MISMATCH:" + unit in report["blockers"]
 
 
+def test_loaded_unit_requiring_daemon_reload_cannot_claim_readiness(tmp_path):
+    base = _units()
+
+    def stale_probe(unit, *, timeout):
+        values = base(unit, timeout=timeout)
+        if unit == "hope-paper.service":
+            values = {**values, "NeedDaemonReload": "yes"}
+        return values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=stale_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert report["ready"] is False
+    assert "UNIT_CONFIGURATION_MISMATCH:hope-paper.service" in report["blockers"]
+
+
+def test_installed_unit_bytes_must_match_authenticated_release(tmp_path):
+    root = _root(tmp_path)
+    observed = []
+
+    def compare(installed, reviewed):
+        observed.append((installed, reviewed))
+        return installed.name != "hope-paper.service"
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+        status_probe=_status(), release_probe=_release_ok,
+        unit_file_probe=compare,
+    )
+    assert report["ready"] is False
+    assert report["blockers"] == [
+        "UNIT_CONFIGURATION_MISMATCH:hope-paper.service",
+    ]
+    assert observed == [
+        (
+            Path(HOPE_UNIT_FRAGMENTS[unit]),
+            (root / "releases" / EXPECTED / HOPE_UNIT_TEMPLATES[unit]).resolve(),
+        )
+        for unit in HOPE_UNIT_FRAGMENTS
+    ]
+
+
+def test_unit_file_match_rejects_different_bytes(tmp_path):
+    installed = tmp_path / "installed.service"
+    reviewed = tmp_path / "reviewed.service"
+    installed.write_bytes(b"[Service]\nExecStart=/unreviewed\n")
+    reviewed.write_bytes(b"[Service]\nExecStart=/reviewed\n")
+    assert aws_readiness._unit_file_matches(installed, reviewed) is False
+
+
+@pytest.mark.parametrize("unsafe", ["symlink", "writable", "oversized"])
+def test_bounded_unit_file_rejects_untrusted_storage(tmp_path, unsafe):
+    target = tmp_path / "target.service"
+    target.write_bytes(b"[Service]\n")
+    path = target
+    if unsafe == "symlink":
+        path = tmp_path / "unit.service"
+        path.symlink_to(target)
+        expected = "AWS_UNIT_CONFIGURATION_UNAVAILABLE"
+    else:
+        if unsafe == "writable":
+            target.chmod(0o666)
+        else:
+            target.write_bytes(b"x" * (aws_readiness.MAX_UNIT_BYTES + 1))
+        expected = "AWS_UNIT_CONFIGURATION_UNTRUSTED"
+    with pytest.raises(ReadinessError, match="^" + expected + "$"):
+        aws_readiness._bounded_unit_file(path)
+
+
+def test_bounded_unit_file_reader_detects_in_place_change(tmp_path, monkeypatch):
+    path = tmp_path / "unit.service"
+    path.write_bytes(b"[Service]\n")
+    real_fstat = os.fstat
+    calls = [0]
+
+    def changed_fstat(descriptor):
+        info = real_fstat(descriptor)
+        calls[0] += 1
+        if calls[0] == 2:
+            class Changed:
+                pass
+            changed = Changed()
+            for attribute in (
+                "st_mode", "st_ino", "st_dev", "st_nlink", "st_size",
+                "st_mtime_ns", "st_ctime_ns",
+            ):
+                setattr(changed, attribute, getattr(info, attribute))
+            changed.st_mtime_ns += 1
+            return changed
+        return info
+
+    monkeypatch.setattr(os, "fstat", changed_fstat)
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        aws_readiness._bounded_unit_file(path)
+
+
 def test_recovery_policies_match_the_reviewed_systemd_units():
     repository = Path(__file__).parents[2]
     paths = {
@@ -718,6 +819,7 @@ def test_systemd_probe_uses_explicit_output_and_time_bounds():
         "LoadState=loaded", "ActiveState=active", "SubState=running",
         "UnitFileState=enabled", "NRestarts=0",
         "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
+        "NeedDaemonReload=no",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -874,6 +976,7 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
         "LoadState=loaded", "ActiveState=active", "SubState=running",
         "UnitFileState=enabled", "NRestarts=0",
         "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
+        "NeedDaemonReload=no",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -885,13 +988,13 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
         "LoadState": "loaded", "ActiveState": "active", "SubState": "running",
         "UnitFileState": "enabled", "NRestarts": "0",
         "FragmentPath": "/etc/systemd/system/hope-paper.service",
-        "DropInPaths": "", **policy,
+        "DropInPaths": "", "NeedDaemonReload": "no", **policy,
     }
     command, kwargs = observed[0]
     assert command[:4] == [
         "/usr/bin/systemctl", "show", "hope-paper.service", "--no-pager",
     ]
-    assert command.count("-p") == 11
+    assert command.count("-p") == 12
     assert kwargs["timeout"] == 5
     assert kwargs["env"]["LC_ALL"] == "C"
 

@@ -1804,3 +1804,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   exporter timer, fragment redirection and drop-in injection. This is read-only
   GitHub readiness code; no unit, service, AWS, database, PAPER or LIVE change
   occurred.
+
+## 2026-10-26 — Loaded systemd unit content authentication
+
+- Demonstrated that a unit could use the expected fixed fragment path without
+  any drop-ins while the installed file bytes still differed from the reviewed,
+  authenticated release template. Readiness would previously report READY.
+- Readiness now compares every loaded HOPE unit's installed bytes with its
+  template in the authenticated deployed release using bounded, no-follow,
+  regular-file reads. Linked, writable, oversized, changing or unavailable
+  evidence fails closed, and `NeedDaemonReload=yes` is rejected so disk and
+  loaded systemd state cannot silently diverge.
+- Adversarial tests cover content mismatch, daemon-reload drift, symlink and
+  writable-file rejection, and in-place mutation during collection. This is
+  read-only GitHub readiness code; no AWS, unit, service, database, PAPER,
+  strategy/risk or LIVE change occurred.

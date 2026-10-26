@@ -121,7 +121,10 @@ shared activation fence or running any release, systemd, or loopback probe.
 Every HOPE systemd unit must also resolve to its reviewed
 `/etc/systemd/system/<unit>` fragment with no effective drop-ins; an alternate
 fragment or override cannot claim readiness even if liveness and restart-policy
-properties appear healthy. PostgreSQL remains distribution-managed.
+properties appear healthy. The installed fragment bytes must match the
+corresponding template inside the authenticated deployed release, and systemd
+must report `NeedDaemonReload=no`; edited-on-disk or stale loaded definitions
+therefore fail closed. PostgreSQL remains distribution-managed.
 
 1. Authenticated console/instance access and exact target confirmation.
 2. Read-only AWS reconciliation under scoped database environments; resolve
