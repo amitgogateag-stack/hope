@@ -32,6 +32,7 @@ MAX_UNIT_BYTES = 16_384
 LOOPBACK_OBSERVATION_TIMEOUT = 5.0
 STATUS_OBSERVATION_TIMEOUT = 5.0
 SYSTEMD_OBSERVATION_TIMEOUT = 5.0
+SYSTEMD_REVALIDATION_TIMEOUT = 5.0
 REQUIRED_UNITS = (
     "postgresql.service",
     "hope-dashboard-web.service",
@@ -712,6 +713,32 @@ def _inspect_stable_readiness(
             blockers.append("OPERATIONS_SNAPSHOT_FROM_FUTURE")
         elif observed_at - generated > timedelta(minutes=15):
             blockers.append("OPERATIONS_SNAPSHOT_STALE")
+
+    # The HTTP documents are meaningful only for the service generation that
+    # was authenticated before they were read. A restart does not take the
+    # deployment activation fence, so re-observe every required long-running
+    # unit after the loopback probes and reject a mixed-generation snapshot.
+    # This is a separate, bounded deadline: the first systemd pass cannot
+    # consume the time reserved for closing the observation window.
+    revalidation_deadline = monotonic() + SYSTEMD_REVALIDATION_TIMEOUT
+    for unit in RUNNING_UNITS:
+        initial = units[unit]
+        initial_identity = (
+            initial["ActiveState"], initial["SubState"], initial["MainPID"],
+            initial["InvocationID"],
+            initial["ExecMainStartTimestampMonotonic"],
+        )
+        remaining = revalidation_deadline - monotonic()
+        if not math.isfinite(remaining) or remaining <= 0:
+            raise ReadinessError("AWS_SYSTEMD_REVALIDATION_TIMEOUT:" + unit)
+        current = systemd_probe(unit, timeout=remaining)
+        current_identity = (
+            current["ActiveState"], current["SubState"], current["MainPID"],
+            current["InvocationID"],
+            current["ExecMainStartTimestampMonotonic"],
+        )
+        if current_identity != initial_identity:
+            raise ReadinessError("AWS_SYSTEMD_RUNTIME_CHANGED:" + unit)
 
     _require_same_release_storage(root, release_storage)
     return {

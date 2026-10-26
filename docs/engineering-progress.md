@@ -1864,3 +1864,19 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   malformed invocation identity, and zero start time. This strengthens only
   read-only GitHub readiness evidence; it does not mutate AWS, systemd, services,
   credentials, databases, PAPER execution, strategy/risk rules, or LIVE state.
+
+## 2026-10-26 — Runtime-generation-consistent readiness
+
+- Demonstrated against the prior green HEAD that PAPER could restart while the
+  loopback status document was collected and readiness still returned READY.
+  The report combined the first systemd observation with HTTP evidence produced
+  after a different worker generation began.
+- After both loopback documents are read, readiness now re-observes PostgreSQL,
+  both dashboard services, and PAPER, comparing active/running state, main PID,
+  systemd invocation ID, and monotonic main-process start timestamp. Any change
+  raises the fixed `AWS_SYSTEMD_RUNTIME_CHANGED:<unit>` error.
+- Twenty adversarial cases cover every running unit and every generation/state
+  field. A separate test exhausts the one shared five-second revalidation
+  deadline. This remains read-only GitHub readiness engineering; AWS, systemd,
+  services, credentials, databases, PAPER execution, strategy/risk rules and
+  LIVE state are unchanged.
