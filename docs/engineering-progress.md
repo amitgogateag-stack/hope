@@ -1835,3 +1835,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   exchange a pathname immediately after descriptor collection. This is
   read-only GitHub readiness code; AWS, units, services, databases, PAPER,
   strategies, risk rules and LIVE remain unchanged.
+
+## 2026-10-26 — Direct systemd unit path traversal
+
+- Demonstrated that final-component `O_NOFOLLOW` still allowed an intermediate
+  directory symlink to redirect a fixed unit pathname. Readiness accepted unit
+  bytes reached through the redirected parent as authentic.
+- Unit collection now walks every absolute-path component with descriptor-
+  relative `O_DIRECTORY|O_NOFOLLOW` opens, retains the complete directory/file
+  identity chain, validates every named edge before closing descriptors, and
+  repeats direct traversal during the two-file comparison recheck.
+- Adversarial tests cover intermediate symlink redirection, parent-directory
+  exchange during comparison, final-file exchange after reading, and in-place
+  mutation. These fail closed without resolving redirected paths. This remains
+  read-only GitHub readiness engineering; no AWS, unit, service, database,
+  PAPER, strategy/risk or LIVE action occurred.

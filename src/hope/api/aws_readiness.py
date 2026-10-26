@@ -91,60 +91,139 @@ def _unit_file_identity(info: os.stat_result) -> tuple[int, ...]:
     )
 
 
-def _bounded_unit_file_snapshot(path: Path) -> tuple[bytes, tuple[int, ...]]:
-    """Read one stable file and bind the descriptor to its current pathname."""
-    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0)
+def _unit_directory_identity(info: os.stat_result) -> tuple[int, ...]:
+    return info.st_dev, info.st_ino, info.st_mode
+
+
+def _open_direct_unit_path(
+    path: Path,
+) -> tuple[list[int], tuple[tuple[int, ...], ...]]:
+    """Open every path component without following an intermediate link."""
+    if not path.is_absolute():
+        raise OSError("absolute unit path required")
+    components = path.parts[1:]
+    if not components or any(part in {"", ".", ".."} for part in components):
+        raise OSError("invalid unit path")
+    nofollow = os.O_NOFOLLOW
+    close_on_exec = getattr(os, "O_CLOEXEC", 0)
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | nofollow | close_on_exec
+    file_flags = os.O_RDONLY | os.O_NONBLOCK | nofollow | close_on_exec
+    descriptors: list[int] = []
+    identities: list[tuple[int, ...]] = []
     try:
-        descriptor = os.open(path, flags)
-    except OSError as exc:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
+        descriptor = os.open("/", directory_flags)
+        descriptors.append(descriptor)
+        identities.append(_unit_directory_identity(os.fstat(descriptor)))
+        for component in components[:-1]:
+            descriptor = os.open(
+                component, directory_flags, dir_fd=descriptors[-1],
+            )
+            descriptors.append(descriptor)
+            identities.append(_unit_directory_identity(os.fstat(descriptor)))
+        descriptor = os.open(
+            components[-1], file_flags, dir_fd=descriptors[-1],
+        )
+        descriptors.append(descriptor)
+        identities.append(_unit_file_identity(os.fstat(descriptor)))
+        return descriptors, tuple(identities)
+    except BaseException:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+        raise
+
+
+def _close_unit_path(descriptors: list[int]) -> None:
+    for descriptor in reversed(descriptors):
+        os.close(descriptor)
+
+
+def _validate_open_unit_path(
+    path: Path,
+    descriptors: list[int],
+    expected: tuple[tuple[int, ...], ...],
+) -> None:
+    components = path.parts[1:]
     try:
-        before = os.fstat(descriptor)
-        if (not stat.S_ISREG(before.st_mode) or before.st_mode & 0o022
-                or before.st_nlink != 1 or before.st_size > MAX_UNIT_BYTES):
-            raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
-        chunks: list[bytes] = []
-        remaining = MAX_UNIT_BYTES + 1
-        while remaining:
-            chunk = os.read(descriptor, remaining)
-            if not chunk:
-                break
-            chunks.append(chunk)
-            remaining -= len(chunk)
-        content = b"".join(chunks)
-        after = os.fstat(descriptor)
+        root = os.stat("/", follow_symlinks=False)
+        if _unit_directory_identity(root) != expected[0]:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+        for index, component in enumerate(components):
+            observed = os.stat(
+                component, dir_fd=descriptors[index], follow_symlinks=False,
+            )
+            identity = (
+                _unit_file_identity(observed)
+                if index == len(components) - 1
+                else _unit_directory_identity(observed)
+            )
+            if identity != expected[index + 1]:
+                raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
     except ReadinessError:
         raise
     except OSError as exc:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
-    finally:
-        os.close(descriptor)
-    before_identity = _unit_file_identity(before)
-    after_identity = _unit_file_identity(after)
-    if before_identity != after_identity or len(content) != before.st_size:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
-    if len(content) > MAX_UNIT_BYTES:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
-    try:
-        named = path.lstat()
-    except OSError as exc:
         raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED") from exc
-    if _unit_file_identity(named) != after_identity:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
-    return content, after_identity
+
+
+def _bounded_unit_file_snapshot(
+    path: Path,
+) -> tuple[bytes, tuple[tuple[int, ...], ...]]:
+    """Read one stable file and bind the descriptor to its current pathname."""
+    try:
+        descriptors, path_identity = _open_direct_unit_path(path)
+    except OSError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
+    descriptor = descriptors[-1]
+    try:
+        try:
+            before = os.fstat(descriptor)
+            if (not stat.S_ISREG(before.st_mode) or before.st_mode & 0o022
+                    or before.st_nlink != 1 or before.st_size > MAX_UNIT_BYTES):
+                raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+            chunks: list[bytes] = []
+            remaining = MAX_UNIT_BYTES + 1
+            while remaining:
+                chunk = os.read(descriptor, remaining)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                remaining -= len(chunk)
+            content = b"".join(chunks)
+            after = os.fstat(descriptor)
+        except ReadinessError:
+            raise
+        except OSError as exc:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_UNAVAILABLE") from exc
+        before_identity = _unit_file_identity(before)
+        after_identity = _unit_file_identity(after)
+        if before_identity != after_identity or len(content) != before.st_size:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+        if len(content) > MAX_UNIT_BYTES:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+        if path_identity[-1] != after_identity:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+        _validate_open_unit_path(path, descriptors, path_identity)
+        return content, path_identity
+    finally:
+        _close_unit_path(descriptors)
 
 
 def _bounded_unit_file(path: Path) -> bytes:
     return _bounded_unit_file_snapshot(path)[0]
 
 
-def _require_same_unit_file(path: Path, expected: tuple[int, ...]) -> None:
+def _require_same_unit_file(
+    path: Path, expected: tuple[tuple[int, ...], ...],
+) -> None:
     try:
-        observed = path.lstat()
+        descriptors, observed = _open_direct_unit_path(path)
     except OSError as exc:
         raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED") from exc
-    if _unit_file_identity(observed) != expected:
-        raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+    try:
+        _validate_open_unit_path(path, descriptors, observed)
+        if observed != expected:
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_CHANGED")
+    finally:
+        _close_unit_path(descriptors)
 
 
 def _unit_file_matches(installed: Path, reviewed: Path) -> bool:
