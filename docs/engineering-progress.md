@@ -1898,3 +1898,20 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   runtime-generation and aggregate-deadline cases remain enforced. This is
   read-only GitHub readiness engineering; no AWS, systemd, service, credential,
   database, PAPER execution, strategy/risk or LIVE action occurred.
+
+## 2026-10-26 — Unit-file identity across the readiness window
+
+- Demonstrated against the prior green HEAD that an installed PAPER unit could
+  be atomically replaced with byte-identical content during the HTTP status
+  fetch while systemd continued to report the same complete state. Readiness
+  discarded the identity captured during its initial unit comparison and still
+  returned READY.
+- The default unit matcher now retains the full installed and reviewed
+  directory/file identity chains after its bounded byte comparison. Following
+  the closing systemd pass, every pathname is reopened without following links
+  and must still name the captured chain before readiness can be returned.
+- Adversarial tests replace either installed or reviewed files and either
+  parent directory during the HTTP window. All four same-content replacements
+  fail closed with `AWS_UNIT_CONFIGURATION_CHANGED`. This changes only
+  read-only GitHub readiness code; AWS, unit files, services, credentials,
+  databases, PAPER execution, strategy/risk and LIVE state remain unchanged.

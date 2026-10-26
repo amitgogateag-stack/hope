@@ -260,6 +260,9 @@ def _unit_file_matches(
     *,
     installed_root: Path | None = None,
     reviewed_root: Path | None = None,
+    attestations: list[
+        tuple[Path, tuple[tuple[int, ...], ...]]
+    ] | None = None,
 ) -> bool:
     installed_content, installed_identity = _bounded_unit_file_snapshot(installed)
     reviewed_content, reviewed_identity = _bounded_unit_file_snapshot(reviewed)
@@ -277,6 +280,11 @@ def _unit_file_matches(
     # Revalidate both names only after both immutable snapshots exist.
     _require_same_unit_file(installed, installed_identity)
     _require_same_unit_file(reviewed, reviewed_identity)
+    if attestations is not None:
+        attestations.extend((
+            (installed, installed_identity),
+            (reviewed, reviewed_identity),
+        ))
     return installed_content == reviewed_content
 
 
@@ -584,6 +592,9 @@ def _inspect_stable_readiness(
         blockers.append("DEPLOYED_SHA_MISMATCH")
 
     units: dict[str, dict[str, str]] = {}
+    unit_file_attestations: list[
+        tuple[Path, tuple[tuple[int, ...], ...]]
+    ] = []
     systemd_deadline = monotonic() + SYSTEMD_OBSERVATION_TIMEOUT
     for unit in REQUIRED_UNITS:
         remaining = systemd_deadline - monotonic()
@@ -619,6 +630,7 @@ def _inspect_stable_readiness(
             _unit_file_matches(
                 Path(fragment), reviewed, installed_root=Path("/"),
                 reviewed_root=deployed_release,
+                attestations=unit_file_attestations,
             )
             if unit_file_probe is None
             else unit_file_probe(Path(fragment), reviewed)
@@ -742,6 +754,13 @@ def _inspect_stable_readiness(
                 raise ReadinessError("AWS_SYSTEMD_RUNTIME_CHANGED:" + unit)
         if current != initial:
             raise ReadinessError("AWS_SYSTEMD_STATE_CHANGED:" + unit)
+
+    # systemd's reload indicator is useful but is not a pathname identity
+    # attestation. Rebind every installed/reviewed unit name to the exact files
+    # compared before HTTP so a same-content or same-metadata exchange during
+    # the observation window cannot claim readiness.
+    for path, identity in unit_file_attestations:
+        _require_same_unit_file(path, identity)
 
     _require_same_release_storage(root, release_storage)
     return {

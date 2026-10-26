@@ -730,10 +730,84 @@ def test_default_unit_matcher_uses_system_and_release_trust_anchors(
         (
             Path(HOPE_UNIT_FRAGMENTS[unit]),
             deployed_release / HOPE_UNIT_TEMPLATES[unit],
-            {"installed_root": Path("/"), "reviewed_root": deployed_release},
+            {
+                "installed_root": Path("/"),
+                "reviewed_root": deployed_release,
+                "attestations": [],
+            },
         )
         for unit in HOPE_UNIT_FRAGMENTS
     ]
+
+
+@pytest.mark.parametrize(
+    "replacement_scope",
+    ["installed_file", "reviewed_file", "installed_parent", "reviewed_parent"],
+)
+def test_unit_path_replacement_during_http_window_fails_closed(
+    tmp_path, monkeypatch, replacement_scope,
+):
+    root = _root(tmp_path / "deployment")
+    deployed = (root / "releases" / EXPECTED).resolve()
+    installed_parent = tmp_path / "installed-systemd"
+    installed_parent.mkdir()
+    installed = installed_parent / "hope-paper.service"
+    reviewed_parent = deployed / "deploy" / "operations"
+    reviewed_parent.mkdir(parents=True)
+    reviewed = reviewed_parent / "hope-paper.service"
+    content = b"[Service]\nExecStart=/reviewed\n"
+    installed.write_bytes(content)
+    reviewed.write_bytes(content)
+    retained = tmp_path / (replacement_scope + "-retained")
+
+    monkeypatch.setattr(
+        aws_readiness, "HOPE_UNIT_FRAGMENTS",
+        {"hope-paper.service": str(installed)},
+    )
+    monkeypatch.setattr(
+        aws_readiness, "HOPE_UNIT_TEMPLATES",
+        {"hope-paper.service": Path("deploy/operations/hope-paper.service")},
+    )
+    monkeypatch.setattr(
+        aws_readiness, "_require_trusted_unit_storage",
+        lambda *_args, **_kwargs: None,
+    )
+    base = _units()
+
+    def systemd_probe(unit, *, timeout):
+        values = base(unit, timeout=timeout)
+        if unit == "hope-paper.service":
+            values = {**values, "FragmentPath": str(installed)}
+        return values
+
+    def replace_during_status(_url, *, timeout):
+        if replacement_scope == "installed_file":
+            replacement = tmp_path / "installed-attacker.service"
+            replacement.write_bytes(content)
+            replacement.replace(installed)
+        elif replacement_scope == "reviewed_file":
+            replacement = tmp_path / "reviewed-attacker.service"
+            replacement.write_bytes(content)
+            replacement.replace(reviewed)
+        else:
+            parent = (
+                installed_parent
+                if replacement_scope == "installed_parent"
+                else reviewed_parent
+            )
+            replacement = parent.with_name(parent.name + "-attacker")
+            replacement.mkdir()
+            (replacement / "hope-paper.service").write_bytes(content)
+            parent.rename(retained)
+            replacement.rename(parent)
+        return _status()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=systemd_probe,
+            status_probe=replace_during_status, release_probe=_release_ok,
+            unit_file_probe=None,
+        )
 
 
 def test_unit_file_match_rejects_different_bytes(tmp_path):

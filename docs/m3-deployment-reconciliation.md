@@ -139,7 +139,11 @@ corresponding template inside the authenticated deployed release, and systemd
 must report `NeedDaemonReload=no`; edited-on-disk or stale loaded definitions
 therefore fail closed. Descriptor identities remain bound to both unit
 pathnames through the complete installed-versus-reviewed comparison, so a
-concurrent pathname exchange also fails closed. Every intermediate pathname
+concurrent pathname exchange also fails closed. Those complete installed and
+reviewed pathname identity chains are retained across the loopback HTTP window
+and revalidated after the closing systemd pass. A same-content or same-metadata
+replacement during readiness therefore cannot escape through an unchanged
+`NeedDaemonReload` value. Every intermediate pathname
 component is opened descriptor-relatively without following links and its
 directory identity is retained through validation, preventing parent-directory
 redirection. Installed unit storage must remain root-owned and non-group/world-
