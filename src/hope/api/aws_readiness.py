@@ -87,12 +87,12 @@ class ReadinessError(RuntimeError):
 def _unit_file_identity(info: os.stat_result) -> tuple[int, ...]:
     return (
         info.st_dev, info.st_ino, info.st_mode, info.st_nlink, info.st_size,
-        info.st_mtime_ns, info.st_ctime_ns,
+        info.st_mtime_ns, info.st_ctime_ns, info.st_uid, info.st_gid,
     )
 
 
 def _unit_directory_identity(info: os.stat_result) -> tuple[int, ...]:
-    return info.st_dev, info.st_ino, info.st_mode
+    return info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid
 
 
 def _open_direct_unit_path(
@@ -226,9 +226,51 @@ def _require_same_unit_file(
         _close_unit_path(descriptors)
 
 
-def _unit_file_matches(installed: Path, reviewed: Path) -> bool:
+def _require_trusted_unit_storage(
+    path: Path,
+    identity: tuple[tuple[int, ...], ...],
+    *,
+    trust_root: Path,
+    required_owner: int | None = None,
+) -> None:
+    """Require a non-writable, single-owner chain below an authenticated root."""
+    if not path.is_absolute() or not trust_root.is_absolute():
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+    try:
+        path.relative_to(trust_root)
+    except ValueError as exc:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED") from exc
+    root_index = len(trust_root.parts) - 1
+    if len(identity) != len(path.parts) or root_index >= len(identity) - 1:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+    root_owner = identity[root_index][3]
+    owner = root_owner if required_owner is None else required_owner
+    for directory in identity[root_index:-1]:
+        if (not stat.S_ISDIR(directory[2]) or directory[2] & 0o022
+                or directory[3] != owner):
+            raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+    if identity[-1][7] != owner:
+        raise ReadinessError("AWS_UNIT_CONFIGURATION_UNTRUSTED")
+
+
+def _unit_file_matches(
+    installed: Path,
+    reviewed: Path,
+    *,
+    installed_root: Path | None = None,
+    reviewed_root: Path | None = None,
+) -> bool:
     installed_content, installed_identity = _bounded_unit_file_snapshot(installed)
     reviewed_content, reviewed_identity = _bounded_unit_file_snapshot(reviewed)
+    installed_root = installed.parent if installed_root is None else installed_root
+    reviewed_root = reviewed.parent if reviewed_root is None else reviewed_root
+    _require_trusted_unit_storage(
+        installed, installed_identity, trust_root=installed_root,
+        required_owner=0 if installed_root == Path("/") else None,
+    )
+    _require_trusted_unit_storage(
+        reviewed, reviewed_identity, trust_root=reviewed_root,
+    )
     # Reading the second file creates a comparison window in which the first
     # pathname could otherwise be exchanged after its descriptor was closed.
     # Revalidate both names only after both immutable snapshots exist.
@@ -469,7 +511,7 @@ def inspect_aws_readiness(
     systemd_probe: Callable[..., dict[str, str]] = _systemd_probe,
     status_probe: Callable[..., dict[str, object]] = _status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
-    unit_file_probe: Callable[[Path, Path], bool] = _unit_file_matches,
+    unit_file_probe: Callable[[Path, Path], bool] | None = None,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
     status_url: str = "http://127.0.0.1:8788/status.json",
     monotonic: Callable[[], float] = time.monotonic,
@@ -516,7 +558,7 @@ def _inspect_stable_readiness(
     systemd_probe: Callable[..., dict[str, str]],
     status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
-    unit_file_probe: Callable[[Path, Path], bool],
+    unit_file_probe: Callable[[Path, Path], bool] | None,
     release_probe: Callable[[Path, str], dict[str, object]],
     status_url: str,
     monotonic: Callable[[], float],
@@ -566,7 +608,15 @@ def _inspect_stable_readiness(
             blockers.append("UNIT_CONFIGURATION_MISMATCH:" + unit)
             continue
         reviewed = deployed_release / HOPE_UNIT_TEMPLATES[unit]
-        if not unit_file_probe(Path(fragment), reviewed):
+        matches = (
+            _unit_file_matches(
+                Path(fragment), reviewed, installed_root=Path("/"),
+                reviewed_root=deployed_release,
+            )
+            if unit_file_probe is None
+            else unit_file_probe(Path(fragment), reviewed)
+        )
+        if not matches:
             blockers.append("UNIT_CONFIGURATION_MISMATCH:" + unit)
 
     for unit in RUNNING_UNITS:
