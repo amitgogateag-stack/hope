@@ -298,6 +298,32 @@ def test_release_directory_replacement_during_status_fails_closed(tmp_path):
         )
 
 
+def test_release_becoming_dirty_during_status_cannot_claim_readiness(tmp_path):
+    root = _root(tmp_path)
+    release = root / "releases" / EXPECTED
+    changed = release / "tracked-file"
+    checks = []
+
+    def verify_release(observed_release, observed_sha):
+        assert observed_release == release
+        assert observed_sha == EXPECTED
+        checks.append("verified")
+        if changed.exists():
+            raise DeploymentError("OPERATIONS_RELEASE_DIRTY")
+        return {"status": "COMPATIBLE_CODE"}
+
+    def change_release(_url, *, timeout):
+        changed.write_text("changed during observation", encoding="utf-8")
+        return _status()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYED_RELEASE_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=change_release, release_probe=verify_release,
+        )
+    assert checks == ["verified", "verified"]
+
+
 def test_healthy_old_dashboard_process_cannot_claim_release_readiness(tmp_path):
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
@@ -1056,7 +1082,10 @@ def test_release_authentication_uses_deployed_sha_not_requested_target(tmp_path)
         dashboard_release_probe=_dashboard_release(deployed),
     )
     assert report["blockers"][0] == "DEPLOYED_SHA_MISMATCH"
-    assert observed == [((root / "releases" / deployed).resolve(), deployed)]
+    assert observed == [
+        ((root / "releases" / deployed).resolve(), deployed),
+        ((root / "releases" / deployed).resolve(), deployed),
+    ]
 
 
 def test_naive_observation_time_is_rejected(tmp_path):
@@ -1463,6 +1492,7 @@ def test_readiness_holds_shared_activation_fence_across_every_probe(tmp_path):
         "release", *("systemd:" + unit for unit in REQUIRED_UNITS),
         "dashboard-release", "status",
         *("systemd:" + unit for unit in REQUIRED_UNITS),
+        "release",
     ]
 
 
