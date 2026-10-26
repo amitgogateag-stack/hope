@@ -126,8 +126,10 @@ corresponding template inside the authenticated deployed release, and systemd
 must report `NeedDaemonReload=no`; edited-on-disk or stale loaded definitions
 therefore fail closed. Descriptor identities remain bound to both unit
 pathnames through the complete installed-versus-reviewed comparison, so a
-concurrent pathname exchange also fails closed. PostgreSQL remains
-distribution-managed.
+concurrent pathname exchange also fails closed. Every intermediate pathname
+component is opened descriptor-relatively without following links and its
+directory identity is retained through validation, preventing parent-directory
+redirection. PostgreSQL remains distribution-managed.
 
 1. Authenticated console/instance access and exact target confirmation.
 2. Read-only AWS reconciliation under scoped database environments; resolve

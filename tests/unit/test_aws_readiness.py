@@ -711,6 +711,40 @@ def test_unit_file_match_detects_installed_replacement_during_comparison(
     assert b"/attacker" in installed.read_bytes()
 
 
+def test_unit_file_match_detects_parent_replacement_during_comparison(
+    tmp_path, monkeypatch,
+):
+    installed_parent = tmp_path / "installed-systemd"
+    replacement_parent = tmp_path / "attacker-systemd"
+    retained_parent = tmp_path / "retained-systemd"
+    installed_parent.mkdir()
+    replacement_parent.mkdir()
+    installed = installed_parent / "hope-paper.service"
+    reviewed = tmp_path / "reviewed.service"
+    reviewed_content = b"[Service]\nExecStart=/reviewed\n"
+    installed.write_bytes(reviewed_content)
+    reviewed.write_bytes(reviewed_content)
+    (replacement_parent / installed.name).write_bytes(
+        b"[Service]\nExecStart=/attacker\n",
+    )
+    real_snapshot = aws_readiness._bounded_unit_file_snapshot
+
+    def replace_parent_while_reading_reviewed(path):
+        snapshot = real_snapshot(path)
+        if path == reviewed:
+            installed_parent.rename(retained_parent)
+            replacement_parent.rename(installed_parent)
+        return snapshot
+
+    monkeypatch.setattr(
+        aws_readiness, "_bounded_unit_file_snapshot",
+        replace_parent_while_reading_reviewed,
+    )
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        aws_readiness._unit_file_matches(installed, reviewed)
+    assert b"/attacker" in installed.read_bytes()
+
+
 def test_bounded_unit_snapshot_detects_path_replacement_after_read(
     tmp_path, monkeypatch,
 ):
@@ -718,22 +752,23 @@ def test_bounded_unit_snapshot_detects_path_replacement_after_read(
     replacement = tmp_path / "attacker.service"
     path.write_bytes(b"[Service]\nExecStart=/reviewed\n")
     replacement.write_bytes(b"[Service]\nExecStart=/attacker\n")
-    real_fstat = os.fstat
-    calls = [0]
+    real_validate = aws_readiness._validate_open_unit_path
 
-    def replace_after_read(descriptor):
-        info = real_fstat(descriptor)
-        calls[0] += 1
-        if calls[0] == 2:
-            replacement.replace(path)
-        return info
+    def replace_before_validation(observed_path, descriptors, expected):
+        replacement.replace(path)
+        return real_validate(observed_path, descriptors, expected)
 
-    monkeypatch.setattr(os, "fstat", replace_after_read)
+    monkeypatch.setattr(
+        aws_readiness, "_validate_open_unit_path",
+        replace_before_validation,
+    )
     with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
         aws_readiness._bounded_unit_file_snapshot(path)
 
 
-@pytest.mark.parametrize("unsafe", ["symlink", "writable", "oversized"])
+@pytest.mark.parametrize(
+    "unsafe", ["symlink", "parent_symlink", "writable", "oversized"],
+)
 def test_bounded_unit_file_rejects_untrusted_storage(tmp_path, unsafe):
     target = tmp_path / "target.service"
     target.write_bytes(b"[Service]\n")
@@ -741,6 +776,14 @@ def test_bounded_unit_file_rejects_untrusted_storage(tmp_path, unsafe):
     if unsafe == "symlink":
         path = tmp_path / "unit.service"
         path.symlink_to(target)
+        expected = "AWS_UNIT_CONFIGURATION_UNAVAILABLE"
+    elif unsafe == "parent_symlink":
+        actual_parent = tmp_path / "actual-systemd"
+        actual_parent.mkdir()
+        target.replace(actual_parent / "unit.service")
+        redirected_parent = tmp_path / "systemd"
+        redirected_parent.symlink_to(actual_parent, target_is_directory=True)
+        path = redirected_parent / "unit.service"
         expected = "AWS_UNIT_CONFIGURATION_UNAVAILABLE"
     else:
         if unsafe == "writable":
@@ -755,26 +798,18 @@ def test_bounded_unit_file_rejects_untrusted_storage(tmp_path, unsafe):
 def test_bounded_unit_file_reader_detects_in_place_change(tmp_path, monkeypatch):
     path = tmp_path / "unit.service"
     path.write_bytes(b"[Service]\n")
-    real_fstat = os.fstat
-    calls = [0]
+    real_read = os.read
+    changed = [False]
 
-    def changed_fstat(descriptor):
-        info = real_fstat(descriptor)
-        calls[0] += 1
-        if calls[0] == 2:
-            class Changed:
-                pass
-            changed = Changed()
-            for attribute in (
-                "st_mode", "st_ino", "st_dev", "st_nlink", "st_size",
-                "st_mtime_ns", "st_ctime_ns",
-            ):
-                setattr(changed, attribute, getattr(info, attribute))
-            changed.st_mtime_ns += 1
-            return changed
-        return info
+    def mutate_after_read(descriptor, size):
+        content = real_read(descriptor, size)
+        if content and not changed[0]:
+            changed[0] = True
+            with path.open("ab") as stream:
+                stream.write(b"changed\n")
+        return content
 
-    monkeypatch.setattr(os, "fstat", changed_fstat)
+    monkeypatch.setattr(os, "read", mutate_after_read)
     with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
         aws_readiness._bounded_unit_file(path)
 
