@@ -1789,3 +1789,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
 - Adversarial tests cover direct root redirection and replacement during path
   resolution, and prove release/systemd/HTTP probes cannot execute afterward.
   This is read-only GitHub code; AWS and PAPER services remain unchanged.
+
+## 2026-10-25 — Effective systemd unit provenance
+
+- Reproduced that readiness could report READY while `hope-paper.service` had
+  an unreviewed systemd drop-in. Loaded/active state and selected recovery
+  properties were still valid even though the override could replace the
+  reviewed `ExecStart` command.
+- All HOPE units now require their fixed `/etc/systemd/system` fragment path and
+  an empty effective `DropInPaths`. PostgreSQL remains distribution-managed.
+  Redirected fragments or any override fail closed as
+  `UNIT_CONFIGURATION_MISMATCH`.
+- Six adversarial cases cover PAPER, both dashboard services, exporter service,
+  exporter timer, fragment redirection and drop-in injection. This is read-only
+  GitHub readiness code; no unit, service, AWS, database, PAPER or LIVE change
+  occurred.

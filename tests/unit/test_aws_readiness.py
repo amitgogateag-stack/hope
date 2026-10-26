@@ -8,7 +8,8 @@ import pytest
 from hope.api import aws_readiness
 from hope.api import operations_deployment
 from hope.api.aws_readiness import (
-    REQUIRED_UNITS, SERVICE_RECOVERY_POLICIES, ReadinessError,
+    HOPE_UNIT_FRAGMENTS, REQUIRED_UNITS, SERVICE_RECOVERY_POLICIES,
+    ReadinessError,
 )
 from hope.api.operations_deployment import DeploymentError
 
@@ -37,6 +38,7 @@ def _units(*, missing: str | None = None):
             values = {
                 "LoadState": "not-found", "ActiveState": "inactive",
                 "SubState": "dead", "UnitFileState": "", "NRestarts": "0",
+                "FragmentPath": "", "DropInPaths": "",
             }
         else:
             values = {
@@ -47,6 +49,10 @@ def _units(*, missing: str | None = None):
                     else "enabled"
                 ),
                 "NRestarts": "0",
+                "FragmentPath": HOPE_UNIT_FRAGMENTS.get(
+                    unit, "/usr/lib/systemd/system/postgresql.service",
+                ),
+                "DropInPaths": "",
             }
         return {**values, **SERVICE_RECOVERY_POLICIES.get(unit, {})}
     return probe
@@ -585,6 +591,44 @@ def test_running_service_without_reviewed_crash_recovery_cannot_claim_readiness(
     assert "UNIT_RECOVERY_POLICY_MISMATCH:" + unit in report["blockers"]
 
 
+@pytest.mark.parametrize(("unit", "change"), (
+    (
+        "hope-paper.service",
+        {"FragmentPath": "/run/systemd/system/hope-paper.service"},
+    ),
+    (
+        "hope-paper.service",
+        {"DropInPaths": "/run/systemd/system/hope-paper.service.d/override.conf"},
+    ),
+    (
+        "hope-ops-dashboard-web.service",
+        {"FragmentPath": "/usr/lib/systemd/system/vendor.service"},
+    ),
+    (
+        "hope-ops-dashboard-export.service",
+        {"DropInPaths": "/etc/systemd/system/override.conf"},
+    ),
+    ("hope-ops-dashboard-export.timer", {"FragmentPath": "/tmp/attacker.timer"}),
+    ("hope-dashboard-web.service", {"DropInPaths": "/run/systemd/system/legacy.conf"}),
+))
+def test_unreviewed_hope_unit_configuration_cannot_claim_readiness(
+    tmp_path, unit, change,
+):
+    base = _units()
+
+    def redirected_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        return {**values, **change} if observed_unit == unit else values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=redirected_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert report["ready"] is False
+    assert "UNIT_CONFIGURATION_MISMATCH:" + unit in report["blockers"]
+
+
 def test_recovery_policies_match_the_reviewed_systemd_units():
     repository = Path(__file__).parents[2]
     paths = {
@@ -673,6 +717,7 @@ def test_systemd_probe_uses_explicit_output_and_time_bounds():
     stdout = "\n".join((
         "LoadState=loaded", "ActiveState=active", "SubState=running",
         "UnitFileState=enabled", "NRestarts=0",
+        "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -828,6 +873,7 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
     stdout = "\n".join((
         "LoadState=loaded", "ActiveState=active", "SubState=running",
         "UnitFileState=enabled", "NRestarts=0",
+        "FragmentPath=/etc/systemd/system/hope-paper.service", "DropInPaths=",
         *(key + "=" + value for key, value in policy.items()),
     )) + "\n"
 
@@ -837,13 +883,15 @@ def test_systemd_probe_collects_effective_paper_recovery_policy():
 
     assert aws_readiness._systemd_probe("hope-paper.service", capture=run) == {
         "LoadState": "loaded", "ActiveState": "active", "SubState": "running",
-        "UnitFileState": "enabled", "NRestarts": "0", **policy,
+        "UnitFileState": "enabled", "NRestarts": "0",
+        "FragmentPath": "/etc/systemd/system/hope-paper.service",
+        "DropInPaths": "", **policy,
     }
     command, kwargs = observed[0]
     assert command[:4] == [
         "/usr/bin/systemctl", "show", "hope-paper.service", "--no-pager",
     ]
-    assert command.count("-p") == 9
+    assert command.count("-p") == 11
     assert kwargs["timeout"] == 5
     assert kwargs["env"]["LC_ALL"] == "C"
 

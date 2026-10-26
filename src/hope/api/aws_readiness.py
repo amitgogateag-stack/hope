@@ -63,6 +63,11 @@ SERVICE_RECOVERY_POLICIES = {
         "WatchdogUSec": "15min",
     },
 }
+HOPE_UNIT_FRAGMENTS = {
+    unit: "/etc/systemd/system/" + unit
+    for unit in REQUIRED_UNITS
+    if unit != "postgresql.service"
+}
 
 
 class ReadinessError(RuntimeError):
@@ -158,6 +163,7 @@ def _systemd_probe(
     timeout = min(float(timeout), SYSTEMD_OBSERVATION_TIMEOUT)
     base_properties = (
         "LoadState", "ActiveState", "SubState", "UnitFileState", "NRestarts",
+        "FragmentPath", "DropInPaths",
     )
     requested_properties = base_properties + tuple(
         SERVICE_RECOVERY_POLICIES.get(unit, ())
@@ -380,6 +386,17 @@ def _inspect_stable_readiness(
         if (units[unit]["LoadState"] == "loaded"
                 and units[unit]["UnitFileState"] != "enabled"):
             blockers.append("UNIT_NOT_ENABLED:" + unit)
+
+    # Effective liveness and restart policy are insufficient when systemd loaded
+    # an unexpected fragment or an unreviewed drop-in can replace ExecStart.
+    # PostgreSQL remains distribution-managed; every HOPE unit is installed from
+    # the reviewed operator package at one fixed system path with no overrides.
+    for unit, fragment in HOPE_UNIT_FRAGMENTS.items():
+        if units[unit]["LoadState"] != "loaded":
+            continue
+        if (units[unit]["FragmentPath"] != fragment
+                or units[unit]["DropInPaths"] != ""):
+            blockers.append("UNIT_CONFIGURATION_MISMATCH:" + unit)
 
     for unit in RUNNING_UNITS:
         if units[unit]["LoadState"] != "loaded":
