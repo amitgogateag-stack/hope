@@ -1,3 +1,4 @@
+from contextlib import contextmanager
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -101,6 +102,56 @@ def test_exact_release_current_status_and_loaded_units_are_ready(tmp_path):
     assert report["ready"] is True
     assert report["blockers"] == []
     assert "secret" not in report["operations_status"]
+
+
+def test_replaced_root_after_fence_acquisition_cannot_claim_readiness(
+    tmp_path, monkeypatch,
+):
+    root = _root(tmp_path / "original")
+    replacement = _root(tmp_path / "replacement")
+    (replacement / "current").unlink()
+    (replacement / "current").symlink_to(Path("releases") / EXPECTED)
+    retained = tmp_path / "retained-root"
+    observed = []
+
+    @contextmanager
+    def replacing_guard(observed_root, *, shared=False):
+        assert shared is True
+        assert observed_root == root
+        root.rename(retained)
+        replacement.rename(root)
+        yield
+
+    def release_probe(*_args):
+        observed.append(True)
+        return {"status": "COMPATIBLE_CODE"}
+
+    monkeypatch.setattr(
+        operations_deployment, "_activation_guard", replacing_guard,
+    )
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=release_probe,
+        )
+    assert observed == []
+
+
+def test_writable_deployment_root_is_rejected_before_fence_or_probes(tmp_path):
+    root = _root(tmp_path)
+    root.chmod(0o777)
+    observed = []
+
+    def forbidden(*_args, **_kwargs):
+        observed.append(True)
+        pytest.fail("untrusted root must block every observation")
+
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=forbidden,
+            status_probe=forbidden, release_probe=forbidden,
+        )
+    assert observed == []
 
 
 def test_symlinked_release_store_cannot_claim_readiness(tmp_path):

@@ -69,6 +69,29 @@ class ReadinessError(RuntimeError):
     """The observation could not be authenticated or safely bounded."""
 
 
+def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
+    try:
+        resolved = root.resolve(strict=True)
+        info = resolved.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
+    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
+    return resolved, (info.st_dev, info.st_ino)
+
+
+def _require_same_deployment_root(
+    root: Path, expected_identity: tuple[int, int],
+) -> None:
+    try:
+        info = root.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED") from exc
+    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
+            or (info.st_dev, info.st_ino) != expected_identity):
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
+
+
 def _trusted_release_directory(path: Path) -> tuple[int, int]:
     """Reject redirected or group/world-writable release storage."""
     try:
@@ -281,6 +304,7 @@ def inspect_aws_readiness(
     if observed_at.tzinfo is None:
         raise ReadinessError("AWS_OBSERVATION_TIME_INVALID")
     observed_at = observed_at.astimezone(timezone.utc)
+    root, root_identity = _deployment_root_identity(root)
 
     # The release pointer, unit state, and dashboard document form one
     # operational snapshot.  Every supported activation holds the exclusive
@@ -290,13 +314,16 @@ def inspect_aws_readiness(
     # from after it and incorrectly report READY.
     try:
         with operations_deployment._activation_guard(root, shared=True):
-            return _inspect_stable_readiness(
+            _require_same_deployment_root(root, root_identity)
+            report = _inspect_stable_readiness(
                 expected_sha, root=root, observed_at=observed_at,
                 systemd_probe=systemd_probe, status_probe=status_probe,
                 dashboard_release_probe=dashboard_release_probe,
                 release_probe=release_probe, status_url=status_url,
                 monotonic=monotonic,
             )
+            _require_same_deployment_root(root, root_identity)
+            return report
     except DeploymentError as exc:
         raise ReadinessError("AWS_ACTIVATION_STATE_UNAVAILABLE") from exc
 

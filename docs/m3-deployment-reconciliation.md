@@ -51,6 +51,10 @@ symlinks, and must not be group- or world-writable. Their device/inode identitie
 permissions and the `current` selection are checked again after Git
 authentication and after all unit/HTTP observations, so replacement during a
 readiness run fails closed without exposing host paths.
+The resolved deployment-root device/inode identity and non-writable mode are
+captured before acquiring the shared fence, checked immediately after fence
+acquisition, and checked again before reporting. The locked directory and the
+pathname used for every observation therefore cannot silently diverge.
 The complete release, systemd and dashboard observation holds the deployment
 activation fence in shared mode. A reviewed activation holds the exclusive side,
 so the probe fails closed instead of combining a pre-switch release with

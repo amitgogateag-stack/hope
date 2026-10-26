@@ -1761,3 +1761,18 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   both authentication and status collection. Every case fails closed. This is
   GitHub code readiness only; no AWS, service, credential, database, PAPER,
   strategy/risk, public exposure, or LIVE change occurred.
+
+## 2026-10-25 — Deployment-root fence identity binding
+
+- Reproduced that readiness could lock one deployment-root inode and then, if
+  that pathname was replaced immediately after fence acquisition, inspect the
+  unfenced replacement root and report READY.
+- Readiness now captures the resolved root's device/inode identity and trusted
+  mode before entering the shared fence, verifies the named root immediately
+  after acquisition, and verifies it again before returning a report. A changed,
+  missing, non-directory or group/world-writable resolved root fails closed
+  before any release, systemd, or HTTP probe can run against it.
+- Adversarial tests replace the root at the fence boundary and prove no later
+  probe executes; a writable-root case is also rejected before fence entry.
+  This changes only read-only GitHub readiness code and performs no AWS, service,
+  credential, database, PAPER, strategy/risk, public exposure, or LIVE action.
