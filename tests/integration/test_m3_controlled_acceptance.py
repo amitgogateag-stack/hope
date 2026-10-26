@@ -11,7 +11,10 @@ from sqlalchemy import create_engine,event,text
 from test_certified_paper_bridge import certified_case
 from hope.application.jobs import create_scheduled_job_run
 from hope.application.market_data.calendar import MarketSessionCalendar
-from hope.infrastructure.paper_acceptance import controlled_paper_acceptance
+from hope.infrastructure.paper_acceptance import (
+    _ACCEPTANCE_LOCK_NAMESPACE,
+    controlled_paper_acceptance,
+)
 from hope.infrastructure.paper_service import PaperServicePlan
 from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding,OperationalPaperSchedule
 
@@ -99,6 +102,26 @@ def test_postcommit_proof_failure_does_not_claim_rollback_or_publish_acceptance(
     assert len(strategy.calls)==1
     with owner.connect() as connection:
         assert connection.execute(text("SELECT status FROM job_runs WHERE job_run_id=:id"),{"id":run.job_run_id}).scalar_one()=="SUCCEEDED"
+
+
+@pytest.mark.integration
+def test_acceptance_lock_contention_fails_before_evidence_or_execution(acceptance_case):
+    owner,writer,build=acceptance_case
+    data,run,strategy,factory,args=build()
+    with owner.connect() as blocker:
+        assert blocker.execute(
+            text("SELECT pg_try_advisory_xact_lock(hashtext(:lock_name)::bigint)"),
+            {"lock_name":f"{_ACCEPTANCE_LOCK_NAMESPACE}:{run.job_run_id}"},
+        ).scalar_one() is True
+        with pytest.raises(RuntimeError,match="^M3_ACCEPTANCE_CONCURRENT_RUN$"):
+            controlled_paper_acceptance(writer,factory,**args)
+    assert strategy.calls==[]
+    with owner.connect() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM job_runs WHERE job_run_id=:id"),
+            {"id":run.job_run_id},
+        ).scalar_one()==0
+    assert not args["evidence_dir"].exists()
 
 
 @pytest.mark.integration
