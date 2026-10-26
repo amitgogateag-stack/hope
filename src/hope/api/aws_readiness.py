@@ -29,6 +29,7 @@ MAX_STATUS_BYTES = 16_384
 MAX_DASHBOARD_RELEASE_BYTES = 1_024
 MAX_SYSTEMD_BYTES = 4_096
 MAX_UNIT_BYTES = 16_384
+TRUSTED_DEPLOYMENT_OWNER = 0
 LOOPBACK_OBSERVATION_TIMEOUT = 5.0
 STATUS_OBSERVATION_TIMEOUT = 5.0
 SYSTEMD_OBSERVATION_TIMEOUT = 5.0
@@ -293,7 +294,8 @@ def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
         named_info = root.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
-    if not stat.S_ISDIR(named_info.st_mode) or named_info.st_mode & 0o022:
+    if (not stat.S_ISDIR(named_info.st_mode) or named_info.st_mode & 0o022
+            or named_info.st_uid != TRUSTED_DEPLOYMENT_OWNER):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
     named_identity = (named_info.st_dev, named_info.st_ino)
     try:
@@ -301,7 +303,8 @@ def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
         info = resolved.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
-    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
+            or info.st_uid != TRUSTED_DEPLOYMENT_OWNER):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
     if (info.st_dev, info.st_ino) != named_identity:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
@@ -316,17 +319,19 @@ def _require_same_deployment_root(
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED") from exc
     if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
+            or info.st_uid != TRUSTED_DEPLOYMENT_OWNER
             or (info.st_dev, info.st_ino) != expected_identity):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
 
 
 def _trusted_release_directory(path: Path) -> tuple[int, int]:
-    """Reject redirected or group/world-writable release storage."""
+    """Reject redirected, mutable-owner, or writable release storage."""
     try:
         info = path.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_RELEASE_STORAGE_UNAVAILABLE") from exc
-    if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
+            or info.st_uid != TRUSTED_DEPLOYMENT_OWNER):
         raise ReadinessError("AWS_RELEASE_STORAGE_UNTRUSTED")
     return info.st_dev, info.st_ino
 

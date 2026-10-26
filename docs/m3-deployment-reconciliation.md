@@ -128,9 +128,13 @@ blocked until these diagnostics can be run through approved access and reviewed.
 ## Pending operational gates
 
 AWS readiness also requires the deployment-root pathname itself to be a direct,
-trusted directory. It rejects symlink redirection and device/inode replacement
-between pathname authentication and canonical resolution before taking the
-shared activation fence or running any release, systemd, or loopback probe.
+root-owned trusted directory. The `releases` directory and selected immutable
+release must remain owned by the same required root operator; restrictive mode
+bits alone are insufficient because a non-root owner can change them after an
+observation. Readiness rejects ownership drift, symlink redirection and
+device/inode replacement between pathname authentication and canonical
+resolution before taking the shared activation fence or running any release,
+systemd, or loopback probe.
 Every HOPE systemd unit must also resolve to its reviewed
 `/etc/systemd/system/<unit>` fragment with no effective drop-ins; an alternate
 fragment or override cannot claim readiness even if liveness and restart-policy
