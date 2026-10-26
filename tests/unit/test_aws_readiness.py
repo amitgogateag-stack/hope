@@ -154,6 +154,58 @@ def test_writable_deployment_root_is_rejected_before_fence_or_probes(tmp_path):
     assert observed == []
 
 
+def test_symlinked_deployment_root_cannot_redirect_readiness(tmp_path):
+    actual_root = _root(tmp_path / "actual")
+    redirected_root = tmp_path / "hope-operations"
+    redirected_root.symlink_to(actual_root, target_is_directory=True)
+    observed = []
+
+    def forbidden(*_args, **_kwargs):
+        observed.append(True)
+        pytest.fail("redirected root must block every observation")
+
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=redirected_root, now=NOW, systemd_probe=forbidden,
+            status_probe=forbidden, release_probe=forbidden,
+        )
+    assert observed == []
+
+
+def test_deployment_root_replacement_during_resolution_fails_closed(
+    tmp_path, monkeypatch,
+):
+    root = _root(tmp_path / "original")
+    replacement = _root(tmp_path / "replacement")
+    (replacement / "current").unlink()
+    (replacement / "current").symlink_to(Path("releases") / EXPECTED)
+    retained = tmp_path / "retained-root"
+    original_resolve = Path.resolve
+    replaced = False
+    observed = []
+
+    def replacing_resolve(path, *args, **kwargs):
+        nonlocal replaced
+        if path == root and not replaced:
+            replaced = True
+            root.rename(retained)
+            replacement.rename(root)
+        return original_resolve(path, *args, **kwargs)
+
+    def forbidden(*_args, **_kwargs):
+        observed.append(True)
+        pytest.fail("changed root must block every observation")
+
+    monkeypatch.setattr(Path, "resolve", replacing_resolve)
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=forbidden,
+            status_probe=forbidden, release_probe=forbidden,
+        )
+    assert replaced is True
+    assert observed == []
+
+
 def test_symlinked_release_store_cannot_claim_readiness(tmp_path):
     root = tmp_path / "hope-operations"
     external = tmp_path / "external-releases"

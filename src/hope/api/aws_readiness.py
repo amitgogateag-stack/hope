@@ -71,13 +71,22 @@ class ReadinessError(RuntimeError):
 
 def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
     try:
+        named_info = root.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
+    if not stat.S_ISDIR(named_info.st_mode) or named_info.st_mode & 0o022:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
+    named_identity = (named_info.st_dev, named_info.st_ino)
+    try:
         resolved = root.resolve(strict=True)
         info = resolved.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
     if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
-    return resolved, (info.st_dev, info.st_ino)
+    if (info.st_dev, info.st_ino) != named_identity:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
+    return resolved, named_identity
 
 
 def _require_same_deployment_root(
