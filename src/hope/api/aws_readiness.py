@@ -721,24 +721,27 @@ def _inspect_stable_readiness(
     # This is a separate, bounded deadline: the first systemd pass cannot
     # consume the time reserved for closing the observation window.
     revalidation_deadline = monotonic() + SYSTEMD_REVALIDATION_TIMEOUT
-    for unit in RUNNING_UNITS:
+    for unit in REQUIRED_UNITS:
         initial = units[unit]
-        initial_identity = (
-            initial["ActiveState"], initial["SubState"], initial["MainPID"],
-            initial["InvocationID"],
-            initial["ExecMainStartTimestampMonotonic"],
-        )
         remaining = revalidation_deadline - monotonic()
         if not math.isfinite(remaining) or remaining <= 0:
             raise ReadinessError("AWS_SYSTEMD_REVALIDATION_TIMEOUT:" + unit)
         current = systemd_probe(unit, timeout=remaining)
-        current_identity = (
-            current["ActiveState"], current["SubState"], current["MainPID"],
-            current["InvocationID"],
-            current["ExecMainStartTimestampMonotonic"],
-        )
-        if current_identity != initial_identity:
-            raise ReadinessError("AWS_SYSTEMD_RUNTIME_CHANGED:" + unit)
+        if unit in RUNNING_UNITS:
+            initial_identity = (
+                initial["ActiveState"], initial["SubState"],
+                initial["MainPID"], initial["InvocationID"],
+                initial["ExecMainStartTimestampMonotonic"],
+            )
+            current_identity = (
+                current["ActiveState"], current["SubState"],
+                current["MainPID"], current["InvocationID"],
+                current["ExecMainStartTimestampMonotonic"],
+            )
+            if current_identity != initial_identity:
+                raise ReadinessError("AWS_SYSTEMD_RUNTIME_CHANGED:" + unit)
+        if current != initial:
+            raise ReadinessError("AWS_SYSTEMD_STATE_CHANGED:" + unit)
 
     _require_same_release_storage(root, release_storage)
     return {
