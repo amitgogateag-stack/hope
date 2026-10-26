@@ -114,6 +114,11 @@ blocked until these diagnostics can be run through approved access and reviewed.
 
 ## Pending operational gates
 
+AWS readiness also requires the deployment-root pathname itself to be a direct,
+trusted directory. It rejects symlink redirection and device/inode replacement
+between pathname authentication and canonical resolution before taking the
+shared activation fence or running any release, systemd, or loopback probe.
+
 1. Authenticated console/instance access and exact target confirmation.
 2. Read-only AWS reconciliation under scoped database environments; resolve
    demonstrated drift through separately approved host changes only.

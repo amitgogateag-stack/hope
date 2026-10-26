@@ -1776,3 +1776,16 @@ strategy/risk change or LIVE enablement is included. Frozen day29 SHA
   probe executes; a writable-root case is also rejected before fence entry.
   This changes only read-only GitHub readiness code and performs no AWS, service,
   credential, database, PAPER, strategy/risk, public exposure, or LIVE action.
+
+## 2026-10-25 — Deployment-root pathname authenticity
+
+- Demonstrated that the readiness entry point resolved and accepted a symlinked
+  deployment root, allowing an operator-supplied path to redirect the shared
+  fence and all subsequent release/host observations to another tree.
+- Readiness now authenticates the named root itself as a direct, non-group/world-
+  writable directory before resolving it, then requires the resolved directory
+  to have the same device/inode identity. A symlink or replacement between the
+  two observations fails before fence acquisition or any host probe.
+- Adversarial tests cover direct root redirection and replacement during path
+  resolution, and prove release/systemd/HTTP probes cannot execute afterward.
+  This is read-only GitHub code; AWS and PAPER services remain unchanged.
