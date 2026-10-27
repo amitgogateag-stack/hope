@@ -731,6 +731,32 @@ def test_stale_recovery_rechecks_state_on_held_root_not_transient_replacement(
     assert (tmp_path / "deployed.env").read_text() == f"HOPE_DEPLOYED_COMMIT={new}\n"
 
 
+@pytest.mark.parametrize("replaced_entry", ["metadata", "pointer"])
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-bound stale recovery")
+def test_stale_recovery_rejects_semantically_equal_state_replacement(
+    tmp_path, monkeypatch, replaced_entry,
+):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+
+    def replace_with_equivalent_inode():
+        if replaced_entry == "metadata":
+            replacement = tmp_path / ".deployed.replacement"
+            replacement.write_text(f"HOPE_DEPLOYED_COMMIT={old}\n")
+            os.replace(replacement, tmp_path / "deployed.env")
+        else:
+            replacement = tmp_path / ".current.replacement"
+            os.symlink(tmp_path / "releases" / old, replacement, target_is_directory=True)
+            os.replace(replacement, tmp_path / "current")
+
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_STATE_CHANGED"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=replace_with_equivalent_inode, proc_root=proc,
+        )
+    assert (tmp_path / ".activation.lock").is_file()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux atomic recovery quarantine; exercised in Linux CI")
 def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monkeypatch):
     old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
