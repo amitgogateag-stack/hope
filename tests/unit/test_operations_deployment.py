@@ -3,6 +3,7 @@ from pathlib import Path
 import subprocess
 import json
 import shutil
+from types import SimpleNamespace
 
 import pytest
 
@@ -294,6 +295,72 @@ def test_activation_lock_serializes_complete_operation_and_cleans_after_failure(
         with module.activation_lock(tmp_path, expected_current=old, target_sha=new):
             raise RuntimeError("acceptance failed")
     assert not (tmp_path / ".activation.lock").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux activation storage trust")
+@pytest.mark.parametrize("unsafe_parent", ["writable", "symlink"])
+def test_activation_rejects_untrusted_deployment_parent_before_lease(
+    tmp_path, unsafe_parent,
+):
+    actual_parent = tmp_path / "actual-opt"
+    root = actual_parent / "hope-operations"
+    root.mkdir(parents=True)
+    if unsafe_parent == "writable":
+        actual_parent.chmod(0o777)
+        observed_root = root
+    else:
+        linked_parent = tmp_path / "opt"
+        linked_parent.symlink_to(actual_parent, target_is_directory=True)
+        observed_root = linked_parent / root.name
+
+    with pytest.raises(
+        module.DeploymentError, match="^OPERATIONS_ACTIVATION_ROOT_UNTRUSTED$",
+    ):
+        with module.activation_lock(
+            observed_root, expected_current="1" * 40, target_sha="2" * 40,
+        ):
+            pytest.fail("untrusted deployment storage admitted activation")
+    assert not (root / ".activation.lock").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux activation storage trust")
+@pytest.mark.parametrize("owner_scope", ["parent", "root"])
+def test_activation_rejects_non_operator_owned_deployment_storage(
+    tmp_path, monkeypatch, owner_scope,
+):
+    root = tmp_path / "hope-operations"
+    root.mkdir()
+    original_lstat = Path.lstat
+    original_fstat = module.os.fstat
+
+    def lstat_with_untrusted_parent(path):
+        info = original_lstat(path)
+        if owner_scope == "parent" and path == root.parent:
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_uid=os.geteuid() + 1,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    def fstat_with_untrusted_root(descriptor):
+        info = original_fstat(descriptor)
+        if owner_scope == "root" and module.stat.S_ISDIR(info.st_mode):
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_uid=os.geteuid() + 1,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_untrusted_parent)
+    monkeypatch.setattr(module.os, "fstat", fstat_with_untrusted_root)
+    with pytest.raises(
+        module.DeploymentError, match="^OPERATIONS_ACTIVATION_ROOT_UNTRUSTED$",
+    ):
+        with module.activation_lock(
+            root, expected_current="1" * 40, target_sha="2" * 40,
+        ):
+            pytest.fail("non-operator-owned storage admitted activation")
+    assert not (root / ".activation.lock").exists()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")

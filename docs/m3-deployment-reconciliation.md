@@ -63,6 +63,12 @@ so the probe fails closed instead of combining a pre-switch release with
 post-switch service or dashboard state. It reads only fixed systemd properties
 and the private loopback `8788/release.json` and `8788/status.json` documents,
 emits only allow-listed fields, and returns 3 while readiness blockers remain.
+Both sides authenticate the same canonical deployment path before locking. The
+exclusive mutation side also requires the direct parent and deployment root to
+be owned by the invoking privileged operator and non-group/world-writable, and
+binds their device/inode identities before it can create an activation lease.
+Writable, foreign-owned, or ancestor-symlinked storage is therefore rejected
+before any release-pointer mutation begins.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot
