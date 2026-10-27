@@ -595,15 +595,19 @@ def recover_stale_activation(
     The caller must stop and verify all deployment services in ``quiesce``.  This
     operation never changes release pointers or metadata and never starts a unit.
     """
-    with _activation_guard(root):
+    with _activation_guard(root) as directory_descriptor:
         return _recover_stale_activation(root, expected_current=expected_current,
-            target_sha=target_sha, quiesce=quiesce, proc_root=proc_root)
+            target_sha=target_sha, quiesce=quiesce, proc_root=proc_root,
+            directory_descriptor=directory_descriptor)
 
 
 def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: str,
-                            quiesce: Callable[[], None], proc_root: Path):
+                            quiesce: Callable[[], None], proc_root: Path,
+                            directory_descriptor: int | None = None):
     expected_current, target_sha = _sha(expected_current), _sha(target_sha)
     root = root.resolve(strict=True)
+    if directory_descriptor is not None:
+        _require_activation_root_current(root, directory_descriptor)
     try:
         fingerprint = _activation_lock_fingerprint(root)
         diagnosis = inspect_activation_recovery(root, proc_root=proc_root)
@@ -617,6 +621,8 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
         raise DeploymentError("OPERATIONS_ACTIVATION_RECOVERY_DENIED")
 
     quiesce()
+    if directory_descriptor is not None:
+        _require_activation_root_current(root, directory_descriptor)
 
     # Recheck every safety fact after stopping units. A concurrently changed
     # lease or release state leaves services stopped and requires review.
@@ -624,7 +630,11 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
         repeated = inspect_activation_recovery(root, proc_root=proc_root)
         if repeated != diagnosis or _activation_lock_fingerprint(root) != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        if directory_descriptor is not None:
+            _require_activation_root_current(root, directory_descriptor)
         _quarantine_activation_lock(root, fingerprint)
+        if directory_descriptor is not None:
+            _require_activation_root_current(root, directory_descriptor)
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
     return {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
