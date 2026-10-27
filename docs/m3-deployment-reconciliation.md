@@ -88,7 +88,10 @@ quarantine. Archive creation, opening, lease movement, synchronization, and
 identity validation are all relative to that descriptor. The named root must
 still be the held trusted inode at every boundary; moving the authenticated
 lease and reconstructing equivalent pointer/metadata content under replacement
-storage cannot authorize recovery or redirect evidence quarantine.
+storage cannot authorize recovery or redirect evidence quarantine. Recovery's
+initial and post-quiescence lease, release-pointer, deployed-metadata, and
+pending-entry proofs are likewise read through the held root descriptor, so a
+transient safe replacement cannot conceal unsafe state on the locked root.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot
