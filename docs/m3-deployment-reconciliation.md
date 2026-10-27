@@ -84,9 +84,11 @@ after release preflight therefore cannot redirect pointer mutation or
 acceptance into replacement storage.
 Stale recovery retains the same exclusive root descriptor across initial lease
 authentication, service quiescence, repeated state proof, and evidence
-quarantine. The named root must still be the held trusted inode at every
-boundary; moving the authenticated lease and reconstructing equivalent
-pointer/metadata content under replacement storage cannot authorize recovery.
+quarantine. Archive creation, opening, lease movement, synchronization, and
+identity validation are all relative to that descriptor. The named root must
+still be the held trusted inode at every boundary; moving the authenticated
+lease and reconstructing equivalent pointer/metadata content under replacement
+storage cannot authorize recovery or redirect evidence quarantine.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot

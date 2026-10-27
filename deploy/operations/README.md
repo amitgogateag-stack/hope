@@ -364,8 +364,10 @@ Recovery never unlinks `.activation.lock` by pathname. It atomically moves the
 entry into a unique mode-0700 `.activation.recovered-*` directory, durably syncs
 both directories, and authenticates the moved `lease.json` against the inspected
 fingerprint. On Linux, the move, sync, and record read are all relative to open,
-validated root/archive directory descriptors; replacing the archive pathname
-cannot redirect the lease into another directory. A raced replacement is
+validated root/archive directory descriptors. The recovery archive itself is
+created and opened relative to the already authenticated root descriptor;
+replacing either the root or archive pathname cannot redirect the lease into
+replacement storage or another directory. A raced replacement is
 preserved in that archive and fails closed as changed state. Successful recovery
 also retains its authenticated archive as an audit artifact; operators must not
 treat its presence as a new active lease.
