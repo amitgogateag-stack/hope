@@ -728,6 +728,39 @@ def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monk
     assert (archives[0] / "lease.json").read_bytes() == replacement_payload
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-bound recovery archive")
+def test_stale_recovery_never_quarantines_through_replaced_root_path(tmp_path, monkeypatch):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    displaced = tmp_path.parent / f"{tmp_path.name}-displaced-at-archive"
+    original_mkdir = os.mkdir
+    attacked = False
+
+    def replace_root_before_archive(path, mode=0o777, *, dir_fd=None):
+        nonlocal attacked
+        if not attacked and Path(path).name.startswith(".activation.recovered-"):
+            attacked = True
+            tmp_path.rename(displaced)
+            tmp_path.mkdir()
+            releases = tmp_path / "releases"
+            (releases / old).mkdir(parents=True)
+            (releases / new).mkdir()
+            os.symlink(releases / old, tmp_path / "current", target_is_directory=True)
+            (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={old}\n")
+            os.replace(displaced / ".activation.lock", tmp_path / ".activation.lock")
+        return original_mkdir(path, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(module.os, "mkdir", replace_root_before_archive)
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_(STATE|ROOT)_CHANGED"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=lambda: None, proc_root=proc,
+        )
+    assert attacked is True
+    assert (tmp_path / ".activation.lock").is_file()
+    assert not list(tmp_path.glob(".activation.recovered-*"))
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux directory descriptor binding; exercised in Linux CI")
 def test_stale_recovery_never_moves_lease_through_replaced_archive_path(tmp_path, monkeypatch):
     old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)

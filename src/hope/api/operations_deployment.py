@@ -514,25 +514,25 @@ def _activation_lock_fingerprint(root: Path) -> tuple[int, int, int, int, str]:
 
 
 def _quarantine_activation_lock(
-    root: Path, fingerprint: tuple[int, int, int, int, str],
+    root: Path, fingerprint: tuple[int, int, int, int, str], *,
+    root_descriptor: int | None = None,
 ) -> None:
     """Durably archive recovery evidence without conditionally unlinking a pathname."""
-    archive = None
-    for _ in range(8):
-        candidate = root / f".activation.recovered-{secrets.token_hex(16)}"
-        try:
-            candidate.mkdir(mode=0o700)
-        except FileExistsError:
-            continue
-        archive = candidate
-        break
-    if archive is None:
-        raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNAVAILABLE")
-
     # Persist the unique empty directory before moving the only lease name into
     # it. Linux binds the transition and subsequent read to open directory
     # descriptors so replacing the archive pathname cannot redirect the move.
     if os.name != "posix":
+        archive = None
+        for _ in range(8):
+            candidate = root / f".activation.recovered-{secrets.token_hex(16)}"
+            try:
+                candidate.mkdir(mode=0o700)
+            except FileExistsError:
+                continue
+            archive = candidate
+            break
+        if archive is None:
+            raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNAVAILABLE")
         _sync_activation_directory(root)
         destination = archive / "lease.json"
         try:
@@ -544,11 +544,24 @@ def _quarantine_activation_lock(
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         return
 
-    root_descriptor = archive_descriptor = None
+    owned_root_descriptor = archive_descriptor = None
     try:
         flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
-        root_descriptor = os.open(root, flags)
-        archive_descriptor = os.open(archive, flags)
+        if root_descriptor is None:
+            owned_root_descriptor = os.open(root, flags)
+            root_descriptor = owned_root_descriptor
+        archive_name = None
+        for _ in range(8):
+            candidate_name = f".activation.recovered-{secrets.token_hex(16)}"
+            try:
+                os.mkdir(candidate_name, mode=0o700, dir_fd=root_descriptor)
+            except FileExistsError:
+                continue
+            archive_name = candidate_name
+            break
+        if archive_name is None:
+            raise DeploymentError("OPERATIONS_ACTIVATION_ARCHIVE_UNAVAILABLE")
+        archive_descriptor = os.open(archive_name, flags, dir_fd=root_descriptor)
         created = os.fstat(archive_descriptor)
         archive_identity = (created.st_dev, created.st_ino)
         if (not stat.S_ISDIR(created.st_mode) or created.st_uid != os.geteuid()
@@ -572,7 +585,9 @@ def _quarantine_activation_lock(
         else:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         try:
-            named_archive = archive.lstat()
+            named_archive = os.stat(
+                archive_name, dir_fd=root_descriptor, follow_symlinks=False,
+            )
         except FileNotFoundError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
         if (not stat.S_ISDIR(named_archive.st_mode)
@@ -582,8 +597,8 @@ def _quarantine_activation_lock(
     finally:
         if archive_descriptor is not None:
             os.close(archive_descriptor)
-        if root_descriptor is not None:
-            os.close(root_descriptor)
+        if owned_root_descriptor is not None:
+            os.close(owned_root_descriptor)
 
 
 def recover_stale_activation(
@@ -632,7 +647,9 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)
-        _quarantine_activation_lock(root, fingerprint)
+        _quarantine_activation_lock(
+            root, fingerprint, root_descriptor=directory_descriptor,
+        )
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)
     except FileNotFoundError as exc:
