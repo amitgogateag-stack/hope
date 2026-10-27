@@ -193,10 +193,16 @@ def _activation_guard(root: Path, *, shared: bool = False):
             except BlockingIOError as exc:
                 raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
             if shared:
-                yield
+                yield directory_descriptor
                 return
         path = root / ".activation.guard"
-        descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        if os.name == "posix":
+            descriptor = os.open(
+                ".activation.guard", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600, dir_fd=directory_descriptor,
+            )
+        else:
+            descriptor = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         info = os.fstat(descriptor)
         if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
                 or info.st_mode & 0o022 or info.st_nlink != 1):
@@ -205,7 +211,31 @@ def _activation_guard(root: Path, *, shared: bool = False):
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
-        yield
+        if os.name == "posix":
+            try:
+                named_guard = os.stat(
+                    ".activation.guard", dir_fd=directory_descriptor,
+                    follow_symlinks=False,
+                )
+                held_root = os.fstat(directory_descriptor)
+                named_root = root.lstat()
+                named_parent = root.parent.lstat()
+            except OSError as exc:
+                raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED") from exc
+            if ((named_guard.st_dev, named_guard.st_ino)
+                    != (info.st_dev, info.st_ino)
+                    or not _trusted_activation_directory(
+                        named_root, required_owner=os.geteuid(),
+                    )
+                    or not _trusted_activation_directory(
+                        named_parent, required_owner=os.geteuid(),
+                    )
+                    or (named_root.st_dev, named_root.st_ino)
+                    != (held_root.st_dev, held_root.st_ino)
+                    or (named_parent.st_dev, named_parent.st_ino)
+                    != parent_identity):
+                raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED")
+        yield directory_descriptor
     finally:
         if descriptor is not None:
             os.close(descriptor)
@@ -216,14 +246,23 @@ def _activation_guard(root: Path, *, shared: bool = False):
 @contextmanager
 def activation_lock(root: Path, *, expected_current: str, target_sha: str):
     """Exclusive authenticated operation lease, retained after process death."""
-    with _activation_guard(root):
-        with _create_activation_lease(root, expected_current=expected_current, target_sha=target_sha):
+    with _activation_guard(root) as directory_descriptor:
+        with _create_activation_lease(
+            root, expected_current=expected_current, target_sha=target_sha,
+            directory_descriptor=directory_descriptor,
+        ):
             yield
 
 
-def _sync_activation_directory(root: Path) -> None:
+def _sync_activation_directory(root: Path, *, directory_descriptor: int | None = None) -> None:
     """Make a lease pathname transition durable on the production Linux host."""
     if os.name != "posix":
+        return
+    if directory_descriptor is not None:
+        try:
+            os.fsync(directory_descriptor)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED") from exc
         return
     descriptor = None
     try:
@@ -237,7 +276,10 @@ def _sync_activation_directory(root: Path) -> None:
 
 
 @contextmanager
-def _create_activation_lease(root: Path, *, expected_current: str, target_sha: str):
+def _create_activation_lease(
+    root: Path, *, expected_current: str, target_sha: str,
+    directory_descriptor: int | None = None,
+):
     expected_current, target_sha = _sha(expected_current), _sha(target_sha)
     root = root.resolve(strict=True)
     path = root / ".activation.lock"
@@ -247,8 +289,15 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
         "process_start_ticks": started, "expected_current": expected_current,
         "target_sha": target_sha,
     }, sort_keys=True, separators=(",", ":")).encode("ascii")
+    lease_name = ".activation.lock"
     try:
-        descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        if os.name == "posix" and directory_descriptor is not None:
+            descriptor = os.open(
+                lease_name, os.O_CREAT | os.O_EXCL | os.O_WRONLY,
+                0o600, dir_fd=directory_descriptor,
+            )
+        else:
+            descriptor = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCKED") from exc
     lease_identity = None
@@ -262,6 +311,20 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
             if (not stat.S_ISREG(created.st_mode) or created.st_uid != os.geteuid()
                     or created.st_mode & 0o022 or created.st_nlink != 1):
                 raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_UNTRUSTED")
+            if directory_descriptor is not None:
+                try:
+                    held_root = os.fstat(directory_descriptor)
+                    named_root = root.lstat()
+                    named_parent = root.parent.lstat()
+                except OSError as exc:
+                    raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED") from exc
+                if (not _trusted_activation_directory(
+                        named_root, required_owner=os.geteuid(),
+                    ) or not _trusted_activation_directory(
+                        named_parent, required_owner=os.geteuid(),
+                    ) or (named_root.st_dev, named_root.st_ino)
+                        != (held_root.st_dev, held_root.st_ino)):
+                    raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED")
         offset = 0
         while offset < len(record):
             written = os.write(descriptor, record[offset:])
@@ -274,7 +337,7 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
             raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_DURABILITY_FAILED") from exc
         # File fsync alone does not make the newly created directory entry
         # crash-durable. Recovery intent must survive before pointer work begins.
-        _sync_activation_directory(root)
+        _sync_activation_directory(root, directory_descriptor=directory_descriptor)
         yield
     finally:
         try:
@@ -282,14 +345,23 @@ def _create_activation_lease(root: Path, *, expected_current: str, target_sha: s
             # attributed to this descriptor. Preserve it for recovery review.
             if os.name != "posix" or lease_identity is not None:
                 if lease_identity is not None:
-                    named = path.lstat()
+                    if directory_descriptor is not None:
+                        named = os.stat(
+                            lease_name, dir_fd=directory_descriptor,
+                            follow_symlinks=False,
+                        )
+                    else:
+                        named = path.lstat()
                     if (not stat.S_ISREG(named.st_mode) or named.st_nlink != 1
                             or (named.st_dev, named.st_ino) != lease_identity):
                         raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED")
-                path.unlink()
+                if directory_descriptor is not None:
+                    os.unlink(lease_name, dir_fd=directory_descriptor)
+                else:
+                    path.unlink()
                 # A clean operation must durably clear its lease as well; otherwise
                 # a reboot can resurrect stale recovery evidence after success.
-                _sync_activation_directory(root)
+                _sync_activation_directory(root, directory_descriptor=directory_descriptor)
         except FileNotFoundError as exc:
             raise DeploymentError("OPERATIONS_ACTIVATION_LEASE_CHANGED") from exc
         finally:
