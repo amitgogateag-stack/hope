@@ -375,6 +375,10 @@ The recovery safety snapshot and its post-quiescence repeat read the lease,
 release pointer, deployed metadata, and pending pointer relative to the same
 held root descriptor. A temporary replacement at the public root pathname
 therefore cannot substitute a safe snapshot for unsafe locked-root state.
+Recovery also fingerprints the descriptor-relative identities of the root,
+release storage, expected and target releases, `current`, `deployed.env`, and
+`.current.next`. Equivalent-content inode replacement during service quiescence
+is evidence of concurrent mutation, not permission to remove the stale lease.
 Contenders fail before stopping services or writing leases. Process death releases
 the kernel guard but preserves the separate lease for explicit operator recovery.
 Symlink, hard-link, foreign-owner and writable-by-others guard files are rejected.

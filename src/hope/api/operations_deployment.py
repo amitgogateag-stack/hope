@@ -574,6 +574,62 @@ def _activation_lock_fingerprint(
             ))[1]
 
 
+def _activation_recovery_state_fingerprint(
+    directory_descriptor: int, *, expected_current: str, target_sha: str,
+) -> tuple[object, ...]:
+    """Fingerprint every filesystem entry that proves stale recovery is safe."""
+    def identity(path: str, *, descriptor: int = directory_descriptor) -> tuple[object, ...]:
+        try:
+            value = os.stat(path, dir_fd=descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            return ("ABSENT",)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+        return (
+            "PRESENT", value.st_dev, value.st_ino, value.st_mode, value.st_uid,
+            value.st_nlink, value.st_size, value.st_mtime_ns, value.st_ctime_ns,
+        )
+
+    root_value = os.fstat(directory_descriptor)
+    root_identity = (
+        root_value.st_dev, root_value.st_ino, root_value.st_mode,
+        root_value.st_uid, root_value.st_nlink,
+    )
+    current_before = identity("current")
+    try:
+        current_target = os.readlink("current", dir_fd=directory_descriptor)
+    except OSError:
+        current_target = None
+    current_after = identity("current")
+    if current_before != current_after:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+
+    release_descriptor = None
+    try:
+        release_descriptor = os.open(
+            "releases", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+            dir_fd=directory_descriptor,
+        )
+        release_value = os.fstat(release_descriptor)
+        releases_identity = (
+            release_value.st_dev, release_value.st_ino, release_value.st_mode,
+            release_value.st_uid, release_value.st_nlink,
+        )
+        expected_identity = identity(expected_current, descriptor=release_descriptor)
+        target_identity = identity(target_sha, descriptor=release_descriptor)
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    finally:
+        if release_descriptor is not None:
+            os.close(release_descriptor)
+
+    return (
+        root_identity, releases_identity, expected_identity, target_identity,
+        current_before, current_target, identity("deployed.env"),
+        identity(".current.next"),
+    )
+
+
 def _quarantine_activation_lock(
     root: Path, fingerprint: tuple[int, int, int, int, str], *,
     root_descriptor: int | None = None,
@@ -685,6 +741,10 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
     if directory_descriptor is not None:
         _require_activation_root_current(root, directory_descriptor)
     try:
+        state_before = (_activation_recovery_state_fingerprint(
+            directory_descriptor, expected_current=expected_current,
+            target_sha=target_sha,
+        ) if directory_descriptor is not None else None)
         fingerprint = _activation_lock_fingerprint(
             root, directory_descriptor=directory_descriptor,
         )
@@ -695,6 +755,12 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
             root, directory_descriptor=directory_descriptor,
         ) != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_CHANGED")
+        state_fingerprint = (_activation_recovery_state_fingerprint(
+            directory_descriptor, expected_current=expected_current,
+            target_sha=target_sha,
+        ) if directory_descriptor is not None else None)
+        if state_before != state_fingerprint:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_MISSING") from exc
     if (diagnosis.get("state") != "STALE" or diagnosis.get("recovery_safe") is not True
@@ -709,12 +775,23 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
     # Recheck every safety fact after stopping units. A concurrently changed
     # lease or release state leaves services stopped and requires review.
     try:
+        repeated_before = (_activation_recovery_state_fingerprint(
+            directory_descriptor, expected_current=expected_current,
+            target_sha=target_sha,
+        ) if directory_descriptor is not None else None)
         repeated = inspect_activation_recovery(
             root, proc_root=proc_root, directory_descriptor=directory_descriptor,
         )
         if repeated != diagnosis or _activation_lock_fingerprint(
             root, directory_descriptor=directory_descriptor,
         ) != fingerprint:
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        repeated_after = (_activation_recovery_state_fingerprint(
+            directory_descriptor, expected_current=expected_current,
+            target_sha=target_sha,
+        ) if directory_descriptor is not None else None)
+        if (repeated_before != state_fingerprint
+                or repeated_after != state_fingerprint):
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)
