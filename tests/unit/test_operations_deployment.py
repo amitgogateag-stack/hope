@@ -120,6 +120,55 @@ def test_atomic_release_switch_restores_previous_on_acceptance_failure(tmp_path,
         module.switch_release(root, new, expected_current="3" * 40, accept=lambda: pytest.fail("no activation"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-bound release switch")
+def test_release_switch_rejects_root_replaced_after_preflight(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    displaced = tmp_path / "displaced"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+
+    def replace_root():
+        root.rename(displaced)
+        root.mkdir()
+
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_ROOT_CHANGED"):
+        module.switch_release(
+            root, new, expected_current=old,
+            before_switch=replace_root,
+            accept=lambda: pytest.fail("acceptance ran against a replaced deployment root"),
+        )
+    assert not (root / "current").exists()
+    assert os.readlink(displaced / "current") == str(root / "releases" / old)
+    assert not (displaced / ".activation.lock").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-bound release rollback")
+def test_release_switch_rolls_back_if_root_is_replaced_during_acceptance(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    displaced = tmp_path / "displaced"
+    old, new = "1" * 40, "2" * 40
+    for sha in (old, new):
+        (root / "releases" / sha).mkdir(parents=True)
+    os.symlink(root / "releases" / old, root / "current", target_is_directory=True)
+    monkeypatch.setattr(module, "inspect_release", lambda *a: {"status": "COMPATIBLE_CODE"})
+
+    def replace_root_during_acceptance():
+        root.rename(displaced)
+        root.mkdir()
+
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_ROOT_CHANGED"):
+        module.switch_release(
+            root, new, expected_current=old,
+            accept=replace_root_during_acceptance,
+        )
+    assert not (root / "current").exists()
+    assert os.readlink(displaced / "current") == str(root / "releases" / old)
+    assert not (displaced / ".activation.lock").exists()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux directory durability; exercised in Linux CI")
 def test_release_pointer_is_directory_synced_before_acceptance(tmp_path, monkeypatch):
     root = tmp_path / "operations"

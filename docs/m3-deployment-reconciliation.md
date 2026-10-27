@@ -76,6 +76,12 @@ identities after taking both kernel locks, and lease creation revalidates the
 held root before admitting work. Replacing the deployment-root pathname during
 either setup boundary cannot split the directory lock, guard, and lease across
 different directory inodes.
+The production release switch carries that same descriptor through the
+pre-switch hook and the `current`/`.current.next` rename. It revalidates the
+named root before mutation and after the durable rename, and performs rollback
+and pending-entry inspection relative to the held inode. Exchanging the root
+after release preflight therefore cannot redirect pointer mutation or
+acceptance into replacement storage.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot

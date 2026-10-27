@@ -122,6 +122,22 @@ def _trusted_activation_directory(
     )
 
 
+def _require_activation_root_current(root: Path, directory_descriptor: int) -> None:
+    """Bind a mutation boundary to the authenticated deployment-root inode."""
+    try:
+        held_root = os.fstat(directory_descriptor)
+        named_root = root.lstat()
+        named_parent = root.parent.lstat()
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED") from exc
+    owner = os.geteuid()
+    if (not _trusted_activation_directory(named_root, required_owner=owner)
+            or not _trusted_activation_directory(named_parent, required_owner=owner)
+            or (named_root.st_dev, named_root.st_ino)
+                != (held_root.st_dev, held_root.st_ino)):
+        raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED")
+
+
 @contextmanager
 def _activation_guard(root: Path, *, shared: bool = False):
     """Fence activation state across privileged and read-only processes.
@@ -251,7 +267,7 @@ def activation_lock(root: Path, *, expected_current: str, target_sha: str):
             root, expected_current=expected_current, target_sha=target_sha,
             directory_descriptor=directory_descriptor,
         ):
-            yield
+            yield directory_descriptor
 
 
 def _sync_activation_directory(root: Path, *, directory_descriptor: int | None = None) -> None:
@@ -625,12 +641,18 @@ def switch_release(
     The acceptance callback must raise on failed checks. CLI does not expose this
     mutation; the approved deployment wrapper invokes it only after preflight.
     """
-    with activation_lock(root, expected_current=expected_current, target_sha=target_sha):
+    with activation_lock(
+        root, expected_current=expected_current, target_sha=target_sha,
+    ) as directory_descriptor:
         _switch_release(root, target_sha, expected_current=expected_current,
-                        accept=accept, before_switch=before_switch)
+                        accept=accept, before_switch=before_switch,
+                        directory_descriptor=directory_descriptor)
 
 
-def _switch_release(root, target_sha, *, expected_current, accept, before_switch):
+def _switch_release(
+    root, target_sha, *, expected_current, accept, before_switch,
+    directory_descriptor=None,
+):
     target_sha, expected_current = _sha(target_sha), _sha(expected_current)
     root = root.resolve(strict=True)
     if any((root/name).exists() or (root/name).is_symlink()
@@ -646,28 +668,66 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
     if previous != releases / expected_current or target != releases / target_sha:
         raise DeploymentError("OPERATIONS_RELEASE_LEASE_MISMATCH")
     inspect_release(target, target_sha)
+    if directory_descriptor is not None:
+        _require_activation_root_current(root, directory_descriptor)
     temporary = root / ".current.next"
-    if temporary.exists() or temporary.is_symlink():
+    if directory_descriptor is not None:
+        try:
+            os.stat(".current.next", dir_fd=directory_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise DeploymentError("OPERATIONS_SWITCH_ALREADY_PENDING")
+    elif temporary.exists() or temporary.is_symlink():
         raise DeploymentError("OPERATIONS_SWITCH_ALREADY_PENDING")
     temporary_identity = None
 
-    def point(path: Path) -> None:
+    def point(path: Path, *, require_named_root: bool = True) -> None:
         nonlocal temporary_identity
         temporary_identity = None
-        os.symlink(path, temporary, target_is_directory=True)
+        if directory_descriptor is not None:
+            os.symlink(
+                path, ".current.next", dir_fd=directory_descriptor,
+                target_is_directory=True,
+            )
+        else:
+            os.symlink(path, temporary, target_is_directory=True)
         if os.name == "posix":
-            created = temporary.lstat()
+            created = (os.stat(
+                ".current.next", dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            ) if directory_descriptor is not None else temporary.lstat())
             if not stat.S_ISLNK(created.st_mode) or created.st_nlink != 1:
                 raise DeploymentError("OPERATIONS_SWITCH_TEMP_UNTRUSTED")
             temporary_identity = (created.st_dev, created.st_ino, created.st_size,
                                   created.st_mtime_ns, created.st_ctime_ns, str(path))
-        os.replace(temporary, current)
+        if directory_descriptor is not None:
+            os.replace(
+                ".current.next", "current", src_dir_fd=directory_descriptor,
+                dst_dir_fd=directory_descriptor,
+            )
+        else:
+            os.replace(temporary, current)
         # Acceptance may only observe a pointer whose rename is durable. This
         # also makes a failed-acceptance rollback durable before it is reported.
-        _sync_activation_directory(root)
+        if directory_descriptor is not None:
+            _sync_activation_directory(
+                root, directory_descriptor=directory_descriptor,
+            )
+        else:
+            _sync_activation_directory(root)
+        if require_named_root and directory_descriptor is not None:
+            _require_activation_root_current(root, directory_descriptor)
+
+    def visible_pointer() -> Path:
+        if directory_descriptor is not None:
+            return Path(os.readlink("current", dir_fd=directory_descriptor))
+        return current.resolve(strict=True)
 
     try:
         before_switch()
+        if directory_descriptor is not None:
+            _require_activation_root_current(root, directory_descriptor)
         try:
             point(target)
         except BaseException:
@@ -675,18 +735,20 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
             # visible pointer. Restore and sync the prior pointer before
             # exposing the failure; never run acceptance on an unsynced target.
             try:
-                visible = current.resolve(strict=True)
+                visible = visible_pointer()
             except OSError as exc:
                 raise DeploymentError("OPERATIONS_RELEASE_POINTER_UNTRUSTED") from exc
             if visible == target:
-                point(previous)
+                point(previous, require_named_root=False)
             elif visible != previous:
                 raise DeploymentError("OPERATIONS_RELEASE_POINTER_UNTRUSTED")
             raise
         try:
             accept()
+            if directory_descriptor is not None:
+                _require_activation_root_current(root, directory_descriptor)
         except BaseException:
-            point(previous)
+            point(previous, require_named_root=False)
             raise
     finally:
         # A failed rename can leave the temporary pathname behind. Never unlink
@@ -694,15 +756,21 @@ def _switch_release(root, target_sha, *, expected_current, accept, before_switch
         # and cleanup. Preserve both our pending pointer and any replacement for
         # explicit recovery review; successful atomic renames leave no entry.
         try:
-            pending = temporary.lstat()
+            pending = (os.stat(
+                ".current.next", dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            ) if directory_descriptor is not None else temporary.lstat())
         except FileNotFoundError:
             pass
         else:
+            pending_target = (os.readlink(
+                ".current.next", dir_fd=directory_descriptor,
+            ) if directory_descriptor is not None else os.readlink(temporary))
             if (temporary_identity is None or not stat.S_ISLNK(pending.st_mode)
                     or pending.st_nlink != 1
                     or (pending.st_dev, pending.st_ino, pending.st_size,
                         pending.st_mtime_ns, pending.st_ctime_ns,
-                        os.readlink(temporary)) != temporary_identity):
+                        pending_target) != temporary_identity):
                 raise DeploymentError("OPERATIONS_SWITCH_TEMP_CHANGED")
             raise DeploymentError("OPERATIONS_SWITCH_TEMP_PRESERVED")
 
