@@ -112,6 +112,16 @@ def _process_identity(pid: int, proc_root: Path = Path("/proc")) -> tuple[str, s
     return boot_id, fields[19]
 
 
+def _trusted_activation_directory(
+    info: os.stat_result, *, required_owner: int | None,
+) -> bool:
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and not info.st_mode & 0o022
+        and (required_owner is None or info.st_uid == required_owner)
+    )
+
+
 @contextmanager
 def _activation_guard(root: Path, *, shared: bool = False):
     """Fence activation state across privileged and read-only processes.
@@ -127,7 +137,24 @@ def _activation_guard(root: Path, *, shared: bool = False):
         import fcntl
     except ImportError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_POSIX_REQUIRED") from exc
-    root = root.resolve(strict=True)
+    requested_root = root
+    parent_identity = None
+    if os.name == "posix" and not shared:
+        if not requested_root.is_absolute() or requested_root.parent == requested_root:
+            raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_UNTRUSTED")
+        try:
+            parent = requested_root.parent.lstat()
+            root = requested_root.resolve(strict=True)
+        except OSError as exc:
+            raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_UNTRUSTED") from exc
+        if (root != requested_root
+                or not _trusted_activation_directory(
+                    parent, required_owner=os.geteuid(),
+                )):
+            raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_UNTRUSTED")
+        parent_identity = (parent.st_dev, parent.st_ino)
+    else:
+        root = requested_root.resolve(strict=True)
     directory_descriptor = None
     descriptor = None
     try:
@@ -138,8 +165,28 @@ def _activation_guard(root: Path, *, shared: bool = False):
                 root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
             )
             info = os.fstat(directory_descriptor)
-            if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022:
+            required_owner = None if shared else os.geteuid()
+            if not _trusted_activation_directory(
+                info, required_owner=required_owner,
+            ):
                 raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_UNTRUSTED")
+            if not shared:
+                try:
+                    named = root.lstat()
+                    current_parent = root.parent.lstat()
+                except OSError as exc:
+                    raise DeploymentError(
+                        "OPERATIONS_ACTIVATION_ROOT_CHANGED",
+                    ) from exc
+                if (not _trusted_activation_directory(
+                        named, required_owner=required_owner,
+                    ) or not _trusted_activation_directory(
+                        current_parent, required_owner=required_owner,
+                    ) or (named.st_dev, named.st_ino)
+                        != (info.st_dev, info.st_ino)
+                    or (current_parent.st_dev, current_parent.st_ino)
+                        != parent_identity):
+                    raise DeploymentError("OPERATIONS_ACTIVATION_ROOT_CHANGED")
             try:
                 mode = fcntl.LOCK_SH if shared else fcntl.LOCK_EX
                 fcntl.flock(directory_descriptor, mode | fcntl.LOCK_NB)
