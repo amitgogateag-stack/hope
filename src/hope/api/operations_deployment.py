@@ -795,11 +795,30 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)
+            quarantine_before = _activation_recovery_state_fingerprint(
+                directory_descriptor, expected_current=expected_current,
+                target_sha=target_sha,
+            )
+            if quarantine_before != state_fingerprint:
+                raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         _quarantine_activation_lock(
             root, fingerprint, root_descriptor=directory_descriptor,
         )
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)
+            quarantine_after = _activation_recovery_state_fingerprint(
+                directory_descriptor, expected_current=expected_current,
+                target_sha=target_sha,
+            )
+            # The retained archive is a new child directory, so its creation
+            # increases the deployment root's link count by exactly one. All
+            # other trusted identities must remain byte-for-byte identical.
+            root_before = state_fingerprint[0]
+            root_after = quarantine_after[0]
+            if (quarantine_after[1:] != state_fingerprint[1:]
+                    or root_after[:-1] != root_before[:-1]
+                    or root_after[-1] != root_before[-1] + 1):
+                raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
     return {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
