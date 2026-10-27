@@ -142,6 +142,57 @@ def test_guard_rejects_link_aliases_without_changing_target(tmp_path, link):
     assert target.read_bytes() == b"must remain unchanged"
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-relative guard setup")
+def test_guard_rejects_deployment_root_replaced_during_guard_open(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    displaced = tmp_path / "displaced"
+    root.mkdir()
+    original_open = module.os.open
+    replaced = False
+
+    def replace_root_before_guard_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if (not replaced and (Path(path) == root / ".activation.guard"
+                or (path == ".activation.guard" and kwargs.get("dir_fd") is not None))):
+            root.rename(displaced)
+            root.mkdir()
+            replaced = True
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_root_before_guard_open)
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_ROOT_CHANGED"):
+        with module._activation_guard(root):
+            pytest.fail("guard entered through a replaced deployment root")
+    assert replaced
+    assert not (root / ".activation.guard").exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-relative lease setup")
+def test_activation_rejects_deployment_root_replaced_during_lease_open(tmp_path, monkeypatch):
+    root = tmp_path / "operations"
+    displaced = tmp_path / "displaced"
+    root.mkdir()
+    original_open = module.os.open
+    replaced = False
+
+    def replace_root_before_lease_open(path, flags, *args, **kwargs):
+        nonlocal replaced
+        if (not replaced and (Path(path) == root / ".activation.lock"
+                or (path == ".activation.lock" and kwargs.get("dir_fd") is not None))):
+            root.rename(displaced)
+            root.mkdir()
+            replaced = True
+        return original_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr(module.os, "open", replace_root_before_lease_open)
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_ROOT_CHANGED"):
+        with module.activation_lock(root, expected_current="1" * 40, target_sha="2" * 40):
+            pytest.fail("activation entered through a replaced deployment root")
+    assert replaced
+    assert not (root / ".activation.lock").exists()
+    assert not (displaced / ".activation.lock").exists()
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Production Linux flock and process death; exercised on Linux CI")
 def test_process_death_releases_kernel_guard_but_retains_authenticated_lease(tmp_path):
     script = """

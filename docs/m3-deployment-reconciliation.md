@@ -69,6 +69,13 @@ be owned by the invoking privileged operator and non-group/world-writable, and
 binds their device/inode identities before it can create an activation lease.
 Writable, foreign-owned, or ancestor-symlinked storage is therefore rejected
 before any release-pointer mutation begins.
+On Linux the persistent guard and per-operation lease are opened, inspected,
+synced, and removed relative to the already authenticated deployment-directory
+descriptor. The guard revalidates its own directory entry plus the parent/root
+identities after taking both kernel locks, and lease creation revalidates the
+held root before admitting work. Replacing the deployment-root pathname during
+either setup boundary cannot split the directory lock, guard, and lease across
+different directory inodes.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot
