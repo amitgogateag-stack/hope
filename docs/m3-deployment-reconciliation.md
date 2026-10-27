@@ -51,10 +51,12 @@ symlinks, and must not be group- or world-writable. Their device/inode identitie
 permissions and the `current` selection are checked again after Git
 authentication and after all unit/HTTP observations, so replacement during a
 readiness run fails closed without exposing host paths.
-The resolved deployment-root device/inode identity and non-writable mode are
-captured before acquiring the shared fence, checked immediately after fence
-acquisition, and checked again before reporting. The locked directory and the
-pathname used for every observation therefore cannot silently diverge.
+The canonical deployment-root path and both its direct parent and root
+device/inode identities, ownership, and non-writable modes are captured before
+acquiring the shared fence, checked immediately after fence acquisition, and
+checked again before reporting. Canonical and lexical paths must agree, so a
+symlinked ancestor cannot redirect the locked directory away from the pathname
+used for observations.
 The complete release, systemd and dashboard observation holds the deployment
 activation fence in shared mode. A reviewed activation holds the exclusive side,
 so the probe fails closed instead of combining a pre-switch release with
@@ -127,14 +129,15 @@ blocked until these diagnostics can be run through approved access and reviewed.
 
 ## Pending operational gates
 
-AWS readiness also requires the deployment-root pathname itself to be a direct,
-root-owned trusted directory. The `releases` directory and selected immutable
-release must remain owned by the same required root operator; restrictive mode
-bits alone are insufficient because a non-root owner can change them after an
-observation. Readiness rejects ownership drift, symlink redirection and
-device/inode replacement between pathname authentication and canonical
-resolution before taking the shared activation fence or running any release,
-systemd, or loopback probe.
+AWS readiness also requires the deployment-root pathname and its direct parent
+to be root-owned, non-group/world-writable trusted directories. The canonical
+root must equal the requested absolute path, rejecting a symlink in any
+ancestor. The `releases` directory and selected immutable release must remain
+owned by the same required root operator; restrictive mode bits alone are
+insufficient because a non-root owner can change them after an observation.
+Readiness rejects parent/root ownership or permission drift, symlink
+redirection, and device/inode replacement before taking the shared activation
+fence and again across the complete release, systemd, and loopback observation.
 Every HOPE systemd unit must also resolve to its reviewed
 `/etc/systemd/system/<unit>` fragment with no effective drop-ins; an alternate
 fragment or override cannot claim readiness even if liveness and restart-policy

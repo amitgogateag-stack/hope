@@ -289,38 +289,69 @@ def _unit_file_matches(
     return installed_content == reviewed_content
 
 
-def _deployment_root_identity(root: Path) -> tuple[Path, tuple[int, int]]:
+def _trusted_deployment_directory(info: os.stat_result) -> bool:
+    return (
+        stat.S_ISDIR(info.st_mode)
+        and not info.st_mode & 0o022
+        and info.st_uid == TRUSTED_DEPLOYMENT_OWNER
+    )
+
+
+def _deployment_root_identity(
+    root: Path,
+) -> tuple[Path, tuple[tuple[int, int], tuple[int, int]]]:
+    if not root.is_absolute() or root.parent == root:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
+    try:
+        parent_info = root.parent.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
+    if not _trusted_deployment_directory(parent_info):
+        raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
+    parent_identity = (parent_info.st_dev, parent_info.st_ino)
     try:
         named_info = root.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
-    if (not stat.S_ISDIR(named_info.st_mode) or named_info.st_mode & 0o022
-            or named_info.st_uid != TRUSTED_DEPLOYMENT_OWNER):
+    if not _trusted_deployment_directory(named_info):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
     named_identity = (named_info.st_dev, named_info.st_ino)
     try:
         resolved = root.resolve(strict=True)
         info = resolved.lstat()
+        current_parent = root.parent.lstat()
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNAVAILABLE") from exc
-    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
-            or info.st_uid != TRUSTED_DEPLOYMENT_OWNER):
+    # The production root is one direct child of /opt. Requiring lexical and
+    # canonical paths to agree rejects a symlink in any ancestor, while the
+    # direct-parent identity check binds the only mutable production ancestor.
+    if resolved != root or not _trusted_deployment_directory(info):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_UNTRUSTED")
-    if (info.st_dev, info.st_ino) != named_identity:
+    if (not _trusted_deployment_directory(current_parent)
+            or (current_parent.st_dev, current_parent.st_ino) != parent_identity
+            or (info.st_dev, info.st_ino) != named_identity):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
-    return resolved, named_identity
+    return resolved, (parent_identity, named_identity)
 
 
 def _require_same_deployment_root(
-    root: Path, expected_identity: tuple[int, int],
+    root: Path,
+    expected_identity: tuple[tuple[int, int], tuple[int, int]],
 ) -> None:
     try:
+        parent_info = root.parent.lstat()
         info = root.lstat()
+        resolved = root.resolve(strict=True)
     except OSError as exc:
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED") from exc
-    if (not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o022
-            or info.st_uid != TRUSTED_DEPLOYMENT_OWNER
-            or (info.st_dev, info.st_ino) != expected_identity):
+    observed = (
+        (parent_info.st_dev, parent_info.st_ino),
+        (info.st_dev, info.st_ino),
+    )
+    if (resolved != root
+            or not _trusted_deployment_directory(parent_info)
+            or not _trusted_deployment_directory(info)
+            or observed != expected_identity):
         raise ReadinessError("AWS_DEPLOYMENT_ROOT_CHANGED")
 
 

@@ -178,6 +178,87 @@ def test_writable_deployment_root_is_rejected_before_fence_or_probes(tmp_path):
     assert observed == []
 
 
+@pytest.mark.parametrize("unsafe_parent", ["writable", "symlink"])
+def test_untrusted_deployment_parent_cannot_claim_readiness(
+    tmp_path, unsafe_parent,
+):
+    actual_parent = tmp_path / "actual-opt"
+    root = _root(actual_parent)
+    if unsafe_parent == "writable":
+        actual_parent.chmod(0o777)
+        observed_root = root
+    else:
+        linked_parent = tmp_path / "opt"
+        linked_parent.symlink_to(actual_parent, target_is_directory=True)
+        observed_root = linked_parent / root.name
+    observed = []
+
+    def forbidden(*_args, **_kwargs):
+        observed.append(True)
+        pytest.fail("untrusted parent must block every observation")
+
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=observed_root, now=NOW, systemd_probe=forbidden,
+            status_probe=forbidden, release_probe=forbidden,
+        )
+    assert observed == []
+
+
+def test_non_operator_owned_deployment_parent_cannot_claim_readiness(
+    tmp_path, monkeypatch,
+):
+    root = _root(tmp_path)
+    parent = root.parent
+    original_lstat = Path.lstat
+
+    def lstat_with_untrusted_parent(path):
+        info = original_lstat(path)
+        if path == parent:
+            return SimpleNamespace(
+                st_mode=info.st_mode, st_uid=os.geteuid() + 1,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_untrusted_parent)
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_UNTRUSTED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+def test_deployment_parent_trust_change_during_observation_fails_closed(
+    tmp_path, monkeypatch,
+):
+    root = _root(tmp_path)
+    parent = root.parent
+    changed = False
+    original_lstat = Path.lstat
+
+    def lstat_with_parent_change(path):
+        info = original_lstat(path)
+        if changed and path == parent:
+            return SimpleNamespace(
+                st_mode=info.st_mode | stat.S_IWOTH, st_uid=info.st_uid,
+                st_dev=info.st_dev, st_ino=info.st_ino,
+            )
+        return info
+
+    def change_parent(_url, *, timeout):
+        nonlocal changed
+        changed = True
+        return _status()(_url, timeout=timeout)
+
+    monkeypatch.setattr(Path, "lstat", lstat_with_parent_change)
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYMENT_ROOT_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=change_parent, release_probe=_release_ok,
+        )
+
+
 def test_symlinked_deployment_root_cannot_redirect_readiness(tmp_path):
     actual_root = _root(tmp_path / "actual")
     redirected_root = tmp_path / "hope-operations"
