@@ -384,12 +384,14 @@ def _create_activation_lease(
             os.close(descriptor)
 
 
-def _read_deployed_metadata(path: Path) -> str:
+def _read_deployed_metadata(
+    path: Path | str, *, directory_descriptor: int | None = None,
+) -> str:
     """Read one small trusted metadata inode without reopening its pathname."""
     descriptor = None
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        descriptor = os.open(path, flags)
+        descriptor = os.open(path, flags, dir_fd=directory_descriptor)
         before = os.fstat(descriptor)
         if (not stat.S_ISREG(before.st_mode) or before.st_uid != os.geteuid()
                 or before.st_mode & 0o022 or before.st_nlink != 1
@@ -417,11 +419,18 @@ def _read_deployed_metadata(path: Path) -> str:
             os.close(descriptor)
 
 
-def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) -> dict[str, object]:
+def inspect_activation_recovery(
+    root: Path, *, proc_root: Path = Path("/proc"),
+    directory_descriptor: int | None = None,
+) -> dict[str, object]:
     """Diagnose an interrupted activation without removing locks or changing services."""
-    root = root.resolve(strict=True)
+    if directory_descriptor is None:
+        root = root.resolve(strict=True)
     try:
-        content, _ = _read_activation_lock(root)
+        content, _ = (_read_activation_lock(root) if directory_descriptor is None else
+                      _read_activation_record(
+                          ".activation.lock", directory_descriptor=directory_descriptor,
+                      ))
     except FileNotFoundError:
         return {"schema_version": 1, "state": "ABSENT", "recovery_safe": True}
     try:
@@ -447,17 +456,64 @@ def inspect_activation_recovery(root: Path, *, proc_root: Path = Path("/proc")) 
         lock_state = "UNKNOWN"
 
     releases = root / "releases"
-    current = root / "current"
-    try:
-        resolved = current.resolve(strict=True) if current.is_symlink() else None
-    except OSError:
-        resolved = None
-    pointer = "EXPECTED" if resolved == releases / expected else "TARGET" if resolved == releases / target else "OTHER"
-    deployed = root / "deployed.env"
-    content = _read_deployed_metadata(deployed)
+    if directory_descriptor is None:
+        current = root / "current"
+        try:
+            resolved = current.resolve(strict=True) if current.is_symlink() else None
+        except OSError:
+            resolved = None
+        pointer = ("EXPECTED" if resolved == releases / expected else
+                   "TARGET" if resolved == releases / target else "OTHER")
+        content = _read_deployed_metadata(root / "deployed.env")
+        pending = ("PRESENT" if (root / ".current.next").exists()
+                   or (root / ".current.next").is_symlink() else "ABSENT")
+    else:
+        try:
+            current_stat = os.stat(
+                "current", dir_fd=directory_descriptor, follow_symlinks=False,
+            )
+            link_target = (os.readlink("current", dir_fd=directory_descriptor)
+                           if stat.S_ISLNK(current_stat.st_mode) else None)
+        except OSError:
+            link_target = None
+        expected_link = str(releases / expected)
+        target_link = str(releases / target)
+        candidate = (expected if link_target == expected_link else
+                     target if link_target == target_link else None)
+        release_descriptor = None
+        try:
+            release_descriptor = os.open(
+                "releases", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=directory_descriptor,
+            )
+            release_stat = (os.stat(
+                candidate, dir_fd=release_descriptor, follow_symlinks=False,
+            ) if candidate is not None else None)
+        except OSError:
+            release_stat = None
+        finally:
+            if release_descriptor is not None:
+                os.close(release_descriptor)
+        pointer = ("EXPECTED" if candidate == expected and release_stat is not None
+                   and stat.S_ISDIR(release_stat.st_mode) else
+                   "TARGET" if candidate == target and release_stat is not None
+                   and stat.S_ISDIR(release_stat.st_mode) else "OTHER")
+        content = _read_deployed_metadata(
+            "deployed.env", directory_descriptor=directory_descriptor,
+        )
+        try:
+            os.stat(
+                ".current.next", dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            pending = "ABSENT"
+        except OSError:
+            pending = "PRESENT"
+        else:
+            pending = "PRESENT"
     metadata = ("EXPECTED" if content == f"HOPE_DEPLOYED_COMMIT={expected}\n" else
                 "TARGET" if content == f"HOPE_DEPLOYED_COMMIT={target}\n" else "OTHER")
-    pending = "PRESENT" if (root / ".current.next").exists() or (root / ".current.next").is_symlink() else "ABSENT"
     safe = lock_state == "STALE" and pointer == metadata == "EXPECTED" and pending == "ABSENT"
     return {
         "schema_version": 1, "state": lock_state, "expected_current": expected,
@@ -508,9 +564,14 @@ def _read_activation_lock(root: Path) -> tuple[bytes, tuple[int, int, int, int, 
     return _read_activation_record(root / ".activation.lock")
 
 
-def _activation_lock_fingerprint(root: Path) -> tuple[int, int, int, int, str]:
+def _activation_lock_fingerprint(
+    root: Path, *, directory_descriptor: int | None = None,
+) -> tuple[int, int, int, int, str]:
     """Bind recovery to the exact regular-file lease that was inspected."""
-    return _read_activation_lock(root)[1]
+    return (_read_activation_lock(root) if directory_descriptor is None else
+            _read_activation_record(
+                ".activation.lock", directory_descriptor=directory_descriptor,
+            ))[1]
 
 
 def _quarantine_activation_lock(
@@ -624,9 +685,15 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
     if directory_descriptor is not None:
         _require_activation_root_current(root, directory_descriptor)
     try:
-        fingerprint = _activation_lock_fingerprint(root)
-        diagnosis = inspect_activation_recovery(root, proc_root=proc_root)
-        if _activation_lock_fingerprint(root) != fingerprint:
+        fingerprint = _activation_lock_fingerprint(
+            root, directory_descriptor=directory_descriptor,
+        )
+        diagnosis = inspect_activation_recovery(
+            root, proc_root=proc_root, directory_descriptor=directory_descriptor,
+        )
+        if _activation_lock_fingerprint(
+            root, directory_descriptor=directory_descriptor,
+        ) != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_CHANGED")
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_LOCK_MISSING") from exc
@@ -642,8 +709,12 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
     # Recheck every safety fact after stopping units. A concurrently changed
     # lease or release state leaves services stopped and requires review.
     try:
-        repeated = inspect_activation_recovery(root, proc_root=proc_root)
-        if repeated != diagnosis or _activation_lock_fingerprint(root) != fingerprint:
+        repeated = inspect_activation_recovery(
+            root, proc_root=proc_root, directory_descriptor=directory_descriptor,
+        )
+        if repeated != diagnosis or _activation_lock_fingerprint(
+            root, directory_descriptor=directory_descriptor,
+        ) != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
         if directory_descriptor is not None:
             _require_activation_root_current(root, directory_descriptor)

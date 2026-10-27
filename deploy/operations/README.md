@@ -371,6 +371,10 @@ replacement storage or another directory. A raced replacement is
 preserved in that archive and fails closed as changed state. Successful recovery
 also retains its authenticated archive as an audit artifact; operators must not
 treat its presence as a new active lease.
+The recovery safety snapshot and its post-quiescence repeat read the lease,
+release pointer, deployed metadata, and pending pointer relative to the same
+held root descriptor. A temporary replacement at the public root pathname
+therefore cannot substitute a safe snapshot for unsafe locked-root state.
 Contenders fail before stopping services or writing leases. Process death releases
 the kernel guard but preserves the separate lease for explicit operator recovery.
 Symlink, hard-link, foreign-owner and writable-by-others guard files are rejected.

@@ -682,6 +682,55 @@ def test_stale_recovery_rejects_root_replaced_during_quiesce(tmp_path, monkeypat
     assert not list(tmp_path.glob(".activation.recovered-*"))
 
 
+@pytest.mark.skipif(os.name != "posix", reason="Linux descriptor-bound stale recovery")
+def test_stale_recovery_rechecks_state_on_held_root_not_transient_replacement(
+    tmp_path, monkeypatch,
+):
+    old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
+    (proc / str(pid) / "stat").unlink()
+    displaced = tmp_path.parent / f"{tmp_path.name}-displaced-during-recheck"
+    original_inspect = module.inspect_activation_recovery
+    inspections = 0
+
+    def inspect_with_transient_safe_replacement(root, **kwargs):
+        nonlocal inspections
+        inspections += 1
+        if inspections == 1:
+            return original_inspect(root, **kwargs)
+        tmp_path.rename(displaced)
+        tmp_path.mkdir()
+        releases = tmp_path / "releases"
+        (releases / old).mkdir(parents=True)
+        (releases / new).mkdir()
+        os.symlink(releases / old, tmp_path / "current", target_is_directory=True)
+        (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={old}\n")
+        os.replace(displaced / ".activation.lock", tmp_path / ".activation.lock")
+        try:
+            return original_inspect(root, **kwargs)
+        finally:
+            os.replace(tmp_path / ".activation.lock", displaced / ".activation.lock")
+            (tmp_path / "current").unlink()
+            (tmp_path / "deployed.env").unlink()
+            (releases / old).rmdir()
+            (releases / new).rmdir()
+            releases.rmdir()
+            tmp_path.rmdir()
+            displaced.rename(tmp_path)
+
+    monkeypatch.setattr(module, "inspect_activation_recovery", inspect_with_transient_safe_replacement)
+
+    def make_held_root_unsafe():
+        (tmp_path / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={new}\n")
+
+    with pytest.raises(module.DeploymentError, match="ACTIVATION_STATE_CHANGED"):
+        module.recover_stale_activation(
+            tmp_path, expected_current=old, target_sha=new,
+            quiesce=make_held_root_unsafe, proc_root=proc,
+        )
+    assert (tmp_path / ".activation.lock").is_file()
+    assert (tmp_path / "deployed.env").read_text() == f"HOPE_DEPLOYED_COMMIT={new}\n"
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux atomic recovery quarantine; exercised in Linux CI")
 def test_stale_recovery_preserves_replacement_raced_at_quarantine(tmp_path, monkeypatch):
     old, new, pid, proc = _interrupted_activation(tmp_path, monkeypatch)
