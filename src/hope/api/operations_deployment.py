@@ -633,7 +633,7 @@ def _activation_recovery_state_fingerprint(
 def _quarantine_activation_lock(
     root: Path, fingerprint: tuple[int, int, int, int, str], *,
     root_descriptor: int | None = None,
-) -> None:
+) -> tuple[str, int, int] | None:
     """Durably archive recovery evidence without conditionally unlinking a pathname."""
     # Persist the unique empty directory before moving the only lease name into
     # it. Linux binds the transition and subsequent read to open directory
@@ -659,7 +659,7 @@ def _quarantine_activation_lock(
         moved_fingerprint = _read_activation_record(destination)[1]
         if moved_fingerprint != fingerprint:
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
-        return
+        return None
 
     owned_root_descriptor = archive_descriptor = None
     try:
@@ -711,11 +711,50 @@ def _quarantine_activation_lock(
                 or (named_archive.st_dev, named_archive.st_ino) != archive_identity
                 or moved_fingerprint != fingerprint):
             raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        return archive_name, *archive_identity
     finally:
         if archive_descriptor is not None:
             os.close(archive_descriptor)
         if owned_root_descriptor is not None:
             os.close(owned_root_descriptor)
+
+
+def _require_recovery_archive_current(
+    root_descriptor: int, archive_proof: tuple[str, int, int],
+    lease_fingerprint: tuple[int, int, int, int, str],
+) -> None:
+    """Require the named archive and retained lease to match quarantine output."""
+    archive_name, expected_device, expected_inode = archive_proof
+    archive_descriptor = None
+    try:
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        archive_descriptor = os.open(archive_name, flags, dir_fd=root_descriptor)
+        held_archive = os.fstat(archive_descriptor)
+        if (not stat.S_ISDIR(held_archive.st_mode)
+                or held_archive.st_uid != os.geteuid()
+                or stat.S_IMODE(held_archive.st_mode) != 0o700
+                or (held_archive.st_dev, held_archive.st_ino)
+                    != (expected_device, expected_inode)
+                or _read_activation_record(
+                    "lease.json", directory_descriptor=archive_descriptor,
+                )[1] != lease_fingerprint):
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+        named_archive = os.stat(
+            archive_name, dir_fd=root_descriptor, follow_symlinks=False,
+        )
+        if (not stat.S_ISDIR(named_archive.st_mode)
+                or (named_archive.st_dev, named_archive.st_ino)
+                    != (expected_device, expected_inode)):
+            raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+    except DeploymentError as exc:
+        if str(exc) == "OPERATIONS_ACTIVATION_STATE_CHANGED":
+            raise
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    except OSError as exc:
+        raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
+    finally:
+        if archive_descriptor is not None:
+            os.close(archive_descriptor)
 
 
 def recover_stale_activation(
@@ -801,7 +840,7 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
             )
             if quarantine_before != state_fingerprint:
                 raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
-        _quarantine_activation_lock(
+        archive_proof = _quarantine_activation_lock(
             root, fingerprint, root_descriptor=directory_descriptor,
         )
         if directory_descriptor is not None:
@@ -819,6 +858,11 @@ def _recover_stale_activation(root: Path, *, expected_current: str, target_sha: 
                     or root_after[:-1] != root_before[:-1]
                     or root_after[-1] != root_before[-1] + 1):
                 raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+            if archive_proof is None:
+                raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED")
+            _require_recovery_archive_current(
+                directory_descriptor, archive_proof, fingerprint,
+            )
     except FileNotFoundError as exc:
         raise DeploymentError("OPERATIONS_ACTIVATION_STATE_CHANGED") from exc
     return {"schema_version": 1, "state": "RECOVERED", "services": "STOPPED",
