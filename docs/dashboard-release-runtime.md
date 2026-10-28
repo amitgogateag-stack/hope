@@ -42,6 +42,11 @@ rollback --target <SHA> --expected-current <SHARED_SHA> --approve-dashboard-chan
 ```
 
 Rollback obtains runtime selection from the durable record, not a new CLI choice.
+The shell dispatcher accepts `HOPE_DASHBOARD_RUNTIME=release` for preflight and
+activation and forwards that explicit mode. Its isolated control bootstrap
+continues to use the trusted shared venv; it never runs an unverified target
+interpreter as root. The shared control environment must remain available even
+when dashboard services use an isolated release environment.
 Interrupted or failed verification remains fenced until explicit recovery.
 An unmerged PR is not an approved integration release: activation still requires
 exact `p0-pit-context` push CI and its bot status marker. Do not loosen that gate.

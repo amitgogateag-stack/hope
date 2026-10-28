@@ -152,7 +152,11 @@ def test_paper_mask_only_creates_nonexecutable_mask_and_retains_it_on_failure(se
     host.paper_properties=Mock(side_effect=[ABSENT,
         "LoadState=masked\nActiveState=inactive\nUnitFileState=masked\nMainPID=0\nFragmentPath=/dev/null\nDropInPaths=\n"])
     host.reload=Mock(side_effect=RuntimeError("reload") if reload_fails else None)
-    monkeypatch.setattr(m.paper_absence_audit,"audit",lambda host:audit_result())
+    def audited(host):
+        assert (layout.root/".activation.guard").exists()
+        with m.paper_absence_audit.deployment_view(layout.root):pass
+        return audit_result()
+    monkeypatch.setattr(m.paper_absence_audit,"audit",audited)
     if reload_fails:
         with pytest.raises(RuntimeError,match="reload"):m.install_paper_mask(layout,host,reviewed=True)
     else:assert m.install_paper_mask(layout,host,reviewed=True)["activation_authorized"] is False

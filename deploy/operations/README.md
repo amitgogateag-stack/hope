@@ -14,6 +14,10 @@ guarded dashboard pointer, durable recovery journal and boot/request fence.
 Do not use the full `activate_release.py` workflow for that purpose: it starts
 PAPER. Reviewed full activation is blocked while dashboard overrides remain;
 restore them to the shared release before any full activation/schema change.
+The read-only AWS readiness probe accepts dashboard-only mode only when systemd
+reports the canonical web/export `90-hope-dashboard-only.conf` paths and their
+bytes exactly match the selected commit. Extra, relocated, writable, replaced,
+or non-dashboard overrides remain fail-closed readiness blockers.
 
 ## Acceptance prerequisites and authorization
 

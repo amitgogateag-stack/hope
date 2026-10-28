@@ -137,8 +137,9 @@ def _validate_record(value):
 
 
 def _record(layout):
-    if not layout.journal.exists() and not layout.journal.is_symlink():return None
-    return _validate_record(_json(layout.journal))
+    path=Path(layout.journal)
+    if not path.exists() and not path.is_symlink():return None
+    return _validate_record(_json(path))
 
 
 def _runtime_mode(layout,sha):
@@ -412,6 +413,9 @@ def install_paper_mask(layout,host,*,reviewed=False):
     operator action and cannot be an automatic error-recovery side effect.
     """
     _require(reviewed,"HOST_REVIEW_REQUIRED")
+    # Bootstrap the persistent guard if this is the host's first activation
+    # operation. The read-only audit deliberately cannot create this file.
+    with operations._activation_guard(layout.root):_idle(layout)
     # The diagnostic takes its own deployment guard. Run it before acquiring
     # ours, then recheck canonical absence under the mutation guard below.
     audit=paper_absence_audit.audit(host)

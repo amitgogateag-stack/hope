@@ -1,4 +1,4 @@
-"""Run only from a reviewed immutable release using the existing HOPE venv."""
+"""Trusted shared-venv control bootstrap; service runtime is selected separately."""
 from pathlib import Path
 import sys
 
