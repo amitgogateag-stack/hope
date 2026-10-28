@@ -1133,6 +1133,7 @@ def test_canonical_dropin_replacement_during_http_window_fails_closed(
             status_probe=replace_during_status,
             dashboard_release_probe=_dashboard_release(),
             paper_status_probe=_paper_status(), release_probe=_release_ok,
+            snapshot_probe=_snapshot(),
             unit_file_probe=lambda *_args: True,
         )
 
@@ -1218,6 +1219,7 @@ def test_default_unit_matcher_uses_system_and_release_trust_anchors(
         EXPECTED, root=root, now=NOW, systemd_probe=_units(),
         status_probe=_status(), dashboard_release_probe=_dashboard_release(),
         paper_status_probe=_paper_status(),
+        snapshot_probe=_snapshot(),
         release_probe=_release_ok,
     )
 
