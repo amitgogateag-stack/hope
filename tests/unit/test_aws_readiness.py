@@ -1023,6 +1023,129 @@ def test_unreviewed_hope_unit_configuration_cannot_claim_readiness(
     assert "UNIT_CONFIGURATION_MISMATCH:" + unit in report["blockers"]
 
 
+def test_exact_canonical_dashboard_dropins_can_claim_readiness(tmp_path):
+    base = _units()
+    canonical = {
+        unit: f"/etc/systemd/system/{unit}.d/90-hope-dashboard-only.conf"
+        for unit in (
+            "hope-ops-dashboard-web.service",
+            "hope-ops-dashboard-export.service",
+        )
+    }
+    observed = []
+
+    def activated_probe(unit, *, timeout):
+        values = base(unit, timeout=timeout)
+        if unit in canonical:
+            values = {**values, "DropInPaths": canonical[unit]}
+        return values
+
+    def authenticate(installed, unit, deployed_sha):
+        observed.append((installed, unit, deployed_sha))
+        return True
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=activated_probe, status_probe=_status(),
+        release_probe=_release_ok, dropin_file_probe=authenticate,
+    )
+
+    assert report["ready"] is True
+    assert observed == [
+        (Path(path), unit, EXPECTED) for unit, path in canonical.items()
+    ]
+
+
+def test_canonical_dashboard_dropin_requires_exact_commit_bound_bytes(
+    tmp_path, monkeypatch,
+):
+    from hope.api import dashboard_activation
+
+    unit = "hope-ops-dashboard-web.service"
+    installed = tmp_path / "90-hope-dashboard-only.conf"
+    monkeypatch.setattr(
+        aws_readiness, "DASHBOARD_DROPIN_PATHS", {unit: installed},
+    )
+    expected = dashboard_activation._configs(
+        dashboard_activation.Layout(), EXPECTED,
+    )[unit].encode()
+    installed.write_bytes(expected)
+    assert aws_readiness._canonical_dashboard_dropin_matches(
+        installed, unit, EXPECTED, installed_root=tmp_path,
+    ) is True
+
+    installed.write_bytes(expected.replace(EXPECTED.encode(), ("c" * 40).encode()))
+    assert aws_readiness._canonical_dashboard_dropin_matches(
+        installed, unit, EXPECTED, installed_root=tmp_path,
+    ) is False
+
+
+def test_canonical_dropin_replacement_during_http_window_fails_closed(
+    tmp_path, monkeypatch,
+):
+    from hope.api import dashboard_activation
+
+    root = _root(tmp_path / "deployment")
+    unit = "hope-ops-dashboard-web.service"
+    installed = tmp_path / "90-hope-dashboard-only.conf"
+    installed.write_text(
+        dashboard_activation._configs(
+            dashboard_activation.Layout(), EXPECTED,
+        )[unit],
+    )
+    monkeypatch.setattr(
+        aws_readiness, "DASHBOARD_DROPIN_PATHS", {unit: installed},
+    )
+    monkeypatch.setattr(
+        aws_readiness, "_require_trusted_unit_storage",
+        lambda *_args, **_kwargs: None,
+    )
+    base = _units()
+
+    def activated_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        if observed_unit == unit:
+            values = {**values, "DropInPaths": str(installed)}
+        return values
+
+    def replace_during_status(url, *, timeout):
+        replacement = tmp_path / "replacement.conf"
+        replacement.write_bytes(installed.read_bytes())
+        replacement.replace(installed)
+        return _status()(url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_UNIT_CONFIGURATION_CHANGED$"):
+        aws_readiness.inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=activated_probe,
+            status_probe=replace_during_status,
+            dashboard_release_probe=_dashboard_release(),
+            paper_status_probe=_paper_status(), release_probe=_release_ok,
+            unit_file_probe=lambda *_args: True,
+        )
+
+
+def test_canonical_dropin_plus_extra_override_cannot_claim_readiness(tmp_path):
+    base = _units()
+    unit = "hope-ops-dashboard-web.service"
+    canonical = f"/etc/systemd/system/{unit}.d/90-hope-dashboard-only.conf"
+
+    def extra_override_probe(observed_unit, *, timeout):
+        values = base(observed_unit, timeout=timeout)
+        if observed_unit == unit:
+            values = {
+                **values,
+                "DropInPaths": canonical + " /run/systemd/system/attacker.conf",
+            }
+        return values
+
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=extra_override_probe, status_probe=_status(),
+        release_probe=_release_ok,
+    )
+    assert "UNIT_CONFIGURATION_MISMATCH:" + unit in report["blockers"]
+
+
 def test_loaded_unit_requiring_daemon_reload_cannot_claim_readiness(tmp_path):
     base = _units()
 
