@@ -69,6 +69,10 @@ prerequisites are unavailable, leave PAPER disabled and report UNAVAILABLE.
    the held deployment-root descriptor, requires it to name the selected
    release, and revalidates the exact inode and contents after systemd and HTTP
    observation. A mismatch or concurrent replacement cannot report READY.
+   It also requires the private `/operations.json` heartbeat from the running
+   PAPER worker to name that release, be current and schema-compatible, retain
+   the PAPER-only/LIVE-disabled contract, and be no more than five minutes old.
+   An active service without matching runtime identity cannot report READY.
    Python and dynamic-loader control variables are not configuration: the reviewed
    units remove them after system-manager and environment-file variables are
    assembled, then supply the exact release `PYTHONPATH` directly to the

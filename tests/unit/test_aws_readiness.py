@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import json
 import os
 from pathlib import Path
 import re
@@ -113,8 +114,29 @@ def _dashboard_release(commit: str = EXPECTED, **changes):
     return lambda _url, *, timeout=5: value
 
 
+def _paper_status(commit: str = EXPECTED, **changes):
+    value = {
+        "schema_version": 1,
+        "generated_at": "2026-10-24T22:59:00+00:00",
+        "state": "CURRENT",
+        "last_success_at": "2026-10-24T22:59:00+00:00",
+        "paper_only": True,
+        "live_enabled": False,
+        "error_code": None,
+        "deployed_commit": commit,
+        "schema_compatibility": "COMPATIBLE",
+        "cycles_succeeded": 1,
+        "cycles_failed": 0,
+        "jobs_executed": 0,
+        "jobs_skipped": 0,
+        **changes,
+    }
+    return lambda _url, *, timeout=5: value
+
+
 def inspect_aws_readiness(*args, **kwargs):
     kwargs.setdefault("dashboard_release_probe", _dashboard_release())
+    kwargs.setdefault("paper_status_probe", _paper_status())
     kwargs.setdefault("unit_file_probe", lambda _installed, _reviewed: True)
     return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
@@ -561,6 +583,71 @@ def test_healthy_old_dashboard_process_cannot_claim_release_readiness(tmp_path):
     }
 
 
+def test_paper_runtime_identity_is_required_for_readiness(tmp_path):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        paper_status_probe=_paper_status("a" * 40),
+    )
+    assert report["ready"] is False
+    assert "PAPER_RUNTIME_IDENTITY_UNVERIFIED" in report["blockers"]
+
+
+@pytest.mark.parametrize(("changes", "blocker"), (
+    ({"paper_only": False}, "PAPER_RUNTIME_SAFETY_CONTRACT_MISMATCH"),
+    ({"live_enabled": True}, "PAPER_RUNTIME_SAFETY_CONTRACT_MISMATCH"),
+    ({"state": "STOPPED"}, "PAPER_RUNTIME_NOT_CURRENT"),
+    ({"state": "HALTED"}, "PAPER_RUNTIME_NOT_CURRENT"),
+    ({"error_code": "PAPER_SERVICE_CYCLE_FAILED"}, "PAPER_RUNTIME_NOT_CURRENT"),
+    ({"cycles_succeeded": 0}, "PAPER_RUNTIME_STATUS_INVALID"),
+    ({"schema_compatibility": "INCOMPATIBLE"},
+     "PAPER_RUNTIME_SCHEMA_INCOMPATIBLE"),
+))
+def test_paper_runtime_must_attest_current_paper_only_safety(
+    tmp_path, changes, blocker,
+):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        paper_status_probe=_paper_status(**changes),
+    )
+    assert report["ready"] is False
+    assert blocker in report["blockers"]
+
+
+@pytest.mark.parametrize(("changes", "blocker"), (
+    ({"generated_at": "not-a-time"}, "PAPER_RUNTIME_TIMESTAMP_INVALID"),
+    ({"generated_at": "2026-10-24T23:01:00+00:00"},
+     "PAPER_RUNTIME_HEARTBEAT_FROM_FUTURE"),
+    ({
+        "generated_at": "2026-10-24T22:54:59+00:00",
+        "last_success_at": "2026-10-24T22:54:59+00:00",
+    }, "PAPER_RUNTIME_HEARTBEAT_STALE"),
+))
+def test_paper_runtime_heartbeat_must_be_valid_and_fresh(
+    tmp_path, changes, blocker,
+):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        paper_status_probe=_paper_status(**changes),
+    )
+    assert report["ready"] is False
+    assert blocker in report["blockers"]
+
+
+def test_paper_runtime_schema_is_exact_and_sanitized(tmp_path):
+    report = inspect_aws_readiness(
+        EXPECTED, root=_root(tmp_path), now=NOW,
+        systemd_probe=_units(), status_probe=_status(), release_probe=_release_ok,
+        paper_status_probe=_paper_status(secret="must-not-be-reported"),
+    )
+    assert report["ready"] is False
+    assert "PAPER_RUNTIME_STATUS_INVALID" in report["blockers"]
+    assert "secret" not in report["paper_status"]
+    assert "error_code" not in report["paper_status"]
+
+
 def test_dashboard_release_identity_is_exact_and_sanitized(tmp_path):
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
@@ -596,6 +683,7 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
         systemd_probe=_units(missing="hope-paper.service"),
         release_probe=_release_ok,
         dashboard_release_probe=_dashboard_release(deployed),
+        paper_status_probe=_paper_status(deployed),
         status_probe=lambda _, *, timeout: {
             "schema_version": 1,
             "service": "RUNNING",
@@ -686,6 +774,32 @@ def test_status_probe_uses_fixed_bounded_curl_without_ambient_credentials():
             "LC_ALL": "C",
         },
     }
+
+
+def test_paper_status_probe_is_pinned_and_bounded():
+    observed = []
+    body = json.dumps(_paper_status()(
+        "http://127.0.0.1:8788/operations.json", timeout=5,
+    ), separators=(",", ":"))
+
+    def capture(command, **kwargs):
+        observed.append((command, kwargs))
+        return body + "\n200"
+
+    document = aws_readiness._paper_status_probe(
+        "http://127.0.0.1:8788/operations.json", capture=capture,
+    )
+    assert document["deployed_commit"] == EXPECTED
+    command, kwargs = observed[0]
+    assert command[-1] == "http://127.0.0.1:8788/operations.json"
+    assert kwargs["timeout"] == 5
+    assert kwargs["max_output"] == aws_readiness.MAX_PAPER_STATUS_BYTES + 4
+    assert set(kwargs["env"]) == {"PATH", "LANG", "LC_ALL"}
+
+    with pytest.raises(ReadinessError, match="^AWS_PAPER_STATUS_URL_NOT_APPROVED$"):
+        aws_readiness._paper_status_probe(
+            "http://example.invalid/operations.json", capture=capture,
+        )
 
 
 def test_dashboard_release_probe_is_pinned_and_more_tightly_bounded():
@@ -967,6 +1081,7 @@ def test_default_unit_matcher_uses_system_and_release_trust_anchors(
     report = aws_readiness.inspect_aws_readiness(
         EXPECTED, root=root, now=NOW, systemd_probe=_units(),
         status_probe=_status(), dashboard_release_probe=_dashboard_release(),
+        paper_status_probe=_paper_status(),
         release_probe=_release_ok,
     )
 
@@ -1524,7 +1639,7 @@ def test_runtime_revalidation_has_one_total_deadline(tmp_path):
         )
 
 
-def test_dashboard_identity_and_status_share_one_total_deadline(tmp_path):
+def test_loopback_documents_share_one_total_deadline(tmp_path):
     clock = [100.0]
     observed = []
 
@@ -1540,14 +1655,21 @@ def test_dashboard_identity_and_status_share_one_total_deadline(tmp_path):
         observed.append(("status", timeout))
         return _status()(_url, timeout=timeout)
 
+    def paper_status_probe(_url, *, timeout):
+        observed.append(("paper-status", timeout))
+        return _paper_status()(_url, timeout=timeout)
+
     report = inspect_aws_readiness(
         EXPECTED, root=_root(tmp_path), now=NOW,
         systemd_probe=_units(), status_probe=status_probe,
+        paper_status_probe=paper_status_probe,
         dashboard_release_probe=release_probe, release_probe=_release_ok,
         monotonic=monotonic,
     )
     assert report["ready"] is True
-    assert observed == [("dashboard-release", 5), ("status", 1)]
+    assert observed == [
+        ("dashboard-release", 5), ("paper-status", 1), ("status", 1),
+    ]
 
 
 def test_exhausted_dashboard_identity_deadline_prevents_status_probe(tmp_path):
@@ -1561,7 +1683,9 @@ def test_exhausted_dashboard_identity_deadline_prevents_status_probe(tmp_path):
         clock[0] += timeout
         return _dashboard_release()(_url, timeout=timeout)
 
-    with pytest.raises(ReadinessError, match="^AWS_STATUS_OBSERVATION_TIMEOUT$"):
+    with pytest.raises(
+        ReadinessError, match="^AWS_PAPER_STATUS_OBSERVATION_TIMEOUT$",
+    ):
         inspect_aws_readiness(
             EXPECTED, root=_root(tmp_path), now=NOW,
             systemd_probe=_units(),

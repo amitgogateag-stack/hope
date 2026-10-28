@@ -1,7 +1,7 @@
 """Read-only AWS host reconciliation for a reviewed HOPE release.
 
 This module deliberately observes only public filesystem metadata, fixed systemd
-properties, and the bounded loopback operations status document.  It never
+properties, and bounded loopback status documents.  It never
 loads environment files, imports a PAPER factory, or changes host state.
 """
 
@@ -26,6 +26,7 @@ from hope.api.operations_deployment import DeploymentError, inspect_release
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MAX_STATUS_BYTES = 16_384
+MAX_PAPER_STATUS_BYTES = 8_192
 MAX_DASHBOARD_RELEASE_BYTES = 1_024
 MAX_SYSTEMD_BYTES = 4_096
 MAX_UNIT_BYTES = 16_384
@@ -630,6 +631,19 @@ def _dashboard_release_probe(
     )
 
 
+def _paper_status_probe(
+    url: str,
+    *,
+    timeout: float = LOOPBACK_OBSERVATION_TIMEOUT,
+    capture: Callable[..., str] = bounded_capture,
+) -> dict[str, object]:
+    return _loopback_json_probe(
+        url, approved_url="http://127.0.0.1:8788/operations.json",
+        max_bytes=MAX_PAPER_STATUS_BYTES, error_scope="PAPER_STATUS",
+        timeout=timeout, capture=capture,
+    )
+
+
 def inspect_aws_readiness(
     expected_sha: str,
     *,
@@ -637,6 +651,7 @@ def inspect_aws_readiness(
     now: datetime | None = None,
     systemd_probe: Callable[..., dict[str, str]] = _systemd_probe,
     status_probe: Callable[..., dict[str, object]] = _status_probe,
+    paper_status_probe: Callable[..., dict[str, object]] = _paper_status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
     unit_file_probe: Callable[[Path, Path], bool] | None = None,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
@@ -671,6 +686,7 @@ def inspect_aws_readiness(
                 expected_sha, root=root, observed_at=observed_at,
                 root_descriptor=root_descriptor,
                 systemd_probe=systemd_probe, status_probe=status_probe,
+                paper_status_probe=paper_status_probe,
                 dashboard_release_probe=dashboard_release_probe,
                 unit_file_probe=unit_file_probe,
                 release_probe=release_probe, status_url=status_url,
@@ -690,6 +706,7 @@ def _inspect_stable_readiness(
     observed_at: datetime,
     systemd_probe: Callable[..., dict[str, str]],
     status_probe: Callable[..., dict[str, object]],
+    paper_status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
     unit_file_probe: Callable[[Path, Path], bool] | None,
     release_probe: Callable[[Path, str], dict[str, object]],
@@ -823,6 +840,75 @@ def _inspect_stable_readiness(
 
     remaining = loopback_deadline - monotonic()
     if not math.isfinite(remaining) or remaining <= 0:
+        raise ReadinessError("AWS_PAPER_STATUS_OBSERVATION_TIMEOUT")
+    paper_status = paper_status_probe(
+        "http://127.0.0.1:8788/operations.json", timeout=remaining,
+    )
+    paper_fields = {
+        "schema_version", "generated_at", "state", "last_success_at",
+        "paper_only", "live_enabled", "error_code", "deployed_commit",
+        "schema_compatibility", "cycles_succeeded", "cycles_failed",
+        "jobs_executed", "jobs_skipped",
+    }
+    failure_fields = {"last_failure_at", "last_failure_code"}
+    safe_paper_status = {
+        key: paper_status[key]
+        for key in (
+            "schema_version", "generated_at", "state", "last_success_at",
+            "paper_only", "live_enabled", "deployed_commit",
+            "schema_compatibility", "cycles_succeeded", "cycles_failed",
+            "jobs_executed", "jobs_skipped",
+        )
+        if key in paper_status
+    }
+    paper_keys = set(paper_status)
+    if ((paper_keys != paper_fields
+            and paper_keys != paper_fields | failure_fields)
+            or type(paper_status.get("schema_version")) is not int
+            or paper_status.get("schema_version") != 1
+            or any(
+                type(paper_status.get(key)) is not int
+                or not 0 <= paper_status[key] <= 9_007_199_254_740_991
+                for key in (
+                    "cycles_succeeded", "cycles_failed", "jobs_executed",
+                    "jobs_skipped",
+                )
+            )
+            or paper_status["cycles_succeeded"] < 1):
+        blockers.append("PAPER_RUNTIME_STATUS_INVALID")
+    if paper_status.get("deployed_commit") != deployed_sha:
+        blockers.append("PAPER_RUNTIME_IDENTITY_UNVERIFIED")
+    if (paper_status.get("paper_only") is not True
+            or paper_status.get("live_enabled") is not False):
+        blockers.append("PAPER_RUNTIME_SAFETY_CONTRACT_MISMATCH")
+    if (paper_status.get("state") != "CURRENT"
+            or paper_status.get("error_code") is not None):
+        blockers.append("PAPER_RUNTIME_NOT_CURRENT")
+    if paper_status.get("schema_compatibility") != "COMPATIBLE":
+        blockers.append("PAPER_RUNTIME_SCHEMA_INCOMPATIBLE")
+    try:
+        generated = datetime.fromisoformat(
+            paper_status["generated_at"].replace("Z", "+00:00"),
+        )
+        successful = datetime.fromisoformat(
+            paper_status["last_success_at"].replace("Z", "+00:00"),
+        )
+        if (generated.tzinfo is None or successful.tzinfo is None
+                or successful > generated):
+            raise ValueError
+        generated = generated.astimezone(timezone.utc)
+        successful = successful.astimezone(timezone.utc)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        blockers.append("PAPER_RUNTIME_TIMESTAMP_INVALID")
+    else:
+        if generated > observed_at + timedelta(seconds=30):
+            blockers.append("PAPER_RUNTIME_HEARTBEAT_FROM_FUTURE")
+        elif (observed_at - generated > timedelta(minutes=5)
+                or observed_at - successful > timedelta(minutes=5)):
+            blockers.append("PAPER_RUNTIME_HEARTBEAT_STALE")
+
+    remaining = loopback_deadline - monotonic()
+    if not math.isfinite(remaining) or remaining <= 0:
         raise ReadinessError("AWS_STATUS_OBSERVATION_TIMEOUT")
     status = status_probe(status_url, timeout=remaining)
     safe_status = {
@@ -906,6 +992,7 @@ def _inspect_stable_readiness(
         "ready": not blockers,
         "blockers": blockers,
         "dashboard_release": safe_dashboard_release,
+        "paper_status": safe_paper_status,
         "operations_status": safe_status,
         "units": units,
     }

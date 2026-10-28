@@ -64,11 +64,12 @@ acquiring the shared fence, checked immediately after fence acquisition, and
 checked again before reporting. Canonical and lexical paths must agree, so a
 symlinked ancestor cannot redirect the locked directory away from the pathname
 used for observations.
-The complete release, systemd and dashboard observation holds the deployment
-activation fence in shared mode. A reviewed activation holds the exclusive side,
+The complete release, systemd, dashboard and PAPER-runtime observation holds the
+deployment activation fence in shared mode. A reviewed activation holds the exclusive side,
 so the probe fails closed instead of combining a pre-switch release with
 post-switch service or dashboard state. It reads only fixed systemd properties
-and the private loopback `8788/release.json` and `8788/status.json` documents,
+and the private loopback `8788/release.json`, `8788/operations.json`, and
+`8788/status.json` documents,
 emits only allow-listed fields, and returns 3 while readiness blockers remain.
 Both sides authenticate the same canonical deployment path before locking. The
 exclusive mutation side also requires the direct parent and deployment root to
@@ -114,6 +115,11 @@ exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot
 claim readiness after the `current` pointer advances. It does not read configuration values, query
 PostgreSQL, install units, restart services, deploy a release, or execute PAPER.
+The PAPER worker's sanitized runtime heartbeat must independently name that same
+commit, remain `CURRENT` and schema-compatible, preserve `paper_only=true` and
+`live_enabled=false`, and carry a successful observation no more than five
+minutes old. An active process from an older release, a stopped or halted
+worker, or a stale/future heartbeat therefore cannot claim readiness.
 Operational readiness requires PostgreSQL, both web services, the export timer,
 and PAPER to be enabled for reboot persistence. Long-running services must be
 both active and `running`; an `active/exited` unit is not a worker. The oneshot
