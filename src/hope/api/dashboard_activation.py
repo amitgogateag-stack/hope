@@ -118,8 +118,13 @@ def _save(path,value,mode=0o644):
 
 
 def _validate_record(value):
-    _require(set(value)=={"schema","target","shared","previous","phase","backup_id",
-        "timer_active","pid","boot","ticks"} and value["schema"]=="hope.dashboard-activation.v1",
+    fields={"schema","target","shared","previous","phase","backup_id",
+        "timer_active","pid","boot","ticks"}
+    version=value.get("schema")
+    _require((version=="hope.dashboard-activation.v1" and set(value)==fields) or
+        (version=="hope.dashboard-activation.v2" and set(value)==fields|{"runtime","previous_runtime"}
+         and value["runtime"] in {"shared","release"} and value["previous_runtime"] in {"shared","release"}
+         and (value["previous"] is not None or value["previous_runtime"]=="shared")),
         "RECORD_INVALID")
     _sha(value["target"]);_sha(value["shared"])
     if value["previous"] is not None:_sha(value["previous"])
@@ -134,6 +139,21 @@ def _validate_record(value):
 def _record(layout):
     if not layout.journal.exists() and not layout.journal.is_symlink():return None
     return _validate_record(_json(layout.journal))
+
+
+def _runtime_mode(layout,sha):
+    record=_record(layout)
+    if record is not None:
+        if sha==record["target"]:return record.get("runtime","shared")
+        if sha==record["previous"]:return record.get("previous_runtime","shared")
+    return "shared"
+
+
+def _python(layout,sha,mode=None):
+    mode=_runtime_mode(layout,sha) if mode is None else mode
+    _require(mode in {"shared","release"},"RUNTIME_MODE_INVALID")
+    return (layout.root/"release-venvs"/_sha(sha)/"bin/python"
+        if mode=="release" else layout.python)
 
 
 def _owner_alive(record):
@@ -165,13 +185,14 @@ def _point(layout,sha):
 
 def _legacy_configs(layout,sha):
     base=layout.root/"dashboard-current"
+    python=_python(layout,sha)
     common=(f"[Service]\nWorkingDirectory={base}\nEnvironment=PYTHONPATH={base}/src\n"
-        f"ExecStartPre={layout.python} -B -s -P -m hope.api.dashboard_activation gate --target {sha}\nExecStart=\n")
+        f"ExecStartPre={python} -B -s -P -m hope.api.dashboard_activation gate --target {sha}\nExecStart=\n")
     return {
-        WEB:common+(f"ExecStart={layout.python} -B -s -P -m hope.api.dashboard_server --port 8788 "
+        WEB:common+(f"ExecStart={python} -B -s -P -m hope.api.dashboard_server --port 8788 "
             f"--preview {base}/docs/dashboard/preview.html --snapshot {layout.snapshot} "
             f"--operations-status-file {layout.health} --deployed-commit {sha} --activation-gate\n"),
-        EXPORT:common+(f"ExecStart={layout.python} -B -s -P -m hope.api.dashboard_snapshot --output {layout.snapshot} "
+        EXPORT:common+(f"ExecStart={python} -B -s -P -m hope.api.dashboard_snapshot --output {layout.snapshot} "
             f"--deployed-commit {sha}\n"),
     }
 
@@ -182,13 +203,14 @@ def _configs(layout,sha):
     Environment= cannot override UnsetEnvironment in a base unit. /usr/bin/env
     adds only this reviewed import path after systemd has scrubbed ambient input.
     """
-    path=f"PYTHONPATH={layout.root}/dashboard-current/src"
+    path=f"PYTHONPATH={layout.root/'dashboard-current'}/src"
+    python=_python(layout,sha)
     unset=("UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS "
         "PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR "
         "LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT\n")
     return {unit:payload.replace(f"Environment={path}\n",unset)
-        .replace(f"ExecStartPre={layout.python}",f"ExecStartPre=/usr/bin/env {path} {layout.python}")
-        .replace(f"ExecStart={layout.python}",f"ExecStart=/usr/bin/env {path} {layout.python}")
+        .replace(f"ExecStartPre={python}",f"ExecStartPre=/usr/bin/env {path} {python}")
+        .replace(f"ExecStart={python}",f"ExecStart=/usr/bin/env {path} {python}")
         for unit,payload in _legacy_configs(layout,sha).items()}
 
 
@@ -232,7 +254,8 @@ def _backup(layout,record):
         try:_validate_record(previous)
         except (KeyError,TypeError,RuntimeError):raise RuntimeError("DASHBOARD_BACKUP_INVALID") from None
         _require(previous["phase"]=="COMMITTED" and previous["target"]==record["previous"]
-            and previous["shared"]==record["shared"],"BACKUP_INVALID")
+            and previous["shared"]==record["shared"]
+            and previous.get("runtime","shared")==record.get("previous_runtime","shared"),"BACKUP_INVALID")
     return value
 
 
@@ -264,6 +287,10 @@ def runtime_gate(layout,target):
     _require(expected==_sha(target) and _pointer(layout,"current")==record["shared"]
         and _pointer(layout,"dashboard-current")==target,"GATE_POINTER_MISMATCH")
     _check_configs(layout,target)
+    if _runtime_mode(layout,target)=="release":
+        python=_python(layout,target)
+        _require(Path(sys.executable)==python and Path(sys.prefix)==python.parent.parent,
+            "RUNTIME_IDENTITY_MISMATCH")
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
     return {"status":"GATE_PASSED","dashboard_commit":target,
         "paper_commit":record["shared"],"execution_authorized":False}
@@ -286,6 +313,13 @@ def _rollback(layout,record,host):
     _require(_pointer(layout,"current")==record["shared"],"SHARED_POINTER_CHANGED")
     # Validate the prior code/runtime/database before any attempt to restart it.
     host.rollback_preflight(record["previous"] or record["shared"])
+    # A prior shared-runtime release may only understand the original journal.
+    # Recovery needs only the destination once rollback starts; retain the
+    # original schema for its startup/request fences. Release-runtime priors
+    # necessarily understand v2 and keep both runtime identities.
+    if record.get("previous_runtime")=="shared":
+        record.pop("runtime");record.pop("previous_runtime")
+        record["schema"]="hope.dashboard-activation.v1"
     record["phase"]="ROLLING_BACK";_save(layout.journal,record)
     try:
         host.stop()
@@ -311,8 +345,9 @@ def _rollback(layout,record,host):
         raise
 
 
-def activate(layout,host,*,target,shared,ci_run,ci_attempt):
+def activate(layout,host,*,target,shared,ci_run,ci_attempt,runtime="shared"):
     target,shared=_sha(target),_sha(shared)
+    _require(runtime in {"shared","release"},"RUNTIME_MODE_INVALID")
     with operations._activation_guard(layout.root):
         _idle(layout)
         previous_record=_record(layout)
@@ -324,11 +359,15 @@ def activate(layout,host,*,target,shared,ci_run,ci_attempt):
               and previous_record["shared"]==shared)),"EXPECTED_POINTER_MISMATCH")
         _require(target!=(previous or shared),"ALREADY_ACTIVE")
         previous_configs=_check_configs(layout,previous)
+        host.target_runtime=runtime
         timer_active=host.preflight(target,shared,previous,ci_run,ci_attempt)
         boot,ticks=operations._process_identity(os.getpid())
         record=dict(schema="hope.dashboard-activation.v1",target=target,shared=shared,
             previous=previous,phase="PREPARED",backup_id=uuid4().hex,timer_active=timer_active,
             pid=os.getpid(),boot=boot,ticks=ticks)
+        previous_runtime=previous_record.get("runtime","shared") if previous_record else "shared"
+        if runtime!="shared" or previous_runtime!="shared":
+            record.update(schema="hope.dashboard-activation.v2",runtime=runtime,previous_runtime=previous_runtime)
         _save(layout.root/("dashboard-backup-"+record["backup_id"]+".json"),
             {"previous_record":previous_record,"configs":previous_configs},0o600)
         _save(layout.journal,record)
@@ -364,6 +403,46 @@ def rollback(layout,host,*,target,shared):
         _rollback(layout,record,host)
         return {"status":"DASHBOARD_ROLLED_BACK","dashboard_commit":record["previous"] or shared,
             "paper_activated":False}
+
+
+def install_paper_mask(layout,host,*,reviewed=False):
+    """Explicitly reviewed prerequisite only; never install executable PAPER code.
+
+    Keep the mask on any reload/verification failure. Removing it is a separate
+    operator action and cannot be an automatic error-recovery side effect.
+    """
+    _require(reviewed,"HOST_REVIEW_REQUIRED")
+    # The diagnostic takes its own deployment guard. Run it before acquiring
+    # ours, then recheck canonical absence under the mutation guard below.
+    audit=paper_absence_audit.audit(host)
+    checks=audit["checks"]
+    _require(checks.get("canonical_unit")=="ABSENT_REQUIRES_REVIEW"
+        and all(checks.get(key,{}).get("status")=="REVIEW_REQUIRED"
+            for key in ("processes","systemd","schedules","deployment")),"PAPER_AUDIT_UNVERIFIED")
+    with operations._activation_guard(layout.root):
+        _idle(layout)
+        record=_record(layout)
+        _require(record is None or record["phase"]=="COMMITTED","RECOVERY_REQUIRED")
+        _trusted(layout.units,directory=True)
+        path=layout.units/PAPER
+        _require(not path.exists() and not path.is_symlink(),"PAPER_UNIT_ALREADY_EXISTS")
+        _require(not (layout.units/(PAPER+".d")).exists()
+            and not (layout.units/(PAPER+".d")).is_symlink(),"PAPER_DROPINS_REQUIRE_REVIEW")
+        _require(paper_absence_audit.unit_state(host.paper_properties())=="ABSENT_REQUIRES_REVIEW",
+            "PAPER_ABSENCE_CHANGED")
+        host.legacy_safe()
+        # Exclusive creation: a concurrent installer cannot be overwritten.
+        os.symlink("/dev/null",path);_sync(layout.units)
+        host.reload();host.paper_safe()
+        output=host.paper_properties()
+        _require(os.readlink(path)=="/dev/null"
+            and paper_absence_audit.unit_state(output)=="INSTALLED_INACTIVE"
+            and dict(line.split("=",1) for line in output.splitlines())==dict(
+                LoadState="masked",ActiveState="inactive",UnitFileState="masked",
+                MainPID="0",FragmentPath="/dev/null",DropInPaths=""),
+            "PAPER_MASK_UNVERIFIED")
+        return {"status":"PAPER_MASK_INSTALLED","execution_authorized":False,
+            "activation_authorized":False,"paper_activated":False}
 
 
 class Host:
@@ -467,10 +546,14 @@ class Host:
 
     def runtime(self,release,*,new=False):
         layout=self.layout
-        _trusted(layout.python.resolve(strict=True))
-        for path in (layout.root/"venv",layout.root/"venv/bin"):_trusted(path,directory=True)
+        mode=getattr(self,"target_runtime","shared") if new else _runtime_mode(layout,release.name)
+        python=_python(layout,release.name,mode)
+        environment=python.parent.parent
+        if mode=="release":_trusted(layout.root/"release-venvs",directory=True)
+        _trusted(python.resolve(strict=True))
+        for path in (environment,python.parent):_trusted(path,directory=True)
         count=0;started=time.monotonic()
-        for directory,dirs,files in os.walk(layout.root/"venv",followlinks=False):
+        for directory,dirs,files in os.walk(environment,followlinks=False):
             count+=len(dirs)+len(files)
             _require(count<=50000 and time.monotonic()-started<=30,"RUNTIME_SCAN_LIMIT")
             for name in (*dirs,*files):
@@ -478,17 +561,22 @@ class Host:
                 if path.is_symlink():
                     _require(path.lstat().st_uid==OWNER,"UNTRUSTED_RUNTIME_LINK")
                     path=path.resolve(strict=True)
+                    for parent in path.parents:
+                        if parent==layout.root:break
+                        _trusted(parent,directory=True)
                 _trusted(path,directory=path.is_dir())
         code=("import sys;from pathlib import Path;import sqlalchemy,psycopg;"
             "from hope.api import dashboard_server,dashboard_snapshot;"
             +("from hope.api import dashboard_readiness,dashboard_activation;" if new else "")+
             "from hope.api.dashboard_server import _verified_snapshot;"
             "assert sys.version_info[:2]==(3,13);"
+            f"assert Path(sys.executable)==Path({str(python)!r});"
+            f"assert Path(sys.prefix)==Path({str(environment)!r});"
             f"assert Path(dashboard_server.__file__).resolve().is_relative_to(Path({str(release)!r}));"
             f"Path({str(release/'docs/dashboard/preview.html')!r}).read_bytes();"
             +(f"_verified_snapshot(Path({str(layout.snapshot)!r}));" if new else "")+
             "print('DASHBOARD_RUNTIME_VERIFIED')")
-        result=self.run("runuser","--user","hope-dashboard","--",str(layout.python),"-B","-s","-P","-c",code,
+        result=self.run("runuser","--user","hope-dashboard","--",str(python),"-B","-s","-P","-c",code,
             env={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","PYTHONPATH":str(release/"src"),"PYTHONDONTWRITEBYTECODE":"1","PYTHONNOUSERSITE":"1"})
         _require(result.strip()=="DASHBOARD_RUNTIME_VERIFIED","RUNTIME_UNVERIFIED")
 
@@ -538,7 +626,15 @@ class Host:
             and lines[0].split()[3]=="127.0.0.1:8788"
             and re.search(r"\bpid="+pid+r",",lines[0]),"PRIVATE_LISTENER_MISMATCH")
         executable=Path("/proc")/pid/"exe"
-        _require(executable.resolve(strict=True)==self.layout.python.resolve(strict=True),"LISTENER_RUNTIME_MISMATCH")
+        sha=_pointer(self.layout,"dashboard-current",optional=True)
+        python=_python(self.layout,sha) if sha else self.layout.python
+        _require(executable.resolve(strict=True)==python.resolve(strict=True),"LISTENER_RUNTIME_MISMATCH")
+        if sha and _runtime_mode(self.layout,sha)=="release":
+            # /proc/exe alone identifies the base interpreter shared by venvs.
+            # argv must also bind the process to the selected environment.
+            with (Path("/proc")/pid/"cmdline").open("rb") as stream:command=stream.read(65537)
+            _require(len(command)<=65536 and command.split(b"\0",1)[0]==os.fsencode(python),
+                "LISTENER_ENVIRONMENT_MISMATCH")
 
     def rollback_preflight(self,sha):
         self.stage="ROLLBACK_PREFLIGHT"
@@ -553,7 +649,9 @@ class Host:
         release=self.release(target)
         _require((release/"src/hope/api/dashboard_activation.py").is_file(),"ACTIVATION_TOOL_MISSING")
         self.stage="GITHUB_ATTESTATION";verify_exact_ci(target,ci_run,ci_attempt)
-        self.stage="RUNTIME";self.runtime(release,new=True)
+        self.stage="RUNTIME"
+        self.runtime(self.layout.root/"releases"/(previous or shared))
+        self.runtime(release,new=True)
         self.stage="DATABASE_TARGET";self.database(release)
         self.stage="DATABASE_PRIOR"
         self.database(self.layout.root/"releases"/(previous or shared))
@@ -618,13 +716,18 @@ class Host:
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Approved dashboard-only activation; never starts PAPER")
-    parser.add_argument("action",choices=("preflight","activate","rollback","gate","status","paper-audit"))
+    parser.add_argument("action",choices=("preflight","activate","rollback","gate","status","paper-audit","paper-mask"))
     parser.add_argument("--target")
     parser.add_argument("--expected-current")
     parser.add_argument("--ci-run-id",type=int)
     parser.add_argument("--ci-run-attempt",type=int)
+    parser.add_argument("--runtime",choices=("shared","release"),default="shared",
+        help="Explicit target environment; release requires release-venvs/<target>/bin/python")
     parser.add_argument("--approve-dashboard-change",action="store_true")
+    parser.add_argument("--approve-reviewed-paper-mask",action="store_true",
+        help="Operator reviewed host processes, alternate units, schedules and restart boundaries")
     args=parser.parse_args(argv);layout=Layout();host=Host(layout)
+    host.target_runtime=args.runtime
     try:
         if args.action in {"activate","rollback"}:
             _require(args.approve_dashboard_change,"EXPLICIT_APPROVAL_REQUIRED")
@@ -632,6 +735,8 @@ def main(argv=None):
         if args.action!="gate":_require(os.geteuid()==0,"ROOT_REQUIRED")
         if args.action=="paper-audit":
             print(json.dumps(paper_absence_audit.audit(host),sort_keys=True));return 2
+        elif args.action=="paper-mask":
+            result=install_paper_mask(layout,host,reviewed=args.approve_reviewed_paper_mask)
         elif args.action=="status":
             value=_record(layout)
             result={"status":"UNMANAGED" if value is None else value["phase"],
@@ -641,7 +746,7 @@ def main(argv=None):
         elif args.action=="rollback":result=rollback(layout,host,target=args.target,shared=args.expected_current)
         elif args.action=="activate":
             result=activate(layout,host,target=args.target,shared=args.expected_current,
-                ci_run=args.ci_run_id,ci_attempt=args.ci_run_attempt)
+                ci_run=args.ci_run_id,ci_attempt=args.ci_run_attempt,runtime=args.runtime)
         else:
             _idle(layout);value=_record(layout)
             _require(value is None or value["phase"]=="COMMITTED","RECOVERY_REQUIRED")
