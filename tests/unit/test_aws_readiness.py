@@ -134,10 +134,21 @@ def _paper_status(commit: str = EXPECTED, **changes):
     return lambda _url, *, timeout=5: value
 
 
+def _snapshot(**changes):
+    value=dict(schema_version=1,source="hope_postgresql",deployed_commit=EXPECTED,
+        generated_at="2026-10-24T22:55:00+00:00",research=dict(run_count=0),
+        paper=dict(environment_state="RUNNING",job_runs=dict(total=0,claimed=0,succeeded=0,failed=0),
+            recovery=dict(claimed_with_effects=0,claimed_without_effects=0,
+                claims_older_than_one_hour=0,reconciliation_receipts=0)))
+    value.update(changes)
+    return lambda _url,*,timeout=5:value
+
+
 def inspect_aws_readiness(*args, **kwargs):
     kwargs.setdefault("dashboard_release_probe", _dashboard_release())
     kwargs.setdefault("paper_status_probe", _paper_status())
     kwargs.setdefault("unit_file_probe", lambda _installed, _reviewed: True)
+    kwargs.setdefault("snapshot_probe", _snapshot())
     return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
 
@@ -684,6 +695,7 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
         release_probe=_release_ok,
         dashboard_release_probe=_dashboard_release(deployed),
         paper_status_probe=_paper_status(deployed),
+        snapshot_probe=_snapshot(deployed_commit=deployed,generated_at="2026-10-17T18:35:14.543100+00:00"),
         status_probe=lambda _, *, timeout: {
             "schema_version": 1,
             "service": "RUNNING",
@@ -698,6 +710,7 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
         "UNIT_NOT_LOADED:hope-paper.service",
         "OPERATIONS_DATA_FEED_NOT_CURRENT",
         "OPERATIONS_SNAPSHOT_STALE",
+        "SNAPSHOT_STALE",
     ]
     assert sorted(str(path.relative_to(root)) for path in root.rglob("*")) == before
 

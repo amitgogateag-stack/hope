@@ -202,6 +202,12 @@ async function main() {
   b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/HEALTH_MISSING/);
   b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',last_successful_poll_at:iso(BASE)});
   assert.equal(b.element('readiness-state').textContent,'READY');
+  b.api.applyReadiness({...data,reason:'RECOVERY_REQUIRED',reconciliation:'RECOVERY_REQUIRED'});
+  assert.equal(b.element('readiness-state').textContent,'RECOVERY_REQUIRED');
+  assert.match(b.element('readiness-note').textContent,/RECOVERY_REQUIRED/);
+  assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',reconciliation:'RECOVERY_REQUIRED',worker_report:'CURRENT',last_successful_poll_at:iso(BASE)}));
+  b.api.applyReadiness({...data,paper_health:'HALTED',reason:'DURABLE_HALT_OBSERVED',reconciliation:'RECOVERY_REQUIRED'});
+  assert.equal(b.element('readiness-state').textContent,'HALTED');
   b.advance(300001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
   assert.throws(()=>b.api.applyReadiness({...data,execution_authorized:true}));
   assert.throws(()=>b.api.applyReadiness({...data,reason:'secret-payload'}));

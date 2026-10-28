@@ -15,6 +15,7 @@ from socket import SHUT_RDWR
 from threading import BoundedSemaphore, Lock, Timer
 
 from hope.api.dashboard_projection import verified_projections
+from hope.api.snapshot_contract import verified_snapshot_payload
 from hope.infrastructure.durable_file import bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
@@ -31,76 +32,7 @@ OPERATIONS_ERROR_CODES = {
 
 
 def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tuple[bytes, datetime]:
-    """Reject malformed, partial, future-dated or oversized snapshot files."""
-    payload = bounded_regular_read(path, 32768)
-    data = json.loads(payload)
-    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1 or data.get("source") != "hope_postgresql":
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
-    commit = data.get("deployed_commit")
-    if commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None):
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_COMMIT_INVALID")
-    if expected_commit is not None and commit != expected_commit:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_COMMIT_MISMATCH")
-    research = data.get("research")
-    paper = data.get("paper")
-    if not isinstance(research, dict) or not isinstance(paper, dict):
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
-    counts = paper.get("job_runs")
-    valid_count = lambda n: type(n) is int and 0 <= n <= 9007199254740991
-    if not valid_count(research.get("run_count")) or paper.get("environment_state") not in {"RUNNING", "HALTED"}:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
-    if not isinstance(counts, dict) or not all(
-        valid_count(counts.get(key)) for key in ("total", "claimed", "succeeded", "failed")
-    ):
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCOMPLETE")
-    if counts["total"] != counts["claimed"] + counts["succeeded"] + counts["failed"]:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INCONSISTENT")
-    recovery = paper.get("recovery")
-    recovery_fields = (
-        "claimed_with_effects", "claimed_without_effects",
-        "claims_older_than_one_hour", "reconciliation_receipts",
-    )
-    if "recovery" in paper:
-        if not isinstance(recovery, dict) or not all(valid_count(recovery.get(k)) for k in recovery_fields):
-            raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INVALID")
-        if (recovery["claimed_with_effects"] + recovery["claimed_without_effects"] != counts["claimed"]
-                or recovery["claims_older_than_one_hour"] > counts["claimed"]
-                or recovery["reconciliation_receipts"] > counts["succeeded"]):
-            raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INCONSISTENT")
-    stamp = data.get("generated_at")
-    if not isinstance(stamp, str):
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
-    try:
-        generated = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID") from exc
-    if generated.tzinfo is None:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_TIMESTAMP_INVALID")
-    if (generated - datetime.now(timezone.utc)).total_seconds() > 300:
-        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_FROM_FUTURE")
-    # The local snapshot file is an untrusted input boundary. Never serve
-    # arbitrary top-level or nested fields that could contain identifiers,
-    # credentials, fills, positions, or other sensitive database material.
-    safe = {
-        "schema_version": 1,
-        "source": "hope_postgresql",
-        "generated_at": generated.isoformat(),
-        "research": {"run_count": research["run_count"]},
-        "paper": {
-            "environment_state": paper["environment_state"],
-            "job_runs": {
-                key: counts[key]
-                for key in ("total", "claimed", "succeeded", "failed")
-            },
-        },
-    }
-    if commit is not None:
-        safe["deployed_commit"] = commit
-    if recovery is not None:
-        safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
-    if "projections" in data:
-        safe["projections"] = verified_projections(data["projections"], generated)
-    return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
+    return verified_snapshot_payload(bounded_regular_read(path,32768),expected_commit=expected_commit)
 
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
