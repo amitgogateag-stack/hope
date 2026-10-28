@@ -379,6 +379,10 @@ Recovery also fingerprints the descriptor-relative identities of the root,
 release storage, expected and target releases, `current`, `deployed.env`, and
 `.current.next`. Equivalent-content inode replacement during service quiescence
 is evidence of concurrent mutation, not permission to remove the stale lease.
+The complete fingerprint is checked again on both sides of evidence quarantine.
+If pointer, release, or deployed metadata changes at that boundary, the retained
+lease stays archived for review and recovery fails closed instead of reporting
+`RECOVERED`.
 Contenders fail before stopping services or writing leases. Process death releases
 the kernel guard but preserves the separate lease for explicit operator recovery.
 Symlink, hard-link, foreign-owner and writable-by-others guard files are rejected.

@@ -95,7 +95,10 @@ transient safe replacement cannot conceal unsafe state on the locked root. The
 root, release directory, expected/target releases, `current` symlink, deployed
 metadata, and pending entry retain descriptor-relative inode fingerprints
 across quiescence; replacing an entry with semantically identical content is
-treated as concurrent state mutation and fails closed.
+treated as concurrent state mutation and fails closed. The same complete state
+fingerprint is checked immediately before and after the lease is quarantined;
+a pointer or metadata change at that final transition retains the archived
+lease but cannot be reported as `RECOVERED`.
 The running dashboard must attest the authenticated deployed commit and the
 exact PAPER-only safety contract (`paper_only=true`, `live_enabled=false`, and
 `execution_authorized=false`); a healthy process from an older release cannot
