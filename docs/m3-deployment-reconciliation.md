@@ -51,6 +51,13 @@ symlinks, and must not be group- or world-writable. Their device/inode identitie
 permissions and the `current` selection are checked again after Git
 authentication and after all unit/HTTP observations, so replacement during a
 readiness run fails closed without exposing host paths.
+The exact `current` symlink inode is retained as part of that selection, so an
+equivalent replacement that still names the same release also fails closed.
+The probe also opens `deployed.env` relative to the held deployment-root
+descriptor, requires its sole commit value to match the selected release, and
+retains its complete inode/content identity through the closing observation.
+This binds the commit supplied to `hope-paper.service` to the authenticated
+release and rejects even same-content metadata replacement during readiness.
 The canonical deployment-root path and both its direct parent and root
 device/inode identities, ownership, and non-writable modes are captured before
 acquiring the shared fence, checked immediately after fence acquisition, and

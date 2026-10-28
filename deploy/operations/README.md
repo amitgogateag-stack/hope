@@ -65,6 +65,10 @@ prerequisites are unavailable, leave PAPER disabled and report UNAVAILABLE.
    success. It revalidates the root pathname after synchronization. A storage
    or identity failure aborts activation instead of acknowledging metadata that
    may disappear after a host crash or a replaced deployment root.
+   The read-only AWS readiness probe independently opens this file relative to
+   the held deployment-root descriptor, requires it to name the selected
+   release, and revalidates the exact inode and contents after systemd and HTTP
+   observation. A mismatch or concurrent replacement cannot report READY.
    Python and dynamic-loader control variables are not configuration: the reviewed
    units remove them after system-manager and environment-file variables are
    assembled, then supply the exact release `PYTHONPATH` directly to the

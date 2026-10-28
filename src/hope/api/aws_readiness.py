@@ -29,6 +29,7 @@ MAX_STATUS_BYTES = 16_384
 MAX_DASHBOARD_RELEASE_BYTES = 1_024
 MAX_SYSTEMD_BYTES = 4_096
 MAX_UNIT_BYTES = 16_384
+MAX_DEPLOYED_METADATA_BYTES = 128
 TRUSTED_DEPLOYMENT_OWNER = 0
 LOOPBACK_OBSERVATION_TIMEOUT = 5.0
 STATUS_OBSERVATION_TIMEOUT = 5.0
@@ -369,7 +370,7 @@ def _trusted_release_directory(path: Path) -> tuple[int, int]:
 
 def _deployed_release(
     root: Path,
-) -> tuple[Path, str, tuple[int, int], tuple[int, int]]:
+) -> tuple[Path, str, tuple[int, ...], tuple[int, int], tuple[int, int]]:
     try:
         root = root.resolve(strict=True)
     except OSError as exc:
@@ -377,8 +378,15 @@ def _deployed_release(
     releases = root / "releases"
     releases_identity = _trusted_release_directory(releases)
     current = root / "current"
-    if not current.is_symlink():
+    try:
+        current_before = current.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_CURRENT_RELEASE_SYMLINK_REQUIRED") from exc
+    if (not stat.S_ISLNK(current_before.st_mode)
+            or current_before.st_uid != TRUSTED_DEPLOYMENT_OWNER
+            or current_before.st_nlink != 1):
         raise ReadinessError("AWS_CURRENT_RELEASE_SYMLINK_REQUIRED")
+    current_identity = _unit_file_identity(current_before)
     try:
         deployed = current.resolve(strict=True)
     except OSError as exc:
@@ -386,12 +394,23 @@ def _deployed_release(
     if deployed.parent != releases or not SHA_RE.fullmatch(deployed.name):
         raise ReadinessError("AWS_CURRENT_RELEASE_TARGET_UNTRUSTED")
     deployed_identity = _trusted_release_directory(deployed)
-    return deployed, deployed.name, releases_identity, deployed_identity
+    try:
+        current_after = current.lstat()
+    except OSError as exc:
+        raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED") from exc
+    if _unit_file_identity(current_after) != current_identity:
+        raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED")
+    return (
+        deployed, deployed.name, current_identity, releases_identity,
+        deployed_identity,
+    )
 
 
 def _require_same_release_storage(
     root: Path,
-    expected: tuple[Path, str, tuple[int, int], tuple[int, int]],
+    expected: tuple[
+        Path, str, tuple[int, ...], tuple[int, int], tuple[int, int],
+    ],
 ) -> None:
     try:
         observed = _deployed_release(root)
@@ -399,6 +418,63 @@ def _require_same_release_storage(
         raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED") from exc
     if observed != expected:
         raise ReadinessError("AWS_RELEASE_STORAGE_CHANGED")
+
+
+def _deployed_metadata_snapshot(
+    root_descriptor: int,
+) -> tuple[bytes, tuple[int, ...]]:
+    """Read one trusted deployed.env inode relative to the held root."""
+    descriptor = None
+    flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+    try:
+        descriptor = os.open("deployed.env", flags, dir_fd=root_descriptor)
+        before = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode)
+                or before.st_uid != TRUSTED_DEPLOYMENT_OWNER
+                or before.st_mode & 0o022 or before.st_nlink != 1
+                or before.st_size > MAX_DEPLOYED_METADATA_BYTES):
+            raise ReadinessError("AWS_DEPLOYED_METADATA_UNVERIFIED")
+        chunks: list[bytes] = []
+        remaining = MAX_DEPLOYED_METADATA_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, remaining)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        content = b"".join(chunks)
+        after = os.fstat(descriptor)
+        named = os.stat(
+            "deployed.env", dir_fd=root_descriptor, follow_symlinks=False,
+        )
+        before_identity = _unit_file_identity(before)
+        after_identity = _unit_file_identity(after)
+        named_identity = _unit_file_identity(named)
+        if (before_identity != after_identity
+                or named_identity != after_identity
+                or len(content) != after.st_size
+                or len(content) > MAX_DEPLOYED_METADATA_BYTES):
+            raise ReadinessError("AWS_DEPLOYED_METADATA_CHANGED")
+        return content, after_identity
+    except ReadinessError:
+        raise
+    except OSError as exc:
+        raise ReadinessError("AWS_DEPLOYED_METADATA_UNVERIFIED") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _require_same_deployed_metadata(
+    root_descriptor: int, expected_content: bytes,
+    expected_identity: tuple[int, ...],
+) -> None:
+    try:
+        content, identity = _deployed_metadata_snapshot(root_descriptor)
+    except ReadinessError as exc:
+        raise ReadinessError("AWS_DEPLOYED_METADATA_CHANGED") from exc
+    if content != expected_content or identity != expected_identity:
+        raise ReadinessError("AWS_DEPLOYED_METADATA_CHANGED")
 
 
 def _systemd_probe(
@@ -585,10 +661,15 @@ def inspect_aws_readiness(
     # it could combine a release from before a switch with services or status
     # from after it and incorrectly report READY.
     try:
-        with operations_deployment._activation_guard(root, shared=True):
+        with operations_deployment._activation_guard(
+            root, shared=True,
+        ) as root_descriptor:
             _require_same_deployment_root(root, root_identity)
+            if root_descriptor is None:
+                raise ReadinessError("AWS_DEPLOYED_METADATA_UNVERIFIED")
             report = _inspect_stable_readiness(
                 expected_sha, root=root, observed_at=observed_at,
+                root_descriptor=root_descriptor,
                 systemd_probe=systemd_probe, status_probe=status_probe,
                 dashboard_release_probe=dashboard_release_probe,
                 unit_file_probe=unit_file_probe,
@@ -605,6 +686,7 @@ def _inspect_stable_readiness(
     expected_sha: str,
     *,
     root: Path,
+    root_descriptor: int,
     observed_at: datetime,
     systemd_probe: Callable[..., dict[str, str]],
     status_probe: Callable[..., dict[str, object]],
@@ -616,8 +698,11 @@ def _inspect_stable_readiness(
 ) -> dict[str, object]:
     """Observe one generation while the caller holds the shared fence."""
     release_storage = _deployed_release(root)
-    (deployed_release, deployed_sha, _releases_identity,
+    (deployed_release, deployed_sha, _current_identity, _releases_identity,
      _deployed_identity) = release_storage
+    metadata_content, metadata_identity = _deployed_metadata_snapshot(
+        root_descriptor,
+    )
     try:
         release_probe(deployed_release, deployed_sha)
     except (OSError, DeploymentError) as exc:
@@ -626,6 +711,9 @@ def _inspect_stable_readiness(
     blockers: list[str] = []
     if deployed_sha != expected_sha:
         blockers.append("DEPLOYED_SHA_MISMATCH")
+    expected_metadata = f"HOPE_DEPLOYED_COMMIT={deployed_sha}\n".encode("ascii")
+    if metadata_content != expected_metadata:
+        blockers.append("DEPLOYED_METADATA_MISMATCH")
 
     units: dict[str, dict[str, str]] = {}
     unit_file_attestations: list[
@@ -807,6 +895,9 @@ def _inspect_stable_readiness(
     except (OSError, DeploymentError) as exc:
         raise ReadinessError("AWS_DEPLOYED_RELEASE_CHANGED") from exc
     _require_same_release_storage(root, release_storage)
+    _require_same_deployed_metadata(
+        root_descriptor, metadata_content, metadata_identity,
+    )
     return {
         "schema_version": 1,
         "observed_at": observed_at.isoformat(),

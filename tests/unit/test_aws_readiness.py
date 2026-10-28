@@ -39,6 +39,7 @@ def _root(tmp_path: Path, deployed: str = EXPECTED) -> Path:
     release = root / "releases" / deployed
     release.mkdir(parents=True)
     (root / "current").symlink_to(release)
+    (root / "deployed.env").write_text(f"HOPE_DEPLOYED_COMMIT={deployed}\n")
     return root
 
 
@@ -376,6 +377,60 @@ def test_non_operator_owned_release_storage_cannot_claim_readiness(
         inspect_aws_readiness(
             EXPECTED, root=root, now=NOW, systemd_probe=_units(),
             status_probe=_status(), release_probe=_release_ok,
+        )
+
+
+def test_deployed_metadata_must_match_selected_release(tmp_path):
+    root = _root(tmp_path)
+    (root / "deployed.env").write_text(
+        "HOPE_DEPLOYED_COMMIT=" + "a" * 40 + "\n",
+    )
+    report = inspect_aws_readiness(
+        EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+        status_probe=_status(), release_probe=_release_ok,
+    )
+    assert report["ready"] is False
+    assert "DEPLOYED_METADATA_MISMATCH" in report["blockers"]
+
+
+@pytest.mark.parametrize("mutation", ["equivalent-replacement", "content-change"])
+def test_deployed_metadata_change_during_observation_fails_closed(
+    tmp_path, mutation,
+):
+    root = _root(tmp_path)
+
+    def change_metadata(_url, *, timeout):
+        metadata = root / "deployed.env"
+        if mutation == "equivalent-replacement":
+            replacement = root / ".deployed.replacement"
+            replacement.write_bytes(metadata.read_bytes())
+            os.replace(replacement, metadata)
+        else:
+            metadata.write_text("HOPE_DEPLOYED_COMMIT=" + "a" * 40 + "\n")
+        return _status()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_DEPLOYED_METADATA_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=change_metadata, release_probe=_release_ok,
+        )
+
+
+def test_equivalent_current_replacement_during_observation_fails_closed(
+    tmp_path,
+):
+    root = _root(tmp_path)
+
+    def replace_current(_url, *, timeout):
+        replacement = root / ".current.replacement"
+        replacement.symlink_to(root / "releases" / EXPECTED)
+        os.replace(replacement, root / "current")
+        return _status()(_url, timeout=timeout)
+
+    with pytest.raises(ReadinessError, match="^AWS_RELEASE_STORAGE_CHANGED$"):
+        inspect_aws_readiness(
+            EXPECTED, root=root, now=NOW, systemd_probe=_units(),
+            status_probe=replace_current, release_probe=_release_ok,
         )
 
 
