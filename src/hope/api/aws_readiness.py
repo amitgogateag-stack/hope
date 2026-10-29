@@ -22,6 +22,7 @@ from typing import Callable
 from hope.api import operations_deployment
 from hope.api.diagnostic_io import bounded_capture
 from hope.api.operations_deployment import DeploymentError, inspect_release
+from hope.api.snapshot_contract import strict_json,snapshot_evidence
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -635,8 +636,8 @@ def _loopback_json_probe(
     if len(raw.encode("utf-8")) > max_bytes:
         raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_TOO_LARGE")
     try:
-        document = json.loads(raw)
-    except json.JSONDecodeError as exc:
+        document = strict_json(raw)
+    except ValueError as exc:
         raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID") from exc
     if not isinstance(document, dict):
         raise ReadinessError("AWS_" + error_scope + "_DOCUMENT_INVALID")
@@ -682,6 +683,11 @@ def _paper_status_probe(
     )
 
 
+def _snapshot_probe(url,*,timeout=LOOPBACK_OBSERVATION_TIMEOUT,capture=bounded_capture):
+    return _loopback_json_probe(url,approved_url="http://127.0.0.1:8788/snapshot.json",
+        max_bytes=32768,error_scope="SNAPSHOT",timeout=timeout,capture=capture)
+
+
 def inspect_aws_readiness(
     expected_sha: str,
     *,
@@ -691,6 +697,7 @@ def inspect_aws_readiness(
     status_probe: Callable[..., dict[str, object]] = _status_probe,
     paper_status_probe: Callable[..., dict[str, object]] = _paper_status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
+    snapshot_probe: Callable[..., dict[str, object]] = _snapshot_probe,
     unit_file_probe: Callable[[Path, Path], bool] | None = None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None = None,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
@@ -727,6 +734,7 @@ def inspect_aws_readiness(
                 systemd_probe=systemd_probe, status_probe=status_probe,
                 paper_status_probe=paper_status_probe,
                 dashboard_release_probe=dashboard_release_probe,
+                snapshot_probe=snapshot_probe,
                 unit_file_probe=unit_file_probe,
                 dropin_file_probe=dropin_file_probe,
                 release_probe=release_probe, status_url=status_url,
@@ -748,6 +756,7 @@ def _inspect_stable_readiness(
     status_probe: Callable[..., dict[str, object]],
     paper_status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
+    snapshot_probe: Callable[..., dict[str, object]],
     unit_file_probe: Callable[[Path, Path], bool] | None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None,
     release_probe: Callable[[Path, str], dict[str, object]],
@@ -995,6 +1004,23 @@ def _inspect_stable_readiness(
         elif observed_at - generated > timedelta(minutes=15):
             blockers.append("OPERATIONS_SNAPSHOT_STALE")
 
+    # A healthy heartbeat and status timestamp cannot certify the persisted
+    # snapshot's release, HALT or unresolved recovery evidence. Fetch it in the
+    # same bounded window, then match the status generation exactly. A producer
+    # update between requests truthfully blocks this observation; it can retry.
+    remaining=loopback_deadline-monotonic()
+    if not math.isfinite(remaining) or remaining<=0:
+        raise ReadinessError("AWS_SNAPSHOT_OBSERVATION_TIMEOUT")
+    snapshot=snapshot_probe("http://127.0.0.1:8788/snapshot.json",timeout=remaining)
+    try:
+        safe_snapshot,snapshot_blockers=snapshot_evidence(
+            json.dumps(snapshot,allow_nan=False,separators=(",",":")).encode(),
+            expected_commit=deployed_sha,observed_at=observed_at,
+            status_timestamp=status.get("snapshot_generated_at"))
+    except (ValueError,TypeError,UnicodeError) as exc:
+        raise ReadinessError("AWS_SNAPSHOT_DOCUMENT_INVALID") from exc
+    blockers.extend(snapshot_blockers)
+
     # The HTTP documents are meaningful only for the service generation that
     # was authenticated before they were read. A restart does not take the
     # deployment activation fence, so re-observe every required long-running
@@ -1053,6 +1079,7 @@ def _inspect_stable_readiness(
         "dashboard_release": safe_dashboard_release,
         "paper_status": safe_paper_status,
         "operations_status": safe_status,
+        "snapshot": safe_snapshot,
         "units": units,
     }
 

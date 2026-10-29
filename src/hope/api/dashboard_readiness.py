@@ -4,6 +4,7 @@ import json
 import re
 
 from hope.api.dashboard_server import _verified_operations, _verified_snapshot
+from hope.api.snapshot_contract import recovery_state
 
 
 def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_paper_commit=None):
@@ -38,8 +39,7 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         activity = (data or {}).get("projections",{}).get("paper_activity",{})
         if activity.get("status")=="AVAILABLE":
             result["last_successful_paper_at"] = activity.get("last_completed_at")
-        if data and data["paper"].get("recovery",{}).get("claimed_with_effects",0)>0:
-            result["reconciliation"] = "CLAIMS_REQUIRE_REVIEW"
+        if data:result["reconciliation"] = recovery_state(data["paper"])
     except (OSError,ValueError,TypeError,UnicodeError):
         pass
     try:
@@ -81,8 +81,8 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         result["reason"] = "SNAPSHOT_NOT_CURRENT"
     elif health["schema_compatibility"]!="COMPATIBLE" or health["deployed_commit"] is None:
         result["reason"] = "WORKER_IDENTITY_UNVERIFIED"
-    elif result["reconciliation"]=="CLAIMS_REQUIRE_REVIEW":
-        result["reason"] = "CLAIMS_REQUIRE_REVIEW"
+    elif result["reconciliation"] in {"CLAIMS_REQUIRE_REVIEW","RECOVERY_REQUIRED"}:
+        result["reason"] = result["reconciliation"]
     else:
         result.update(paper_health="READY",reason="CURRENT_OBSERVATIONS_ONLY")
     return result

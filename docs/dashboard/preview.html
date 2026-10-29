@@ -281,17 +281,17 @@ const applyOperations = data => {
  operationsCache = {data,time}; renderOperations();
 };
 // Freshness ages even for offline files or when a network request never finishes.
-const readinessReasons = ['HEALTH_FROM_FUTURE','POLL_NOT_CURRENT','WORKER_STATUS_INCONSISTENT','HEALTH_MISSING','HEALTH_UNREADABLE','HEALTH_INVALID','HEALTH_STALE','DURABLE_HALT_OBSERVED','WORKER_STARTING','WORKER_UNAVAILABLE','WORKER_STOPPED','SNAPSHOT_NOT_CURRENT','WORKER_IDENTITY_UNVERIFIED','CLAIMS_REQUIRE_REVIEW','CURRENT_OBSERVATIONS_ONLY'];
+const readinessReasons = ['HEALTH_FROM_FUTURE','POLL_NOT_CURRENT','WORKER_STATUS_INCONSISTENT','HEALTH_MISSING','HEALTH_UNREADABLE','HEALTH_INVALID','HEALTH_STALE','DURABLE_HALT_OBSERVED','WORKER_STARTING','WORKER_UNAVAILABLE','WORKER_STOPPED','SNAPSHOT_NOT_CURRENT','WORKER_IDENTITY_UNVERIFIED','CLAIMS_REQUIRE_REVIEW','RECOVERY_REQUIRED','CURRENT_OBSERVATIONS_ONLY'];
 const clearReadiness = () => {readinessCache=null;tag('readiness-state','UNAVAILABLE','off');metric('readiness-note','Observations unavailable; no execution authorization.');};
 const renderReadiness = () => {
  if (!readinessCache) return;
  const {data,time}=readinessCache;
  if (Date.now()-time>HEARTBEAT_STALE_MS || time>Date.now() || (data.paper_health==='READY' && (data.last_successful_poll_at===null || Date.now()-stamp(data.last_successful_poll_at)>HEARTBEAT_STALE_MS))) {tag('readiness-state','UNAVAILABLE','off');metric('readiness-note','STALE observations; no execution authorization.');return;}
- tag('readiness-state',data.paper_health,data.paper_health==='READY'?'':'off');
+ tag('readiness-state',data.paper_health==='UNAVAILABLE'&&data.reconciliation==='RECOVERY_REQUIRED'?'RECOVERY_REQUIRED':data.paper_health,data.paper_health==='READY'?'':'off');
  metric('readiness-note',data.reason+' · Worker reported '+data.worker_report+' · Snapshot '+data.snapshot+' · DB '+data.database+' · Reconciliation '+data.reconciliation+' · Last PAPER success '+(data.last_successful_paper_at||'unavailable')+' · Last failure '+(data.last_failure_code||'none observed')+' '+(data.last_failure_at||'')+' · No execution authorization.');
 };
 const applyReadiness = data => {
- if (data?.schema!=='hope.operational-readiness.v1'||data.execution_authorized!==false||data.paper_only!==true||data.live_enabled!==false||data.server!=='RUNNING'||!['READY','HALTED','UNAVAILABLE'].includes(data.paper_health)||!readinessReasons.includes(data.reason)||!['UNKNOWN','STARTING','CURRENT','HALTED','UNAVAILABLE','STOPPED'].includes(data.worker_report)||!['CURRENT','STALE','UNAVAILABLE'].includes(data.snapshot)||!['OBSERVED_AT_SNAPSHOT','UNVERIFIED'].includes(data.database)||!['UNVERIFIED','CLAIMS_REQUIRE_REVIEW'].includes(data.reconciliation)) throw Error('Invalid readiness observations');
+ if (data?.schema!=='hope.operational-readiness.v1'||data.execution_authorized!==false||data.paper_only!==true||data.live_enabled!==false||data.server!=='RUNNING'||!['READY','HALTED','UNAVAILABLE'].includes(data.paper_health)||!readinessReasons.includes(data.reason)||!['UNKNOWN','STARTING','CURRENT','HALTED','UNAVAILABLE','STOPPED'].includes(data.worker_report)||!['CURRENT','STALE','UNAVAILABLE'].includes(data.snapshot)||!['OBSERVED_AT_SNAPSHOT','UNVERIFIED'].includes(data.database)||!['UNVERIFIED','CLAIMS_REQUIRE_REVIEW','RECOVERY_REQUIRED'].includes(data.reconciliation)) throw Error('Invalid readiness observations');
  const time=stamp(data.generated_at);
  for(const key of ['last_successful_poll_at','last_successful_paper_at','last_failure_at']) if(data[key]!==null&&stamp(data[key])>time) throw Error('Invalid readiness time');
  if(data.last_failure_code!==null&&!operationsErrorCodes.includes(data.last_failure_code)) throw Error('Invalid failure observation');
