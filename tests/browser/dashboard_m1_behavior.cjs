@@ -8,7 +8,7 @@ const BASE = Date.parse('2026-10-16T12:00:00Z');
 const iso = n => new Date(n).toISOString();
 const sample = () => ({schema_version:1,source:'hope_postgresql',generated_at:iso(BASE),research:{run_count:0},paper:{environment_state:'HALTED',job_runs:{total:3,claimed:1,succeeded:1,failed:1},recovery:{claimed_with_effects:1,claimed_without_effects:0,claims_older_than_one_hour:1,reconciliation_receipts:1}}});
 const ops = () => ({schema_version:1,generated_at:iso(BASE),state:'CURRENT',last_success_at:iso(BASE),cycles_succeeded:1,cycles_failed:0,jobs_executed:0,jobs_skipped:0,paper_only:true,live_enabled:false,deployed_commit:'a'.repeat(40),schema_compatibility:'COMPATIBLE'});
-const runtime = () => ({schema:'hope.runtime-integrity.v1',state:'VERIFIED',code:'MANIFEST_AND_RUNTIME_MATCH',release_commit:'a'.repeat(40),runtime_mode:'shared',manifest_sha256:'b'.repeat(64),inventory_sha256:'c'.repeat(64),process_sha256:null,file_count:1,execution_authorized:false,provenance_state:'VERIFIED',provenance_sha256:'e'.repeat(64)});
+const runtime = () => ({schema:'hope.runtime-integrity.v1',state:'VERIFIED',code:'MANIFEST_AND_RUNTIME_MATCH',release_commit:'a'.repeat(40),runtime_mode:'shared',manifest_sha256:'b'.repeat(64),inventory_sha256:'c'.repeat(64),process_sha256:null,file_count:1,execution_authorized:false,provenance_state:'VERIFIED',provenance_sha256:'e'.repeat(64),build_state:'VERIFIED',build_sha256:'f'.repeat(64),builder_id:'c'.repeat(64)});
 const response = value => ({ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(value)});
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 function browser() {
@@ -26,12 +26,14 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
 }
 async function main() {
+ {const b=browser();const data={schema:'hope.acceptance-observation.v1',scope:'DISPOSABLE_LAB_ONLY',state:'VERIFIED',release_commit:'a'.repeat(40),generated_at:iso(BASE),blockers:[],execution_authorized:false};b.api.applyAcceptance(data);assert.equal(b.element('acceptance-state').textContent,'VERIFIED');assert.notEqual(b.element('readiness-state').textContent,'READY');assert.throws(()=>b.api.applyAcceptance({...data,execution_authorized:true}));assert.throws(()=>b.api.applyAcceptance({...data,blockers:['REVIEW_DATABASE']}));b.advance(300001);assert.equal(b.element('acceptance-state').textContent,'STALE');b.api.clearAcceptance();}
+
  { const b=browser();const data={schema:'hope.rehearsal-observation.v1',scope:'DISPOSABLE_LAB_ONLY',state:'VERIFIED',release_commit:'a'.repeat(40),generated_at:iso(BASE),execution_authorized:false};
  b.api.applyRehearsal(data);assert.equal(b.element('rehearsal-state').textContent,'VERIFIED');assert.notEqual(b.element('readiness-state').textContent,'READY');
  assert.throws(()=>b.api.applyRehearsal({...data,scope:'PRODUCTION'}));assert.throws(()=>b.api.applyRehearsal({...data,execution_authorized:true}));
@@ -217,9 +219,9 @@ async function main() {
   b.advance(300001);assert.equal(b.element('runtime-integrity').textContent,'UNVERIFIED');assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
   assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',runtime_integrity:undefined}));
   assert.throws(()=>b.api.applyReadiness({...data,runtime_integrity:{...runtime(),private_path:'/secret'}}));
-  b.api.applyReadiness({...data,reason:'RUNTIME_UNVERIFIED',runtime_integrity:{...runtime(),state:'UNVERIFIED',code:'LEGACY_JOURNAL_UNBOUND',release_commit:null,runtime_mode:null,manifest_sha256:null,inventory_sha256:null,process_sha256:null,file_count:0,provenance_state:'UNVERIFIED',provenance_sha256:null}});
+  b.api.applyReadiness({...data,reason:'RUNTIME_UNVERIFIED',runtime_integrity:{...runtime(),state:'UNVERIFIED',code:'LEGACY_JOURNAL_UNBOUND',release_commit:null,runtime_mode:null,manifest_sha256:null,inventory_sha256:null,process_sha256:null,file_count:0,provenance_state:'UNVERIFIED',provenance_sha256:null,build_state:'UNVERIFIED',build_sha256:null,builder_id:null}});
   assert.equal(b.element('runtime-integrity').textContent,'UNVERIFIED');
-  assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',runtime_integrity:{...runtime(),provenance_state:'UNVERIFIED',provenance_sha256:null}}));
+  assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',runtime_integrity:{...runtime(),provenance_state:'UNVERIFIED',provenance_sha256:null,build_state:'UNVERIFIED',build_sha256:null,builder_id:null}}));
   assert.throws(()=>b.api.applyReadiness({...data,execution_authorized:true}));
   assert.throws(()=>b.api.applyReadiness({...data,reason:'secret-payload'}));
   b.api.clearReadiness();assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');

@@ -52,8 +52,8 @@ def _trusted(path,*,directory=False,system=False):
     return _identity(info)
 
 
-def _read(path,limit,*,deadline=None):
-    before=_trusted(path)
+def _read(path,limit,*,deadline=None,system=False):
+    before=_trusted(path,system=system)
     _require(before[6]<=limit,"FILE_LIMIT")
     flags=os.O_RDONLY|getattr(os,"O_BINARY",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0)
     fd=os.open(path,flags)
@@ -66,14 +66,14 @@ def _read(path,limit,*,deadline=None):
             if not block:break
             result.extend(block)
         _require(len(result)==before[6] and len(result)<=limit
-            and _identity(os.fstat(fd))==before and _trusted(path)==before,"FILE_CHANGED")
+            and _identity(os.fstat(fd))==before and _trusted(path,system=system)==before,"FILE_CHANGED")
         return bytes(result)
     finally:os.close(fd)
 
 
-def _fingerprint(path,deadline):
+def _fingerprint(path,deadline,*,system=False):
     """Hash large binary/package files with constant bounded read memory."""
-    before=_trusted(path);_require(before[6]<=MAX_FILE_BYTES,"FILE_LIMIT")
+    before=_trusted(path,system=system);_require(before[6]<=MAX_FILE_BYTES,"FILE_LIMIT")
     flags=os.O_RDONLY|getattr(os,"O_BINARY",0)|getattr(os,"O_NOFOLLOW",0)|getattr(os,"O_NONBLOCK",0)
     fd=os.open(path,flags)
     try:
@@ -86,7 +86,7 @@ def _fingerprint(path,deadline):
             size+=len(block);_require(size<=MAX_FILE_BYTES,"FILE_LIMIT");digest.update(block)
             if len(header)<65536:header.extend(block[:65536-len(header)])
         _require(size==before[6] and _identity(os.fstat(fd))==before
-            and _trusted(path)==before,"FILE_CHANGED")
+            and _trusted(path,system=system)==before,"FILE_CHANGED")
         return digest.hexdigest(),bytes(header)
     finally:os.close(fd)
 
@@ -186,7 +186,7 @@ def _pins(release,deadline=None):
     return payload,pins
 
 
-def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenance_digest=None):
+def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenance_digest=None,build_digest=None):
     """Inventory candidate only. A trusted builder/operator must approve it.
 
     Never save this automatically beside the runtime during activation: that
@@ -239,6 +239,9 @@ def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenanc
     if provenance_digest is not None:
         _require(isinstance(provenance_digest,str) and re.fullmatch("[0-9a-f]{64}",provenance_digest),"PROVENANCE_DIGEST_INVALID")
         result.update(schema="hope.runtime-manifest.v2",package_provenance_sha256=provenance_digest)
+    if build_digest is not None:
+        _require(provenance_digest is not None and isinstance(build_digest,str) and re.fullmatch("[0-9a-f]{64}",build_digest),"BUILD_DIGEST_INVALID")
+        result.update(schema="hope.runtime-manifest.v3",release_build_sha256=build_digest)
     return result
 
 
@@ -252,7 +255,8 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     payload=_read(path,MAX_MANIFEST_BYTES,deadline=deadline);approved=strict_json(payload)
     fields={"schema","repository","release_commit","runtime_mode","constraints_sha256","interpreter","distributions","files","links"}
     _require(isinstance(approved,dict) and ((approved.get("schema")==SCHEMA and set(approved)==fields)
-        or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})),"MANIFEST_INVALID")
+        or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})
+        or (approved.get("schema")=="hope.runtime-manifest.v3" and set(approved)==fields|{"package_provenance_sha256","release_build_sha256"})),"MANIFEST_INVALID")
     digest=_digest(_canonical(approved))
     _require(expected_manifest is None or digest==expected_manifest,"MANIFEST_CHANGED")
     _require(approved.get("repository")=="amitgogateag-stack/hope"
@@ -270,17 +274,23 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     with _LOCK:cached=_CACHE.get(key)
     if cached!=(inventory,_digest(constraints)):
         actual=build_runtime_manifest(root,sha,mode,release=release,_deadline=deadline,
-            provenance_digest=approved.get("package_provenance_sha256"))
+            provenance_digest=approved.get("package_provenance_sha256"),build_digest=approved.get("release_build_sha256"))
         _require(actual==approved,"CONTENT_MISMATCH")
         _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
         with _LOCK:
             if len(_CACHE)>=8:_CACHE.clear()
             _CACHE[key]=(inventory,_digest(constraints))
     provenance=dict(state="UNVERIFIED",sha256=None)
-    if approved["schema"]=="hope.runtime-manifest.v2":
+    if approved["schema"] in {"hope.runtime-manifest.v2","hope.runtime-manifest.v3"}:
         from hope.api.package_provenance import verify_provenance
         provenance=verify_provenance(root,sha,mode,runtime_manifest=approved,
             expected_digest=approved["package_provenance_sha256"],deadline=deadline)
+        _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
+    build=dict(state="UNVERIFIED",sha256=None,builder_id=None)
+    if approved["schema"]=="hope.runtime-manifest.v3":
+        from hope.api.release_build_evidence import verify_release_build
+        build=verify_release_build(root,sha,mode,runtime_manifest=approved,
+            expected_digest=approved["release_build_sha256"],deadline=deadline)
         _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
     _require(_read(path,MAX_MANIFEST_BYTES,deadline=deadline)==payload and _trusted(path)==manifest_identity
         and _trusted(root/"runtime-manifests",directory=True)==manifest_directory,"MANIFEST_CHANGED")
@@ -290,9 +300,10 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     _require(time.monotonic()<=deadline,"DEADLINE")
     return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
         release_commit=sha,runtime_mode=mode,manifest_sha256=digest,
-        inventory_sha256=_digest(_canonical((inventory,manifest_identity,constraints_identity,provenance.get("identity_sha256")))),process_sha256=None,
+        inventory_sha256=_digest(_canonical((inventory,manifest_identity,constraints_identity,provenance.get("identity_sha256"),build.get("identity_sha256")))),process_sha256=None,
         file_count=len(approved["files"]),execution_authorized=False,
-        provenance_state=provenance["state"],provenance_sha256=provenance["sha256"])
+        provenance_state=provenance["state"],provenance_sha256=provenance["sha256"],
+        build_state=build["state"],build_sha256=build["sha256"],builder_id=build["builder_id"])
 
 
 def diagnostic(root,sha,mode,*,expected_manifest=None,release=None):
@@ -313,7 +324,8 @@ def unverified(code="LEGACY_JOURNAL_UNBOUND",*,blocked=False):
 def safe_evidence(value):
     if value is None:return unverified()
     fields={"schema","state","code","release_commit","runtime_mode","manifest_sha256","inventory_sha256","process_sha256","file_count","execution_authorized"}
-    _require(isinstance(value,dict) and set(value) in (fields,fields|{"provenance_state","provenance_sha256"}) and value["schema"]=="hope.runtime-integrity.v1"
+    _require(isinstance(value,dict) and set(value) in (fields,fields|{"provenance_state","provenance_sha256"},
+        fields|{"provenance_state","provenance_sha256","build_state","build_sha256","builder_id"}) and value["schema"]=="hope.runtime-integrity.v1"
         and value["state"] in {"VERIFIED","MISMATCH","UNVERIFIED","BLOCKED"}
         and value["code"] in {"MANIFEST_AND_RUNTIME_MATCH","RUNTIME_EVIDENCE_UNVERIFIED",
             "LEGACY_JOURNAL_UNBOUND","ACTIVATION_BLOCKED","RELEASE_OR_FENCE_UNVERIFIED"}
@@ -334,6 +346,10 @@ def safe_evidence(value):
             and re.fullmatch("[0-9a-f]{40}",value["release_commit"])),"EVIDENCE_INVALID")
         _require(value["runtime_mode"] in {None,"shared","release"},"EVIDENCE_INVALID")
     result=dict(value,provenance_state=value.get("provenance_state","UNVERIFIED"),provenance_sha256=value.get("provenance_sha256"))
+    result.update(build_state=value.get("build_state","UNVERIFIED"),build_sha256=value.get("build_sha256"),builder_id=value.get("builder_id"))
+    _require((result["build_state"]=="UNVERIFIED" and result["build_sha256"] is None and result["builder_id"] is None)
+        or (result["state"]=="VERIFIED" and result["provenance_state"]=="VERIFIED" and result["build_state"]=="VERIFIED"
+            and all(isinstance(result[k],str) and re.fullmatch("[0-9a-f]{64}",result[k]) for k in ("build_sha256","builder_id"))),"BUILD_EVIDENCE_INVALID")
     _require((result["provenance_state"]=="UNVERIFIED" and result["provenance_sha256"] is None)
         or (result["state"]=="VERIFIED" and result["provenance_state"]=="VERIFIED"
             and isinstance(result["provenance_sha256"],str) and re.fullmatch("[0-9a-f]{64}",result["provenance_sha256"])),"PROVENANCE_EVIDENCE_INVALID")

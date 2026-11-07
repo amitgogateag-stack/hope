@@ -30,6 +30,7 @@ def paper_operational_guard(release,*,root=Path("/opt/hope-operations")):
                 operations.inspect_release(release,sha);source=source_snapshot(release)
                 evidence=attest_runtime(root,sha,mode,release=release)
                 _require(evidence.get("provenance_state")=="VERIFIED","PACKAGE_PROVENANCE_REQUIRED")
+                _require(evidence.get("build_state")=="VERIFIED","RELEASE_BUILD_REQUIRED")
                 return evidence,source
             original=observe()
             def check():

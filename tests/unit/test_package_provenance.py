@@ -147,6 +147,8 @@ def signed_runtime(tmp_path,monkeypatch,request):
     subprocess.run([str(p.OPENSSL),"pkeyutl","-sign","-rawin","-inkey",str(private),"-in",str(path),"-out",str(path.with_suffix(".sig"))],check=True,capture_output=True)
     for filename,payload in wheels.items():(root/"wheelhouse"/filename).write_bytes(payload)
     manifest=r.build_runtime_manifest(root,SHA,mode,provenance_digest=r._digest(path.read_bytes()))
+    from build_approval_fixture import approve_fixture_build
+    manifest=approve_fixture_build(root,SHA,mode,manifest,private)
     r.manifest_path(root,SHA,mode).write_bytes(r._canonical(manifest))
     return root,env,mode,manifest,path
 

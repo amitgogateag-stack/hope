@@ -22,7 +22,7 @@ def _file_identity(path):
     return info.st_dev,info.st_ino,info.st_mode,info.st_size,info.st_mtime_ns,info.st_ctime_ns
 
 
-def verify_listener(pid,python,*,identity,managed,expected_identity=None,proc=Path("/proc")):
+def verify_listener(pid,python,*,identity,managed,expected_identity=None,proc=Path("/proc"),expected_arguments=None):
     """Bind one stable kernel process to the reviewed venv, module and port.
 
     Read only argv and executable metadata, never the process environment.
@@ -41,8 +41,10 @@ def verify_listener(pid,python,*,identity,managed,expected_identity=None,proc=Pa
     arguments=command[:-1].split(b"\0")
     _require(arguments[0]==os.fsencode(python),"LISTENER_ENVIRONMENT_MISMATCH")
     expected=[os.fsencode(python)]
-    if managed:expected.extend((b"-B",b"-s",b"-P"))
-    expected.extend((b"-m",b"hope.api.dashboard_server",b"--port",b"8788"))
+    if expected_arguments is not None:expected.extend(os.fsencode(value) for value in expected_arguments)
+    else:
+        if managed:expected.extend((b"-B",b"-s",b"-P"))
+        expected.extend((b"-m",b"hope.api.dashboard_server",b"--port",b"8788"))
     _require(arguments[:len(expected)]==expected,"LISTENER_COMMAND_MISMATCH")
     _require(identity(pid)==before,"LISTENER_PROCESS_CHANGED")
     _require(python.resolve(strict=True)==target and _file_identity(python)==selected

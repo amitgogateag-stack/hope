@@ -250,6 +250,47 @@ def test_runtime_loss_after_factory_blocks_claim_and_effects(admitted_plan):
 
 
 @pytest.mark.integration
+def test_m4_india_usa_open_close_holiday_dst_and_restart_matrix(admitted_plan,monkeypatch):
+    """Synthetic calendar holiday, genuine IANA DST, real durable DB effects."""
+    from zoneinfo import ZoneInfo
+    engine,original,_=admitted_plan;version=original().bindings[0].strategy_version_id
+    catalog=service.SqlAlchemyStrategyCandidateRepository.current(None)
+    monkeypatch.setattr(service.SqlAlchemyStrategyCandidateRepository,"current",
+        lambda _:[catalog[0].model_copy(update={"markets":(StrategyMarket.INDIA,StrategyMarket.USA)})])
+    calendars={};openings={}
+    for market,zone,open_time,close_time in ((StrategyMarket.INDIA,"Asia/Kolkata",(9,15),(15,30)),
+            (StrategyMarket.USA,"America/New_York",(9,30),(16,0))):
+        sessions=[]
+        for day in (7,10):
+            opened=datetime(2025,3,day,*open_time,tzinfo=ZoneInfo(zone)).astimezone(UTC)
+            closed=datetime(2025,3,day,*close_time,tzinfo=ZoneInfo(zone)).astimezone(UTC)
+            sessions.append((opened,closed));openings[(market,day)]=opened
+        calendars[market]=MarketSessionCalendar(tuple(sessions))
+    assert openings[(StrategyMarket.USA,7)].hour==14 and openings[(StrategyMarket.USA,10)].hour==13
+    assert openings[(StrategyMarket.INDIA,7)].hour==openings[(StrategyMarket.INDIA,10)].hour==3
+    def factory(connection,current):
+        def no_trade(runtime):runtime.record_no_trade(strategy_version="v1",decision_time=current,inputs_hash="b"*64)
+        bindings=tuple(OperationalPaperJobBinding(version,market,"m4",no_trade) for market in calendars)
+        schedules=tuple(OperationalPaperSchedule(version,market,"m4",timedelta(0)) for market in calendars)
+        start=current.replace(hour=0,minute=0,second=0,microsecond=0)
+        return service.PaperServicePlan(bindings,schedules,calendars,start,start+timedelta(days=1),timedelta(minutes=1))
+    for day in (7,10):
+        for index,market in enumerate((StrategyMarket.INDIA,StrategyMarket.USA)):
+            current=openings[(market,day)]
+            assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:current)==(1,index)
+            engine.dispose()
+            assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:current)==(0,index+1)
+        close=calendars[StrategyMarket.USA].sessions[(7,10).index(day)][1]
+        assert not calendars[StrategyMarket.USA].contains(close)
+        assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:close)==(0,2)
+    holiday=datetime(2025,3,11,14,tzinfo=UTC)  # explicitly synthetic omitted day
+    assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:holiday)==(0,0)
+    for (market,day),current in openings.items():
+        run=create_scheduled_job_run(f"paper:{market.value}:{version}:m4",current)
+        assert _counts(engine,run)==(1,1,1)
+
+
+@pytest.mark.integration
 def test_two_service_workers_never_duplicate_no_trade(admitted_plan):
     engine, plan, run = admitted_plan
     barrier = Barrier(2)
