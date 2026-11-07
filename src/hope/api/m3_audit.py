@@ -28,7 +28,7 @@ READINESS_FIELDS={
         "WORKER_IDENTITY_UNVERIFIED","CLAIMS_REQUIRE_REVIEW","RECOVERY_REQUIRED","CURRENT_OBSERVATIONS_ONLY",
         "HEALTH_FROM_FUTURE","POLL_NOT_CURRENT","WORKER_STATUS_INCONSISTENT",
         "SNAPSHOT_IDENTITY_UNVERIFIED",
-        "RUNTIME_UNVERIFIED","RUNTIME_MISMATCH","RUNTIME_BLOCKED","PACKAGE_PROVENANCE_UNVERIFIED","PAPER_RUNTIME_UNVERIFIED",
+        "RUNTIME_UNVERIFIED","RUNTIME_MISMATCH","RUNTIME_BLOCKED","PACKAGE_PROVENANCE_UNVERIFIED","PAPER_RUNTIME_UNVERIFIED","RELEASE_BUILD_UNVERIFIED",
         "DURABLE_HALT_OBSERVED"},
     "worker_report":{"UNKNOWN","STARTING","CURRENT","HALTED","UNAVAILABLE","STOPPED"},
     "snapshot":{"CURRENT","STALE","UNAVAILABLE"},
@@ -83,7 +83,7 @@ def _readiness(value):
     if age>300:return {"status":"STALE_RESPONSE"}
     if safe["paper_health"]=="READY":
         if (safe.get("runtime_integrity",{}).get("state")!="VERIFIED"
-                or safe["runtime_integrity"]["provenance_state"]!="VERIFIED"):
+                or safe["runtime_integrity"]["provenance_state"]!="VERIFIED" or safe["runtime_integrity"]["build_state"]!="VERIFIED"):
             raise ValueError("readiness runtime required")
         poll=stamps.get("last_successful_poll_at")
         if age<0 or poll is None or not 0<=age+(generated-poll).total_seconds()<=300:

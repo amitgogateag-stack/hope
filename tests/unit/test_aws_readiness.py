@@ -146,7 +146,7 @@ def _snapshot(**changes):
 
 def _runtime(commit=EXPECTED):
     return lambda *a,**k:dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
-        release_commit=commit,runtime_mode="shared",manifest_sha256="a"*64,inventory_sha256="c"*64,process_sha256="d"*64,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64)
+        release_commit=commit,runtime_mode="shared",manifest_sha256="a"*64,inventory_sha256="c"*64,process_sha256="d"*64,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
 
 
 def inspect_aws_readiness(*args, **kwargs):

@@ -254,16 +254,8 @@ def _verify_provenance(root,sha,mode,*,runtime_manifest,expected_digest,deadline
         name=item["filename"]
         _check(_relative(name)==PurePosixPath(name).name and name not in identities,"ARTIFACT_PATH_INVALID")
         identities[name]=integrity._trusted(artifacts/name)
-    key=integrity._read(public,1024,deadline=deadline)
-    der=base64.b64decode(b"".join(key.splitlines()[1:-1]),validate=True)
-    _check(der.startswith(bytes.fromhex("302a300506032b6570032100")) and len(der)==44,"KEY_INVALID")
-    _check(len(integrity._read(signature,64,deadline=deadline))==64,"SIGNATURE_INVALID")
-    integrity._trusted(OPENSSL.resolve(strict=True),system=True)
-    result=subprocess.run([str(OPENSSL),"pkeyutl","-verify","-rawin","-pubin","-inkey",str(public),
-        "-sigfile",str(signature),"-in",str(path)],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
-        timeout=max(.001,deadline-time.monotonic()),check=False,
-        env={"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C","OPENSSL_CONF":"/dev/null"})
-    _check(result.returncode==0,"SIGNATURE_INVALID")
+    from hope.api.artifact_approval import verify_document
+    _check(verify_document(path,signature,public,expected_digest=expected_digest,deadline=deadline)==descriptor,"APPROVAL_CHANGED")
     _check(isinstance(descriptor,dict) and isinstance(descriptor.get("artifacts"),list)
         and 0<len(descriptor["artifacts"])<=MAX_WHEELS,"MANIFEST_INVALID")
     wheels={};total=0

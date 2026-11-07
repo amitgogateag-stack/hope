@@ -306,6 +306,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/acceptance.json":
+            from hope.api.acceptance_evidence import read_acceptance
+            payload=json.dumps(read_acceptance(self.server.snapshot.parent/"acceptance-result.json"),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/rehearsal.json":
             from hope.api.rehearsal_evidence import read_rehearsal
             payload=json.dumps(read_rehearsal(self.server.snapshot.parent/"rehearsal-result.json"),separators=(",",":")).encode()

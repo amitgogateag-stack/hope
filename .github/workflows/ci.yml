@@ -49,6 +49,8 @@ jobs:
           for script in deploy/operations/*.sh; do
             bash -n "$script"
           done
+      - name: M4 reproducibility and acceptance preflight
+        run: pytest -q tests/unit/test_release_builder.py tests/unit/test_build_evidence.py tests/unit/test_operational_acceptance.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope

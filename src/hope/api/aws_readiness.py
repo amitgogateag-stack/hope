@@ -1071,6 +1071,7 @@ def _inspect_stable_readiness(
     elif runtime["release_commit"]!=deployed_sha:blockers.append("RUNTIME_RELEASE_MISMATCH")
     elif runtime["process_sha256"] is None:blockers.append("RUNTIME_PROCESS_UNVERIFIED")
     if runtime["provenance_state"]!="VERIFIED":blockers.append("PACKAGE_PROVENANCE_UNVERIFIED")
+    if runtime["build_state"]!="VERIFIED":blockers.append("RELEASE_BUILD_UNVERIFIED")
 
     # The HTTP documents are meaningful only for the service generation that
     # was authenticated before they were read. A restart does not take the
