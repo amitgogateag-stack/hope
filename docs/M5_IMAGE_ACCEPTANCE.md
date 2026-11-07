@@ -15,10 +15,11 @@ It emits `a/`, `b/` OCI layouts and `candidate.json` only after equality checks.
 No registry, daemon, network, pip, package hook, signing key or cleanup command
 is used. Existing directories are never reused.
 
-Independent Ed25519 signatures approve the base document and M4 release
-approval. The base document binds a bounded uncompressed POSIX tar to its full
+Independent Ed25519 signatures approve the base document, builder inputs and
+M4 release approval. All three keys must differ. The image builder reuses the
+release builder input validator and requires signed image-compatible v2 inputs. The base document binds a bounded uncompressed POSIX tar to its full
 file/mode inventory, actual Python 3.13 executable bytes and `/etc/os-release`.
-The base and release signing keys must differ. Archives reject special files,
+The approved builder platform must match the OS architecture. Archives reject special files,
 symlinks, hardlinks, traversal, duplicate names, whiteouts, writable/setuid
 modes, PAX overrides and excessive files/bytes. OS inputs must be regular-file
 materializations; distribution symlinks must be resolved by a separately
@@ -34,7 +35,10 @@ production credentials, current pointers, deployment receipts or trust keys.
 Signed `hope.build-input.v2` permits only `/usr/bin/python3.13` as the logical OS
 Python. It normalizes generated venv `home` and `executable` metadata; interpreter
 and package bytes remain unchanged. Existing v1 host builds retain their
-original behavior. The image verifier reconstructs and hashes the original
+original behavior. PAPER bootstrap accepts an explicit `--runtime-mode release`
+and carries it through pinned reauthentication; the default remains shared.
+An invalid selector never reaches authentication or process execution.
+The image verifier reconstructs and hashes the original
 release archive to reject contradictory evidence even when an image signature
 and every OCI content address are valid.
 
@@ -49,9 +53,11 @@ code, and no automatic production trust authority.
 
 A distinct policy key signs `hope.image-policy.v1` with positive integer
 `generation`, integer `issued_at`/`expires_at` (maximum 24 hours), and bounded
-`revoked_images`/`revoked_keys` SHA256 lists. Key revocation fingerprints the
+`revoked_images`/`revoked_keys` SHA256 lists. Revocation covers image signing
+keys and all three upstream provenance keys retained in the image approval. Key revocation fingerprints the
 Ed25519 SPKI DER, not PEM whitespace. Verification rechecks signatures, expiry,
-policy and all OCI blobs on every call. Callers may pin `minimum_generation`;
+policy and all OCI blobs on every call, including expiry at the closing
+observation. Replacement during construction/attestation fails closed. Callers may pin `minimum_generation`;
 policy generation is not a durable anti-rollback counter by itself. Production
 adoption must supply an independently maintained minimum generation and clock.
 

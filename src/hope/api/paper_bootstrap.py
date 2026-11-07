@@ -13,11 +13,12 @@ from hope.api.runtime_integrity import _require
 def main(argv=None,*,release,execute=None):
     parser=argparse.ArgumentParser(add_help=False)
     parser.add_argument("--approved-runtime-manifest")
+    parser.add_argument("--runtime-mode",choices=("shared","release"),default="shared")
     parser.add_argument("--preflight",action="store_true")
     args,forwarded=parser.parse_known_args(argv)
     try:
         _require(sys.flags.isolated,"ISOLATION_REQUIRED")
-        python,evidence=authenticate_control(release,"shared",expected_manifest=args.approved_runtime_manifest)
+        python,evidence=authenticate_control(release,args.runtime_mode,expected_manifest=args.approved_runtime_manifest)
         _require(os.environ.get("HOPE_DEPLOYED_COMMIT")==Path(release).name
             and os.environ.get("HOPE_LIVE_ENABLED")=="false","PAPER_DEPLOYMENT_UNVERIFIED")
         if args.approved_runtime_manifest is None:
@@ -26,7 +27,7 @@ def main(argv=None,*,release,execute=None):
             for name in ("HOPE_DATABASE_URL","HOPE_DEPLOYED_COMMIT","HOPE_LIVE_ENABLED","NOTIFY_SOCKET","WATCHDOG_PID","WATCHDOG_USEC"):
                 if name in os.environ:environment[name]=os.environ[name]
             arguments=[str(python),"-I","-B","-X",CACHE_PREFIX,str(Path(release)/"deploy/operations/paper_release.py"),
-                "--approved-runtime-manifest",evidence["manifest_sha256"]]
+                "--approved-runtime-manifest",evidence["manifest_sha256"],"--runtime-mode",args.runtime_mode]
             if args.preflight:arguments.append("--preflight")
             return (execute or os.execve)(str(python),arguments+forwarded,environment)
         verify_interpreter(python)

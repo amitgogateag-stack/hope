@@ -122,6 +122,18 @@ def _tar(path,files,epoch):
     r._require(path.stat().st_size<=MAX_ARCHIVE,"BUILD_ARCHIVE_LIMIT")
 
 
+def validate_build_plan(plan):
+    """Shared signed input schema for builds and downstream image verification."""
+    fields={"schema","release_commit","builder_id","builder","epoch","deployment_root","artifacts","requested_extras"}
+    r._require(isinstance(plan,dict) and ((set(plan)==fields and plan["schema"]=="hope.build-input.v1")
+        or (set(plan)==fields|{"os_python"} and plan["schema"]=="hope.build-input.v2" and plan["os_python"]=="/usr/bin/python3.13"))
+        and re.fullmatch("[0-9a-f]{64}",plan["builder_id"]) and type(plan["epoch"]) is int and 0<=plan["epoch"]<=4102444800,"BUILD_INPUT_INVALID")
+    sha=r._sha(plan["release_commit"]);logical=Path(plan["deployment_root"])/"release-venvs"/sha
+    r._require(Path(plan["deployment_root"]).is_absolute() and str(logical).find("\n")==-1
+        and " " not in str(logical) and not any(v in {".",".."} for v in logical.parts),"BUILD_PREFIX_INVALID")
+    return sha,logical
+
+
 def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,python):
     """Two independently created runtimes, compared before emitting candidates."""
     source,work,inputs,signature,public=map(Path,(source,work,inputs,signature,public))
@@ -130,13 +142,7 @@ def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,p
         and r._read(work/".hope-builder",64)==MARKER,"BUILD_DISPOSABLE_ROOT_REQUIRED")
     r._require(all(not path.resolve(strict=True).is_relative_to(work) for path in (source,inputs,signature,public)),"BUILD_AUTHORITY_OVERLAP")
     plan=verify_document(inputs,signature,public,expected_digest=expected_inputs_digest)
-    fields={"schema","release_commit","builder_id","builder","epoch","deployment_root","artifacts","requested_extras"}
-    r._require(isinstance(plan,dict) and ((set(plan)==fields and plan["schema"]=="hope.build-input.v1")
-        or (set(plan)==fields|{"os_python"} and plan["schema"]=="hope.build-input.v2" and plan["os_python"]=="/usr/bin/python3.13"))
-        and re.fullmatch("[0-9a-f]{64}",plan["builder_id"]) and type(plan["epoch"]) is int and 0<=plan["epoch"]<=4102444800,"BUILD_INPUT_INVALID")
-    sha=r._sha(plan["release_commit"]);logical=Path(plan["deployment_root"])/"release-venvs"/sha
-    r._require(Path(plan["deployment_root"]).is_absolute() and str(logical).find("\n")==-1
-        and " " not in str(logical) and not any(v in {".",".."} for v in logical.parts),"BUILD_PREFIX_INVALID")
+    sha,logical=validate_build_plan(plan)
     r._require(builder_identity(python)==plan["builder"],"BUILD_BUILDER_MISMATCH")
     source_files=_source(source,sha);source_digest=r._digest(r._canonical({k:r._digest(v) for k,v in source_files.items()}))
     r._require(isinstance(plan["artifacts"],list) and 0<len(plan["artifacts"])<=p.MAX_WHEELS,"BUILD_ARTIFACT_LIMIT")

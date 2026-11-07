@@ -48,7 +48,7 @@ def _name(name):
 def _members(payload):
     """Validate before writing anything: no devices, hardlinks or extraction API."""
     _check(len(payload) <= MAX_LAYER)
-    entries = {}; total = 0
+    entries = {}; total = 0; consumed = 0
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
         for member in archive:
             name = _name(member.name.rstrip("/") if member.isdir() else member.name)
@@ -60,7 +60,8 @@ def _members(payload):
             data = archive.extractfile(member).read(MAX_LAYER + 1) if member.isfile() else b""
             _check(len(data) == member.size)
             entries[name] = (data, member.mode, member.isdir())
-    _check(entries)
+            consumed=member.offset_data+((member.size+511)//512)*512
+    _check(entries and len(payload)-consumed >= 1024 and not any(payload[consumed:]))
     for name in entries:
         for parent in PurePosixPath(name).parents:
             if str(parent) in entries:_check(entries[str(parent)][2])
@@ -144,7 +145,9 @@ def _release(document, payload, base):
     for digest in hashes.values():_hash(digest)
     _check(r._digest(payload) == hashes["release.tar"]
         and document["builder"]["python_sha256"] == base["python_sha256"]
-        and document["builder"]["os_release_sha256"] == base["os_release_sha256"])
+        and document["builder"]["os_release_sha256"] == base["os_release_sha256"]
+        and document["builder"]["platform"] == dict(system="Linux",machine={"amd64":"x86_64","arm64":"aarch64"}[base["architecture"]],
+            python="3.13",implementation="cpython"))
     entries = _members(payload); evidence = {}
     for name, (data, mode, directory) in entries.items():
         prefix, separator, relative = name.partition("/")
@@ -191,7 +194,8 @@ def _layout(base_payload, overlay, architecture, epoch, sha):
         **{"blobs/sha256/"+key:value for key,value in blobs.items()}},r._digest(manifest)
 
 
-def build_image(work, base_document, base_archive, release_document, release_archive, *, base_public, release_public):
+def build_image(work, base_document, base_archive, release_document, release_archive, *, base_public, release_public,
+                builder_document, builder_public):
     """Construct two content-addressed OCI layouts in a new marked temp root.
 
     The image is deliberately a lab candidate. Production launch integration,
@@ -201,13 +205,24 @@ def build_image(work, base_document, base_archive, release_document, release_arc
     _check(work.resolve(strict=True) == work and work.is_relative_to(temporary) and work != temporary
         and r._read(work/".hope-image-builder",64) == MARKER)
     r._trusted(work,directory=True)
-    inputs = tuple(map(Path,(base_document,base_archive,release_document,release_archive,base_public,release_public)))
+    inputs = tuple(map(Path,(base_document,base_archive,release_document,release_archive,base_public,release_public,
+        builder_document,builder_public)))
     _check(all(not path.resolve(strict=True).is_relative_to(work) for path in inputs))
     identities = {path:r._trusted(path) for path in inputs}
     base = _signed(base_document,base_public); release = _signed(release_document,release_public)
-    _check(_key_digest(base_public) != _key_digest(release_public))
+    provenance_keys=sorted(_key_digest(path) for path in (base_public,release_public,builder_public))
+    _check(len(set(provenance_keys)) == 3)
+    plan = _signed(builder_document,builder_public,digest=release["inputs_sha256"])
+    from hope.api.release_builder import validate_build_plan
+    validate_build_plan(plan)
+    _check(plan["schema"] == "hope.build-input.v2" and all(plan[key] == release[key]
+        for key in ("release_commit","builder_id","builder","epoch","deployment_root")))
     base_bytes = r._read(Path(base_archive),MAX_LAYER); release_bytes = r._read(Path(release_archive),MAX_LAYER)
     _base(base,base_bytes); sha,entries,runtime = _release(release,release_bytes,base)
+    packages=strict_json(entries["evidence/package-provenance.json"][0])
+    _check(sorted(plan["artifacts"],key=lambda a:a["filename"]) == sorted([
+        {key:a[key] for key in ("filename","sha256","name","version")} for a in packages["artifacts"]],key=lambda a:a["filename"])
+        and plan["requested_extras"] == packages["requested_extras"])
     overlay = {}; prefix = "opt/hope-operations/"
     for name,value in entries.items():
         group,relative = name.split("/",1)
@@ -215,17 +230,19 @@ def build_image(work, base_document, base_archive, release_document, release_arc
         overlay[prefix+mapped+"/"+relative] = value
     overlay[prefix+"candidate-evidence/"+sha+"/release-approval.json"] = (r._canonical(release),0o644,False)
     overlay[prefix+"candidate-evidence/"+sha+"/base.json"] = (r._canonical(base),0o644,False)
+    overlay[prefix+"candidate-evidence/"+sha+"/builder-inputs.json"] = (r._canonical(plan),0o644,False)
     # Link declarations remain evidence, never unchecked tar symlinks. A lab
     # image cannot claim executable compatibility until a real launch verifies it.
     image_a,digest = _layout(base_bytes,_tar(overlay,release["epoch"]),base["architecture"],release["epoch"],sha)
     image_b,digest_b = _layout(base_bytes,_tar(overlay,release["epoch"]),base["architecture"],release["epoch"],sha)
     _check(image_a == image_b and digest == digest_b)
     _check(all(r._trusted(path) == identity for path,identity in identities.items())
-        and _signed(base_document,base_public) == base and _signed(release_document,release_public) == release)
+        and _signed(base_document,base_public) == base and _signed(release_document,release_public) == release
+        and _signed(builder_document,builder_public,digest=release["inputs_sha256"]) == plan)
     report = dict(schema="hope.image-candidate.v1",scope="DISPOSABLE_LAB_ONLY",state="REPRODUCIBLE",
         release_commit=sha,image_sha256=digest,base_sha256=base["layer_sha256"],
         base_inventory_sha256=base["inventory_sha256"],release_approval_sha256=r._digest(r._canonical(release)),
-        hashes=release["hashes"],execution_authorized=False)
+        hashes=release["hashes"],provenance_keys=provenance_keys,execution_authorized=False)
     for name,layout in (("a",image_a),("b",image_b)):
         destination = work/name; destination.mkdir(mode=0o700)
         for relative,payload in layout.items():
@@ -236,7 +253,8 @@ def build_image(work, base_document, base_archive, release_document, release_arc
 
 def verify_image(layout, approval_path, image_public, policy_path, policy_public, *, expected_sha, now=None, minimum_generation=1):
     """Reverify every content address and current revocation; never cache policy."""
-    now = int(time.time()) if now is None else now
+    live_clock=now is None
+    now = int(time.time()) if live_clock else now
     _check(type(now) is int and type(minimum_generation) is int and minimum_generation > 0)
     layout = Path(layout); approval_path = Path(approval_path)
     authorities = tuple(map(Path,(approval_path,approval_path.with_suffix(".sig"),image_public,
@@ -247,7 +265,7 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
     _check(policy["generation"] >= minimum_generation)
     approval = _signed(approval_path,image_public)
     fields = {"schema","scope","state","release_commit","image_sha256","base_sha256","base_inventory_sha256",
-        "release_approval_sha256","hashes","execution_authorized","issued_at","expires_at"}
+        "release_approval_sha256","hashes","provenance_keys","execution_authorized","issued_at","expires_at"}
     _check(isinstance(approval,dict) and set(approval) == fields and approval["schema"] == "hope.image-approval.v1"
         and approval["scope"] == "DISPOSABLE_LAB_ONLY" and approval["state"] == "APPROVED"
         and approval["execution_authorized"] is False and approval["release_commit"] == r._sha(expected_sha)
@@ -255,8 +273,13 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
         and approval["issued_at"] <= now < approval["expires_at"]
         and 0 < approval["expires_at"] - approval["issued_at"] <= 86400)
     for key in ("image_sha256","base_sha256","base_inventory_sha256","release_approval_sha256"):_hash(approval[key])
+    _check(isinstance(approval["provenance_keys"],list) and len(approval["provenance_keys"]) == 3
+        and len(set(approval["provenance_keys"])) == 3)
+    for key in approval["provenance_keys"]:_hash(key)
+    _check(_key_digest(image_public) not in approval["provenance_keys"]
+        and _key_digest(policy_public) not in approval["provenance_keys"])
     _check(approval["image_sha256"] not in policy["revoked_images"]
-        and _key_digest(image_public) not in policy["revoked_keys"])
+        and not set([_key_digest(image_public),*approval["provenance_keys"]]) & set(policy["revoked_keys"]))
     directory = r._trusted(layout,directory=True); observed = {}
     parents={path:r._trusted(path,directory=True) for path in (layout/"blobs",layout/"blobs/sha256")}
     def read(path,limit):
@@ -301,15 +324,24 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
         and release["hashes"] == approval["hashes"] and release["release_commit"] == expected_sha
         and base["layer_sha256"] == approval["base_sha256"] and base["inventory_sha256"] == approval["base_inventory_sha256"])
     _base(base,layers[0])
+    plan_bytes=inventories[1][prefix+"builder-inputs.json"][0];plan=strict_json(plan_bytes)
+    from hope.api.release_builder import validate_build_plan
+    validate_build_plan(plan)
+    _check(r._digest(plan_bytes) == release["inputs_sha256"] and plan["schema"] == "hope.build-input.v2"
+        and all(plan[key] == release[key] for key in ("release_commit","builder_id","builder","epoch","deployment_root")))
     restored = {}
     mappings = {"opt/hope-operations/releases/"+expected_sha+"/":"release/",
         "opt/hope-operations/release-venvs/"+expected_sha+"/":"runtime/",prefix:"evidence/"}
     for name,value in inventories[1].items():
-        if name in {prefix+"base.json",prefix+"release-approval.json"}:continue
+        if name in {prefix+"base.json",prefix+"release-approval.json",prefix+"builder-inputs.json"}:continue
         matching = [key for key in mappings if name.startswith(key)]
         _check(len(matching) == 1)
         key = matching[0];restored[mappings[key]+name[len(key):]] = value
     _release(release,_tar(restored,release["epoch"]),base)
+    packages=strict_json(inventories[1][prefix+"package-provenance.json"][0])
+    _check(sorted(plan["artifacts"],key=lambda a:a["filename"]) == sorted([
+        {key:a[key] for key in ("filename","sha256","name","version")} for a in packages["artifacts"]],key=lambda a:a["filename"])
+        and plan["requested_extras"] == packages["requested_extras"])
     _check(set(approval["hashes"]) == {"runtime-manifest.json","package-provenance.json","sbom.json","release.tar"})
     for name,digest in approval["hashes"].items():
         _hash(digest)
@@ -318,6 +350,7 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
         and all(r._trusted(path,directory=True) == identity for path,identity in parents.items())
         and r._trusted(layout,directory=True) == directory
         and _policy(policy_path,policy_public,now=now) == policy and _signed(approval_path,image_public) == approval)
+    _check(not live_clock or now <= int(time.time()) < min(approval["expires_at"],policy["expires_at"]))
     return dict(schema="hope.image-observation.v1",scope="DISPOSABLE_LAB_ONLY",state="VERIFIED",
         release_commit=expected_sha,image_sha256=approval["image_sha256"],expires_at=min(approval["expires_at"],policy["expires_at"]),
         policy_generation=policy["generation"],execution_authorized=False)
@@ -325,7 +358,7 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
 
 def main(argv=None):
     parser=argparse.ArgumentParser(description="Build unsigned offline lab OCI candidates; never deploy")
-    for name in ("work","base-document","base-archive","release-document","release-archive","base-public","release-public"):
+    for name in ("work","base-document","base-archive","release-document","release-archive","base-public","release-public","builder-document","builder-public"):
         parser.add_argument("--"+name,type=Path,required=True)
     try:report=build_image(**vars(parser.parse_args(argv)))
     except Exception:

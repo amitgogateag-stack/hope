@@ -72,7 +72,8 @@ def image_case(build_case):
     base_document=folder/'base.json';write_signed(base_document,base,base_private)
     work=args['work'].parent/'image-work';work.mkdir();(work/'.hope-image-builder').write_bytes(image.MARKER)
     arguments=dict(work=work,base_document=base_document,base_archive=base_archive,release_document=release_document,
-        release_archive=args['work']/'a/release.tar',base_public=base_public,release_public=release_public)
+        release_archive=args['work']/'a/release.tar',base_public=base_public,release_public=release_public,
+        builder_document=args['inputs'],builder_public=args['public'])
     return arguments,plan,folder
 
 
@@ -118,11 +119,12 @@ def test_independent_signatures_reproducibility_full_linkage_and_rootfs_python(a
 
 
 @pytest.mark.parametrize('fault',['image_revoked','key_revoked','expired_policy','future_policy','expired_approval','future_approval',
-    'generation','unsigned','wrong_signer','release','blob','config','sbom','runtime','source','archive_link','base_inventory','extra_overlay'])
+    'generation','unsigned','wrong_signer','release','blob','config','sbom','runtime','source','archive_link','base_inventory','extra_overlay','builder_revoked','builder_inputs'])
 def test_revocation_expiry_substitution_and_contradictions_fail_closed(approved_image,fault):
     args,candidate,verify,approval,key,policy,policy_key=approved_image
     if fault=='image_revoked':policy['revoked_images']=[candidate['image_sha256']]
     elif fault=='key_revoked':policy['revoked_keys']=[image._key_digest(verify['image_public'])]
+    elif fault=='builder_revoked':policy['revoked_keys']=[candidate['provenance_keys'][0]]
     elif fault=='expired_policy':policy['expires_at']=verify['now']
     elif fault=='future_policy':policy['issued_at']=verify['now']+1
     elif fault=='expired_approval':approval['expires_at']=verify['now']
@@ -147,8 +149,8 @@ def test_revocation_expiry_substitution_and_contradictions_fail_closed(approved_
         else:
             entries=image._members(layers[1]);prefix='opt/hope-operations/'
             if fault=='extra_overlay':entries['tmp/unapproved']=(b'unapproved',0o644,False)
-            elif fault in {'sbom','runtime'}:
-                name=prefix+'candidate-evidence/'+candidate['release_commit']+'/'+('sbom.json' if fault=='sbom' else 'runtime-manifest.json')
+            elif fault in {'sbom','runtime','builder_inputs'}:
+                name=prefix+'candidate-evidence/'+candidate['release_commit']+'/'+{'sbom':'sbom.json','runtime':'runtime-manifest.json','builder_inputs':'builder-inputs.json'}[fault]
                 entries[name]=(b'{}',0o644,False)
             elif fault=='source':
                 name=next(n for n in entries if '/releases/' in n);entries[name]=(b'changed',0o644,False)
@@ -182,17 +184,65 @@ def test_unsigned_or_private_diagnostics_never_expose_paths(tmp_path):
     assert str(tmp_path) not in str(result) and len(result)==8
 
 
-@pytest.mark.parametrize('fault',['missing_marker','base_signature','release_signature','base_bytes','release_bytes','base_python','unapproved_prefix'])
+@pytest.mark.parametrize('fault',['missing_marker','base_signature','release_signature','builder_signature','base_bytes','release_bytes','base_python','unapproved_prefix','authority_reuse','architecture'])
 def test_builder_rejects_unapproved_inputs_before_writing_layout(image_case,fault):
     args,_,folder=image_case
     if fault=='missing_marker':(args['work']/'.hope-image-builder').unlink()
     elif fault in {'base_signature','release_signature'}:args['base_document' if fault.startswith('base') else 'release_document'].with_suffix('.sig').write_bytes(b'x'*64)
+    elif fault=='builder_signature':args['builder_document'].with_suffix('.sig').write_bytes(b'x'*64)
+    elif fault=='authority_reuse':args['builder_public']=args['release_public']
     elif fault in {'base_bytes','release_bytes'}:args['base_archive' if fault.startswith('base') else 'release_archive'].write_bytes(b'x')
     elif fault=='base_python':
         document=r.strict_json(args['base_document'].read_bytes());document['python_sha256']='a'*64
+        write_signed(args['base_document'],document,folder/'base-authority.key')
+    elif fault=='architecture':
+        document=r.strict_json(args['base_document'].read_bytes());document['architecture']='arm64'
         write_signed(args['base_document'],document,folder/'base-authority.key')
     else:
         document=r.strict_json(args['release_document'].read_bytes());document['deployment_root']='/unapproved'
         write_signed(args['release_document'],document,folder/'release-authority.key')
     with pytest.raises(Exception):image.build_image(**args)
     assert not (args['work']/'a').exists() and not (args['work']/'candidate.json').exists()
+
+
+def test_expiry_during_attestation_does_not_return_verified(approved_image,monkeypatch):
+    _,_,verification,_,_,_,_=approved_image
+    clock=iter((verification['now'],verification['now']+301))
+    monkeypatch.setattr(image.time,'time',lambda:next(clock))
+    arguments={k:v for k,v in verification.items() if k!='now'}
+    with pytest.raises(RuntimeError):image.verify_image(**arguments)
+
+
+def test_policy_replacement_during_snapshot_is_detected(approved_image,monkeypatch):
+    _,_,verification,_,_,_,_=approved_image
+    original=image._members;count=0
+    def concurrent(payload):
+        nonlocal count
+        entries=original(payload);count+=1
+        if count==1:
+            path=verification['policy_path'];other=path.with_suffix('.replacement')
+            other.write_bytes(path.read_bytes());other.replace(path)
+        return entries
+    monkeypatch.setattr(image,'_members',concurrent)
+    with pytest.raises(RuntimeError):image.verify_image(**verification)
+
+
+def test_builder_input_replacement_during_construction_emits_no_candidate(image_case,monkeypatch):
+    args,_,_=image_case;original=image._layout;count=0
+    def concurrent(*values):
+        nonlocal count
+        result=original(*values);count+=1
+        if count==1:
+            path=args['builder_document'];other=path.with_suffix('.replacement')
+            other.write_bytes(path.read_bytes());other.replace(path)
+        return result
+    monkeypatch.setattr(image,'_layout',concurrent)
+    with pytest.raises(RuntimeError):image.build_image(**args)
+    assert not (args['work']/'candidate.json').exists() and not (args['work']/'a').exists()
+
+
+def test_layer_cannot_hide_trailing_concatenated_payload():
+    payload=image._tar({'safe':(b'safe',0o644,False)},0)
+    assert image._members(payload)['safe'][0]==b'safe'
+    with pytest.raises(RuntimeError):image._members(payload+b'hidden payload')
+    with pytest.raises(RuntimeError):image._members(payload+payload)
