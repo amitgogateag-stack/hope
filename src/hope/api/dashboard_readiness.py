@@ -89,6 +89,10 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
     elif (runtime["state"]!="VERIFIED"
             or (expected_commit is not None and runtime["release_commit"]!=expected_commit)):
         result["reason"]="RUNTIME_"+(runtime["state"] if runtime["state"]!="VERIFIED" else "MISMATCH")
+    elif runtime["provenance_state"]!="VERIFIED":
+        result["reason"]="PACKAGE_PROVENANCE_UNVERIFIED"
+    elif health.get("runtime_gate")!="VERIFIED":
+        result["reason"]="PAPER_RUNTIME_UNVERIFIED"
     else:
         result.update(paper_health="READY",reason="CURRENT_OBSERVATIONS_ONLY")
     return result

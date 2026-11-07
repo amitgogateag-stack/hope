@@ -15,7 +15,7 @@ from hope.api.dashboard_server import DashboardHTTPServer,_verified_operations
 def verified_runtime(commit="a"*40):
     return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
         release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,
-        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64)
 
 
 @pytest.mark.parametrize("case,expected,reason",[

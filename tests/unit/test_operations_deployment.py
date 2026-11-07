@@ -269,7 +269,7 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     for required in ("User=hope-paper", "Type=notify", "NotifyAccess=main", "WatchdogSec=15min",
                      "Restart=always", "KillSignal=SIGTERM",
                      "TimeoutStartSec=15min", "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
-                     "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
+                     "paper_release.py --preflight", "/usr/bin/python3 -I -B -S", "NoNewPrivileges=yes"):
         assert required in paper
     web = (root / "hope-ops-dashboard-web.service").read_text()
     assert "--port 8788" in web and "--operations-status-file" in web
@@ -305,6 +305,19 @@ def test_python_units_ignore_ambient_python_or_loader_paths(name, python_path):
                      "PYTHONPLATLIBDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
         assert variable in unset.split("=", 1)[1].split()
     assert "Environment=PYTHONPATH=" not in unit
+    if name=="hope-paper.service":
+        import shlex
+        commands=[shlex.split(line.split("=",1)[1]) for line in unit.splitlines()
+            if line.startswith(("ExecStart=","ExecStartPre="))]
+        assert len(commands)==2
+        for command in commands:
+            assert command[:7]==["/usr/bin/python3","-I","-B","-S","-X",
+                "pycache_prefix=/nonexistent/hope-runtime-bootstrap",
+                "/opt/hope-operations/current/deploy/operations/paper_release.py"]
+            assert not any("PYTHONPATH=" in argument for argument in command)
+        assert commands[0][7:]==["--preflight"]
+        assert commands[1][7:9]==["--factory","${HOPE_PAPER_FACTORY}"]
+        return
     python_commands = [line for line in unit.splitlines()
                        if line.startswith(("ExecStart=", "ExecStartPre=")) and "/python " in line]
     assert python_commands

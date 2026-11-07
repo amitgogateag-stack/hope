@@ -20,6 +20,7 @@ def authenticate_control(release,mode,*,expected_manifest=None):
         operations.inspect_release(release,sha)
         before=source_snapshot(release)
         evidence=attest_runtime(root,sha,mode,expected_manifest=expected_manifest,release=release)
+        _require(evidence.get("provenance_state")=="VERIFIED","PACKAGE_PROVENANCE_REQUIRED")
         operations.inspect_release(release,sha)
         _require(source_snapshot(release)==before,"SOURCE_CHANGED")
     return environment_path(root,sha,mode)/"bin/python",evidence

@@ -20,7 +20,7 @@ def control(tmp_path,monkeypatch):
     monkeypatch.setattr(m.operations,"_activation_guard",lambda *a,**k:nullcontext())
     inspector=Mock();monkeypatch.setattr(m.operations,"inspect_release",inspector)
     snapshot=Mock(return_value={"source":"stable"});monkeypatch.setattr(m,"source_snapshot",snapshot)
-    attestor=Mock(return_value={"manifest_sha256":"a"*64});monkeypatch.setattr(m,"attest_runtime",attestor)
+    attestor=Mock(return_value={"manifest_sha256":"a"*64,"provenance_state":"VERIFIED"});monkeypatch.setattr(m,"attest_runtime",attestor)
     return release,inspector,snapshot,attestor
 
 
