@@ -287,12 +287,37 @@ def publish_startup_failure(path,commit):
         last_failure_code="PAPER_RUNTIME_UNVERIFIED",runtime_gate="UNVERIFIED",paper_only=True,live_enabled=False))
 
 
-def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
+def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
+    """Production guarded workers retain a private, exclusive recovery history."""
+    if kwargs.get("cycle_guard") is None:return _run_service(engine,factory,**kwargs)
+    from hope.infrastructure.paper_history import history_lease
+    try:
+        with history_lease(kwargs["status_file"],publish_service_status) as history:
+            from contextlib import contextmanager
+            guard=kwargs["cycle_guard"]
+            @contextmanager
+            def guarded_history():
+                history.check()
+                with guard() as check:
+                    def admitted():
+                        history.check()
+                        if check is not None:check()
+                    admitted();yield admitted
+                    admitted()
+            return _run_service(engine,factory,history=history,**dict(kwargs,cycle_guard=guarded_history))
+    except Exception:
+        # Corruption or a conflicting publisher must invalidate a previous
+        # CURRENT heartbeat before any factory can run in this instance.
+        publish_startup_failure(kwargs["status_file"],os.getenv("HOPE_DEPLOYED_COMMIT"))
+        return 1
+
+
+def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
                 status_file: str | Path, stop_event: Event | None = None,
                 poll_seconds: float = 30, once: bool = False,
                 now: Callable[[], datetime] = lambda: datetime.now(UTC),
                 require_certified: bool = False,
-                notifier: SystemdNotifier | None = None,cycle_guard=None) -> int:
+                notifier: SystemdNotifier | None = None,cycle_guard=None,history=None) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
     if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)) or not 1 <= poll_seconds <= 300:
         raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
@@ -306,6 +331,7 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
                   runtime_gate="UNVERIFIED")
     def publish():
         health["generated_at"] = datetime.now(UTC).isoformat()
+        if history is not None:history.append(health)
         publish_service_status(status_file, health)
         print(json.dumps(health, sort_keys=True, separators=(",", ":")), flush=True)
     publish()

@@ -26,7 +26,8 @@ def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadl
     inputs=folder/(sha+"-"+mode+".inputs.json");builder_key=root/"runtime-trust/builders-ed25519.pub"
     input_identity=r._trusted(inputs)
     plan=verify_document(inputs,inputs.with_suffix(".sig"),builder_key,expected_digest=approval["inputs_sha256"],deadline=deadline)
-    r._require(plan["schema"]=="hope.build-input.v1" and all(plan[k]==approval[k]
+    r._require((plan["schema"]=="hope.build-input.v1" or (plan["schema"]=="hope.build-input.v2"
+        and plan.get("os_python")=="/usr/bin/python3.13")) and all(plan[k]==approval[k]
         for k in ("release_commit","builder_id","builder","epoch","deployment_root"))
         and approval["builder"]["python_sha256"]==runtime_manifest["interpreter"]["sha256"],"BUILD_BUILDER_MISMATCH")
     r._require(isinstance(hashes,dict) and set(hashes)=={"runtime-manifest.json","package-provenance.json","sbom.json","release.tar"},"BUILD_APPROVAL_INVALID")

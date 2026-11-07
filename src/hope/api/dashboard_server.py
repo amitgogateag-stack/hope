@@ -306,6 +306,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/image.json":
+            from hope.api.image_diagnostics import image_observation
+            payload=json.dumps(image_observation(self.server.snapshot.parent/"image-evidence",self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/history.json":
+            from hope.infrastructure.paper_history import history_observation
+            path=Path(str(self.server.operations)+".history.json") if self.server.operations is not None else self.server.snapshot.parent/"paper-health.json.history.json"
+            payload=json.dumps(history_observation(path),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/acceptance.json":
             from hope.api.acceptance_evidence import read_acceptance
             payload=json.dumps(read_acceptance(self.server.snapshot.parent/"acceptance-result.json"),separators=(",",":")).encode()

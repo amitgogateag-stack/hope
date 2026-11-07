@@ -131,7 +131,8 @@ def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,p
     r._require(all(not path.resolve(strict=True).is_relative_to(work) for path in (source,inputs,signature,public)),"BUILD_AUTHORITY_OVERLAP")
     plan=verify_document(inputs,signature,public,expected_digest=expected_inputs_digest)
     fields={"schema","release_commit","builder_id","builder","epoch","deployment_root","artifacts","requested_extras"}
-    r._require(isinstance(plan,dict) and set(plan)==fields and plan["schema"]=="hope.build-input.v1"
+    r._require(isinstance(plan,dict) and ((set(plan)==fields and plan["schema"]=="hope.build-input.v1")
+        or (set(plan)==fields|{"os_python"} and plan["schema"]=="hope.build-input.v2" and plan["os_python"]=="/usr/bin/python3.13"))
         and re.fullmatch("[0-9a-f]{64}",plan["builder_id"]) and type(plan["epoch"]) is int and 0<=plan["epoch"]<=4102444800,"BUILD_INPUT_INVALID")
     sha=r._sha(plan["release_commit"]);logical=Path(plan["deployment_root"])/"release-venvs"/sha
     r._require(Path(plan["deployment_root"]).is_absolute() and str(logical).find("\n")==-1
@@ -163,7 +164,13 @@ def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,p
         # installed dependency or runtime input and must not broaden the allowlist.
         (environment/".gitignore").unlink(missing_ok=True)
         config=environment/"pyvenv.cfg";lines=config.read_text().splitlines()
-        config.write_text("\n".join(line for line in lines if not line.startswith(("command =","prompt =")))+"\n",encoding="utf-8",newline="\n")
+        lines=[line for line in lines if not line.startswith(("command =","prompt ="))]
+        if plan["schema"]=="hope.build-input.v2":
+            # Only generated venv metadata is normalized, under explicit signed
+            # approval. Package bytes and interpreter content remain unchanged.
+            lines=[("home = /usr/bin" if line.startswith("home =") else
+                "executable = /usr/bin/python3.13" if line.startswith("executable =") else line) for line in lines]
+        config.write_text("\n".join(lines)+"\n",encoding="utf-8",newline="\n")
         _install(environment,wheels,logical)
         runtime=r.build_runtime_manifest(root,sha,"release")
         descriptor=p.build_candidate(root,sha,"release",wheels,runtime_manifest=runtime,requested_extras=plan["requested_extras"])

@@ -465,3 +465,50 @@ def test_lost_service_result_after_commit_restarts_from_durable_truth(admitted_p
     assert json.loads(status.read_text())["state"] == "UNAVAILABLE"
     assert _cycle(engine, lambda *_: plan()) == (0, 1)
     assert _counts(engine, run) == (1, 1, 1)
+
+@pytest.mark.integration
+def test_m5_repeated_failure_restart_history_and_lost_ack_preserve_exactly_once(admitted_plan,monkeypatch,tmp_path):
+    """Disposable PostgreSQL + genuine history/lease; no production admission."""
+    from contextlib import contextmanager
+    from sqlalchemy.exc import OperationalError
+    from hope.infrastructure.paper_history import read_history,history_observation
+    engine,plan,run=admitted_plan;status=tmp_path/'m5-health.json';history=Path(str(status)+'.history.json')
+    calls=[];admission={'valid':False}
+    @contextmanager
+    def reviewed_lab_guard():
+        def check():
+            if not admission['valid']:raise RuntimeError('PAPER_RUNTIME_UNVERIFIED')
+        check();yield check;check()
+    def factory(*_):calls.append(True);return plan()
+    arguments=dict(migrations_dir=MIGRATIONS,status_file=status,once=True,now=lambda:NOW,cycle_guard=reviewed_lab_guard)
+    for _ in range(2):
+        assert service.run_service(engine,factory,**arguments)==1
+        assert _counts(engine,run)==(0,0,0)
+    assert calls==[]
+    admission['valid']=True;original=service.run_due_operational_paper_jobs
+    def committed_ack_lost(*args,**kwargs):
+        original(*args,**kwargs)
+        raise OperationalError('SIMULATED_DISCONNECT_AFTER_COMMIT',{},Exception('disposable fixture'))
+    with monkeypatch.context() as patch:
+        patch.setattr(service,'run_due_operational_paper_jobs',committed_ack_lost)
+        assert service.run_service(engine,factory,**arguments)==1
+    assert _counts(engine,run)==(1,1,1)
+    engine.dispose()
+    for _ in range(3):
+        assert service.run_service(engine,factory,**arguments)==0
+        assert _counts(engine,run)==(1,1,1)
+        engine.dispose()
+    admitted_calls=len(calls);reviewed=history.read_bytes();read_history(history)
+    history.write_bytes(b'{"interrupted":')
+    assert service.run_service(engine,factory,**arguments)==1
+    assert len(calls)==admitted_calls and _counts(engine,run)==(1,1,1)
+    assert json.loads(status.read_text())['runtime_gate']=='UNVERIFIED'
+    assert history_observation(history)['state']=='UNVERIFIED'
+    # Explicit test-operator restoration of a validated prior private file.
+    # The product never repairs history or clears a financial recovery gate.
+    history.write_bytes(reviewed);read_history(history)
+    assert service.run_service(engine,factory,**arguments)==0
+    assert _counts(engine,run)==(1,1,1)
+    evidence=history_observation(history)
+    assert evidence['retained_starts']==7 and evidence['retained_failures']==3
+    assert evidence['execution_authorized'] is False
