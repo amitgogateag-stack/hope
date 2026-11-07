@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import sysconfig
 import tarfile
 import time
 
@@ -15,8 +16,27 @@ from test_package_provenance import wheel
 from build_approval_fixture import sign
 
 
+@pytest.fixture(scope="module")
+def trusted_python(tmp_path_factory):
+    if os.name!="posix":pytest.skip("Native isolated CPython staging is exercised by Linux CI")
+    # Runner tool caches can have shared writable/hardlinked executables. Do
+    # not relax the production trust policy: prepare an isolated, byte-matched
+    # fixture distribution instead. No system installation is changed.
+    root=tmp_path_factory.mktemp("m4-python");(root/"bin").mkdir();(root/"lib").mkdir()
+    executable=Path(sys.executable).resolve(strict=True);target=root/"bin/python3.13"
+    shutil.copyfile(executable,target);target.chmod(0o755)
+    assert r._digest(target.read_bytes())==r._digest(executable.read_bytes())
+    standard=Path(sysconfig.get_path("stdlib"))
+    shutil.copytree(standard,root/"lib/python3.13",ignore=shutil.ignore_patterns("site-packages","__pycache__","*.pyc","test","tests"))
+    for library in Path(sysconfig.get_config_var("LIBDIR")).glob("libpython3.13*.so*"):
+        if library.is_file():shutil.copyfile(library,root/"lib"/library.name)
+    for path in root.rglob("*"):
+        if not path.is_symlink():path.chmod(0o755 if path.is_dir() or path==target else 0o644)
+    return target
+
+
 @pytest.fixture
-def build_case(tmp_path,monkeypatch):
+def build_case(tmp_path,monkeypatch,trusted_python):
     if os.name!="posix":pytest.skip("Actual isolated POSIX builder/Ed25519/Git and Python 3.13 are exercised by Linux CI")
     monkeypatch.setattr(r,"OWNER",os.geteuid())
     source=tmp_path/"source";(source/"src").mkdir(parents=True);(source/"constraints").mkdir()
@@ -38,12 +58,12 @@ def build_case(tmp_path,monkeypatch):
         payload,_=wheel(name);filename=name+"-1.0-py3-none-any.whl";(authority/"wheelhouse"/filename).write_bytes(payload)
         artifacts.append(dict(filename=filename,sha256=r._digest(payload),name=name,version="1.0"))
     deployment=tmp_path/"deployment";deployment.mkdir();(deployment/".hope-acceptance").write_bytes(a.MARKER)
-    plan=dict(schema="hope.build-input.v1",release_commit=sha,builder_id="b"*64,builder=b.builder_identity(sys.executable),
+    plan=dict(schema="hope.build-input.v1",release_commit=sha,builder_id="b"*64,builder=b.builder_identity(trusted_python),
         epoch=1735689600,deployment_root=str(deployment),artifacts=artifacts,requested_extras={})
     path=authority/"inputs.json";path.write_bytes(r._canonical(plan));sign(path,private)
     work=tmp_path/"work";work.mkdir();(work/".hope-builder").write_bytes(b.MARKER)
     return dict(source=source,work=work,inputs=path,signature=path.with_suffix(".sig"),public=public,
-        expected_inputs_digest=r._digest(path.read_bytes()),python=Path(sys.executable)),plan,private,deployment
+        expected_inputs_digest=r._digest(path.read_bytes()),python=trusted_python),plan,private,deployment
 
 
 def test_two_real_offline_builds_are_byte_identical_candidates_and_stage_safely(build_case):
