@@ -188,6 +188,15 @@ def test_old_ready_response_cannot_be_replayed_as_current(tmp_path,monkeypatch):
     assert module._endpoint("/readiness.json")=={"http_status":200,"status":"STALE_RESPONSE"}
 
 
+def test_legacy_ready_without_runtime_evidence_cannot_be_upgraded_by_audit(tmp_path,monkeypatch):
+    value={**readiness(tmp_path),"paper_health":"READY","reason":"CURRENT_OBSERVATIONS_ONLY",
+        "worker_report":"CURRENT","snapshot":"CURRENT","database":"OBSERVED_AT_SNAPSHOT"}
+    value["last_successful_poll_at"]=value["generated_at"]
+    value.pop("runtime_integrity",None)
+    response_for(monkeypatch,json.dumps(value).encode())
+    assert module._endpoint("/readiness.json")=={"http_status":200,"status":"INVALID_RESPONSE"}
+
+
 def test_real_http_redirect_cannot_escape_the_fixed_endpoint(monkeypatch):
     reached=[]
     class Redirect(BaseHTTPRequestHandler):

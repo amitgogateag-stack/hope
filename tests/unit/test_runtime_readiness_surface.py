@@ -18,6 +18,17 @@ from test_aws_snapshot_attestation import host
 from test_aws_readiness import EXPECTED,_runtime
 
 
+def test_direct_readiness_call_cannot_omit_mandatory_runtime_evidence(setup):
+    from hope.api.dashboard_readiness import dashboard_readiness
+    layout,_=setup;commit="a"*40
+    data=json.loads(valid_snapshot());data["deployed_commit"]=commit
+    data["paper"]["environment_state"]="RUNNING"
+    layout.snapshot.write_text(json.dumps(data));layout.health.write_text(json.dumps(health()))
+    result=dashboard_readiness(layout.snapshot,layout.health,expected_commit=commit)
+    assert result["paper_health"]=="UNAVAILABLE" and result["reason"]=="RUNTIME_UNVERIFIED"
+    assert result["runtime_integrity"]["state"]=="UNVERIFIED"
+
+
 @pytest.mark.parametrize("state",["VERIFIED","UNVERIFIED","MISMATCH","BLOCKED","wrong_release","private_payload"])
 def test_runtime_endpoint_is_bounded_and_mandatory_for_ready(setup,state):
     layout,_=setup;commit="a"*40

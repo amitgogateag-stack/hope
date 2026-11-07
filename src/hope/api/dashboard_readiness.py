@@ -19,8 +19,8 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         database="UNVERIFIED",reconciliation="UNVERIFIED",last_successful_poll_at=None,
         last_successful_paper_at=None,last_failure_at=None,last_failure_code=None,
         execution_authorized=False,paper_only=True,live_enabled=False)
-    runtime=safe_evidence(runtime_evidence) if runtime_evidence is not None else None
-    if runtime is not None:result["runtime_integrity"]=runtime
+    runtime=safe_evidence(runtime_evidence)
+    result["runtime_integrity"]=runtime
     data = None
     snapshot_identity = expected_commit is None
     try:
@@ -86,7 +86,7 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         result["reason"] = "WORKER_IDENTITY_UNVERIFIED"
     elif result["reconciliation"] in {"CLAIMS_REQUIRE_REVIEW","RECOVERY_REQUIRED"}:
         result["reason"] = result["reconciliation"]
-    elif runtime is not None and (runtime["state"]!="VERIFIED"
+    elif (runtime["state"]!="VERIFIED"
             or (expected_commit is not None and runtime["release_commit"]!=expected_commit)):
         result["reason"]="RUNTIME_"+(runtime["state"] if runtime["state"]!="VERIFIED" else "MISMATCH")
     else:

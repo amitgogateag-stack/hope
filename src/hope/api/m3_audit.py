@@ -82,7 +82,7 @@ def _readiness(value):
     # Never reproduce an old READY/HALTED claim as a current host observation.
     if age>300:return {"status":"STALE_RESPONSE"}
     if safe["paper_health"]=="READY":
-        if "runtime_integrity" in safe and safe["runtime_integrity"]["state"]!="VERIFIED":
+        if safe.get("runtime_integrity",{}).get("state")!="VERIFIED":
             raise ValueError("readiness runtime required")
         poll=stamps.get("last_successful_poll_at")
         if age<0 or poll is None or not 0<=age+(generated-poll).total_seconds()<=300:
