@@ -216,11 +216,13 @@ def test_real_http_redirect_cannot_escape_the_fixed_endpoint(monkeypatch):
     ("stopped","UNAVAILABLE","WORKER_STOPPED",200),
     ("halted","HALTED","DURABLE_HALT_OBSERVED",200),
     ("current","READY","CURRENT_OBSERVATIONS_ONLY",200),
+    ("runtime_unverified","UNAVAILABLE","RUNTIME_UNVERIFIED",200),
 ])
 def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
         tmp_path,monkeypatch,case,expected,reason,operations_status):
     page=tmp_path/"preview.html";page.write_text("HOPE")
     snapshot=tmp_path/"snapshot.json";data=json.loads(valid_snapshot())
+    commit="a"*40;data["deployed_commit"]=commit
     data["paper"]["environment_state"]="RUNNING";snapshot.write_text(json.dumps(data))
     operations=tmp_path/"health.json";value=health()
     if case=="stale":
@@ -229,7 +231,11 @@ def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
     if case=="halted":value["state"]="HALTED"
     if case!="missing":operations.write_text("broken{" if case=="invalid" else json.dumps(value))
     opener=build_opener(ProxyHandler({}),module._NoRedirect())
-    with DashboardHTTPServer(0,page,snapshot,operations) as server:
+    evidence=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,
+        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+    with DashboardHTTPServer(0,page,snapshot,operations,deployed_commit=commit,
+            activation_check=None if case=="runtime_unverified" else lambda:{"runtime_integrity":evidence}) as server:
         thread=Thread(target=server.serve_forever,daemon=True);thread.start()
         local=f"http://127.0.0.1:{server.server_port}"
         # Only the test adapter changes the port; production remains fixed loopback 8788.
