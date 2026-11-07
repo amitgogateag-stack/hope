@@ -305,6 +305,19 @@ def test_python_units_ignore_ambient_python_or_loader_paths(name, python_path):
                      "PYTHONPLATLIBDIR", "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
         assert variable in unset.split("=", 1)[1].split()
     assert "Environment=PYTHONPATH=" not in unit
+    if name=="hope-paper.service":
+        import shlex
+        commands=[shlex.split(line.split("=",1)[1]) for line in unit.splitlines()
+            if line.startswith(("ExecStart=","ExecStartPre="))]
+        assert len(commands)==2
+        for command in commands:
+            assert command[:7]==["/usr/bin/python3","-I","-B","-S","-X",
+                "pycache_prefix=/nonexistent/hope-runtime-bootstrap",
+                "/opt/hope-operations/current/deploy/operations/paper_release.py"]
+            assert not any("PYTHONPATH=" in argument for argument in command)
+        assert commands[0][7:]==["--preflight"]
+        assert commands[1][7:9]==["--factory","${HOPE_PAPER_FACTORY}"]
+        return
     python_commands = [line for line in unit.splitlines()
                        if line.startswith(("ExecStart=", "ExecStartPre=")) and "/python " in line]
     assert python_commands
