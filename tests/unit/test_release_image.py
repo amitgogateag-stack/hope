@@ -47,6 +47,9 @@ def image_case(build_case):
     binaries=[python]
     for path in sorted((python_root/'lib').rglob('*')):
         if not path.is_file():continue
+        # A runtime OS image does not contain the interpreter's static-link
+        # archive or relocatable build objects. Keep the runtime bound at 128MiB.
+        if path.suffix in {'.a','.o'} or path.name=='libpython3.13.so':continue
         name='usr/lib/'+path.relative_to(python_root/'lib').as_posix()
         entries[name]=(path.read_bytes(),0o644,False)
         header=path.read_bytes()[:18]
@@ -107,7 +110,7 @@ def test_independent_signatures_reproducibility_full_linkage_and_rootfs_python(a
     # Real image interpreter + image-specific venv, non-root, isolated network.
     # No service, mount, host configuration or AWS operation is performed.
     python='/opt/hope-operations/release-venvs/'+candidate['release_commit']+'/bin/python'
-    code='import sys,sqlalchemy;assert sys.version_info[:2]==(3,13);assert sqlalchemy.approved;assert sys.base_prefix=="/usr";print("IMAGE_PYTHON_VERIFIED")'
+    code='import sys,sqlalchemy,ssl,hashlib,ctypes,zlib,sqlite3,decimal;assert sys.version_info[:2]==(3,13);assert sqlalchemy.approved;assert sys.base_prefix=="/usr";print("IMAGE_PYTHON_VERIFIED")'
     result=subprocess.run(['sudo','-n','unshare','--net','chroot','--userspec=65532:65532',str(root),python,'-I','-B','-c',code],
         env={'PATH':'/usr/bin:/bin','LANG':'C'},check=True,capture_output=True,text=True,timeout=15)
     assert result.stdout.strip()=='IMAGE_PYTHON_VERIFIED'
