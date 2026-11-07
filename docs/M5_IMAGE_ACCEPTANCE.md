@@ -79,6 +79,14 @@ Unexpected modification/deletion, a substituted lock, corrupt/partial history,
 non-monotonic time or competing publisher blocks the worker and invalidates
 CURRENT health. No automatic history repair is performed.
 
+PAPER SIGINT/SIGTERM handlers now only store a stop-request flag. Calling
+`threading.Event.set()` from a handler could reenter the main thread's
+non-reentrant condition lock during `Event.wait()` and deadlock shutdown. A
+deterministic child-process regression timed out before this fix and passes
+for both signals afterward. Idle polling observes the flag within 100ms; an
+already-running transaction still finishes through the existing recovery gates.
+The ten-second certified-worker shutdown assertion remains unchanged.
+
 The chain detects corruption within its retained window; it is not a signed,
 privileged-rollback-proof financial journal. A missing history on initial
 adoption is allowed for legacy compatibility and does not claim historical

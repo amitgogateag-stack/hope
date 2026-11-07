@@ -5,7 +5,7 @@ import importlib
 import os
 from pathlib import Path
 import signal
-from threading import Event
+from hope.infrastructure.signal_stop import SignalStop as Event
 from sqlalchemy import create_engine
 from hope.infrastructure.paper_service import run_service,publish_startup_failure
 from hope.api.paper_operational_guard import paper_operational_guard

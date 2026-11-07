@@ -52,7 +52,7 @@ jobs:
       - name: M4 reproducibility and acceptance preflight
         run: pytest -q tests/unit/test_release_builder.py tests/unit/test_build_evidence.py tests/unit/test_operational_acceptance.py
       - name: M5 offline image and recovery acceptance
-        run: pytest -q tests/unit/test_release_image.py tests/unit/test_paper_history.py
+        run: pytest -q tests/unit/test_release_image.py tests/unit/test_paper_history.py tests/unit/test_paper_signal_stop.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
