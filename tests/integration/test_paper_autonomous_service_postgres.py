@@ -93,7 +93,18 @@ def factory(connection,current):
     environment = dict(os.environ)
     environment["PYTHONPATH"] = str(release_src) + os.pathsep + os.pathsep.join(sys.path)
     status = tmp_path / "process-health.json"
-    command = [sys.executable, "-m", "hope.api.paper_service", "--factory", "m2_process_fixture:factory",
+    # Disposable source fixture exercises the supervisor API in a real process.
+    # Production CLI additionally requires external signed runtime provenance;
+    # its fail-closed admission is tested independently, with no test bypass flag.
+    entry=release_src/"supervisor_fixture.py"
+    entry.write_text('''
+import sys
+from contextlib import nullcontext
+from hope.api import paper_service as cli
+cli.paper_operational_guard=lambda *a:nullcontext(lambda:None)
+raise SystemExit(cli.main(sys.argv[1:]))
+''')
+    command = [sys.executable, str(entry), "--factory", "m2_process_fixture:factory",
                "--migrations-dir", str(release_migrations), "--status-file", str(status), "--poll-seconds", "30"]
     process = subprocess.Popen(command, env=environment, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
     try:
@@ -197,6 +208,45 @@ def test_clean_service_cycle_reboot_retry_and_schema_readonly(admitted_plan, tmp
     assert health["state"] == "STOPPED" and health["schema_compatibility"] == "COMPATIBLE"
     assert health["last_success_at"] is not None
     assert health["jobs_skipped"] == 1 and health["live_enabled"] is False
+
+
+@pytest.mark.integration
+def test_consecutive_simulated_sessions_closure_restart_and_runtime_denial(admitted_plan):
+    """Synthetic sessions remain test evidence; effects/claims use PostgreSQL."""
+    engine,original,first=admitted_plan;binding=original().bindings[0]
+    sessions=(NOW,NOW+timedelta(days=2))  # intervening simulated closed day
+    def factory(connection,current):
+        def no_trade(runtime):
+            runtime.record_no_trade(strategy_version="v1",decision_time=current,inputs_hash="a"*64)
+        start=current.replace(hour=14,minute=0,second=0,microsecond=0)
+        calendar=MarketSessionCalendar(tuple((s,s+timedelta(hours=1)) for s in sessions))
+        return service.PaperServicePlan((OperationalPaperJobBinding(binding.strategy_version_id,binding.market,binding.job_key,no_trade),),
+            original().schedules,{StrategyMarket.USA:calendar},start,start+timedelta(hours=1),timedelta(minutes=1))
+    for current in (NOW,NOW+timedelta(days=1),NOW+timedelta(days=2)):
+        assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:current)==((0,0) if current not in sessions else (1,0))
+        engine.dispose()
+        assert service.run_service_cycle(engine,factory,migrations_dir=MIGRATIONS,now=lambda:current)==((0,0) if current not in sessions else (0,1))
+    for current in sessions:
+        run=create_scheduled_job_run(binding.durable_job_key,current)
+        assert _counts(engine,run)==(1,1,1)
+    called=[]
+    def denied():raise RuntimeError("PAPER_RUNTIME_UNVERIFIED")
+    with pytest.raises(RuntimeError,match="PAPER_RUNTIME_UNVERIFIED"):
+        service.run_service_cycle(engine,lambda *a:called.append(True),migrations_dir=MIGRATIONS,now=lambda:NOW,execution_check=denied)
+    assert called==[]
+
+
+@pytest.mark.integration
+def test_runtime_loss_after_factory_blocks_claim_and_effects(admitted_plan):
+    engine,plan,run=admitted_plan;checks=[]
+    def proof():
+        checks.append(True)
+        if len(checks)>=3:raise RuntimeError("PAPER_RUNTIME_UNVERIFIED")
+    with pytest.raises(RuntimeError,match="PAPER_RUNTIME_UNVERIFIED"):
+        service.run_service_cycle(engine,lambda *_:plan(),migrations_dir=MIGRATIONS,now=lambda:NOW,execution_check=proof)
+    assert len(checks)==3 and _counts(engine,run)==(0,0,0)
+    assert _cycle(engine,lambda *_:plan())==(1,0)
+    assert _counts(engine,run)==(1,1,1)
 
 
 @pytest.mark.integration

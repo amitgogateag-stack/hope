@@ -7,7 +7,8 @@ from pathlib import Path
 import signal
 from threading import Event
 from sqlalchemy import create_engine
-from hope.infrastructure.paper_service import run_service
+from hope.infrastructure.paper_service import run_service,publish_startup_failure
+from hope.api.paper_operational_guard import paper_operational_guard
 
 
 def load_plan_factory(specification: str, *, release: str | Path | None = None):
@@ -49,16 +50,19 @@ def main(argv=None) -> int:
         signal.signal(signum, lambda *_: stop.set())
     try:
         release = Path(args.migrations_dir).resolve(strict=True).parent
-        factory = load_plan_factory(args.factory, release=release)
+        with paper_operational_guard(release):
+            factory = load_plan_factory(args.factory, release=release)
         engine = create_engine(url, pool_pre_ping=True, pool_timeout=10,
             connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000 -c lock_timeout=10000"})
         try:
             return run_service(engine, factory, migrations_dir=args.migrations_dir,
                 status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once,
-                require_certified=True)
+                require_certified=True,cycle_guard=lambda:paper_operational_guard(release))
         finally:
             engine.dispose()
     except Exception:
+        try:publish_startup_failure(args.status_file,os.getenv("HOPE_DEPLOYED_COMMIT"))
+        except Exception:pass
         parser.exit(2, "PAPER_SERVICE_STARTUP_FAILED\n")
 
 

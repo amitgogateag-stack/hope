@@ -601,6 +601,7 @@ class Host:
             if release.name==binding["target"]:expected=binding["runtime_manifest"]
             elif release.name==(binding["previous"] or binding["shared"]):expected=binding["previous_runtime_manifest"]
         evidence=attest_runtime(layout.root,release.name,mode,expected_manifest=expected,release=release)
+        _require(evidence.get("provenance_state")=="VERIFIED","PACKAGE_PROVENANCE_REQUIRED")
         if not hasattr(self,"runtime_manifests"):self.runtime_manifests={}
         self.runtime_manifests[release.name]=evidence["manifest_sha256"]
         if mode=="release":_trusted(layout.root/"release-venvs",directory=True)

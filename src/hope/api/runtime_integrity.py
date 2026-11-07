@@ -186,7 +186,7 @@ def _pins(release,deadline=None):
     return payload,pins
 
 
-def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None):
+def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenance_digest=None):
     """Inventory candidate only. A trusted builder/operator must approve it.
 
     Never save this automatically beside the runtime during activation: that
@@ -233,9 +233,13 @@ def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None):
     _require(REQUIRED<=distributions.keys(),"DEPENDENCIES_INCOMPLETE")
     interpreter=_fingerprint(resolved,deadline)[0]
     _require(_inventory(root,sha,mode,deadline)[3]==before,"ENVIRONMENT_CHANGED")
-    return dict(schema=SCHEMA,repository="amitgogateag-stack/hope",release_commit=sha,runtime_mode=mode,
+    result=dict(schema=SCHEMA,repository="amitgogateag-stack/hope",release_commit=sha,runtime_mode=mode,
         constraints_sha256=_digest(constraints),interpreter=dict(resolved=str(resolved),sha256=interpreter),
         distributions=distributions,files=hashes,links={key:value[0] for key,value in before[2].items()})
+    if provenance_digest is not None:
+        _require(isinstance(provenance_digest,str) and re.fullmatch("[0-9a-f]{64}",provenance_digest),"PROVENANCE_DIGEST_INVALID")
+        result.update(schema="hope.runtime-manifest.v2",package_provenance_sha256=provenance_digest)
+    return result
 
 
 def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS):
@@ -246,11 +250,12 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     manifest_directory=_trusted(root/"runtime-manifests",directory=True)
     manifest_identity=_trusted(path)
     payload=_read(path,MAX_MANIFEST_BYTES,deadline=deadline);approved=strict_json(payload)
-    _require(isinstance(approved,dict) and set(approved)=={"schema","repository","release_commit",
-        "runtime_mode","constraints_sha256","interpreter","distributions","files","links"},"MANIFEST_INVALID")
+    fields={"schema","repository","release_commit","runtime_mode","constraints_sha256","interpreter","distributions","files","links"}
+    _require(isinstance(approved,dict) and ((approved.get("schema")==SCHEMA and set(approved)==fields)
+        or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})),"MANIFEST_INVALID")
     digest=_digest(_canonical(approved))
     _require(expected_manifest is None or digest==expected_manifest,"MANIFEST_CHANGED")
-    _require(approved.get("schema")==SCHEMA and approved.get("repository")=="amitgogateag-stack/hope"
+    _require(approved.get("repository")=="amitgogateag-stack/hope"
         and approved.get("release_commit")==sha and approved.get("runtime_mode")==mode,"MANIFEST_IDENTITY_MISMATCH")
     # Cache only a previously hashed immutable inventory. Every call still scans
     # all names/metadata, the external manifest and pinned constraints. ctime and
@@ -264,12 +269,19 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     key=(str(root),sha,mode,digest)
     with _LOCK:cached=_CACHE.get(key)
     if cached!=(inventory,_digest(constraints)):
-        actual=build_runtime_manifest(root,sha,mode,release=release,_deadline=deadline)
+        actual=build_runtime_manifest(root,sha,mode,release=release,_deadline=deadline,
+            provenance_digest=approved.get("package_provenance_sha256"))
         _require(actual==approved,"CONTENT_MISMATCH")
         _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
         with _LOCK:
             if len(_CACHE)>=8:_CACHE.clear()
             _CACHE[key]=(inventory,_digest(constraints))
+    provenance=dict(state="UNVERIFIED",sha256=None)
+    if approved["schema"]=="hope.runtime-manifest.v2":
+        from hope.api.package_provenance import verify_provenance
+        provenance=verify_provenance(root,sha,mode,runtime_manifest=approved,
+            expected_digest=approved["package_provenance_sha256"],deadline=deadline)
+        _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
     _require(_read(path,MAX_MANIFEST_BYTES,deadline=deadline)==payload and _trusted(path)==manifest_identity
         and _trusted(root/"runtime-manifests",directory=True)==manifest_directory,"MANIFEST_CHANGED")
     _require(_trusted(release,directory=True)==release_identity
@@ -278,8 +290,9 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     _require(time.monotonic()<=deadline,"DEADLINE")
     return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
         release_commit=sha,runtime_mode=mode,manifest_sha256=digest,
-        inventory_sha256=_digest(_canonical((inventory,manifest_identity,constraints_identity))),process_sha256=None,
-        file_count=len(approved["files"]),execution_authorized=False)
+        inventory_sha256=_digest(_canonical((inventory,manifest_identity,constraints_identity,provenance.get("identity_sha256")))),process_sha256=None,
+        file_count=len(approved["files"]),execution_authorized=False,
+        provenance_state=provenance["state"],provenance_sha256=provenance["sha256"])
 
 
 def diagnostic(root,sha,mode,*,expected_manifest=None,release=None):
@@ -287,19 +300,20 @@ def diagnostic(root,sha,mode,*,expected_manifest=None,release=None):
     except (OSError,ValueError,TypeError,RuntimeError):
         return dict(schema="hope.runtime-integrity.v1",state="UNVERIFIED" if expected_manifest is None else "MISMATCH",
             code="RUNTIME_EVIDENCE_UNVERIFIED",release_commit=sha,runtime_mode=mode,
-            manifest_sha256=None,inventory_sha256=None,process_sha256=None,file_count=0,execution_authorized=False)
+            manifest_sha256=None,inventory_sha256=None,process_sha256=None,file_count=0,execution_authorized=False,
+            provenance_state="UNVERIFIED",provenance_sha256=None)
 
 
 def unverified(code="LEGACY_JOURNAL_UNBOUND",*,blocked=False):
     return dict(schema="hope.runtime-integrity.v1",state="BLOCKED" if blocked else "UNVERIFIED",
         code=code,release_commit=None,runtime_mode=None,manifest_sha256=None,inventory_sha256=None,process_sha256=None,
-        file_count=0,execution_authorized=False)
+        file_count=0,execution_authorized=False,provenance_state="UNVERIFIED",provenance_sha256=None)
 
 
 def safe_evidence(value):
     if value is None:return unverified()
     fields={"schema","state","code","release_commit","runtime_mode","manifest_sha256","inventory_sha256","process_sha256","file_count","execution_authorized"}
-    _require(isinstance(value,dict) and set(value)==fields and value["schema"]=="hope.runtime-integrity.v1"
+    _require(isinstance(value,dict) and set(value) in (fields,fields|{"provenance_state","provenance_sha256"}) and value["schema"]=="hope.runtime-integrity.v1"
         and value["state"] in {"VERIFIED","MISMATCH","UNVERIFIED","BLOCKED"}
         and value["code"] in {"MANIFEST_AND_RUNTIME_MATCH","RUNTIME_EVIDENCE_UNVERIFIED",
             "LEGACY_JOURNAL_UNBOUND","ACTIVATION_BLOCKED","RELEASE_OR_FENCE_UNVERIFIED"}
@@ -319,7 +333,11 @@ def safe_evidence(value):
         _require(value["release_commit"] is None or (isinstance(value["release_commit"],str)
             and re.fullmatch("[0-9a-f]{40}",value["release_commit"])),"EVIDENCE_INVALID")
         _require(value["runtime_mode"] in {None,"shared","release"},"EVIDENCE_INVALID")
-    return dict(value)
+    result=dict(value,provenance_state=value.get("provenance_state","UNVERIFIED"),provenance_sha256=value.get("provenance_sha256"))
+    _require((result["provenance_state"]=="UNVERIFIED" and result["provenance_sha256"] is None)
+        or (result["state"]=="VERIFIED" and result["provenance_state"]=="VERIFIED"
+            and isinstance(result["provenance_sha256"],str) and re.fullmatch("[0-9a-f]{64}",result["provenance_sha256"])),"PROVENANCE_EVIDENCE_INVALID")
+    return result
 
 
 def main(argv=None):

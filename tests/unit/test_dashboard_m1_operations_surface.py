@@ -17,7 +17,7 @@ def health():
         "last_success_at": now, "cycles_succeeded": 1, "cycles_failed": 0,
         "jobs_executed": 0, "jobs_skipped": 0, "paper_only": True,
         "live_enabled": False, "error_code": None,
-        "deployed_commit": "a" * 40, "schema_compatibility": "COMPATIBLE",
+        "deployed_commit": "a" * 40, "schema_compatibility": "COMPATIBLE","runtime_gate":"VERIFIED",
     }
 
 

@@ -152,7 +152,9 @@ def verify_schema_compatibility(connection: Connection, migrations_dir: str | Pa
 
 
 def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
-                      now: Callable[[], datetime], require_certified: bool = False) -> tuple[int, int]:
+                      now: Callable[[], datetime], require_certified: bool = False,
+                      execution_check: Callable[[], None] | None = None) -> tuple[int, int]:
+    if execution_check is not None:execution_check()
     current = now()
     if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
         raise RuntimeError("PAPER_SERVICE_CLOCK_INVALID")
@@ -163,6 +165,7 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         connection.execute(text("SET TRANSACTION READ ONLY"))
         verify_schema_compatibility(connection, migrations_dir)
         SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
+        if execution_check is not None:execution_check()
         plan = factory(connection, current)
         if not isinstance(plan, PaperServicePlan):
             raise RuntimeError("PAPER_SERVICE_PLAN_UNAVAILABLE")
@@ -210,6 +213,7 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         # connection would block their own bind. Generic compatibility plans
         # retain the independently published catalog revalidation contract.
         authorize=None if certified_plan else authorize_current_candidates,
+        **({"before_execute":execution_check} if execution_check is not None else {}),
     )
     if certified_plan:
         from hope.infrastructure.scheduling.paper_reconciliation import authenticate_successful_paper_run
@@ -245,6 +249,8 @@ def publish_service_status(path: str | Path, value: dict) -> None:
 
 def _failure_state(exc: Exception) -> tuple[str, str]:
     # Never serialize database errors, credentials, provider payloads or callback text.
+    if isinstance(exc,RuntimeError) and str(exc).startswith("PAPER_RUNTIME_"):
+        return "UNAVAILABLE","PAPER_RUNTIME_UNVERIFIED"
     if isinstance(exc, RuntimeError) and str(exc) == "PAPER_ENVIRONMENT_HALTED":
         return "HALTED", "PAPER_ENVIRONMENT_HALTED"
     if isinstance(exc, (RuntimeError, ValueError)) and str(exc).startswith(
@@ -259,7 +265,9 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, RuntimeError) and str(exc) in {
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
         "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
-        "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
+        "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN","PAPER_SCHEDULER_RUN_STALE",
+        "PAPER_SCHEDULER_CLOCK_REGRESSION","PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL",
+        "PAPER_SCHEDULER_RECONCILIATION_NOT_SUCCEEDED",
         "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
         "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT",
         "PAPER_SERVICE_CERTIFIED_BINDING_REQUIRED",
@@ -269,12 +277,22 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     return "UNAVAILABLE", "PAPER_SERVICE_CYCLE_FAILED"
 
 
+def publish_startup_failure(path,commit):
+    """Invalidate a prior process's CURRENT observation before factory load."""
+    stamp=datetime.now(UTC).isoformat()
+    commit=commit if isinstance(commit,str) and re.fullmatch(r"[0-9a-f]{40}",commit) else None
+    publish_service_status(path,dict(schema_version=1,deployed_commit=commit,schema_compatibility="UNKNOWN",
+        generated_at=stamp,state="UNAVAILABLE",last_success_at=None,cycles_succeeded=0,cycles_failed=1,
+        jobs_executed=0,jobs_skipped=0,error_code="PAPER_RUNTIME_UNVERIFIED",last_failure_at=stamp,
+        last_failure_code="PAPER_RUNTIME_UNVERIFIED",runtime_gate="UNVERIFIED",paper_only=True,live_enabled=False))
+
+
 def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
                 status_file: str | Path, stop_event: Event | None = None,
                 poll_seconds: float = 30, once: bool = False,
                 now: Callable[[], datetime] = lambda: datetime.now(UTC),
                 require_certified: bool = False,
-                notifier: SystemdNotifier | None = None) -> int:
+                notifier: SystemdNotifier | None = None,cycle_guard=None) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
     if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)) or not 1 <= poll_seconds <= 300:
         raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
@@ -284,7 +302,8 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
     commit = commit if isinstance(commit, str) and re.fullmatch(r"[0-9a-f]{40}", commit) else None
     health = dict(deployed_commit=commit, schema_compatibility="UNKNOWN", schema_version=1, generated_at=None, state="STARTING", last_success_at=None,
                   cycles_succeeded=0, cycles_failed=0, jobs_executed=0, jobs_skipped=0,
-                  error_code=None, last_failure_at=None, last_failure_code=None, paper_only=True, live_enabled=False)
+                  error_code=None, last_failure_at=None, last_failure_code=None, paper_only=True, live_enabled=False,
+                  runtime_gate="UNVERIFIED")
     def publish():
         health["generated_at"] = datetime.now(UTC).isoformat()
         publish_service_status(status_file, health)
@@ -294,14 +313,21 @@ def run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | P
     failed = False
     while not stop.is_set():
         try:
-            executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now,
-                                                  require_certified=require_certified)
+            if cycle_guard is None:
+                executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now,
+                    require_certified=require_certified)
+            else:
+                with cycle_guard() as check:
+                    executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now,
+                        require_certified=require_certified,execution_check=check)
+                health["runtime_gate"]="VERIFIED"
             health.update(state="CURRENT", schema_compatibility="COMPATIBLE", error_code=None, last_success_at=datetime.now(UTC).isoformat())
             health["cycles_succeeded"] += 1
             health["jobs_executed"] += executed
             health["jobs_skipped"] += skipped
             failed = False
         except Exception as exc:
+            health["runtime_gate"]="UNVERIFIED"
             state, code = _failure_state(exc)
             health.update(last_failure_at=datetime.now(UTC).isoformat(),last_failure_code=code)
             health.update(state=state, error_code=code, schema_compatibility=("INCOMPATIBLE" if code in {"PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE"} else "UNKNOWN"))

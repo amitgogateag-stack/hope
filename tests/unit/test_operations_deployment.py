@@ -269,7 +269,7 @@ def test_systemd_units_bound_resources_and_enable_reboot_ordering():
     for required in ("User=hope-paper", "Type=notify", "NotifyAccess=main", "WatchdogSec=15min",
                      "Restart=always", "KillSignal=SIGTERM",
                      "TimeoutStartSec=15min", "TimeoutStopSec=60s", "WantedBy=multi-user.target", "MemoryMax=1G",
-                     "operations_deployment", "--database-component paper", "NoNewPrivileges=yes"):
+                     "paper_release.py --preflight", "/usr/bin/python3 -I -B -S", "NoNewPrivileges=yes"):
         assert required in paper
     web = (root / "hope-ops-dashboard-web.service").read_text()
     assert "--port 8788" in web and "--operations-status-file" in web

@@ -20,6 +20,9 @@ from hope.api.runtime_integrity import safe_evidence,unverified
 from hope.infrastructure.durable_file import bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
+    "PAPER_RUNTIME_UNVERIFIED",
+    "PAPER_SCHEDULER_RUN_STALE","PAPER_SCHEDULER_CLOCK_REGRESSION",
+    "PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL","PAPER_SCHEDULER_RECONCILIATION_NOT_SUCCEEDED",
         None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
         "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
@@ -113,6 +116,7 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
         "state": data["state"], "last_success_at": success.isoformat() if success else None,
         "paper_only": True, "live_enabled": False, "error_code": error,
         "deployed_commit": commit, "schema_compatibility": compatibility,
+        "runtime_gate": "VERIFIED" if data.get("runtime_gate")=="VERIFIED" else "UNVERIFIED",
         **{key: data[key] for key in fields},
     }
     if "last_failure_at" in data or "last_failure_code" in data:
@@ -302,6 +306,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/rehearsal.json":
+            from hope.api.rehearsal_evidence import read_rehearsal
+            payload=json.dumps(read_rehearsal(self.server.snapshot.parent/"rehearsal-result.json"),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/runtime.json":
             self._respond(200,json.dumps(self.runtime_evidence,separators=(",",":")).encode(),"application/json; charset=utf-8")
             return
@@ -361,14 +370,20 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 return
             self._respond(200, payload, "application/json; charset=utf-8")
             return
-        if self.path == "/readiness.json":
+        if self.path in {"/readiness.json","/paper-diagnostics.json"}:
             from hope.api.dashboard_readiness import dashboard_readiness
-            payload = json.dumps(dashboard_readiness(
+            observed=dashboard_readiness(
                 self.server.snapshot, self.server.operations,
                 expected_commit=self.server.deployed_commit,
                 expected_paper_commit=self.server.paper_deployed_commit,
                 runtime_evidence=self.runtime_evidence,
-            ),separators=(",",":")).encode("utf-8")
+            )
+            if self.path=="/paper-diagnostics.json":
+                from hope.api.paper_diagnostics import paper_diagnostics
+                try:health=json.loads(_verified_operations(self.server.operations,expected_commit=self.server.paper_deployed_commit))
+                except (OSError,ValueError,TypeError):health=None
+                observed=paper_diagnostics(observed,health)
+            payload=json.dumps(observed,separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path == "/release.json":

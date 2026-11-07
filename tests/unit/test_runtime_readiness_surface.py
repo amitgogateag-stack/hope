@@ -36,7 +36,7 @@ def test_runtime_endpoint_is_bounded_and_mandatory_for_ready(setup,state):
     layout.snapshot.write_text(json.dumps(data));layout.health.write_text(json.dumps(health()))
     page=layout.root/"page.html";page.write_text("HOPE")
     evidence=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
-        release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+        release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64)
     if state in {"UNVERIFIED","MISMATCH","BLOCKED"}:
         evidence={**unverified(),"state":state}
     elif state=="wrong_release":evidence["release_commit"]="c"*40

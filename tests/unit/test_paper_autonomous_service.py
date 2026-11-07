@@ -449,12 +449,15 @@ def test_factory_defined_inside_exact_release_is_accepted(tmp_path, monkeypatch)
 
 
 def test_production_cli_always_requires_certified_work(tmp_path, monkeypatch):
+    from contextlib import nullcontext
     import hope.api.paper_service as cli
     captured = {}
     engine = SimpleNamespace(dispose=lambda: None)
     monkeypatch.setenv("HOPE_DATABASE_URL", "test-only")
     monkeypatch.setattr(cli, "create_engine", lambda *a, **k: engine)
     monkeypatch.setattr(cli, "load_plan_factory", lambda _, **kwargs: lambda *a: None)
+    # CLI plumbing only; real lease/provenance checks have independent tests.
+    monkeypatch.setattr(cli,"paper_operational_guard",lambda *a:nullcontext(lambda:None))
     def run(*a, **kwargs):
         captured.update(kwargs)
         return 0
@@ -462,6 +465,7 @@ def test_production_cli_always_requires_certified_work(tmp_path, monkeypatch):
     assert cli.main(["--factory", "reviewed:factory", "--migrations-dir", str(tmp_path),
                      "--status-file", str(tmp_path / "health"), "--once"]) == 0
     assert captured["require_certified"] is True
+    assert callable(captured["cycle_guard"])
 
 
 @pytest.mark.parametrize("primary", ["PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE",

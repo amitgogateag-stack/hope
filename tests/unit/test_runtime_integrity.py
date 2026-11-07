@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 import pytest
+from test_package_provenance import signed_runtime
 
 from hope.api import runtime_integrity as m
 
@@ -146,10 +147,10 @@ def test_legitimate_interpreter_and_internal_library_links_are_authenticated(run
     assert result["state"]=="VERIFIED" and candidate["links"]["lib64"]=="@runtime/lib"
 
 
-def test_rollback_runtime_must_match_its_journal_pinned_manifest(runtime,monkeypatch):
+def test_rollback_runtime_must_match_its_journal_pinned_manifest(signed_runtime,monkeypatch):
     from hope.api import dashboard_activation as activation
     from unittest.mock import Mock
-    root,env,mode,candidate,path,digest=runtime
+    root,env,mode,candidate,path=signed_runtime;digest=m._digest(m._canonical(candidate))
     monkeypatch.setattr(activation,"OWNER",os.geteuid())
     layout=activation.Layout(root=root);host=activation.Host(layout)
     record=dict(schema="hope.dashboard-activation.v3",target="3"*40,shared="1"*40,previous=SHA,

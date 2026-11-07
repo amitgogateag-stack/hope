@@ -239,6 +239,7 @@ def run_due_operational_paper_jobs(
     now: Callable[[], datetime],
     max_lateness: timedelta,
     authorize: Callable[[Connection], None] | None = None,
+    before_execute: Callable[[], None] | None = None,
 ) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute due PAPER work after durable restart reconciliation and safety preflight."""
     if not isinstance(registry, PaperJobRegistry):
@@ -317,6 +318,7 @@ def run_due_operational_paper_jobs(
 
         results: list[tuple[ScheduledJobRun, PaperCycleOutcome]] = []
         for job_run in due:
+            if before_execute is not None:before_execute()
             if job_run.job_run_id in recovery.terminal_run_ids:
                 results.append((job_run, PaperCycleOutcome.SKIPPED_TERMINAL))
             else:
