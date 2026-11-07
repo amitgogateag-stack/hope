@@ -49,7 +49,9 @@ def image_case(build_case):
         if not path.is_file():continue
         name='usr/lib/'+path.relative_to(python_root/'lib').as_posix()
         entries[name]=(path.read_bytes(),0o644,False)
-        if path.read_bytes()[:4]==b'\x7fELF':binaries.append(path)
+        header=path.read_bytes()[:18]
+        if header[:4]==b'\x7fELF' and int.from_bytes(header[16:18],'little' if header[5]==1 else 'big') in {2,3}:
+            binaries.append(path)
     for binary in binaries:
         output=subprocess.run(['/usr/bin/ldd',str(binary)],check=True,capture_output=True,text=True).stdout
         for line in output.splitlines():
