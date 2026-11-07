@@ -30,7 +30,7 @@ M4 extends these mechanisms instead of adding a second deployment state machine.
    install hooks, dependency resolution or network operations. Supported layouts
    retain the conservative purelib/platlib/entry-point policy; unknown layouts
    fail closed. No signing key is read by the builder.
-4. Runtime activation scripts are omitted because services use explicit Python.
+4. Runtime activation scripts and Python 3.13 SCM ignore metadata are omitted because services use explicit Python.
    Non-semantic `pyvenv.cfg` command/prompt metadata is removed. Generated entry
    points and interpreter manifest paths use the approved logical deployment
    prefix, so separate physical work directories do not change their bytes.

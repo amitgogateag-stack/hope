@@ -59,3 +59,11 @@ def test_builder_cli_failure_is_sanitized(tmp_path,monkeypatch,capsys):
     for name in ("source","work","inputs","signature","public","python"):args.extend(("--"+name,str(tmp_path)))
     assert b.main(args+["--inputs-sha256","f"*64])==2
     result=json.loads(capsys.readouterr().out);assert result["state"]=="BLOCKED" and result["execution_authorized"] is False
+
+
+def test_unapproved_archive_is_rejected_before_zip_parsing(monkeypatch):
+    from unittest.mock import Mock
+    parser=Mock();monkeypatch.setattr(b.p,"inspect_wheel",parser)
+    with pytest.raises(RuntimeError,match="BUILD_ARTIFACT_MISMATCH"):
+        b._approved_wheel(dict(filename="bad.whl",sha256="f"*64,name="bad",version="1.0"),b"corrupted archive")
+    parser.assert_not_called()

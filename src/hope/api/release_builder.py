@@ -83,6 +83,14 @@ def _install(environment,wheels,logical):
         writer.writerow((info["directory"]+"/RECORD","",""));(environment/record).write_text(stream.getvalue(),encoding="utf-8",newline="\n")
 
 
+def _approved_wheel(artifact,payload):
+    r._require(r._digest(payload)==artifact["sha256"],"BUILD_ARTIFACT_MISMATCH")
+    try:actual=p.inspect_wheel(payload)
+    except zipfile.BadZipFile:raise RuntimeError("BUILD_ARTIFACT_FORMAT_INVALID") from None
+    r._require(artifact==dict(filename=artifact["filename"],sha256=r._digest(payload),name=actual["name"],version=actual["version"]),"BUILD_ARTIFACT_MISMATCH")
+    return actual
+
+
 def build_sbom(descriptor,source_digest):
     artifacts=descriptor["artifacts"];versions={a["name"]:a["version"] for a in artifacts}
     refs={name:"pkg:pypi/"+name+"@"+version for name,version in versions.items()}
@@ -138,8 +146,7 @@ def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,p
         r._require(Path(filename).name==filename and filename.endswith(".whl") and filename not in wheels,"BUILD_ARTIFACT_PATH_INVALID")
         artifact_identities[filename]=r._trusted(inputs.parent/"wheelhouse"/filename)
         payload=r._read(inputs.parent/"wheelhouse"/filename,p.MAX_WHEEL);total+=len(payload)
-        actual=p.inspect_wheel(payload)
-        r._require(total<=p.MAX_EXPANDED and artifact==dict(filename=filename,sha256=r._digest(payload),name=actual["name"],version=actual["version"]),"BUILD_ARTIFACT_MISMATCH")
+        r._require(total<=p.MAX_EXPANDED,"BUILD_ARTIFACT_LIMIT");_approved_wheel(artifact,payload)
         wheels[filename]=payload
     outputs=[]
     for attempt in ("a","b"):
@@ -152,6 +159,9 @@ def build_release(source,work,inputs,signature,public,*,expected_inputs_digest,p
             env={"PATH":"/usr/bin:/bin","LANG":"C","LC_ALL":"C","PYTHONDONTWRITEBYTECODE":"1"})
         r._require(result.returncode==0,"BUILD_VENV_FAILED")
         for name in ("activate","activate.csh","activate.fish","Activate.ps1"):(environment/"bin"/name).unlink(missing_ok=True)
+        # Python 3.13 CLI creates SCM ignore metadata by default. It is not an
+        # installed dependency or runtime input and must not broaden the allowlist.
+        (environment/".gitignore").unlink(missing_ok=True)
         config=environment/"pyvenv.cfg";lines=config.read_text().splitlines()
         config.write_text("\n".join(line for line in lines if not line.startswith(("command =","prompt =")))+"\n",encoding="utf-8",newline="\n")
         _install(environment,wheels,logical)
