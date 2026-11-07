@@ -13,7 +13,9 @@ SCRIPT=Path(__file__).parents[2]/"deploy/operations/m3_dashboard_operator.sh"
 
 def test_dispatcher_contains_only_dashboard_bootstrap_and_isolated_python():
     content=SCRIPT.read_text()
-    assert '"$ROOT/venv/bin/python" -I -B' in content
+    assert '/usr/bin/python3 -I -B -S' in content
+    assert 'pycache_prefix=/nonexistent/hope-runtime-bootstrap' in content
+    assert 'HOPE_DASHBOARD_CONTROL_RUNTIME' in content
     assert "--approve-dashboard-change" in content
     assert "hope-paper.service" not in content
     commands="\n".join(line for line in content.splitlines() if not line.lstrip().startswith("#"))
@@ -58,8 +60,9 @@ def test_dispatcher_requires_approval_and_never_runs_a_host_command_in_tests(tmp
     assert record.exists()==allowed
     if allowed:
         values=record.read_text().splitlines()
-        assert values[:5]==["--preserve-env=GH_TOKEN",str(root/"venv/bin/python"),"-I","-B",str(bootstrap)]
-        assert values[5]==action and "hope-paper" not in " ".join(values)
+        assert values[:10]==["--preserve-env=GH_TOKEN","/usr/bin/python3","-I","-B","-S",
+            "-X","pycache_prefix=/nonexistent/hope-runtime-bootstrap",str(bootstrap),"--control-runtime","shared"]
+        assert values[10]==action and "hope-paper" not in " ".join(values)
         assert ("--ci-run-id" in values)==(action in {"preflight","activate"})
         assert (approval in values)==approved
         if action in {"preflight","activate"}:assert values[values.index("--runtime")+1]==runtime

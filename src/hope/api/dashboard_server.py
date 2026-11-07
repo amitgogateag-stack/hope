@@ -16,6 +16,7 @@ from threading import BoundedSemaphore, Lock, Timer
 
 from hope.api.dashboard_projection import verified_projections
 from hope.api.snapshot_contract import verified_snapshot_payload
+from hope.api.runtime_integrity import safe_evidence,unverified
 from hope.infrastructure.durable_file import bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
@@ -276,13 +277,21 @@ class DashboardHandler(BaseHTTPRequestHandler):
             self._respond(403, b"Forbidden")
             return
         stack=ExitStack()
+        evidence=None
         try:
             if self.server.activation_view is not None:
-                stack.enter_context(self.server.activation_view())
+                evidence=stack.enter_context(self.server.activation_view())
             elif self.server.activation_check is not None:
-                self.server.activation_check()
+                evidence=self.server.activation_check()
+            self.runtime_evidence=safe_evidence(evidence.get("runtime_integrity") if isinstance(evidence,dict) else None)
+            if (self.runtime_evidence["state"]=="VERIFIED"
+                    and self.runtime_evidence["release_commit"]!=self.server.deployed_commit):
+                raise RuntimeError("RUNTIME_RELEASE_MISMATCH")
         except Exception:
             stack.close()
+            if self.path=="/runtime.json":
+                self._respond(200,json.dumps(unverified("ACTIVATION_BLOCKED",blocked=True),separators=(",",":")).encode(),"application/json; charset=utf-8")
+                return
             self._respond(503,b"Dashboard activation requires recovery")
             return
         try:
@@ -293,6 +302,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/runtime.json":
+            self._respond(200,json.dumps(self.runtime_evidence,separators=(",",":")).encode(),"application/json; charset=utf-8")
+            return
         if self.path in {"/", "/index.html"}:
             try:
                 payload = bounded_regular_read(self.server.preview, 65536)
@@ -355,6 +367,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 self.server.snapshot, self.server.operations,
                 expected_commit=self.server.deployed_commit,
                 expected_paper_commit=self.server.paper_deployed_commit,
+                runtime_evidence=self.runtime_evidence,
             ),separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return

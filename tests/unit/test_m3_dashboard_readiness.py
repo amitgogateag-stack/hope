@@ -12,6 +12,12 @@ from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.dashboard_server import DashboardHTTPServer,_verified_operations
 
 
+def verified_runtime(commit="a"*40):
+    return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,
+        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+
+
 @pytest.mark.parametrize("case,expected,reason",[
     ("missing","UNAVAILABLE","HEALTH_MISSING"),("invalid","UNAVAILABLE","HEALTH_INVALID"),
     ("unreadable","UNAVAILABLE","HEALTH_UNREADABLE"),("stale","UNAVAILABLE","HEALTH_STALE"),
@@ -31,7 +37,7 @@ def test_observations_distinguish_unavailable_causes_without_authorization(tmp_p
     if case!="missing":operations.write_text("broken{" if case=="invalid" else json.dumps(value))
     if case=="unreadable":
         monkeypatch.setattr("hope.api.dashboard_readiness._verified_operations",lambda *a:(_ for _ in ()).throw(PermissionError("private path secret")))
-    result=dashboard_readiness(snapshot,operations)
+    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime())
     assert result["paper_health"]==expected and result["reason"]==reason
     assert result["execution_authorized"] is False and result["live_enabled"] is False
     assert "secret" not in json.dumps(result)
@@ -67,7 +73,7 @@ def test_managed_readiness_accepts_exact_snapshot_release(tmp_path):
     snapshot.write_text(json.dumps(data))
     operations.write_text(json.dumps(health()))
     assert dashboard_readiness(
-        snapshot, operations, expected_commit=expected
+        snapshot, operations, expected_commit=expected,runtime_evidence=verified_runtime(expected)
     )["paper_health"] == "READY"
 
 

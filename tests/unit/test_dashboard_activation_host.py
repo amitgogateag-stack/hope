@@ -1,5 +1,6 @@
 from datetime import UTC,datetime,timedelta
 import json
+import io
 import os
 import subprocess
 from pathlib import Path
@@ -25,6 +26,7 @@ def preflight(setup,monkeypatch):
     path=layout.root/"releases"/NEW/"src/hope/api";path.mkdir(parents=True)
     (path/"dashboard_activation.py").write_text("reviewed code")
     host.runtime=Mock();host.database=Mock();host.configuration=Mock();host.listener=Mock()
+    host.runtime_manifests={OLD:"a"*64,NEW:"b"*64}
     host.show=Mock(return_value={"ActiveState":"inactive"})
     monkeypatch.setattr(module,"verify_exact_ci",Mock(return_value={"sha":NEW}))
     monkeypatch.setattr(module.shutil,"disk_usage",lambda *a:SimpleNamespace(free=256*1024*1024))
@@ -275,6 +277,12 @@ def test_private_listener_must_belong_to_exact_systemd_python(setup,monkeypatch,
     if failure=="wrong_pid":line=line.replace("pid=321,","pid=999,")
     host.run=Mock(return_value=line)
     original=Path.resolve
+    opened=Path.open;path_stat=Path.stat
+    command=b"\0".join((str(layout.python).encode(),b"-m",b"hope.api.dashboard_server",b"--port",b"8788"))+b"\0"
+    monkeypatch.setattr(Path,"open",lambda path,*a,**k:
+        io.BytesIO(command) if path.as_posix()=="/proc/321/cmdline" else opened(path,*a,**k))
+    monkeypatch.setattr(Path,"stat",lambda path,*a,**k:
+        path_stat(layout.python,*a,**k) if path.as_posix()=="/proc/321/exe" else path_stat(path,*a,**k))
     monkeypatch.setattr(Path,"resolve",lambda p,*a,**k:
         layout.root/"wrong-python" if p.as_posix()=="/proc/321/exe" and failure=="wrong_python" else
         original(layout.python,*a,**k) if p.as_posix()=="/proc/321/exe" else original(p,*a,**k))
@@ -307,8 +315,10 @@ def test_release_trust_and_git_inspection_precede_imports(setup,monkeypatch):
     (release/".git/objects/info").mkdir(parents=True)
     monkeypatch.setattr(module,"_trusted",Mock())
     inspect=Mock();monkeypatch.setattr(module.operations,"inspect_release",inspect)
+    source=Mock();monkeypatch.setattr(module,"source_snapshot",source)
     assert host.release(NEW)==release
     inspect.assert_called_once_with(release,NEW)
+    source.assert_called_once_with(release)
     (release/".git/objects/info/alternates").write_text("outside")
     with pytest.raises(RuntimeError,match="EXTERNAL_GIT_STATE"):host.release(NEW)
 

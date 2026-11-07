@@ -14,9 +14,10 @@ import secrets
 import stat
 import subprocess
 from pathlib import Path
-from typing import Callable
+from typing import Callable,TYPE_CHECKING
 
-from sqlalchemy import Connection, text
+if TYPE_CHECKING:
+    from sqlalchemy import Connection
 
 
 class DeploymentError(RuntimeError):
@@ -70,6 +71,7 @@ def verify_database_role(connection: Connection, *, component: str) -> None:
 
     Caller must begin a read-only transaction. No role names or URLs are returned.
     """
+    from sqlalchemy import text
     if component not in {"paper", "dashboard"}:
         raise DeploymentError("OPERATIONS_COMPONENT_INVALID")
     if connection.execute(text("SHOW transaction_read_only")).scalar_one() != "on":
@@ -1022,7 +1024,7 @@ def main() -> None:
     try:
         result = inspect_release(args.release, args.expected_sha)
         if args.database_component:
-            from sqlalchemy import create_engine
+            from sqlalchemy import create_engine,text
             from hope.infrastructure.paper_service import verify_schema_compatibility
             url = os.environ.get("HOPE_DATABASE_URL")
             if not url:
