@@ -47,7 +47,9 @@ def test_release_failure_restores_shared_and_preserves_paper_pointer(setup,failu
 
 
 def test_release_request_gate_rejects_shared_interpreter_even_with_same_base_python(setup,monkeypatch):
+    from hope.api.runtime_identity import verify_interpreter
     layout,host=setup;switch(layout,host)
+    monkeypatch.setattr(m,"_interpreter_identity",verify_interpreter)
     monkeypatch.setattr(m.sys,"executable",str(layout.python))
     with pytest.raises(RuntimeError,match="RUNTIME_IDENTITY_MISMATCH"):m.runtime_gate(layout,NEW)
     python=m._python(layout,NEW)

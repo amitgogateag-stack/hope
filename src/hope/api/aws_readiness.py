@@ -8,6 +8,7 @@ loads environment files, imports a PAPER factory, or changes host state.
 from __future__ import annotations
 
 import argparse
+import hashlib
 from datetime import datetime, timedelta, timezone
 import json
 import math
@@ -23,6 +24,8 @@ from hope.api import operations_deployment
 from hope.api.diagnostic_io import bounded_capture
 from hope.api.operations_deployment import DeploymentError, inspect_release
 from hope.api.snapshot_contract import strict_json,snapshot_evidence
+from hope.api.runtime_integrity import attest_runtime,safe_evidence,unverified,MAX_SECONDS as RUNTIME_TIMEOUT
+from hope.api.runtime_identity import verify_listener
 
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
@@ -688,6 +691,40 @@ def _snapshot_probe(url,*,timeout=LOOPBACK_OBSERVATION_TIMEOUT,capture=bounded_c
         max_bytes=32768,error_scope="SNAPSHOT",timeout=timeout,capture=capture)
 
 
+def _runtime_probe(root,sha,unit,*,timeout):
+    """Independent local manifest/kernel evidence; no HTTP self-attestation."""
+    from hope.api.dashboard_activation import Layout,_record,_pointer
+    try:
+        deadline=time.monotonic()+timeout
+        layout=Layout(root=root);record=_record(layout)
+        if record is None or record["schema"]!="hope.dashboard-activation.v3":return unverified()
+        if (record["phase"]!="COMMITTED" or record["target"]!=sha
+                or _pointer(layout,"dashboard-current")!=sha
+                or _pointer(layout,"current")!=record["shared"]):return unverified("ACTIVATION_BLOCKED",blocked=True)
+        pid=int(unit["MainPID"]);process_identity=operations_deployment._process_identity(pid)
+        evidence=attest_runtime(root,sha,record["runtime"],expected_manifest=record["runtime_manifest"],
+            timeout=min(timeout,RUNTIME_TIMEOUT))
+        from hope.api.runtime_integrity import environment_path
+        verify_listener(pid,environment_path(root,sha,record["runtime"])/"bin/python",
+            identity=operations_deployment._process_identity,managed=True,expected_identity=process_identity)
+        remaining=deadline-time.monotonic()
+        if remaining<=0:return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
+        listeners=bounded_capture(["/usr/bin/ss","-H","-ltnp","sport = :8788"],timeout=remaining,
+            max_output=4096,env={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C","LC_ALL":"C"}).splitlines()
+        if (len(listeners)!=1 or len(listeners[0].split())<6
+                or listeners[0].split()[3]!="127.0.0.1:8788"
+                or not re.search(r"\bpid="+re.escape(unit["MainPID"])+r",",listeners[0])):
+            return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
+        if _record(layout)!=record:return unverified("ACTIVATION_BLOCKED",blocked=True)
+        if operations_deployment._process_identity(pid)!=process_identity:
+            return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
+        if time.monotonic()>deadline:return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
+        evidence["process_sha256"]=hashlib.sha256(json.dumps((pid,process_identity),separators=(",",":")).encode()).hexdigest()
+        return evidence
+    except (OSError,ValueError,TypeError,RuntimeError,subprocess.SubprocessError):
+        return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
+
+
 def inspect_aws_readiness(
     expected_sha: str,
     *,
@@ -698,6 +735,7 @@ def inspect_aws_readiness(
     paper_status_probe: Callable[..., dict[str, object]] = _paper_status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
     snapshot_probe: Callable[..., dict[str, object]] = _snapshot_probe,
+    runtime_probe: Callable[..., dict[str, object]] = _runtime_probe,
     unit_file_probe: Callable[[Path, Path], bool] | None = None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None = None,
     release_probe: Callable[[Path, str], dict[str, object]] = inspect_release,
@@ -735,6 +773,7 @@ def inspect_aws_readiness(
                 paper_status_probe=paper_status_probe,
                 dashboard_release_probe=dashboard_release_probe,
                 snapshot_probe=snapshot_probe,
+                runtime_probe=runtime_probe,
                 unit_file_probe=unit_file_probe,
                 dropin_file_probe=dropin_file_probe,
                 release_probe=release_probe, status_url=status_url,
@@ -757,6 +796,7 @@ def _inspect_stable_readiness(
     paper_status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
     snapshot_probe: Callable[..., dict[str, object]],
+    runtime_probe: Callable[..., dict[str, object]],
     unit_file_probe: Callable[[Path, Path], bool] | None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None,
     release_probe: Callable[[Path, str], dict[str, object]],
@@ -1020,6 +1060,16 @@ def _inspect_stable_readiness(
     except (ValueError,TypeError,UnicodeError) as exc:
         raise ReadinessError("AWS_SNAPSHOT_DOCUMENT_INVALID") from exc
     blockers.extend(snapshot_blockers)
+    remaining=loopback_deadline-monotonic()
+    if not math.isfinite(remaining) or remaining<=0:
+        raise ReadinessError("AWS_RUNTIME_OBSERVATION_TIMEOUT")
+    try:
+        runtime=safe_evidence(runtime_probe(root,deployed_sha,units["hope-ops-dashboard-web.service"],timeout=remaining))
+    except (OSError,ValueError,TypeError,RuntimeError) as exc:
+        raise ReadinessError("AWS_RUNTIME_EVIDENCE_INVALID") from exc
+    if runtime["state"]!="VERIFIED":blockers.append("RUNTIME_"+runtime["state"])
+    elif runtime["release_commit"]!=deployed_sha:blockers.append("RUNTIME_RELEASE_MISMATCH")
+    elif runtime["process_sha256"] is None:blockers.append("RUNTIME_PROCESS_UNVERIFIED")
 
     # The HTTP documents are meaningful only for the service generation that
     # was authenticated before they were read. A restart does not take the
@@ -1066,6 +1116,12 @@ def _inspect_stable_readiness(
     except (OSError, DeploymentError) as exc:
         raise ReadinessError("AWS_DEPLOYED_RELEASE_CHANGED") from exc
     _require_same_release_storage(root, release_storage)
+    try:
+        closing_runtime=safe_evidence(runtime_probe(root,deployed_sha,
+            units["hope-ops-dashboard-web.service"],timeout=RUNTIME_TIMEOUT))
+    except (OSError,ValueError,TypeError,RuntimeError) as exc:
+        raise ReadinessError("AWS_RUNTIME_EVIDENCE_CHANGED") from exc
+    if closing_runtime!=runtime:raise ReadinessError("AWS_RUNTIME_EVIDENCE_CHANGED")
     _require_same_deployed_metadata(
         root_descriptor, metadata_content, metadata_identity,
     )
@@ -1080,6 +1136,7 @@ def _inspect_stable_readiness(
         "paper_status": safe_paper_status,
         "operations_status": safe_status,
         "snapshot": safe_snapshot,
+        "runtime_integrity": runtime,
         "units": units,
     }
 

@@ -38,9 +38,12 @@ if [[ $action == preflight || $action == activate ]]; then
 fi
 if [[ $action == activate || $action == rollback ]]; then arguments+=(--approve-dashboard-change); fi
 if [[ $action == paper-mask ]]; then arguments+=(--approve-reviewed-paper-mask); fi
+control_runtime=${HOPE_DASHBOARD_CONTROL_RUNTIME:-shared}
+[[ $control_runtime == shared || $control_runtime == release ]] || exit 2
 
 # Isolated Python ignores ambient Python import/startup variables. The reviewed
 # bootstrap explicitly loads this release. sudo's normal env_reset policy must
 # remain enabled; never use sudo -E or preserve loader/Python settings.
-exec /usr/bin/sudo --preserve-env=GH_TOKEN "$ROOT/venv/bin/python" -I -B \
-  "$BOOTSTRAP" "${arguments[@]}"
+exec /usr/bin/sudo --preserve-env=GH_TOKEN /usr/bin/python3 -I -B -S \
+  -X pycache_prefix=/nonexistent/hope-runtime-bootstrap \
+  "$BOOTSTRAP" --control-runtime "$control_runtime" "${arguments[@]}"

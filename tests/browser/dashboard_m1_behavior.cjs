@@ -8,6 +8,7 @@ const BASE = Date.parse('2026-10-16T12:00:00Z');
 const iso = n => new Date(n).toISOString();
 const sample = () => ({schema_version:1,source:'hope_postgresql',generated_at:iso(BASE),research:{run_count:0},paper:{environment_state:'HALTED',job_runs:{total:3,claimed:1,succeeded:1,failed:1},recovery:{claimed_with_effects:1,claimed_without_effects:0,claims_older_than_one_hour:1,reconciliation_receipts:1}}});
 const ops = () => ({schema_version:1,generated_at:iso(BASE),state:'CURRENT',last_success_at:iso(BASE),cycles_succeeded:1,cycles_failed:0,jobs_executed:0,jobs_skipped:0,paper_only:true,live_enabled:false,deployed_commit:'a'.repeat(40),schema_compatibility:'COMPATIBLE'});
+const runtime = () => ({schema:'hope.runtime-integrity.v1',state:'VERIFIED',code:'MANIFEST_AND_RUNTIME_MATCH',release_commit:'a'.repeat(40),runtime_mode:'shared',manifest_sha256:'b'.repeat(64),inventory_sha256:'c'.repeat(64),process_sha256:null,file_count:1,execution_authorized:false});
 const response = value => ({ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(value)});
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 function browser() {
@@ -198,17 +199,21 @@ async function main() {
  // M3 observations distinguish unreachable health from web liveness and age independently.
  {
   const b=browser();
-  const data={schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'UNAVAILABLE',reason:'HEALTH_MISSING',worker_report:'UNKNOWN',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:null,last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
+  const data={runtime_integrity:runtime(),schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'UNAVAILABLE',reason:'HEALTH_MISSING',worker_report:'UNKNOWN',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:null,last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
   b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/HEALTH_MISSING/);
   b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',last_successful_poll_at:iso(BASE)});
-  assert.equal(b.element('readiness-state').textContent,'READY');
+  assert.equal(b.element('readiness-state').textContent,'READY');assert.equal(b.element('runtime-integrity').textContent,'VERIFIED');
   b.api.applyReadiness({...data,reason:'RECOVERY_REQUIRED',reconciliation:'RECOVERY_REQUIRED'});
   assert.equal(b.element('readiness-state').textContent,'RECOVERY_REQUIRED');
   assert.match(b.element('readiness-note').textContent,/RECOVERY_REQUIRED/);
   assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',reconciliation:'RECOVERY_REQUIRED',worker_report:'CURRENT',last_successful_poll_at:iso(BASE)}));
   b.api.applyReadiness({...data,paper_health:'HALTED',reason:'DURABLE_HALT_OBSERVED',reconciliation:'RECOVERY_REQUIRED'});
   assert.equal(b.element('readiness-state').textContent,'HALTED');
-  b.advance(300001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
+  b.advance(300001);assert.equal(b.element('runtime-integrity').textContent,'UNVERIFIED');assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');assert.match(b.element('readiness-note').textContent,/STALE/);
+  assert.throws(()=>b.api.applyReadiness({...data,paper_health:'READY',runtime_integrity:undefined}));
+  assert.throws(()=>b.api.applyReadiness({...data,runtime_integrity:{...runtime(),private_path:'/secret'}}));
+  b.api.applyReadiness({...data,reason:'RUNTIME_UNVERIFIED',runtime_integrity:{...runtime(),state:'UNVERIFIED',code:'LEGACY_JOURNAL_UNBOUND',release_commit:null,runtime_mode:null,manifest_sha256:null,inventory_sha256:null,process_sha256:null,file_count:0}});
+  assert.equal(b.element('runtime-integrity').textContent,'UNVERIFIED');
   assert.throws(()=>b.api.applyReadiness({...data,execution_authorized:true}));
   assert.throws(()=>b.api.applyReadiness({...data,reason:'secret-payload'}));
   b.api.clearReadiness();assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');
@@ -216,7 +221,7 @@ async function main() {
  // A recent response cannot extend an old successful poll, or conceal new diagnoses.
  {
   const b=browser();
-  const data={schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:iso(BASE-299000),last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
+  const data={runtime_integrity:runtime(),schema:'hope.operational-readiness.v1',generated_at:iso(BASE),server:'RUNNING',paper_health:'READY',reason:'CURRENT_OBSERVATIONS_ONLY',worker_report:'CURRENT',snapshot:'CURRENT',database:'OBSERVED_AT_SNAPSHOT',reconciliation:'UNVERIFIED',last_successful_poll_at:iso(BASE-299000),last_successful_paper_at:null,last_failure_at:null,last_failure_code:null,execution_authorized:false,paper_only:true,live_enabled:false};
   b.api.applyReadiness(data);assert.equal(b.element('readiness-state').textContent,'READY');
   b.advance(1001);assert.equal(b.element('readiness-state').textContent,'UNAVAILABLE');
   assert.throws(()=>b.api.applyReadiness({...data,last_successful_poll_at:null}));

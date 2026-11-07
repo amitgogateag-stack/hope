@@ -17,9 +17,16 @@ from test_dashboard_only_activation import OLD,NEW,FakeHost
 
 @pytest.mark.skipif(sys.platform!="linux",reason="Native Linux crash/fsync/symlink/flock; exercised in Linux CI")
 @pytest.mark.parametrize("crash",["PREPARED","CONFIGS","POINTER","VERIFYING","STARTED","COMMITTED"])
-def test_sigkill_fences_boot_and_explicit_rollback_restores_original(tmp_path,monkeypatch,crash):
+@pytest.mark.parametrize("manifest_bound",[False,True])
+def test_sigkill_fences_boot_and_explicit_rollback_restores_original(tmp_path,monkeypatch,crash,manifest_bound):
     monkeypatch.setattr(module,"OWNER",os.getuid())
     monkeypatch.setattr(module,"_code_identity",lambda *a:None)
+    monkeypatch.setattr(module,"_interpreter_identity",lambda *a:None)
+    def approved(root,sha,mode,**kwargs):
+        return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+            release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
+            inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+    monkeypatch.setattr(module,"attest_runtime",approved)
     layout=module.Layout(root=tmp_path,units=tmp_path/"units")
     layout.units.mkdir()
     for sha in (OLD,NEW):(tmp_path/"releases"/sha).mkdir(parents=True)
@@ -32,6 +39,12 @@ from hope.api import dashboard_activation as m
 from test_dashboard_only_activation import OLD,NEW,FakeHost
 m.OWNER=os.getuid()
 m._code_identity=lambda *a:None
+m._interpreter_identity=lambda *a:None
+def approved(root,sha,mode,**kwargs):
+    return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
+        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+m.attest_runtime=approved
 root=Path(sys.argv[1]);phase=sys.argv[2]
 layout=m.Layout(root=root,units=root/'units')
 def pause():
@@ -50,12 +63,13 @@ if phase in {'CONFIGS','POINTER'}:
         result=original(*args,**kwargs);pause();return result
     setattr(m,name,hooked)
 host=FakeHost()
+if sys.argv[3]=='bound':host.runtime_manifests={OLD:'a'*64,NEW:'b'*64}
 if phase=='STARTED':host.verify=lambda *a,**k:pause()
 m.activate(layout,host,target=NEW,shared=OLD,ci_run=123,ci_attempt=1)
 '''
     env=dict(os.environ)
     env["PYTHONPATH"]=os.pathsep.join([str(Path(__file__).parents[2]/"src"),str(Path(__file__).parent)])
-    child=subprocess.Popen([sys.executable,"-B","-c",code,str(tmp_path),crash],env=env,
+    child=subprocess.Popen([sys.executable,"-B","-c",code,str(tmp_path),crash,"bound" if manifest_bound else "legacy"],env=env,
         stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     web=None
     try:
@@ -74,6 +88,10 @@ from pathlib import Path
 from hope.api import dashboard_activation as m
 from hope.api.dashboard_server import DashboardHTTPServer
 m.OWNER=os.getuid();root=Path(sys.argv[1]);layout=m.Layout(root=root,units=root/'units')
+m._interpreter_identity=lambda *a:None
+m.attest_runtime=lambda root,sha,mode,**kwargs:dict(schema="hope.runtime-integrity.v1",state="VERIFIED",
+    code="MANIFEST_AND_RUNTIME_MATCH",release_commit=sha,runtime_mode=mode,manifest_sha256='b'*64,
+    inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
 with DashboardHTTPServer(0,root/'page',root/'snapshot',deployed_commit=sys.argv[2],
         activation_check=lambda:m.runtime_gate(layout,sys.argv[2])) as server:
     (root/'web-port').write_text(str(server.server_port))

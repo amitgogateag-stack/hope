@@ -144,11 +144,17 @@ def _snapshot(**changes):
     return lambda _url,*,timeout=5:value
 
 
+def _runtime(commit=EXPECTED):
+    return lambda *a,**k:dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        release_commit=commit,runtime_mode="shared",manifest_sha256="a"*64,inventory_sha256="c"*64,process_sha256="d"*64,file_count=1,execution_authorized=False)
+
+
 def inspect_aws_readiness(*args, **kwargs):
     kwargs.setdefault("dashboard_release_probe", _dashboard_release())
     kwargs.setdefault("paper_status_probe", _paper_status())
     kwargs.setdefault("unit_file_probe", lambda _installed, _reviewed: True)
     kwargs.setdefault("snapshot_probe", _snapshot())
+    kwargs.setdefault("runtime_probe", _runtime())
     return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
 
@@ -696,6 +702,7 @@ def test_observed_aws_drift_is_reported_without_mutating_release(tmp_path):
         dashboard_release_probe=_dashboard_release(deployed),
         paper_status_probe=_paper_status(deployed),
         snapshot_probe=_snapshot(deployed_commit=deployed,generated_at="2026-10-17T18:35:14.543100+00:00"),
+        runtime_probe=_runtime(deployed),
         status_probe=lambda _, *, timeout: {
             "schema_version": 1,
             "service": "RUNNING",
@@ -1134,6 +1141,7 @@ def test_canonical_dropin_replacement_during_http_window_fails_closed(
             dashboard_release_probe=_dashboard_release(),
             paper_status_probe=_paper_status(), release_probe=_release_ok,
             snapshot_probe=_snapshot(),
+            runtime_probe=_runtime(),
             unit_file_probe=lambda *_args: True,
         )
 
@@ -1220,6 +1228,7 @@ def test_default_unit_matcher_uses_system_and_release_trust_anchors(
         status_probe=_status(), dashboard_release_probe=_dashboard_release(),
         paper_status_probe=_paper_status(),
         snapshot_probe=_snapshot(),
+        runtime_probe=_runtime(),
         release_probe=_release_ok,
     )
 

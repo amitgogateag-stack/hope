@@ -1,4 +1,5 @@
 """One pure bounded snapshot contract for local serving and host attestation."""
+from __future__ import annotations
 from datetime import datetime, timezone
 import json
 from re import fullmatch

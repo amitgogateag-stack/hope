@@ -14,6 +14,7 @@ from hope.api.operations_deployment import inspect_release,verify_database_role
 from hope.api.dashboard_server import OPERATIONS_ERROR_CODES
 from hope.api.release_attestation import _NoRedirect,verify_exact_ci
 from hope.api.dashboard_transport import validate_live_transport
+from hope.api.runtime_integrity import safe_evidence
 from hope.infrastructure.paper_service import verify_schema_compatibility
 
 UNITS=("hope-paper.service","hope-ops-dashboard-web.service","hope-ops-dashboard-export.timer")
@@ -27,6 +28,7 @@ READINESS_FIELDS={
         "WORKER_IDENTITY_UNVERIFIED","CLAIMS_REQUIRE_REVIEW","RECOVERY_REQUIRED","CURRENT_OBSERVATIONS_ONLY",
         "HEALTH_FROM_FUTURE","POLL_NOT_CURRENT","WORKER_STATUS_INCONSISTENT",
         "SNAPSHOT_IDENTITY_UNVERIFIED",
+        "RUNTIME_UNVERIFIED","RUNTIME_MISMATCH","RUNTIME_BLOCKED",
         "DURABLE_HALT_OBSERVED"},
     "worker_report":{"UNKNOWN","STARTING","CURRENT","HALTED","UNAVAILABLE","STOPPED"},
     "snapshot":{"CURRENT","STALE","UNAVAILABLE"},
@@ -71,6 +73,7 @@ def _readiness(value):
         raise ValueError("readiness failure history")
     safe["last_failure_code"]=(code if isinstance(code,str) and code in OPERATIONS_ERROR_CODES
         else "PAPER_SERVICE_CYCLE_FAILED") if code is not None else None
+    if "runtime_integrity" in value:safe["runtime_integrity"]=safe_evidence(value["runtime_integrity"])
     if safe["paper_health"]=="READY" and (
             safe["reason"]!="CURRENT_OBSERVATIONS_ONLY" or safe["worker_report"]!="CURRENT"
             or safe["snapshot"]!="CURRENT" or safe["database"]!="OBSERVED_AT_SNAPSHOT"
@@ -79,6 +82,8 @@ def _readiness(value):
     # Never reproduce an old READY/HALTED claim as a current host observation.
     if age>300:return {"status":"STALE_RESPONSE"}
     if safe["paper_health"]=="READY":
+        if "runtime_integrity" in safe and safe["runtime_integrity"]["state"]!="VERIFIED":
+            raise ValueError("readiness runtime required")
         poll=stamps.get("last_successful_poll_at")
         if age<0 or poll is None or not 0<=age+(generated-poll).total_seconds()<=300:
             raise ValueError("readiness current poll required")

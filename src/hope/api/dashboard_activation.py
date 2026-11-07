@@ -32,6 +32,9 @@ from hope.api.diagnostic_io import bounded_capture
 from hope.api.dashboard_server import _verified_snapshot
 from hope.api.m3_audit import _readiness
 from hope.api.release_attestation import _NoRedirect,verify_exact_ci
+from hope.api.runtime_identity import verify_interpreter as _interpreter_identity,verify_listener
+from hope.api.runtime_integrity import attest_runtime,unverified,safe_evidence,manifest_path,source_snapshot
+from hope.api.snapshot_contract import strict_json
 from hope.infrastructure.paper_service import verify_schema_compatibility
 
 OWNER=0
@@ -109,7 +112,7 @@ def _json(path):
     _trusted(path)
     _require(path.stat().st_size<=65536,"RECORD_TOO_LARGE")
     payload=path.read_bytes();_require(len(payload)<=65536,"RECORD_TOO_LARGE")
-    value=json.loads(payload);_require(isinstance(value,dict),"RECORD_INVALID")
+    value=strict_json(payload);_require(isinstance(value,dict),"RECORD_INVALID")
     return value
 
 
@@ -121,6 +124,12 @@ def _validate_record(value):
     fields={"schema","target","shared","previous","phase","backup_id",
         "timer_active","pid","boot","ticks"}
     version=value.get("schema")
+    if version=="hope.dashboard-activation.v3":
+        _require(set(value)==fields|{"runtime","previous_runtime","runtime_manifest","previous_runtime_manifest"}
+            and all(isinstance(value.get(key),str) and re.fullmatch("[0-9a-f]{64}",value[key])
+                for key in ("runtime_manifest","previous_runtime_manifest")),"RECORD_INVALID")
+        older={key:item for key,item in value.items() if key not in {"runtime_manifest","previous_runtime_manifest"}}
+        older["schema"]="hope.dashboard-activation.v2";_validate_record(older);return value
     _require((version=="hope.dashboard-activation.v1" and set(value)==fields) or
         (version=="hope.dashboard-activation.v2" and set(value)==fields|{"runtime","previous_runtime"}
          and value["runtime"] in {"shared","release"} and value["previous_runtime"] in {"shared","release"}
@@ -244,7 +253,21 @@ def _install_configs(layout,sha):
 
 def _backup(layout,record):
     value=_json(layout.root/("dashboard-backup-"+record["backup_id"]+".json"))
-    _require(set(value)=={"previous_record","configs"} and isinstance(value["configs"],dict),"BACKUP_INVALID")
+    _require(set(value) in ({"previous_record","configs"},{"previous_record","configs","runtime_binding"})
+        and isinstance(value["configs"],dict),"BACKUP_INVALID")
+    binding=value.get("runtime_binding")
+    if binding is not None:
+        fields={"target","shared","previous","runtime","previous_runtime","runtime_manifest","previous_runtime_manifest"}
+        _require(isinstance(binding,dict) and set(binding)==fields
+            and all(binding[key]==record[key] for key in ("target","shared","previous"))
+            and binding["runtime"] in {"shared","release"}
+            and binding["previous_runtime"]==record.get("previous_runtime","shared")
+            and all(isinstance(binding[key],str) and re.fullmatch("[0-9a-f]{64}",binding[key])
+                for key in ("runtime_manifest","previous_runtime_manifest")),"BACKUP_INVALID")
+        if record["schema"]=="hope.dashboard-activation.v3":
+            _require(all(binding[key]==record[key] for key in fields),"BACKUP_INVALID")
+        else:_require(record["phase"] in {"ROLLING_BACK","ROLLBACK_FAILED"},"BACKUP_INVALID")
+    if record["schema"]=="hope.dashboard-activation.v3":_require(binding is not None,"BACKUP_INVALID")
     expected=_configs(layout,record["previous"]) if record["previous"] else {WEB:None,EXPORT:None}
     _require(value["configs"]==expected or (record["previous"]
         and value["configs"]==_legacy_configs(layout,record["previous"])),"BACKUP_INVALID")
@@ -257,6 +280,8 @@ def _backup(layout,record):
         _require(previous["phase"]=="COMMITTED" and previous["target"]==record["previous"]
             and previous["shared"]==record["shared"]
             and previous.get("runtime","shared")==record.get("previous_runtime","shared"),"BACKUP_INVALID")
+        if previous.get("schema")=="hope.dashboard-activation.v3":
+            _require(previous["runtime_manifest"]==record.get("previous_runtime_manifest"),"BACKUP_INVALID")
     return value
 
 
@@ -288,13 +313,14 @@ def runtime_gate(layout,target):
     _require(expected==_sha(target) and _pointer(layout,"current")==record["shared"]
         and _pointer(layout,"dashboard-current")==target,"GATE_POINTER_MISMATCH")
     _check_configs(layout,target)
-    if _runtime_mode(layout,target)=="release":
-        python=_python(layout,target)
-        _require(Path(sys.executable)==python and Path(sys.prefix)==python.parent.parent,
-            "RUNTIME_IDENTITY_MISMATCH")
+    _interpreter_identity(_python(layout,target))
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
+    evidence=unverified()
+    if record["schema"]=="hope.dashboard-activation.v3":
+        digest=record["previous_runtime_manifest"] if record["phase"]=="ROLLING_BACK" else record["runtime_manifest"]
+        evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest)
     return {"status":"GATE_PASSED","dashboard_commit":target,
-        "paper_commit":record["shared"],"execution_authorized":False}
+        "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence)}
 
 
 @contextmanager
@@ -318,7 +344,11 @@ def _rollback(layout,record,host):
     # Recovery needs only the destination once rollback starts; retain the
     # original schema for its startup/request fences. Release-runtime priors
     # necessarily understand v2 and keep both runtime identities.
-    if record.get("previous_runtime")=="shared":
+    prior_version=(backup["previous_record"] or {}).get("schema","hope.dashboard-activation.v1")
+    if record["schema"]=="hope.dashboard-activation.v3" and prior_version!="hope.dashboard-activation.v3":
+        record.pop("runtime_manifest");record.pop("previous_runtime_manifest")
+        record["schema"]="hope.dashboard-activation.v2"
+    if record.get("previous_runtime")=="shared" and prior_version=="hope.dashboard-activation.v1":
         record.pop("runtime");record.pop("previous_runtime")
         record["schema"]="hope.dashboard-activation.v1"
     record["phase"]="ROLLING_BACK";_save(layout.journal,record)
@@ -369,8 +399,16 @@ def activate(layout,host,*,target,shared,ci_run,ci_attempt,runtime="shared"):
         previous_runtime=previous_record.get("runtime","shared") if previous_record else "shared"
         if runtime!="shared" or previous_runtime!="shared":
             record.update(schema="hope.dashboard-activation.v2",runtime=runtime,previous_runtime=previous_runtime)
+        manifests=getattr(host,"runtime_manifests",None)
+        if manifests is not None:
+            record.update(schema="hope.dashboard-activation.v3",runtime=runtime,previous_runtime=previous_runtime,
+                runtime_manifest=manifests[target],previous_runtime_manifest=manifests[previous or shared])
+            _validate_record(record)
         _save(layout.root/("dashboard-backup-"+record["backup_id"]+".json"),
-            {"previous_record":previous_record,"configs":previous_configs},0o600)
+            {"previous_record":previous_record,"configs":previous_configs,
+             **({"runtime_binding":{key:record[key] for key in ("target","shared","previous","runtime",
+                "previous_runtime","runtime_manifest","previous_runtime_manifest")}}
+                if record["schema"]=="hope.dashboard-activation.v3" else {})},0o600)
         _save(layout.journal,record)
         try:
             host.stop();_install_configs(layout,target);_point(layout,target)
@@ -546,6 +584,7 @@ class Host:
             for name in dirs:_trusted(Path(directory)/name,directory=True)
             for name in files:_trusted(Path(directory)/name)
         operations.inspect_release(release,sha)
+        source_snapshot(release)
         return release
 
     def runtime(self,release,*,new=False):
@@ -553,6 +592,17 @@ class Host:
         mode=getattr(self,"target_runtime","shared") if new else _runtime_mode(layout,release.name)
         python=_python(layout,release.name,mode)
         environment=python.parent.parent
+        record=_record(layout)
+        expected=None
+        binding=record
+        if record and record["schema"]!="hope.dashboard-activation.v3" and record["phase"] in {"ROLLING_BACK","ROLLBACK_FAILED"}:
+            binding=_backup(layout,record).get("runtime_binding",record)
+        if not new and binding and "runtime_manifest" in binding:
+            if release.name==binding["target"]:expected=binding["runtime_manifest"]
+            elif release.name==(binding["previous"] or binding["shared"]):expected=binding["previous_runtime_manifest"]
+        evidence=attest_runtime(layout.root,release.name,mode,expected_manifest=expected,release=release)
+        if not hasattr(self,"runtime_manifests"):self.runtime_manifests={}
+        self.runtime_manifests[release.name]=evidence["manifest_sha256"]
         if mode=="release":_trusted(layout.root/"release-venvs",directory=True)
         _trusted(python.resolve(strict=True))
         for path in (environment,python.parent):_trusted(path,directory=True)
@@ -569,13 +619,18 @@ class Host:
                         if parent==layout.root:break
                         _trusted(parent,directory=True)
                 _trusted(path,directory=path.is_dir())
-        code=("import sys;from pathlib import Path;import sqlalchemy,psycopg;"
+        code=("import sys,json,hashlib;from pathlib import Path;import sqlalchemy,psycopg,pydantic,alembic;"
             "from hope.api import dashboard_server,dashboard_snapshot;"
             +("from hope.api import dashboard_readiness,dashboard_activation;" if new else "")+
             "from hope.api.dashboard_server import _verified_snapshot;"
             "assert sys.version_info[:2]==(3,13);"
             f"assert Path(sys.executable)==Path({str(python)!r});"
             f"assert Path(sys.prefix)==Path({str(environment)!r});"
+            f"assert all(Path(dependency.__file__).resolve().is_relative_to(Path({str(environment)!r})) for dependency in (sqlalchemy,psycopg,pydantic,alembic));"
+            f"manifest=Path({str(manifest_path(layout.root,release.name,mode))!r}).open('rb').read(4194305);"
+            "assert len(manifest)<=4194304;approved=json.loads(manifest);"
+            f"assert hashlib.sha256(json.dumps(approved,sort_keys=True,separators=(',',':')).encode()).hexdigest()=={evidence['manifest_sha256']!r};"
+            f"[Path({str(environment)!r},name).open('rb').close() for name in approved['files']];"
             f"assert Path(dashboard_server.__file__).resolve().is_relative_to(Path({str(release)!r}));"
             f"Path({str(release/'docs/dashboard/preview.html')!r}).read_bytes();"
             +(f"_verified_snapshot(Path({str(layout.snapshot)!r}));" if new else "")+
@@ -625,20 +680,16 @@ class Host:
     def listener(self):
         pid=self.show(WEB).get("MainPID","")
         _require(pid.isdigit() and int(pid)>0,"LISTENER_IDENTITY_UNKNOWN")
+        process_identity=operations._process_identity(int(pid))
         lines=self.run("ss","-H","-ltnp","sport = :8788").splitlines()
         _require(len(lines)==1 and len(lines[0].split())>=6
             and lines[0].split()[3]=="127.0.0.1:8788"
             and re.search(r"\bpid="+pid+r",",lines[0]),"PRIVATE_LISTENER_MISMATCH")
-        executable=Path("/proc")/pid/"exe"
         sha=_pointer(self.layout,"dashboard-current",optional=True)
         python=_python(self.layout,sha) if sha else self.layout.python
-        _require(executable.resolve(strict=True)==python.resolve(strict=True),"LISTENER_RUNTIME_MISMATCH")
-        if sha and _runtime_mode(self.layout,sha)=="release":
-            # /proc/exe alone identifies the base interpreter shared by venvs.
-            # argv must also bind the process to the selected environment.
-            with (Path("/proc")/pid/"cmdline").open("rb") as stream:command=stream.read(65537)
-            _require(len(command)<=65536 and command.split(b"\0",1)[0]==os.fsencode(python),
-                "LISTENER_ENVIRONMENT_MISMATCH")
+        verify_listener(int(pid),python,identity=operations._process_identity,managed=sha is not None,
+            expected_identity=process_identity)
+        _require(self.show(WEB).get("MainPID")==pid,"LISTENER_PROCESS_CHANGED")
 
     def rollback_preflight(self,sha):
         self.stage="ROLLBACK_PREFLIGHT"
@@ -669,6 +720,15 @@ class Host:
         _require(match and int(match.group(1))>=128*1024,"MEMORY_INSUFFICIENT")
         self.stage="SYSTEMD_CONFIGURATION";self.configuration(shared,previous)
         self.stage="PRIVATE_LISTENER";self.listener()
+        # Close the full preflight window: database/HTTP probes cannot replace a
+        # previously authenticated rollback environment or release unnoticed.
+        self.stage="RUNTIME"
+        for sha in (target,previous or shared):
+            checked=self.release(sha)
+            mode=getattr(self,"target_runtime","shared") if sha==target else _runtime_mode(self.layout,sha)
+            evidence=attest_runtime(self.layout.root,sha,mode,release=checked,
+                expected_manifest=self.runtime_manifests[sha])
+            _require(evidence["state"]=="VERIFIED","RUNTIME_UNVERIFIED")
         return self.show(TIMER)["ActiveState"]=="active"
 
     def request(self,path):

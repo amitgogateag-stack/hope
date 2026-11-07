@@ -9,7 +9,7 @@ import pytest
 
 from hope.api import aws_readiness as m
 from hope.api.snapshot_contract import snapshot_evidence,verified_snapshot_payload,strict_json
-from test_aws_readiness import EXPECTED,NOW,_units,_status,_paper_status,_dashboard_release,_snapshot
+from test_aws_readiness import EXPECTED,NOW,_units,_status,_paper_status,_dashboard_release,_snapshot,_runtime
 
 
 @pytest.fixture
@@ -31,6 +31,7 @@ def host(monkeypatch):
         return m.inspect_aws_readiness(EXPECTED,root=root,now=NOW,
             systemd_probe=kwargs.pop("systemd_probe",_units()),status_probe=kwargs.pop("status_probe",_status()),
             paper_status_probe=_paper_status(),dashboard_release_probe=_dashboard_release(),
+            runtime_probe=kwargs.pop("runtime_probe",_runtime()),
             release_probe=lambda *a:{"status":"COMPATIBLE_CODE"},unit_file_probe=lambda *a:True,**kwargs)
     return snapshot,inspect
 

@@ -24,6 +24,9 @@ def guard_platform(monkeypatch):
             except OSError as exc:
                 raise BlockingIOError() from exc
         monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(flock=flock, LOCK_EX=1, LOCK_NB=2))
+        # Keep metadata emulation local to the guard implementation. Patching
+        # the shared os module used to corrupt unrelated descriptor readers.
+        monkeypatch.setattr(module,"os",SimpleNamespace(**vars(module.os)))
         monkeypatch.setattr(module.os, "O_NOFOLLOW", 0, raising=False)
         monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
         original_stat = module.os.fstat
@@ -99,6 +102,7 @@ def test_all_lease_mutators_fail_before_work_when_guard_is_held(tmp_path, guard_
     assert not (tmp_path / ".activation.lock").exists()
 
 
+@pytest.mark.skipif(os.name!="posix",reason="Native unlink of an open activation lease; exercised on Linux CI")
 def test_activation_holds_guard_for_complete_lease_lifetime(tmp_path, guard_platform):
     with module.activation_lock(tmp_path, expected_current="1"*40, target_sha="2"*40):
         assert (tmp_path / ".activation.lock").is_file()

@@ -47,12 +47,32 @@ def setup(tmp_path_factory,monkeypatch,guard_platform):
     # Real source-path binding is exercised by the native separate web process;
     # these filesystem orchestration fixtures do not copy an entire release.
     monkeypatch.setattr(module,"_code_identity",lambda *a:None)
+    monkeypatch.setattr(module,"_interpreter_identity",lambda *a:None)
+    # Orchestration fixtures model approved runtime evidence; separate integrity
+    # tests exercise real files, hashes, permissions and independent manifests.
+    def attested(root,sha,mode,**kwargs):
+        return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+            release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
+            inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False)
+    monkeypatch.setattr(module,"attest_runtime",attested)
     if os.name=="nt":
         # Windows cannot grant POSIX symlinks/fsync/ownership. Model pointer
         # metadata locally; Linux CI runs these exact operations natively.
         monkeypatch.setattr(module,"_sync",lambda *a:None)
         monkeypatch.setattr(module,"_trusted",lambda *a,**k:None)
         monkeypatch.setattr(module.os,"fchmod",lambda *a:None,raising=False)
+        from hope.api import dashboard_server
+        def private_read(path,limit):
+            # Windows fixture models private ACL storage; native Linux CI uses
+            # the production no-follow descriptor/mode checks unchanged.
+            before=path.stat()
+            if not path.is_file() or before.st_nlink!=1 or before.st_size>limit:raise ValueError("fixture file invalid")
+            with path.open("rb") as stream:payload=stream.read(limit+1)
+            after=path.stat()
+            if len(payload)>limit or (before.st_ino,before.st_size,before.st_mtime_ns)!=(after.st_ino,after.st_size,after.st_mtime_ns):
+                raise ValueError("fixture file changed")
+            return payload
+        monkeypatch.setattr(dashboard_server,"bounded_regular_read",private_read)
         def pointer(layout,name,optional=False):
             path=layout.root/name
             if optional and not path.exists():return None
