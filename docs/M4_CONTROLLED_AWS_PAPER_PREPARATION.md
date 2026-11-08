@@ -455,4 +455,4 @@ data. These hashes are source inventory, never independent deployment approval.
 | 232 | 232_paper_strategy_authorization.sql | `123d1b6e1c925560421e2419ad768946a6c9af52637da1a343de3996f2eba82c` |
 | 233 | 233_paper_certified_outcomes.sql | `950733ceeb97e26da2e9f902807b759cf24319b2586dd1baa0548d93b94cd211` |
 | 234 | 234_paper_handoff_intents.sql | `09ac97d2010058e2fba036eb3058c3567d1b38eb474fce3ead3160a30b014ecc` |
-| 235 | 235_paper_startup_authorities.sql | `1f76d5f1f9aac2c8bd0dcc2b9de8835328b629d46d36d01f39a66e7d1383433e` |
+| 235 | 235_paper_startup_authorities.sql | `f855d24ccdb999e495bc82c13f2ec87a895f391b70951b6621c5f1d2511975bc` |

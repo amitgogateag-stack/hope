@@ -58,14 +58,14 @@ def seeded(startup_database,request):return request.getfixturevalue('certified_c
 @pytest.fixture
 def prepare(startup_database,seeded,tmp_path,monkeypatch):
     _,make=seeded;worker=startup_database['worker']
-    def build(path='NO_TRADE',market=StrategyMarket.USA):
+    def build(path='NO_TRADE',market=StrategyMarket.USA,*,receipt=RECEIPT):
         data,_,strategy,work,_=make(emit=path!='NO_TRADE',blocked=path=='RISK_BLOCKED',market=market)
         run,plan=_constrained_service_plan(data,work);strategy.run=run
         with worker.connect().execution_options(isolation_level='REPEATABLE READ') as connection:
             connection.exec_driver_sql('SET TRANSACTION READ ONLY');identity=database_identity(connection)
             catalog=schema_observation(connection)['sha256']
         folder=tmp_path/uuid4().hex;folder.mkdir()
-        case=startup_case(folder,monkeypatch,run,database_sha256=identity,catalog_sha256=catalog)
+        case=startup_case(folder,monkeypatch,run,database_sha256=identity,catalog_sha256=catalog,receipt=receipt)
         return dict(case=case,worker=worker,data=data,run=run,plan=plan,strategy=strategy)
     return build
 
@@ -310,7 +310,11 @@ def test_real_cli_route_bootstraps_without_current_and_requires_separate_executi
     release.mkdir(parents=True);shutil.copytree(MIGRATIONS,release/'migrations')
     (case['root']/'current').symlink_to(release,target_is_directory=True)
     directory=tmp_path/'controller';controller.initialize(directory,SHA,RECEIPT,FACTORY)
-    health=tmp_path/'health'/'health.json';factory_calls=[]
+    health=tmp_path/'health'/'health.json';factory_calls=[];cycle_errors=[]
+    classify=service._failure_state
+    def classification(error):
+        cycle_errors.append((type(error).__name__,str(error)));return classify(error)
+    monkeypatch.setattr(service,'_failure_state',classification)
     ordinary=Mock(side_effect=AssertionError('ordinary CURRENT gate must never be weakened or faked'))
     monkeypatch.setattr(api,'paper_operational_guard',ordinary)
     def factory(spec,**options):
@@ -331,7 +335,7 @@ def test_real_cli_route_bootstraps_without_current_and_requires_separate_executi
         '--expected-cycle-key',service.logical_cycle_key(value['run']),'--startup-request',case['startup']['request_sha256']]
     if execute_cycle:args+=['--first-cycle-execution-request',case['execution']['request_sha256']]
     previous={key:signal.getsignal(key) for key in (signal.SIGTERM,signal.SIGINT)}
-    try:assert api.main(args)==0
+    try:assert api.main(args)==0,cycle_errors
     finally:
         for key,handler in previous.items():signal.signal(key,handler)
     import json
@@ -346,11 +350,15 @@ def test_real_cli_route_bootstraps_without_current_and_requires_separate_executi
 
 
 def test_witness_expiring_after_success_before_actual_commit_rolls_back_financial_transaction(prepare):
+    import time
     value=prepare('FILLED');case=value['case'];worker=value['worker'];startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
+    # Isolate financial expiry before the separate five-second idle scheduler
+    # connection expires. Do not loosen either production timeout or assertion.
+    case['probes']['stage_probe']=lambda *a,**kw:dict(case['stage'],expires_at=int(time.time())+2)
     execution=case['verify_execution']();check,txcheck,complete=startup.execution_callbacks(worker,execution)
     def delayed(connection,phase):
         txcheck(connection,phase)
-        if phase=='commit':connection.exec_driver_sql('SELECT pg_sleep(6)')
+        if phase=='commit':connection.exec_driver_sql('SELECT pg_sleep(3)')
     with pytest.raises(DBAPIError,match='FINANCIAL_COMMIT_UNVERIFIED'):
         service.run_service_cycle(worker,lambda *_:value['plan'],migrations_dir=MIGRATIONS,now=lambda:value['data']['as_of']+timedelta(minutes=1),
             require_certified=True,execution_check=check,expected_cycle_key=service.logical_cycle_key(value['run']),
@@ -369,3 +377,22 @@ def test_temporary_financial_schema_shadow_is_refused_before_any_startup_consump
         with pytest.raises(RuntimeError):assert_public_schema(connection)
         connection.rollback()
     assert value['strategy'].calls==[]
+
+
+def test_prebootstrapped_competing_authorities_cannot_open_two_unresolved_executions(prepare):
+    from concurrent.futures import ThreadPoolExecutor
+    first=prepare(receipt='1'*64);second=prepare(receipt='2'*64)
+    for value in (first,second):startup.bootstrap(value['worker'],value['case']['verify_startup'](),MIGRATIONS)
+    permits=[value['case']['verify_execution']() for value in (first,second)]
+    def contender(permit):
+        try:
+            with first['worker'].begin() as connection:SqlAlchemyPaperStartupRepository(connection).claim_execution(permit)
+            return True
+        except IntegrityError as error:
+            assert 'PAPER_STARTUP_EXECUTION_UNVERIFIED' in str(error)
+            return False
+    with ThreadPoolExecutor(max_workers=2) as pool:results=list(pool.map(contender,permits))
+    assert sorted(results)==[False,True]
+    with first['worker'].connect() as connection:
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==1
+        assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0

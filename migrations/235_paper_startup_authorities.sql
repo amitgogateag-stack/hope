@@ -136,7 +136,9 @@ BEGIN
            OR parent.first_cycle_key_sha256 IS DISTINCT FROM NEW.first_cycle_key_sha256
            OR parent.database_sha256 IS DISTINCT FROM NEW.database_sha256
            OR parent.authorizer_key_sha256=NEW.authorizer_key_sha256
-           OR EXISTS (SELECT 1 FROM job_runs WHERE job_run_id=NEW.job_run_id) THEN
+           OR EXISTS (SELECT 1 FROM job_runs WHERE job_run_id=NEW.job_run_id)
+           OR EXISTS (SELECT 1 FROM paper_startup_executions e LEFT JOIN paper_startup_completions c USING(authorization_sha256)
+                      WHERE e.database_sha256=NEW.database_sha256 AND c.authorization_sha256 IS NULL) THEN
             RAISE EXCEPTION 'PAPER_STARTUP_EXECUTION_UNVERIFIED' USING ERRCODE='23514';
         END IF;
     ELSE

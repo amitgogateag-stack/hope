@@ -31,7 +31,7 @@ def model(now):
     return token,stage,controller,policy
 
 
-def signed_case(folder,monkeypatch):
+def signed_case(folder,monkeypatch,*,receipt=RECEIPT):
     """Real signatures/kernel owner; stage and runtime attestations are modeled."""
     import pytest
     if os.name!='posix':pytest.skip('Native POSIX/OpenSSL signatures required')
@@ -46,6 +46,7 @@ def signed_case(folder,monkeypatch):
         subprocess.run(['/usr/bin/openssl','pkey','-in',str(key),'-pubout','-out',str(pub)],check=True,capture_output=True)
         private[role]=key
     token,stage,controller,policy=model(int(time.time()))
+    token['deployment_receipt_sha256']=receipt;stage['receipt_sha256']=receipt
     policy.update(schema='hope.image-policy.v1',issued_at=int(time.time())-1,revoked_images=[])
     token.update(controller_process_sha256=a.process_observation()['process_sha256'],controller_argv_sha256=a.process_observation()['argv_sha256'])
     def sign(path,value,key):
@@ -63,6 +64,6 @@ def signed_case(folder,monkeypatch):
         return dict(deepcopy(stage),expires_at=min(int(time.time())+5,token['expires_at']))
     probes=dict(stage_probe=stage_probe,runtime_probe=Mock(side_effect=lambda *args:deepcopy(controller)))
     policy_pin();pin()
-    def verify():return a.verify(root,SHA,token['request_sha256'],RECEIPT,FACTORY,**probes)
+    def verify():return a.verify(root,SHA,token['request_sha256'],receipt,FACTORY,**probes)
     return dict(root=root,token=token,stage=stage,controller=controller,policy=policy,pin=pin,policy_pin=policy_pin,
                 private=private,verify=verify,probes=probes)

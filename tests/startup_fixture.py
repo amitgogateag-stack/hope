@@ -8,8 +8,8 @@ from hope.api import startup_authority as a
 from hope.infrastructure.paper_service import logical_cycle_key
 
 
-def startup_case(folder,monkeypatch,run,*,database_sha256='4'*64,catalog_sha256='6'*64):
-    case=signed_case(folder,monkeypatch);root=case['root']
+def startup_case(folder,monkeypatch,run,*,database_sha256='4'*64,catalog_sha256='6'*64,receipt=RECEIPT):
+    case=signed_case(folder,monkeypatch,receipt=receipt);root=case['root']
     for role in ('startup','first-cycle-execution'):
         key=case['private']['first-cycle'].parent/(role+'.key');pub=root/'runtime-trust'/(role+'-ed25519.pub')
         subprocess.run(['/usr/bin/openssl','genpkey','-algorithm','ED25519','-out',str(key)],check=True,capture_output=True)
@@ -34,6 +34,6 @@ def startup_case(folder,monkeypatch,run,*,database_sha256='4'*64,catalog_sha256=
         (path.parent/(value['request_sha256']+'.ref')).write_text(digest,encoding='ascii')
         return digest
     startup_digest=pin('startup');execution['startup_authorization_sha256']=startup_digest;pin('execution')
-    def verify_startup():return a.verify_startup(root,SHA,startup['request_sha256'],case['token']['request_sha256'],RECEIPT,FACTORY,logical_cycle_key(run),intent_verifier=lambda *args,**kw:case['verify'](),namespace_probe=lambda *args:'7'*64)
+    def verify_startup():return a.verify_startup(root,SHA,startup['request_sha256'],case['token']['request_sha256'],receipt,FACTORY,logical_cycle_key(run),intent_verifier=lambda *args,**kw:case['verify'](),namespace_probe=lambda *args:'7'*64)
     def verify_execution(permit=None):return a.verify_execution(root,permit or verify_startup(),execution['request_sha256'])
     return dict(case, startup=startup,execution=execution,pin_authority=pin,verify_startup=verify_startup,verify_execution=verify_execution)
