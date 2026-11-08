@@ -53,6 +53,18 @@ jobs:
         run: pytest -q tests/unit/test_release_builder.py tests/unit/test_build_evidence.py tests/unit/test_operational_acceptance.py
       - name: M5 offline image and recovery acceptance
         run: pytest -q tests/unit/test_release_image.py tests/unit/test_paper_history.py tests/unit/test_paper_signal_stop.py tests/unit/test_deployment_contract.py
+      - name: Staged controller crash and concurrency acceptance
+        run: pytest -q tests/unit/test_paper_controller.py tests/unit/test_paper_preflight.py tests/unit/test_paper_stage.py
+      - name: First-cycle handoff signatures and PostgreSQL one-use audit
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
+        run: pytest -q tests/unit/test_first_cycle_authorization.py tests/unit/test_paper_handoff_repository.py tests/integration/test_first_cycle_handoff.py
+      - name: M4 upgrade rehearsal and constrained certified cycle
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
+        run: pytest -q tests/unit/test_migration_upgrade_safety.py tests/unit/test_paper_release_plan.py tests/unit/test_schema_verification.py tests/integration/test_migration_upgrade_rehearsal.py tests/integration/test_certified_paper_bridge.py tests/integration/test_dashboard_m1_authenticated_projections_pg.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
