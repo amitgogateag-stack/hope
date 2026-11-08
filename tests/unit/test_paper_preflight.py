@@ -38,11 +38,12 @@ def records(tmp_path,monkeypatch):
     return directory,rows,settings,connection,queries
 
 
-@pytest.mark.parametrize('fault',[None,'pending','unknown','mismatch','unsigned','duplicate','invalid_checksum',
+@pytest.mark.parametrize('fault',[None,'pending','gap','unknown','mismatch','unsigned','duplicate','invalid_checksum',
                                  'readwrite','readcommitted','unbounded_statement','unbounded_lock','long_timeout','isolation','postgres_major'])
 def test_readonly_migration_record_reconciliation(records,fault):
     directory,rows,settings,connection,queries=records
     if fault=='pending':rows.pop()
+    elif fault=='gap':rows.pop(0)
     elif fault=='unknown':rows.append(('private.sql','f'*64))
     elif fault=='mismatch':rows[0]=(rows[0][0],'f'*64)
     elif fault=='unsigned':rows[0]=(rows[0][0],None)

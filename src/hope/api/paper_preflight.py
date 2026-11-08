@@ -99,7 +99,8 @@ def migration_compatibility(connection, directory, *, schema='public'):
         require(inventory(directory) == (expected, identity)
                 and [tuple(row) for row in connection.execute(query)] == rows
                 and show('transaction_read_only') == 'on')
-        if unknown or mismatched:
+        prefix = sorted(applied) == list(expected)[:len(applied)]
+        if unknown or mismatched or not prefix:
             report.update(state='BLOCKED', code='MIGRATION_HISTORY_MISMATCH')
         elif pending:
             report.update(state='BLOCKED', code='REVIEWED_MIGRATIONS_PENDING')
