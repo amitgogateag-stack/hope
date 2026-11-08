@@ -144,7 +144,7 @@ def test_upgraded_catalog_matches_fresh_install_and_detects_disabled_guard(isola
     prepare_eight(engine,tmp_path)
     with engine.begin() as connection:apply_migrations(connection,MIGRATIONS)
     with engine.connect() as connection:upgraded_rows=[tuple(row) for row in connection.execute(text(CATALOG))]
-    differences=[(kind,identity,sha256(definition.encode()).hexdigest(),definition[:200] if kind=='column' else '') for kind,identity,definition in sorted(set(fresh_rows)^set(upgraded_rows))]
+    differences=[(kind,identity,sha256(definition.encode()).hexdigest()) for kind,identity,definition in sorted(set(fresh_rows)^set(upgraded_rows))]
     assert observe(fresh['sha256'])['state']=='VERIFIED', differences
     with engine.begin() as connection:connection.exec_driver_sql('ALTER TABLE public.paper_handoff_intents DISABLE TRIGGER trg_paper_handoff_intent_insert')
     assert observe(fresh['sha256'])['state']=='MISMATCH'

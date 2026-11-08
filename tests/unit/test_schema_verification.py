@@ -38,3 +38,20 @@ def test_single_cycle_blocker_is_preserved_in_bounded_dashboard_diagnostics(code
     from hope.api.dashboard_server import OPERATIONS_ERROR_CODES
     assert _failure_state(RuntimeError(code))==('UNAVAILABLE',code)
     assert code in OPERATIONS_ERROR_CODES
+
+
+
+def test_catalog_digest_is_order_independent_but_preserves_definition_and_multiplicity():
+    settings=dict(server_version_num='170000',transaction_read_only='on',transaction_isolation='repeatable read',statement_timeout='5s',lock_timeout='1s')
+    rows=[('constraint','same.identity','definition A'),('constraint','same.identity','definition B'),('column','other.identity','definition C')]
+    def execute(sql):
+        sql=str(sql)
+        return SimpleNamespace(scalar_one=lambda:settings[sql[5:]]) if sql.startswith('SHOW ') else list(rows)
+    connection=SimpleNamespace(dialect=SimpleNamespace(name='postgresql'),execute=execute)
+    original=schema_observation(connection)['sha256']
+    rows.reverse()
+    assert schema_observation(connection,original)['state']=='VERIFIED'
+    rows.append(rows[0])
+    assert schema_observation(connection,original)['state']=='MISMATCH'
+    rows.pop();rows[0]=(rows[0][0],rows[0][1],'changed definition')
+    assert schema_observation(connection,original)['state']=='MISMATCH'

@@ -41,6 +41,9 @@ def schema_observation(connection, expected_sha256=None):
                 or not 0<_milliseconds(show('lock_timeout'))<=10000):raise ValueError()
         rows=[tuple(row) for row in connection.execute(text(CATALOG))]
         if not 0<len(rows)<=10000 or any(row[2] is None for row in rows):raise ValueError()
+        # Server collation may tie distinct identities/definitions. Canonical
+        # ordinal ordering includes every field and retains duplicate rows.
+        rows.sort()
         payload=json.dumps(rows,separators=(',',':'),ensure_ascii=True).encode()
         if len(payload)>4*1024*1024:raise ValueError()
         digest=hashlib.sha256(payload).hexdigest()

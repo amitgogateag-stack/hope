@@ -58,7 +58,9 @@ No claim is made that current AWS is compatible with this branch.
    chain on the same PostgreSQL major/extension versions. In bounded read-only
    REPEATABLE READ transactions, schema_observation hashes public relations,
    columns/defaults, constraints/validation, indexes/readiness, trigger definitions
-   and enabled state, functions, sequence definitions and views. It excludes data,
+   and enabled state, functions, sequence definitions and views. Rows are
+   canonically ordered independently of server collation; duplicates are retained.
+   It excludes data,
    sequence current values and OIDs. It does not certify role grants, all database
    settings, external binary integrity or data correctness. No function body or
    private data is returned. An observed digest alone remains UNVERIFIED; an
