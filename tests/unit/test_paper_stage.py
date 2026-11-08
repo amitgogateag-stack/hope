@@ -297,13 +297,20 @@ def test_controller_stage_inspection_never_changes_journal_or_promotes_running_g
 
 
 @NATIVE
-def test_stage_deadline_stops_without_factory_and_live_environment_refuses_publication(tmp_path,monkeypatch):
+def test_stage_deadline_stops_without_factory_and_live_environment_refuses_publication(tmp_path,monkeypatch,capsys):
     (tmp_path/'staging').mkdir();monkeypatch.setenv('HOPE_LIVE_ENABLED','true');monkeypatch.setenv('HOPE_DEPLOYED_COMMIT',SHA)
     with pytest.raises(RuntimeError):s.run_stage(tmp_path,SHA,FACTORY,REQUEST,timeout=1)
     assert not s.status_path(tmp_path).exists()
     monkeypatch.setenv('HOPE_LIVE_ENABLED','false')
+    monkeypatch.setattr(s.signal,'signal',Mock())
     import time
     before=time.monotonic()
-    assert s.run_stage(tmp_path,SHA,FACTORY,REQUEST,timeout=1)==0
+    argv=['--factory',FACTORY,'--stage-request',REQUEST,'--stage-timeout','1']
+    assert s.main(argv,release=tmp_path/'releases'/SHA)==0
     assert time.monotonic()-before<5
     assert json.loads(s.status_path(tmp_path).read_bytes())['state']=='STOPPED'
+    prior=s.status_path(tmp_path).read_bytes()
+    monkeypatch.setenv('HOPE_LIVE_ENABLED','true')
+    with pytest.raises(SystemExit) as error:s.main(argv,release=tmp_path/'releases'/SHA)
+    assert error.value.code==2 and capsys.readouterr().err=='PAPER_STAGE_UNVERIFIED\n'
+    assert s.status_path(tmp_path).read_bytes()==prior
