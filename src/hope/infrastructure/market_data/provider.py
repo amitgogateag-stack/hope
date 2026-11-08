@@ -49,6 +49,12 @@ class MarketDataRequest:
             raise ValueError("MARKET_DATA_WINDOW_NOT_ALIGNED_TO_INTERVAL")
 
     @property
+    def expected_count(self) -> int:
+        """Grid cardinality without materializing an unreceived time window."""
+        duration = self.end.astimezone(UTC) - self.start.astimezone(UTC)
+        return (duration // self.interval) * len(self.source_symbols)
+
+    @property
     def expected_keys(self) -> tuple[tuple[str, datetime], ...]:
         """Exact source-symbol/event-time grid required for a complete response."""
 
@@ -61,6 +67,13 @@ class MarketDataRequest:
         return tuple(keys)
 
 
+def _snapshot_request(request: MarketDataRequest) -> MarketDataRequest:
+    if not isinstance(request, MarketDataRequest):
+        raise TypeError("PROVIDER_REQUEST_TYPE_INVALID")
+    return MarketDataRequest(source=request.source, source_symbols=request.source_symbols,
+                             start=request.start, end=request.end, interval=request.interval)
+
+
 @dataclass(frozen=True)
 class ProviderMarketDataBatch:
     source: str
@@ -69,6 +82,15 @@ class ProviderMarketDataBatch:
     fetched_at: datetime
 
     def __post_init__(self) -> None:
+        # Frozen dataclasses do not freeze caller-owned containers. Retain one
+        # immutable response snapshot before checking completeness; never a
+        # list/generator that can change between validation and persistence.
+        if not isinstance(self.bars, (tuple, list)):
+            raise TypeError("PROVIDER_BATCH_BAR_CONTAINER_INVALID")
+        object.__setattr__(self, "bars", tuple(self.bars))
+        object.__setattr__(self, "request", _snapshot_request(self.request))
+        if any(not isinstance(bar, RawMarketBar) for bar in self.bars):
+            raise TypeError("PROVIDER_BATCH_BAR_TYPE_INVALID")
         if self.source != self.request.source:
             raise ValueError("PROVIDER_BATCH_SOURCE_MISMATCH")
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() is None:
@@ -101,7 +123,10 @@ class ProviderMarketDataBatch:
         actual_keys = tuple((bar.source_symbol, bar.event_time.astimezone(UTC)) for bar in self.bars)
         if len(set(actual_keys)) != len(actual_keys):
             raise ValueError("PROVIDER_RETURNED_DUPLICATE_BAR_KEY")
-        if set(actual_keys) != set(self.request.expected_keys):
+        # Every unique key is already a requested symbol on the exact closed
+        # interval grid. Cardinality therefore proves equality with that grid
+        # without allocating all expected keys for a huge sparse response.
+        if len(actual_keys) != self.request.expected_count:
             raise ValueError("PROVIDER_RESPONSE_INCOMPLETE")
 
 
@@ -123,10 +148,19 @@ def fetch_and_normalize_bars(
 ) -> NormalizedMarketBarBatch:
     """Fetch through a provider boundary and normalize only coherent evidence."""
 
+    request = _snapshot_request(request)
     identity_map = snapshot_request_bindings((request,), identity_map)
     if provider.source != request.source:
         raise ValueError("PROVIDER_REQUEST_SOURCE_MISMATCH")
-    batch = provider.fetch_bars(request)
+    # The adapter receives a separate request; mutating its echo must not change
+    # the private expected request captured before any provider side effect.
+    batch = provider.fetch_bars(_snapshot_request(request))
+    if not isinstance(batch, ProviderMarketDataBatch):
+        raise TypeError("PROVIDER_RESPONSE_TYPE_INVALID")
+    # Revalidate returned evidence, including adapters which bypassed frozen
+    # fields or returned an old object changed since its construction.
+    batch = ProviderMarketDataBatch(source=batch.source,request=batch.request,
+                                    bars=batch.bars,fetched_at=batch.fetched_at)
     if (
         batch.request.source != request.source
         or batch.request.source_symbols != request.source_symbols
