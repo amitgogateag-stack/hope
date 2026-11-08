@@ -272,7 +272,7 @@ def observation(directory, root, *, inspector=inspect_deployment, now=None, expe
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Local PAPER verification journal; never activates services")
-    parser.add_argument("action", choices=("initialize", "verify", "halt", "inspect"))
+    parser.add_argument("action", choices=("initialize", "verify", "halt", "inspect", "inspect-stage"))
     parser.add_argument("--directory", type=Path, required=True)
     parser.add_argument("--root", type=Path, default=Path("/opt/hope-operations"))
     parser.add_argument("--release")
@@ -281,6 +281,17 @@ def main(argv=None):
     parser.add_argument("--request")
     args = parser.parse_args(argv)
     try:
+        if args.action == 'inspect-stage':
+            # Read the existing pinned plan without acquiring a publishing
+            # lease, recovering a journal, or promoting its lifecycle state.
+            directory=args.directory.absolute();_directory(directory,readonly=True)
+            value=read(directory/'state.json');pinned=value['plan']
+            require(value['events'][-1]['state']!='HALTED')
+            from hope.api.deployment_contract import inspect_staged_deployment
+            result=inspect_staged_deployment(args.root,pinned['release_commit'],expected_receipt=pinned['receipt_sha256'],expected_factory=pinned['factory'])
+            require(read(directory/'state.json')==value)
+            print(canonical(result).decode())
+            return 0 if result['state']=='STAGED' else 1
         if args.action == "initialize":
             initialize(args.directory, args.release, args.receipt, args.factory)
         elif args.action != "inspect":

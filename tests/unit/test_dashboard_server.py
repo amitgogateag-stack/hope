@@ -547,7 +547,7 @@ def test_legacy_rejects_boolean_schema_version(tmp_path):
         server.legacy.write_text(json.dumps(payload))
         assert request(server, "/legacy-research.json")[0] == 503
 
-@pytest.mark.parametrize('endpoint',["/image.json","/history.json","/deployment.json","/publisher.json","/controller.json"])
+@pytest.mark.parametrize('endpoint',["/image.json","/history.json","/deployment.json","/publisher.json","/controller.json","/staging.json"])
 def test_image_and_history_diagnostics_missing_evidence_are_bounded_and_unverified(tmp_path,endpoint):
     with dashboard(tmp_path) as server:
         status,_,payload=request(server,endpoint)
