@@ -99,6 +99,13 @@ def test_absent_connection_never_reads_files_or_creates_database_objects(tmp_pat
     inventory.assert_not_called()
 
 
+@pytest.mark.parametrize('sha,code',[('invalid','APPROVED_RELEASE_REQUIRED'),(SHA,'OPERATIONS_ROOT_UNVERIFIED')])
+def test_invalid_release_or_unavailable_root_has_actionable_fixed_source_gate(tmp_path,sha,code):
+    result=p.inspect_preflight(tmp_path/'missing',sha)
+    assert result['state']=='BLOCKED' and result['stages']['source']==dict(state='BLOCKED',code=code)
+    assert str(tmp_path) not in json.dumps(result)
+
+
 @pytest.fixture
 def preflight(tmp_path,monkeypatch):
     monkeypatch.setattr(p,'_activation_guard',lambda *a,**k:nullcontext())
@@ -144,6 +151,16 @@ def test_complete_preflight_requires_every_independent_stage_and_closure(preflig
     assert 'private' not in json.dumps(result) and str(root) not in json.dumps(result)
     if fault in {'closing_source','closing_deployment','closing_controller','expiry'}:
         assert all(stage['state']!='VERIFIED' for stage in result['stages'].values())
+
+
+@pytest.mark.parametrize('finished',[NOW+60,NOW-1])
+def test_preflight_cannot_publish_green_after_closing_probe_crosses_expiry_or_clock_reverses(preflight,monkeypatch,finished):
+    root,*_=preflight
+    ticks=iter([NOW,NOW+1,finished])
+    monkeypatch.setattr(p.time,'time',lambda:next(ticks))
+    result=p.inspect_preflight(root,SHA,receipt=RECEIPT,factory=FACTORY)
+    assert result['state']=='BLOCKED'
+    assert all(stage['state']!='VERIFIED' for stage in result['stages'].values())
 
 
 def test_cli_never_connects_without_opt_in_or_before_source_validation(tmp_path,monkeypatch,capsys):

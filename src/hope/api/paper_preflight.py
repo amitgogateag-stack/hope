@@ -121,10 +121,12 @@ def inspect_preflight(root, sha, *, connection=None, receipt=None, factory=None,
                   observed_at=now, stages={name:dict(state='UNVERIFIED', code='PREREQUISITE_REQUIRED') for name in STAGES},
                   migrations=None, execution_authorized=False, host_changes=False, database_writes=False, live_enabled=False)
     stages = report['stages']
+    stages['source']['code'] = 'APPROVED_RELEASE_REQUIRED'
     root = Path(root)
     try:
         runtime._sha(sha)
         report['release_commit'] = sha
+        stages['source']['code'] = 'OPERATIONS_ROOT_UNVERIFIED'
         with _activation_guard(root, shared=True):
             before = runtime._trusted(root, directory=True)
             release = root/'releases'/sha
@@ -195,6 +197,8 @@ def inspect_preflight(root, sha, *, connection=None, receipt=None, factory=None,
                 report['state'] = 'BLOCKED'
     except Exception:
         report['state'] = 'BLOCKED'
+        if stages['source']['state'] == 'UNVERIFIED':
+            stages['source']['state'] = 'BLOCKED'
         # A failed closing observation invalidates every earlier success.
         for name,value in stages.items():
             if value['state'] == 'VERIFIED':

@@ -553,5 +553,6 @@ def test_image_and_history_diagnostics_missing_evidence_are_bounded_and_unverifi
         status,_,payload=request(server,endpoint)
         assert status==200
         data=json.loads(payload)
-    assert data['state'] in {'UNVERIFIED','UNKNOWN','BLOCKED','UNAVAILABLE'} and data['execution_authorized'] is False
+    allowed={'UNAVAILABLE'} if endpoint=='/controller.json' else {'UNVERIFIED','UNKNOWN','BLOCKED'}
+    assert data['state'] in allowed and data['execution_authorized'] is False
     assert str(tmp_path) not in json.dumps(data) and len(json.dumps(data))<1024

@@ -53,6 +53,8 @@ multi-session acceptance evidence.
 
 | Stage/code | Operator action, after any required separate authorization |
 | --- | --- |
+| APPROVED_RELEASE_REQUIRED | Supply the exact approved non-frozen release SHA; no host or DB probing is attempted for an invalid release |
+| OPERATIONS_ROOT_UNVERIFIED | Check authorized access, trusted operations-root storage and activation-fence availability; never remove locks to force diagnosis |
 | RELEASE_SOURCE_UNVERIFIED | Reconcile exact approved Git SHA, trusted paths and clean source; do not change the frozen baseline |
 | HOST_PREREQUISITES_UNVERIFIED | Inspect actual Python 3.13/systemd >=249/public host identity; install or modify nothing during preflight |
 | READONLY_POSTGRES_CONNECTION_REQUIRED | Supply authorized read-only access to PostgreSQL 16/17 with bounded timeouts and snapshot isolation |
