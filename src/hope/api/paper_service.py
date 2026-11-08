@@ -43,9 +43,12 @@ def main(argv=None) -> int:
     parser.add_argument("--poll-seconds", type=float, default=30)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--deployment-receipt",help="Independently approved immutable receipt SHA256; fail closed on absent evidence")
+    parser.add_argument("--controller-directory",type=Path,help="Optional staged controller admission gate; requires --deployment-receipt")
     args = parser.parse_args(argv)
     if args.deployment_receipt is not None and not re.fullmatch('[0-9a-f]{64}',args.deployment_receipt):
         parser.exit(2,"PAPER_SERVICE_DEPLOYMENT_RECEIPT_INVALID\n")
+    if args.controller_directory is not None and args.deployment_receipt is None:
+        parser.exit(2,"PAPER_SERVICE_CONTROLLER_RECEIPT_REQUIRED\n")
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         parser.exit(2, "PAPER_SERVICE_DATABASE_CONFIGURATION_REQUIRED\n")
@@ -70,7 +73,8 @@ def main(argv=None) -> int:
                 return host_observation(connection=connection)
         def guard():
             if args.deployment_receipt is None:return paper_operational_guard(release)
-            return paper_operational_guard(release,deployment_receipt=args.deployment_receipt,factory_spec=args.factory,host_probe=host_probe)
+            options={} if args.controller_directory is None else {'controller_directory':args.controller_directory}
+            return paper_operational_guard(release,deployment_receipt=args.deployment_receipt,factory_spec=args.factory,host_probe=host_probe,**options)
         with guard():
             factory = load_plan_factory(args.factory, release=release)
         database()

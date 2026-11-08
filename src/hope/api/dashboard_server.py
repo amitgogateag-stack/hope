@@ -316,6 +316,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/controller.json":
+            from hope.api.paper_controller import observation
+            payload=json.dumps(observation(Path('/var/lib/hope-controller'),Path('/opt/hope-operations')),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/deployment.json":
             from hope.api.deployment_contract import inspect_deployment
             payload=json.dumps(inspect_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
