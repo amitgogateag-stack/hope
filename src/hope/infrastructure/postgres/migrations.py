@@ -113,7 +113,8 @@ def apply_migrations(connection: Connection, migrations_dir: str | Path, *, sche
         count = validate_history(inventory, rows)
         if not exists:
             timestamp = 'TEXT' if dialect == 'sqlite' else 'TIMESTAMPTZ'
-            connection.execute(text(f"CREATE TABLE {table} (version TEXT PRIMARY KEY, applied_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP, checksum CHAR(64))"))
+            default = 'CURRENT_TIMESTAMP' if dialect == 'sqlite' else 'now()'
+            connection.execute(text(f"CREATE TABLE {table} (version TEXT PRIMARY KEY, applied_at {timestamp} NOT NULL DEFAULT {default}, checksum CHAR(64))"))
         newly_applied = []
         for migration in inventory[count:]:
             connection.exec_driver_sql(migration.sql)

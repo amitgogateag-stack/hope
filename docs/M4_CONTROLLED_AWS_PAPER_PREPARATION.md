@@ -39,7 +39,8 @@ No claim is made that current AWS is compatible with this branch.
    disposable PostgreSQL16 environment matching the host; also run17 CI. Keep
    credentials and the production database URL out of the rehearsal. Validate
    backup provenance, tables/data counts, logical identities and restore time.
-   The CI008 fixture is representative, not a copy of the actual host's data.
+   The CI008 fixture explicitly recreates the historical runner ledger (including
+   DEFAULT now()); it is representative, not a copy of the actual host's data.
 4. Read the exact migration inventory below. The chain has234 migrations;
    an exact verified008 prefix has226 pending (009 through234). Verify every
    applied checksum against approved source, prefix order and unknown records.

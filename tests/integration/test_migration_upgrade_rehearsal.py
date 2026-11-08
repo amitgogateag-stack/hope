@@ -42,6 +42,9 @@ def prepare_eight(engine,tmp_path):
     old=tmp_path/'old';old.mkdir()
     for item in sorted(MIGRATIONS.glob('*.sql'))[:8]:shutil.copyfile(item,old/item.name)
     with engine.begin() as connection:
+        # Exact historical PostgreSQL runner ledger definition, not a fresh
+        # ledger silently supplied by the upgraded runner.
+        connection.exec_driver_sql('CREATE TABLE public.hope_schema_migrations (version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ NOT NULL DEFAULT now(), checksum CHAR(64))')
         assert len(apply_migrations(connection,old))==8
         connection.execute(text("INSERT INTO instruments(instrument_id,canonical_symbol,exchange,status) VALUES (:id,'SYNTHETIC_REHEARSAL','TEST','ACTIVE')"),{'id':uuid4()})
     return old
