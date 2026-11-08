@@ -294,6 +294,7 @@ def run_paper_once(
     *,
     now: Callable[[], datetime],
     claim_window: tuple[datetime, datetime] | None = None,
+    transaction_check=None,
 ) -> PaperCycleOutcome:
     """Execute exactly one registered PAPER job and durably preserve terminal state.
 
@@ -312,6 +313,7 @@ def run_paper_once(
 
     with engine.begin() as connection:
         SqlAlchemyPaperEnvironmentControlRepository(connection).assert_running()
+        if transaction_check is not None:transaction_check(connection,'prepare')
         # A durable terminal run must not depend on PIT inputs still being
         # available on restart. Authenticate the exact run identity before
         # resolving a connection-bound handler, without replaying its work.
@@ -339,6 +341,7 @@ def run_paper_once(
             if isinstance(registered_work, ConnectionBoundPaperJob)
             else registered_work
         )
+        if transaction_check is not None:transaction_check(connection,'claim')
         # A connection-bound handler may spend time reading PIT market inputs.
         # The scheduler's pre-bind deadline check cannot authorize a claim
         # after that preparation crosses the permitted execution window.
@@ -394,6 +397,9 @@ def run_paper_once(
             )
             if not repository.complete(completion):
                 raise RuntimeError("PAPER_JOB_COMPLETION_CONFLICT")
+
+        if transaction_check is not None:
+            transaction_check(connection,'commit' if work_error is None else 'failure')
 
     if work_error is not None:
         raise work_error

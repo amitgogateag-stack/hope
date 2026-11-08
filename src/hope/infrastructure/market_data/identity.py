@@ -24,5 +24,5 @@ def snapshot_request_bindings(
     for key in keys:
         value = identity_map.get(key, missing)
         if value is not missing:
-            captured[key] = value
+            captured[key] = UUID(int=value.int) if isinstance(value,UUID) else value
     return MappingProxyType(captured)

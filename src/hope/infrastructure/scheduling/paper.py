@@ -240,6 +240,7 @@ def run_due_operational_paper_jobs(
     max_lateness: timedelta,
     authorize: Callable[[Connection], None] | None = None,
     before_execute: Callable[[], None] | None = None,
+    transaction_check=None,
 ) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute due PAPER work after durable restart reconciliation and safety preflight."""
     if not isinstance(registry, PaperJobRegistry):
@@ -339,6 +340,7 @@ def run_due_operational_paper_jobs(
                                 execution_time,
                                 job_run.scheduled_for + max_lateness,
                             ),
+                            **({'transaction_check':transaction_check} if transaction_check is not None else {}),
                         ),
                     )
                 )

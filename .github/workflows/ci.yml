@@ -49,6 +49,11 @@ jobs:
           for script in deploy/operations/*.sh; do
             bash -n "$script"
           done
+      - name: Independent static high-severity security review
+        run: |
+          python -m venv /tmp/hope-security-review
+          /tmp/hope-security-review/bin/python -m pip install -r constraints/security-review.txt
+          /tmp/hope-security-review/bin/python -m bandit -q -r src/hope --severity-level high
       - name: M4 reproducibility and acceptance preflight
         run: pytest -q tests/unit/test_release_builder.py tests/unit/test_build_evidence.py tests/unit/test_operational_acceptance.py
       - name: M5 offline image and recovery acceptance
@@ -65,6 +70,13 @@ jobs:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
         run: pytest -q tests/unit/test_migration_upgrade_safety.py tests/unit/test_paper_release_plan.py tests/unit/test_schema_verification.py tests/integration/test_migration_upgrade_rehearsal.py tests/integration/test_certified_paper_bridge.py tests/integration/test_dashboard_m1_authenticated_projections_pg.py
+      - name: Provider window integrity acceptance
+        run: pytest -q tests/unit/test_provider_window_integrity.py
+      - name: Integrated independent startup and certified first cycle
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
+        run: pytest -q tests/unit/test_startup_authority.py tests/unit/test_startup_diagnostics.py tests/integration/test_startup_transition_postgres.py tests/integration/test_provider_window_integrity_postgres.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope

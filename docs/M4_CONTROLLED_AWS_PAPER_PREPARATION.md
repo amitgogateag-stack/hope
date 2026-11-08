@@ -8,11 +8,13 @@ instructions. Keep LIVE disabled; preserve NO_TRADE/HALTED and the frozen
 
 ## Current decision
 
-**GO for offline preparation and disposable rehearsal only. NO-GO for AWS
-installation/migration/activation. NO-GO for the first operational PAPER cycle.**
-Repository CI does not establish host operating readiness. Missing independent
-execution authority and the startup CURRENT circularity must not be solved by
-substituting handoff intent, ACKNOWLEDGED, STAGED or HTTP 200 for running proof.
+**Engineering candidate: validate the exact combined PR and independent review.
+GO only for offline preparation/disposable rehearsal. NO-GO for AWS installation,
+production migration/activation and the first operational PAPER cycle until all
+genuine independent evidence and explicit approvals exist.**
+Repository CI does not establish host operating readiness. The startup circularity is addressed only by the explicit dual-authority route
+below. It never substitutes handoff intent, ACKNOWLEDGED, STAGED or HTTP200 for
+running proof. Ordinary execution retains its unchanged CURRENT requirement.
 
 The user's historical AWS observations are EC2 i-019d427e5a9b6fa87 in ap-south-1,
 t3.medium / approximately 4 GiB RAM, 30 GiB EBS / approximately 27 GiB free,
@@ -24,11 +26,17 @@ No claim is made that current AWS is compatible with this branch.
 
 ## Procedure in dependency order
 
-1. Independently review PR83 and independent market-data PR84; merge only after
-   explicit approval. Select the final accepted release SHA and exact source/PR
+1. Independently review the dedicated integrated candidate combining PR83 at
+   cb82eb12e95a9c1b17c08c917dab3919e0b79783 and PR84 at
+   3fec053a3a9358894d1699f72baaa7d023c6c76a. Both original PRs remain untouched.
+   Choose the integration approach explicitly; do not blindly merge all three.
+   Merge only after explicit approval. Select the accepted integrated release SHA
+   from its final exact source/PR
    PostgreSQL16/17 CI. Reconcile source, build, image, dependency manifests and
-   independent signatures. PR84 is not stacked in83; its provider fix is not
-   silently included. Never deploy an unreviewed feature SHA or frozen baseline.
+   independent signatures. This candidate explicitly combines both branches and
+   fixes additional transport-alias risks. Never deploy an unreviewed feature SHA
+   or frozen baseline. The exact candidate SHA/CI URLs are recorded in the
+   integration PR; this document does not pretend to contain its own commit SHA.
 2. Obtain separate read-only host-access approval. Re-observe release/pointers,
    both environment identities, process/namespace owners, permissions, services,
    dashboards, timeouts, actual database major/history and activation journals.
@@ -41,13 +49,13 @@ No claim is made that current AWS is compatible with this branch.
    backup provenance, tables/data counts, logical identities and restore time.
    The CI008 fixture explicitly recreates the historical runner ledger (including
    DEFAULT now()); it is representative, not a copy of the actual host's data.
-4. Read the exact migration inventory below. The chain has234 migrations;
-   an exact verified008 prefix has226 pending (009 through234). Verify every
+4. Read the exact migration inventory below. The chain has235 migrations;
+   an exact verified008 prefix has227 pending (009 through235). Verify every
    applied checksum against approved source, prefix order and unknown records.
    NULL checksums, missing checksum columns, gaps or altered history require
    independent investigation. This runner does not backfill unverifiable history.
    Migration008's historical backfill remains unchanged and is not a new bypass.
-5. In the disposable restored database, review all226 pending SQL files, data
+5. In the disposable restored database, review all227 pending SQL files, data
    constraints, new functions/triggers, required privileges, locks and disk/RAM
    headroom. Apply using apply_migrations inside an explicit READ COMMITTED
    transaction. The runner supports PostgreSQL16/17, takes the schema migration
@@ -104,16 +112,70 @@ No claim is made that current AWS is compatible with this branch.
     remain distinct; missing/stale snapshots are blocked/stale. HTTP200 is not
     readiness. New single-cycle refusal codes remain bounded diagnostics and
     cannot produce CURRENT or READY. No health/history may be seeded to bootstrap.
-12. The optional --handoff-request plus --expected-cycle-key requires --once,
-    --deployment-receipt and --controller-directory. It narrows the existing
-    running deployment guard: verifies the independently signed intent, commits
-    one-use consumption before dispatch, checks the exact one-run certified plan
-    and revalidates around existing scheduler/financial gates. Missing/extra/future/
-    stale runs, HALT or revoked evidence fail closed. Successful NO_TRADE is valid.
-    This is not an alternative startup authority. The CURRENT-before-first-cycle
-    circularity remains an explicit engineering blocker. No operational first
-    cycle may run until a separately reviewed independent execution-authority
-    transition exists and all genuine provider/data/calendar/host evidence passes.
+12. Controlled first-cycle startup requires THREE linked artifacts: the existing
+    one-use handoff intent, independent bootstrap-only authority and a distinct
+    one-certified-cycle execution authority. No issuer/key generator is provided.
+    Approvers provision separately reviewed startup-ed25519.pub and
+    first-cycle-execution-ed25519.pub, distinct from each other and every existing
+    signing role. Current signed policy/revocation/generation checks apply.
+    Content-addressed JSON plus detached signatures and request refs live under
+    startup-authorizations/ and execution-authorizations/. Documents last at most
+    60seconds and bind the immutable handoff digest, exact controller incarnation,
+    logical cycle/database identity and PAPER=true/LIVE=false. Startup max_cycles
+    is0 and additionally binds the reviewed public schema-catalog digest and the
+    actual controller namespace digest. Execution max_cycles is1 and also binds
+    startup digest plus exact deterministic job UUID/key/UTC schedule. Expiry may
+    not extend the parent authority. Existing handoff binds release/runtime/image/
+    receipt/factory/provider/data/calendar through established independent proof.
+13. Launch only the existing attested release entry in the independently approved
+    image namespace as its non-root identity. The controller must share the real
+    stage mount/PID/user/network namespaces and root inode; its independently
+    attested release runtime manifest must equal the image-bound stage runtime.
+    The stage PID remains non-executing and distinct. A host worker cannot borrow
+    another container's image proof. A reviewed read-only container observer must
+    be available; do NOT give the worker unrestricted Docker/Podman daemon access
+    or mount an unrestricted engine socket to make this check pass. Missing
+    observer/namespace evidence stays BLOCKED. Verify the launch/observer design
+    in disposable acceptance before requesting any host action.
+14. The future operator invocation, inside that approved namespace, is the normal
+    paper_release.py entry with --runtime-mode release, --factory, --migrations-dir,
+    --status-file, --deployment-receipt, --controller-directory, --once,
+    --handoff-request, --expected-cycle-key, --startup-request and (only for actual
+    execution) --first-cycle-execution-request. --authority-wait-seconds is an
+    explicit0-60second non-trading wait for independently supplied documents.
+    Missing/forged/revoked documents never import the factory or dispatch work.
+    Startup-only mode can verify schema/credentials and record BOOTSTRAPPED, then
+    exits without creating normal worker health or execution. It cannot trade.
+15. A separately reviewed first-cycle service must be one-shot with Restart=no,
+    WatchdogSec=0 and no inherited NOTIFY_SOCKET/WATCHDOG_PID/WATCHDOG_USEC. It
+    must launch in the exact approved namespace, not merely reuse the ordinary
+    host unit. Do not enable/start it or convert --stage-only into execution.
+    Source bootstrap, least-privilege DB login, schema235, restore proof, signed
+    authorities and provider/data/calendar acceptance must all be current.
+    Namespace/launcher/observer facts and production installation/activation each
+    need separate explicit approval. The normal long-running unit remains
+    CURRENT-gated and is not implicitly promoted by a first-cycle success.
+16. Startup atomically consumes the intent and bootstrap authority, then performs
+    read-only exact migration/catalog checks and records BOOTSTRAPPED. Execution
+    consumes the distinct execution authority before factory import/dispatch.
+    Public schema resolution is mandatory; private/temp shadows are rejected.
+    The existing certified scheduler enforces the exact one-run plan and retains
+    HALT, eligibility, risk/sizing, sessions/PIT/freshness and reconciliation.
+    Authority is revalidated inside the financial transaction and a fresh immutable
+    commit witness is required by a deferred database constraint at actual COMMIT.
+    An expired/missing witness rolls back the entire financial attempt. Successful
+    NO_TRADE and RISK_BLOCKED are valid; no bearish or other implementation is
+    enabled without its own certified persisted evidence. CYCLE_COMPLETED requires
+    the real SUCCEEDED job, certified outcome, commit witness and reconciliation
+    audit. It cannot be inferred from ACKNOWLEDGED or a missing record.
+17. /startup.json reports only fresh, owner-bound startup phase evidence and always
+    execution_authorized=false. Missing/dead/stale publishers and contradictory
+    fields never imply readiness. A successful one-cycle worker publishes genuine
+    cycle evidence then STOPPED; it is not an autonomous READY worker. New database
+    audit states are ABSENT, BOOTSTRAPPED, RECOVERY_REQUIRED and CYCLE_COMPLETED.
+    A pending execution without completion blocks a new startup in that database;
+    do not clear it, retry it or invent a completion. Obtain independent review of
+    durable financial proof and explicit recovery authority first.
 
 ## Crash, rollback and recovery
 
@@ -127,7 +189,7 @@ After a committed upgrade, this chain has no supported down migrations. Recovery
 is **restore-only** unless a separately reviewed forward repair exists. Restore
 the approved pre-upgrade database/volume as a coherent unit, then revalidate the
 matching old release/runtime/schema/receipts before any activation. Switching
-only the code pointer does not roll back234 database migrations. Do not truncate
+only the code pointer does not roll back235 database migrations. Do not truncate
 audit tables, clear HALT, rewrite checksums or disable triggers as recovery.
 Existing atomic release/journal recovery must prove either completed activation
 or verified restoration; interrupted or corrupt records stay blocked.
@@ -146,15 +208,16 @@ Current authorized host observations; approved final merged release and fresh
 exact-head CI; independent build/package/image/receipt/runtime approvals; real
 provider/factory/dataset/PIT/session/calendar acceptance and credentials; approved
 schema/data/role rehearsal on a restored host snapshot; current backup/restore
-proof; explicit migration/install/activation approvals; and the separately
-reviewed startup execution-authority transition. Missing evidence stays BLOCKED.
+proof; explicit migration/install/activation approvals; and separately reviewed namespace/observer/launch configuration plus genuine
+startup/execution authorities. Independent human security review of the combined
+candidate remains required before merge or deployment. Missing evidence stays BLOCKED.
 
 ## Exact migration sequence and source checksums
 
-These are normalized UTF-8/universal-newline checksums, matching the runner and
-existing records. Sequential SQL dependencies are enforced by actual fresh/008
-upgrade rehearsals, not inferred solely from filenames or a SQL regex. The table
-is an inventory, not independent approval or a guarantee about unseen host data.
+Normalized UTF-8/universal-newline checksums match the runner and existing records.
+This is235 steps; a verified008 prefix has227 pending. Actual fresh/008 upgrade
+rehearsals establish SQL dependency compatibility for the fixture, not unseen host
+data. These hashes are source inventory, never independent deployment approval.
 
 | Order | Migration | SHA256 |
 |---|---|---|
@@ -392,3 +455,4 @@ is an inventory, not independent approval or a guarantee about unseen host data.
 | 232 | 232_paper_strategy_authorization.sql | `123d1b6e1c925560421e2419ad768946a6c9af52637da1a343de3996f2eba82c` |
 | 233 | 233_paper_certified_outcomes.sql | `950733ceeb97e26da2e9f902807b759cf24319b2586dd1baa0548d93b94cd211` |
 | 234 | 234_paper_handoff_intents.sql | `09ac97d2010058e2fba036eb3058c3567d1b38eb474fce3ead3160a30b014ecc` |
+| 235 | 235_paper_startup_authorities.sql | `1f76d5f1f9aac2c8bd0dcc2b9de8835328b629d46d36d01f39a66e7d1383433e` |

@@ -47,7 +47,17 @@ def main(argv=None) -> int:
     parser.add_argument("--controller-directory",type=Path,help="Optional staged controller admission gate; requires --deployment-receipt")
     parser.add_argument('--expected-cycle-key',help='Additional one-run constraint; never substitutes for independently approved execution authority')
     parser.add_argument('--handoff-request',help='One-use intent admission in addition to existing running authority; requires exact single-cycle mode')
+    parser.add_argument('--startup-request',help='Separately signed bootstrap-only authority; never implicit from STAGED')
+    parser.add_argument('--first-cycle-execution-request',help='Distinct signed one-certified-cycle authority')
+    parser.add_argument('--authority-wait-seconds',type=int,default=0)
     args = parser.parse_args(argv)
+    if args.startup_request is not None and (not args.once or args.handoff_request is None or args.expected_cycle_key is None
+            or args.deployment_receipt is None or args.controller_directory is None
+            or re.fullmatch('[0-9a-f]{64}',args.startup_request) is None or not 0<=args.authority_wait_seconds<=60):
+        parser.exit(2,'PAPER_STARTUP_ARGUMENTS_INVALID\n')
+    if (args.first_cycle_execution_request is not None and (args.startup_request is None
+            or re.fullmatch('[0-9a-f]{64}',args.first_cycle_execution_request) is None)) or (args.startup_request is None and args.authority_wait_seconds!=0):
+        parser.exit(2,'PAPER_STARTUP_ARGUMENTS_INVALID\n')
     if args.handoff_request is not None and (args.expected_cycle_key is None or re.fullmatch('[0-9a-f]{64}',args.handoff_request) is None):
         parser.exit(2,'PAPER_HANDOFF_REQUEST_INVALID\n')
     if args.expected_cycle_key is not None and (not args.once or args.controller_directory is None
@@ -67,11 +77,16 @@ def main(argv=None) -> int:
     def database():
         nonlocal engine
         if engine is None:
+            options="-c statement_timeout=30000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=5000"
+            if args.startup_request is not None:options+=" -c search_path=pg_catalog,public,pg_temp"
             engine=create_engine(url,pool_pre_ping=True,pool_timeout=10,
-                connect_args={"connect_timeout":10,"options":"-c statement_timeout=30000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=5000"})
+                connect_args={"connect_timeout":10,"options":options})
         return engine
     try:
         release = Path(args.migrations_dir).resolve(strict=True).parent
+        if args.startup_request is not None:
+            from hope.api.paper_startup import run_startup
+            return run_startup(args,release,database,stop)
         def host_probe():
             # Called only after source/runtime/image/provider approvals pass.
             # Observe the configured database without any data mutation.

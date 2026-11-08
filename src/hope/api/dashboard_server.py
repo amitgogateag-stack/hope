@@ -27,6 +27,7 @@ OPERATIONS_ERROR_CODES = {
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
         "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
         "PAPER_SINGLE_CYCLE_GUARD_REQUIRED", "PAPER_SINGLE_CYCLE_PLAN_MISMATCH",
+        "PAPER_STARTUP_EXECUTION_GUARD_REQUIRED", "PAPER_STARTUP_NEW_CYCLE_REQUIRED",
         "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
         "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
         "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
@@ -317,6 +318,12 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/startup.json":
+            from hope.api.paper_startup import startup_observation
+            health=self.server.operations if self.server.operations is not None else self.server.snapshot.parent/'paper-health.json'
+            payload=json.dumps(startup_observation(Path(str(health)+'.startup.json'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/staging.json":
             from hope.api.deployment_contract import inspect_staged_deployment
             payload=json.dumps(inspect_staged_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
