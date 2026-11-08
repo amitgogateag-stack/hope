@@ -55,6 +55,11 @@ jobs:
         run: pytest -q tests/unit/test_release_image.py tests/unit/test_paper_history.py tests/unit/test_paper_signal_stop.py tests/unit/test_deployment_contract.py
       - name: Staged controller crash and concurrency acceptance
         run: pytest -q tests/unit/test_paper_controller.py tests/unit/test_paper_preflight.py tests/unit/test_paper_stage.py
+      - name: First-cycle handoff signatures and PostgreSQL one-use audit
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
+        run: pytest -q tests/unit/test_first_cycle_authorization.py tests/unit/test_paper_handoff_repository.py tests/integration/test_first_cycle_handoff.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope

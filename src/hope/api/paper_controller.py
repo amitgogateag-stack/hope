@@ -220,6 +220,17 @@ class Controller:
             return deepcopy(self.value)
         return self._record("HALTED", "HALT_LATCHED", request)
 
+    def inspect_handoff(self,request,**options):
+        """Owner-scoped read-only authority inspection, never consumes an intent."""
+        require(is_hash(request));self._check()
+        if self.value['events'][-1]['state']=='HALTED':
+            raise RuntimeError('PAPER_CONTROLLER_HALT_LATCHED')
+        from hope.api.first_cycle_authorization import observation
+        pinned=self.value['plan']
+        result=observation(self.root,pinned['release_commit'],request,pinned['receipt_sha256'],pinned['factory'],**options)
+        self._check()
+        return result
+
 
 @contextmanager
 def controller(directory, root, *, inspector=inspect_deployment, clock=lambda: int(time.time())):
