@@ -72,7 +72,10 @@ def staged_process_observation(root,container,receipt,provider,*,now=None):
             {key:value for key,value in raw.items() if key!='generated_at'})
     require(publisher_observation(path,expected_instance=raw['publisher_instance'],expected_identity=identity)['state']=='VERIFIED'
             and _process_identity(pid)==before)
-    return dict(binding=(identity,raw['request'],raw['publisher_instance'],tuple(identities)),
+    # Status publication atomically replaces its inode every heartbeat. Its
+    # namespace binding is checked at each observation, but only directory and
+    # lifetime lock inodes are immutable across the verification window.
+    return dict(binding=(identity,raw['request'],raw['publisher_instance'],(identities[0],identities[2])),
                 expires_at=int(stamp.timestamp())+5)
 
 

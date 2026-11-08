@@ -190,6 +190,20 @@ def test_exact_stage_identity_namespace_argv_and_fresh_lease_are_mandatory(leaf,
         with pytest.raises((RuntimeError,ValueError,TypeError,OSError)):call()
 
 
+def test_legitimate_atomic_heartbeats_preserve_stage_binding_while_namespace_is_rechecked(leaf):
+    root,path,raw,cmd,receipt,publisher,namespace_fault,now=leaf
+    provider={'factory_module':'approved.factory','factory_name':'build'}
+    first=s.staged_process_observation(root,{'pid':1234},receipt,provider,now=now)
+    inode=path.stat().st_ino
+    replacement=path.with_suffix('.next');replacement.write_text(json.dumps(dict(raw,generated_at=(now+timedelta(seconds=1)).isoformat())))
+    replacement.chmod(0o640);replacement.replace(path)
+    assert path.stat().st_ino!=inode
+    second=s.staged_process_observation(root,{'pid':1234},receipt,provider,now=now+timedelta(seconds=1))
+    assert second['binding']==first['binding'] and second['expires_at']==first['expires_at']+1
+    namespace_fault[0]=True
+    with pytest.raises(RuntimeError):s.staged_process_observation(root,{'pid':1234},receipt,provider,now=now+timedelta(seconds=1))
+
+
 @NATIVE
 def test_waiting_loop_never_imports_factory_connects_database_or_accepts_receipts(tmp_path,monkeypatch):
     (tmp_path/'staging').mkdir()
