@@ -148,3 +148,29 @@ def test_upgraded_catalog_matches_fresh_install_and_detects_disabled_guard(isola
     assert observe(fresh['sha256'])['state']=='VERIFIED', differences
     with engine.begin() as connection:connection.exec_driver_sql('ALTER TABLE public.paper_handoff_intents DISABLE TRIGGER trg_paper_handoff_intent_insert')
     assert observe(fresh['sha256'])['state']=='MISMATCH'
+
+
+
+def test_private_schema_upgrade_cannot_borrow_public_history(isolated_database):
+    engine=isolated_database;schema='review_'+uuid4().hex
+    with engine.begin() as connection:apply_migrations(connection,MIGRATIONS)
+    with engine.begin() as connection:
+        connection.exec_driver_sql('CREATE SCHEMA '+schema)
+        connection.exec_driver_sql('SET LOCAL search_path='+schema+',public')
+        assert len(apply_migrations(connection,MIGRATIONS))==234
+        assert connection.execute(text(f'SELECT count(*) FROM {schema}.hope_schema_migrations')).scalar_one()==234
+        assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==234
+        assert connection.execute(text(f"SELECT to_regclass('{schema}.job_runs')")).scalar_one() is not None
+        assert apply_migrations(connection,MIGRATIONS,schema=schema)==[]
+    with engine.begin() as connection:
+        connection.exec_driver_sql(f"UPDATE {schema}.hope_schema_migrations SET checksum=repeat('a',64) WHERE version='001_initial.sql'")
+    with engine.begin() as connection:
+        with pytest.raises(MigrationError,match='checksum mismatch'):apply_migrations(connection,MIGRATIONS,schema=schema)
+        assert apply_migrations(connection,MIGRATIONS,schema='public')==[]
+
+
+@pytest.mark.parametrize('schema',['pg_catalog','pg_temp','information_schema','private;DROP SCHEMA public','Missing'])
+def test_unsafe_migration_namespace_cannot_redirect_ddl(isolated_database,schema):
+    with isolated_database.begin() as connection:
+        with pytest.raises(MigrationError,match='target schema invalid'):apply_migrations(connection,MIGRATIONS,schema=schema)
+        assert connection.execute(text("SELECT to_regclass('public.hope_schema_migrations')")).scalar_one() is None

@@ -12,8 +12,8 @@ from hope.infrastructure.repositories.paper_handoff import SqlAlchemyPaperHandof
 def handoff_guard(engine,root,sha,request,receipt,factory,cycle_key,*,verifier=verify):
     proof=verifier(root,sha,request,receipt,factory)
     require(proof.token['first_cycle_key_sha256']==cycle_key)
-    # Commit before dispatch. Uncertain commit or any later failure consumes the
-    # intent permanently; never retry, clear, or manufacture an ABORTED outcome.
+    # Commit before dispatch. After commit, any later failure retains the claim.
+    # Unknown commit outcomes never dispatch; never retry or invent ABORTED.
     with engine.begin() as connection:SqlAlchemyPaperHandoffRepository(connection).claim(proof)
     def check():proof.assert_current()
     check()

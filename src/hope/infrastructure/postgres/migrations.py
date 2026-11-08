@@ -67,7 +67,7 @@ def validate_history(inventory, rows) -> int:
     return len(applied)
 
 
-def apply_migrations(connection: Connection, migrations_dir: str | Path) -> list[str]:
+def apply_migrations(connection: Connection, migrations_dir: str | Path, *, schema: str | None = None) -> list[str]:
     """Transactional reviewed DDL; caller commits. Never repairs unverifiable history.
 
     PostgreSQL callers must use 16/17 READ COMMITTED and an existing transaction.
@@ -92,10 +92,15 @@ def apply_migrations(connection: Connection, migrations_dir: str | Path) -> list
                 ceiling = {'statement_timeout':30000,'lock_timeout':5000}[setting]
                 if milliseconds <= 0 or milliseconds > ceiling:
                     connection.execute(text(f"SET LOCAL {setting}='{ceiling}ms'"))
-            connection.execute(text("SET LOCAL search_path=public,pg_catalog,pg_temp"))
-            table = 'public.hope_schema_migrations'
-            exists = connection.execute(text("SELECT pg_catalog.to_regclass('public.hope_schema_migrations')")).scalar_one() is not None
+            selected = schema if schema is not None else connection.execute(text('SELECT pg_catalog.current_schema()')).scalar_one()
+            if (not isinstance(selected,str) or re.fullmatch('[a-z_][a-z0-9_]{0,62}',selected) is None
+                    or selected.startswith('pg_') or selected=='information_schema'):
+                raise MigrationError('migration target schema invalid')
+            connection.execute(text(f'SET LOCAL search_path="{selected}",pg_catalog,public,pg_temp'))
+            table = selected+'.hope_schema_migrations'
+            exists = connection.execute(text('SELECT pg_catalog.to_regclass(:table)'),{'table':table}).scalar_one() is not None
         else:
+            if schema not in {None,'main'}:raise MigrationError('SQLite migration schema unsupported')
             table = 'hope_schema_migrations'
             exists = connection.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='hope_schema_migrations'")).first() is not None
         if exists:

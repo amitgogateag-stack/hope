@@ -64,7 +64,7 @@ jobs:
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
-        run: pytest -q tests/unit/test_migration_upgrade_safety.py tests/unit/test_paper_release_plan.py tests/unit/test_schema_verification.py tests/integration/test_migration_upgrade_rehearsal.py tests/integration/test_certified_paper_bridge.py
+        run: pytest -q tests/unit/test_migration_upgrade_safety.py tests/unit/test_paper_release_plan.py tests/unit/test_schema_verification.py tests/integration/test_migration_upgrade_rehearsal.py tests/integration/test_certified_paper_bridge.py tests/integration/test_dashboard_m1_authenticated_projections_pg.py
       - name: Tests
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope

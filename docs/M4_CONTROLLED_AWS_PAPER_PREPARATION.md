@@ -50,7 +50,9 @@ No claim is made that current AWS is compatible with this branch.
    constraints, new functions/triggers, required privileges, locks and disk/RAM
    headroom. Apply using apply_migrations inside an explicit READ COMMITTED
    transaction. The runner supports PostgreSQL16/17, takes the schema migration
-   advisory lock, clamps unbounded/excessive statement and lock waits to30s/5s,
+   advisory lock, binds metadata to the validated current or explicitly selected
+   schema (never borrowing public history for private dashboard schemas),
+   clamps unbounded/excessive statement and lock waits to30s/5s,
    checks the complete source/history before DDL, uses a savepoint and verifies
    all checksums/source after DDL. A competing runner fails rather than races.
    Do not weaken a failed constraint or edit a historical migration to proceed.
