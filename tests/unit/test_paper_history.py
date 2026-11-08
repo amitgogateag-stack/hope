@@ -203,3 +203,25 @@ def test_unsafe_publisher_directory_and_unapproved_target_fail_without_writes(tm
         with pytest.raises(RuntimeError,match='TARGET_INVALID'):
             owner.publish(tmp_path/'unapproved',health(),service.publish_service_status)
     assert not (tmp_path/'unapproved').exists()
+
+
+def test_heartbeat_read_cannot_borrow_a_successor_lease_even_in_same_process(tmp_path,monkeypatch):
+    from hope.api import dashboard_server
+    status=tmp_path/'health';stamp=datetime.now(timezone.utc).isoformat()
+    value=dict(schema_version=1,state='CURRENT',generated_at=stamp,last_success_at=stamp,
+        cycles_succeeded=1,cycles_failed=0,jobs_executed=0,jobs_skipped=1,error_code=None,
+        deployed_commit='a'*40,schema_compatibility='COMPATIBLE',runtime_gate='VERIFIED',paper_only=True,live_enabled=False)
+    first_context=h.publisher_lease(status);first=first_context.__enter__();first.publish(status,value,service.publish_service_status)
+    second_context=None;original=dashboard_server.bounded_regular_read
+    def switch_after_read(path,limit):
+        nonlocal second_context
+        payload=original(path,limit)
+        first_context.__exit__(None,None,None)
+        second_context=h.publisher_lease(status);second=second_context.__enter__()
+        second.publish(status,value,service.publish_service_status)
+        return payload
+    monkeypatch.setattr(dashboard_server,'bounded_regular_read',switch_after_read)
+    try:
+        with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):dashboard_server._verified_operations(status)
+    finally:
+        if second_context is not None:second_context.__exit__(None,None,None)

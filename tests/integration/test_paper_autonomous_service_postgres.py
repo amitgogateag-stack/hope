@@ -127,6 +127,9 @@ raise SystemExit(cli.main(sys.argv[1:]))
         # change A's shared evidence or execute another financial transaction.
         history=Path(str(status)+".history.json")
         owned_health=status.read_bytes();owned_history=history.read_bytes()
+        accepted_run=create_scheduled_job_run(f"paper:USA:{version}:process",scheduled)
+        with engine.connect() as connection:
+            reconciled_before=connection.execute(text("SELECT count(*) FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),{'id':str(accepted_run.job_run_id)}).scalar_one()
         contender=subprocess.run(command+["--once"],env=environment,capture_output=True,timeout=10)
         assert contender.returncode==1
         assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
@@ -136,6 +139,8 @@ raise SystemExit(cli.main(sys.argv[1:]))
         assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
         accepted_run=create_scheduled_job_run(f"paper:USA:{version}:process",scheduled)
         assert _counts(engine,accepted_run)==(1,1,1)
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),{'id':str(accepted_run.job_run_id)}).scalar_one()==reconciled_before
         process.terminate()
         process.wait(timeout=10)
         stopped=json.loads(status.read_text())

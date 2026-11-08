@@ -21,7 +21,7 @@ from hope.api.snapshot_contract import strict_json
 ENV={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':'/nonexistent'}
 HASH=re.compile('[0-9a-f]{64}')
 FORMAT='\n'.join('{{json .'+field+'}}' for field in (
-    'Id','Image','State.Running','State.Pid','HostConfig.Privileged','HostConfig.ReadonlyRootfs','HostConfig.NetworkMode'))
+    'Id','Image','State.Running','State.Pid','HostConfig.Privileged','HostConfig.ReadonlyRootfs','HostConfig.NetworkMode','Config.User'))
 
 
 def require(value):
@@ -66,17 +66,18 @@ def host_observation(*,connection=None,capture=bounded_capture):
 
 
 def container_observation(engine,container_id,*,capture=bounded_capture):
-    """Ask for seven public fields; never inspect env, mounts or credentials."""
+    """Ask for eight public fields; never inspect env, mounts or credentials."""
     require(engine in {'docker','podman'} and isinstance(container_id,str) and HASH.fullmatch(container_id))
     binary=Path('/usr/bin')/engine;r._trusted(binary.resolve(strict=True),system=True)
     output=capture([str(binary),'inspect','--type','container','--format',FORMAT,container_id],
         timeout=3,max_output=4096,env=ENV)
-    fields=output.strip().splitlines();require(len(fields)==7)
+    fields=output.strip().splitlines();require(len(fields)==8)
     values=[strict_json(value.encode()) for value in fields]
-    identity,image,running,pid,privileged,readonly,network=values
+    identity,image,running,pid,privileged,readonly,network,user=values
     require(identity==container_id and isinstance(image,str) and re.fullmatch('sha256:[0-9a-f]{64}',image)
         and running is True and type(pid) is int and pid>0 and privileged is False and readonly is True
-        and isinstance(network,str) and re.fullmatch('[A-Za-z0-9_-]{1,64}',network) and network not in {'host','container'})
+        and isinstance(network,str) and re.fullmatch('[A-Za-z0-9_-]{1,64}',network) and network not in {'host','container'}
+        and user=='65532:65532')
     return dict(container_id=identity,config_sha256=image[7:],pid=pid,network=network)
 
 
@@ -94,6 +95,33 @@ def process_observation(container,receipt):
         and _process_identity(pid)==before and (process/'exe').stat().st_ino==kernel.st_ino
         and executable.stat().st_ino==selected.st_ino)
     return r._digest(r._canonical((pid,before)))
+
+
+def runtime_observation(root,sha,container,receipt,*,node_stat=None):
+    """Require reviewed host source/runtime bindings, not a separate lookalike.
+
+    The existing inventory/attestation owns dependency validation. Every
+    namespace node must be that same approved inode; nested substitution fails.
+    """
+    deadline=time.monotonic()+r.MAX_SECONDS
+    node_stat=node_stat or Path.lstat
+    environment,_,_,before=r._inventory(root,sha,'release',deadline)
+    source=r.source_snapshot(root/'releases'/sha)
+    proof=r.attest_runtime(root,sha,'release',expected_manifest=receipt['runtime_manifest_sha256'])
+    image=strict_json(r._read(root/'image-evidence/approval.json',65536))
+    require(proof['state']==proof['provenance_state']==proof['build_state']=='VERIFIED'
+        and proof['build_sha256']==image['release_approval_sha256']
+        and proof['provenance_sha256']==image['hashes']['package-provenance.json'])
+    namespace=Path('/proc')/str(container['pid'])/'root/opt/hope-operations'
+    nodes={**before[0],**before[1],**{key:value[1] for key,value in before[2].items()}}
+    expected={str(environment/key):identity for key,identity in nodes.items()}
+    expected.update(source)
+    for name,identity in expected.items():
+        require(time.monotonic()<=deadline)
+        actual=namespace/Path(name).relative_to(root)
+        require(r._identity(node_stat(actual))==identity)
+    require(r._inventory(root,sha,'release',deadline)[3]==before and r.source_snapshot(root/'releases'/sha)==source)
+    return proof
 
 
 def provider_contract(root,sha,digest,now):
@@ -149,10 +177,11 @@ def rollback_contract(root,sha,digest,now):
 
 
 def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factory=None,host_probe=host_observation,container_probe=container_observation,
-        process_probe=process_observation,host_readiness=None):
+        process_probe=process_observation,runtime_probe=runtime_observation,host_readiness=None):
     """Reconcile signed approvals with fresh local observations; never activate."""
     root=Path(root);live_clock=now is None;now=int(time.time()) if live_clock else now
     report=dict(schema='hope.deployment-observation.v1',state='UNKNOWN',release_commit=None,image_sha256=None,
+        container_id=None,process_sha256=None,runtime_manifest_sha256=None,
         receipt_sha256=None,host='UNKNOWN',container='UNKNOWN',provenance='UNKNOWN',provider='UNKNOWN',rollback='UNKNOWN',
         expires_at=None,blockers=['INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'],execution_authorized=False)
     blocker='INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'
@@ -202,12 +231,18 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
         require(observed['config_sha256']==manifest['config']['digest'][7:]
             and process_probe(observed,value)==value['process_sha256'])
         report['container']='VERIFIED'
+        report.update(container_id=observed['container_id'],process_sha256=value['process_sha256'])
+        blocker='SIGNED_IMAGE_TO_RUNNING_RUNTIME_BINDING_REQUIRED'
+        runtime=runtime_probe(root,sha,observed,value)
+        require(runtime['manifest_sha256']==value['runtime_manifest_sha256'])
         if host_readiness is None:
             from hope.api.aws_readiness import inspect_aws_readiness
             host_readiness=inspect_aws_readiness
         blocker='HOST_RUNTIME_AND_PAPER_READINESS_REQUIRED'
         current=host_readiness(sha,root=root)
-        require(current['ready'] is True and current['runtime_integrity']['manifest_sha256']==value['runtime_manifest_sha256'])
+        require(current['ready'] is True and type(current['units']['hope-paper.service']['MainPID']) in {str,int}
+            and int(current['units']['hope-paper.service']['MainPID'])==observed['pid'])
+        report['runtime_manifest_sha256']=value['runtime_manifest_sha256']
         # Close on all identities: a current process must still match the same
         # independently approved receipt after slow host/readiness observations.
         blocker='CONCURRENT_CHANGE_OR_EXPIRED_ACCEPTANCE'
@@ -216,6 +251,7 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
         require(verify_image(folder/'oci',folder/'approval.json',folder/'images-ed25519.pub',folder/'policy.json',
             folder/'policy-ed25519.pub',expected_sha=sha,now=closing,minimum_generation=value['minimum_policy_generation'])==proof)
         require(authorities(root,folder,closing)==approved_roles)
+        require(runtime_probe(root,sha,observed,value)==runtime)
         require(host_probe()==host and container_probe(value['engine'],value['container_id'])==observed
             and process_probe(observed,value)==value['process_sha256']
             and r._trusted(reference)==reference_identity and r._read(reference,64).decode('ascii')==pinned and signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')[1]==digest)

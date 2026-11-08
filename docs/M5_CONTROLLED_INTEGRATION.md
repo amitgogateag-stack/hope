@@ -84,12 +84,19 @@ Python version and fixed systemd version output. PostgreSQL major is UNKNOWN
 without a supplied read-only database connection. The probe checks transaction
 read-only before SHOW server_version_num and never changes transaction mode.
 
-Container inspection invokes only fixed docker/podman binaries and seven
+Container inspection invokes only fixed docker/podman binaries and eight
 allowlisted public fields. It never requests environment, mounts, unrestricted
-inspect JSON or credentials. Mutable image tags, privileged/writable-root
+inspect JSON or credentials. Mutable image tags, root-user overrides, privileged/writable-root
 containers, host networking, invalid PIDs or contradictory config digests fail.
 The OCI manifest binds the engine's config digest; /proc kernel executable
 inode/content, exact argv hash and boot/start identity bind the running process.
+The container must bind the reviewed host release source and release venv;
+every source/runtime namespace inode is matched to the existing trusted
+inventory, and runtime package/build proofs must match the signed image.
+A separate lookalike container cannot borrow a native worker's health: systemd's
+PAPER MainPID must equal the independently observed container PID. Dashboard
+runtime evidence is not substituted for PAPER runtime evidence. These bindings
+require explicit controlled deployment configuration, never automatic mounts.
 Host, process, container, receipt selector, policy, provider acceptance and
 rollback evidence are rechecked before returning VERIFIED.
 

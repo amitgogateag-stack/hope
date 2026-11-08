@@ -89,7 +89,8 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
             raise ValueError('HOPE_OPERATIONS_PUBLISHER_INVALID')
         if data['state']=='CURRENT':
             from hope.infrastructure.paper_history import publisher_observation
-            if publisher_observation(path)['state']!='VERIFIED':
+            if publisher_observation(path,expected_instance=data['publisher_instance'],
+                    expected_identity=data['publisher_identity_sha256'])['state']!='VERIFIED':
                 raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     fields = ("cycles_succeeded", "cycles_failed", "jobs_executed", "jobs_skipped")
     if not all(type(data.get(k)) is int and 0 <= data[k] <= 9007199254740991 for k in fields):

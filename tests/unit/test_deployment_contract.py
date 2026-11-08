@@ -44,7 +44,8 @@ def contract(tmp_path,monkeypatch):
     layout=root/'image-evidence/oci/blobs/sha256';layout.mkdir(parents=True)
     (layout/('b'*64)).write_bytes(r._canonical(dict(config=dict(digest='sha256:'+'9'*64))))
     probes=dict(now=now,host_probe=Mock(side_effect=lambda:deepcopy(host)),container_probe=Mock(side_effect=lambda *a:deepcopy(container)),
-        process_probe=Mock(return_value='1'*64),host_readiness=Mock(return_value=dict(ready=True,runtime_integrity=dict(manifest_sha256='c'*64))))
+        process_probe=Mock(return_value='1'*64),runtime_probe=Mock(return_value=dict(manifest_sha256='c'*64)),
+        host_readiness=Mock(return_value=dict(ready=True,units={'hope-paper.service':{'MainPID':'1234'}},runtime_integrity=dict(manifest_sha256='c'*64))))
     return root,receipt,pin,image,host,container,probes
 
 
@@ -61,7 +62,7 @@ def test_every_independent_gate_and_closing_observation_is_required(contract,mon
         host[name]=[3,12] if fault=='python' else 15 if fault=='postgres' else 248 if fault=='systemd' else '0'*64
     elif fault=='container_config':container['config_sha256']='0'*64
     elif fault=='process':probes['process_probe'].return_value='0'*64
-    elif fault=='runtime':probes['host_readiness'].return_value['runtime_integrity']['manifest_sha256']='0'*64
+    elif fault=='runtime':probes['runtime_probe'].return_value['manifest_sha256']='0'*64
     elif fault=='host_blocked':probes['host_readiness'].return_value['ready']=False
     elif fault in {'receipt_expired','receipt_future'}:
         receipt['expires_at' if fault=='receipt_expired' else 'issued_at']=probes['now'] if fault=='receipt_expired' else probes['now']+1;pin()
@@ -71,7 +72,7 @@ def test_every_independent_gate_and_closing_observation_is_required(contract,mon
         def replaced(*args,**kwargs):
             reference=root/'deployment-receipts'/f'{SHA}.ref';other=reference.with_suffix('.new')
             other.write_bytes(reference.read_bytes());other.replace(reference)
-            return dict(ready=True,runtime_integrity=dict(manifest_sha256='c'*64))
+            return dict(ready=True,units={'hope-paper.service':{'MainPID':'1234'}},runtime_integrity=dict(manifest_sha256='c'*64))
         probes['host_readiness'].side_effect=replaced
     elif fault=='policy_changed':
         monkeypatch.setattr(d,'verify_image',Mock(side_effect=[deepcopy(image),dict(image,policy_generation=8)]))
@@ -108,16 +109,17 @@ def test_readonly_host_probe_never_changes_database_transaction_mode(monkeypatch
     assert observed['postgres_major']==17 and observed['python_version']==[3,13]
 
 
-@pytest.mark.parametrize('fault',[None,'environment','pid','privileged','writable','host_network','image'])
+@pytest.mark.parametrize('fault',[None,'environment','pid','privileged','writable','host_network','image','root_user'])
 def test_container_probe_is_allowlisted_bounded_and_never_reads_environment(monkeypatch,fault):
     monkeypatch.setattr(d.r,'_trusted',lambda *a,**k:None)
     monkeypatch.setattr(d.Path,'resolve',lambda self,**k:self)
-    values=['f'*64,'sha256:'+'9'*64,True,123,False,True,'hope-paper']
+    values=['f'*64,'sha256:'+'9'*64,True,123,False,True,'hope-paper','65532:65532']
     if fault=='pid':values[3]=True
     elif fault=='privileged':values[4]=True
     elif fault=='writable':values[5]=False
     elif fault=='host_network':values[6]='host'
     elif fault=='image':values[1]='mutable:tag'
+    elif fault=='root_user':values[7]='0:0'
     elif fault=='environment':values.append({'secret':'must not be read'})
     capture=Mock(return_value='\n'.join(r._canonical(v).decode() for v in values))
     if fault is None:
@@ -193,3 +195,34 @@ def test_all_new_approval_roles_are_independent_and_revocable(tmp_path,monkeypat
     if fault is None:assert len(d.authorities(tmp_path,tmp_path,0))==4
     else:
         with pytest.raises(RuntimeError):d.authorities(tmp_path,tmp_path,0)
+
+@pytest.mark.parametrize('fault',[None,'namespace_substitution','source_substitution','wrong_build','wrong_packages','concurrent_inventory'])
+def test_running_namespace_must_be_same_approved_runtime_not_a_lookalike(tmp_path,monkeypatch,fault):
+    from types import SimpleNamespace
+    root=tmp_path;environment=root/'release-venvs'/SHA;release=root/'releases'/SHA
+    def metadata(number):
+        return SimpleNamespace(st_dev=1,st_ino=number,st_mode=0o100644,st_uid=0,st_gid=0,st_nlink=1,st_size=1,st_mtime_ns=1,st_ctime_ns=1)
+    identities={name:metadata(index) for index,name in enumerate(('runtime','python','lib64','src','factory.py'),1)}
+    before=({'.':r._identity(identities['runtime'])},{'bin/python':r._identity(identities['python'])},
+        {'lib64':('@runtime/lib',r._identity(identities['lib64']))},'interpreter',())
+    inventory=(environment,environment/'bin/python',environment/'bin/python',before)
+    if fault=='concurrent_inventory':
+        monkeypatch.setattr(r,'_inventory',Mock(side_effect=[inventory,(*inventory[:3],({'changed':()}, {}, {},'',()))]))
+    else:monkeypatch.setattr(r,'_inventory',Mock(return_value=inventory))
+    source={str(release/'src'):r._identity(identities['src']),str(release/'src/factory.py'):r._identity(identities['factory.py'])}
+    monkeypatch.setattr(r,'source_snapshot',Mock(return_value=source))
+    proof=dict(state='VERIFIED',provenance_state='VERIFIED',build_state='VERIFIED',manifest_sha256='c'*64,
+        build_sha256='d'*64,provenance_sha256='e'*64)
+    if fault=='wrong_build':proof['build_sha256']='0'*64
+    if fault=='wrong_packages':proof['provenance_sha256']='0'*64
+    attest=Mock(return_value=proof);monkeypatch.setattr(r,'attest_runtime',attest)
+    monkeypatch.setattr(r,'_read',lambda *a,**k:r._canonical(dict(release_approval_sha256='d'*64,hashes={'package-provenance.json':'e'*64})))
+    def stat_node(path):
+        name=Path(path).name;name='runtime' if name==SHA else name
+        if (fault=='namespace_substitution' and name=='python') or (fault=='source_substitution' and name=='factory.py'):return metadata(999)
+        return identities[name]
+    if fault is None:
+        assert d.runtime_observation(root,SHA,{'pid':1234},{'runtime_manifest_sha256':'c'*64},node_stat=stat_node)==proof
+        attest.assert_called_once_with(root,SHA,'release',expected_manifest='c'*64)
+    else:
+        with pytest.raises(RuntimeError):d.runtime_observation(root,SHA,{'pid':1234},{'runtime_manifest_sha256':'c'*64},node_stat=stat_node)

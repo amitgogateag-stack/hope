@@ -162,7 +162,7 @@ def history_observation(path,*,now=None):
     except (OSError,ValueError,RuntimeError,TypeError,KeyError):return absent
 
 
-def publisher_observation(status_path):
+def publisher_observation(status_path,*,expected_instance=None,expected_identity=None):
     """Correlate a held kernel lock, process incarnation and persisted heartbeat."""
     absent=dict(schema='hope.paper-publisher-observation.v1',state='UNKNOWN',identity_sha256=None,
         generated_at=datetime.now(timezone.utc).isoformat(),execution_authorized=False)
@@ -180,6 +180,8 @@ def publisher_observation(status_path):
         except BlockingIOError:pass
         header=strict_json(os.read(descriptor,1025));health=strict_json(bounded_regular_read(status_path,8192))
         if (set(header)!={'schema','pid','identity_sha256','instance'} or header['schema']!='hope.paper-publisher.v1'
+                or (expected_instance is not None and header['instance']!=expected_instance)
+                or (expected_identity is not None and header['identity_sha256']!=expected_identity)
                 or type(header['pid']) is not int or header['pid']<=0
                 or digest((header['pid'],_process_identity(header['pid'])))!=header['identity_sha256']
                 or health.get('publisher_instance')!=header['instance']
