@@ -125,7 +125,7 @@ def test_optional_controller_admission_gate_rechecks_each_cycle(guarded,monkeypa
         with pytest.raises(RuntimeError,match='PAPER_RUNTIME_UNVERIFIED'):
             with guard():pytest.fail('unsafe controller admitted')
     else:
-        with pytest.raises(RuntimeError,match='CONTROLLER_VERIFICATION_REQUIRED'):
+        with pytest.raises(RuntimeError,match='PAPER_RUNTIME_UNVERIFIED'):
             with guard() as check:
                 check()
                 result['state']='HALTED'

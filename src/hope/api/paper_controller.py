@@ -236,6 +236,7 @@ def controller(directory, root, *, inspector=inspect_deployment, clock=lambda: i
 
 def observation(directory, root, *, inspector=inspect_deployment, now=None, expected_plan=None):
     """Bounded projection, fresh independent revalidation, no writes or imports."""
+    live_clock = now is None
     now = int(time.time()) if now is None else now
     report = dict(schema="hope.paper-controller-observation.v1", state="UNAVAILABLE", code="JOURNAL_UNVERIFIED",
                   release_commit=None, receipt_sha256=None, sequence=None, retained_events=0,
@@ -258,10 +259,12 @@ def observation(directory, root, *, inspector=inspect_deployment, now=None, expe
             pinned = value["plan"]
             with _activation_guard(Path(root), shared=True):
                 proof = inspector(Path(root), pinned["release_commit"], expected_receipt=pinned["receipt_sha256"], expected_factory=pinned["factory"])
-                evidence, expiry = _proof(proof, pinned, now)
+                closing = int(time.time()) if live_clock else now
+                require(now <= closing < latest["expires_at"])
+                evidence, expiry = _proof(proof, pinned, closing)
                 require(evidence == latest["evidence_sha256"] and read(path) == value)
                 _directory(directory, readonly=True)
-                report.update(state="VERIFIED", code="EVIDENCE_VERIFIED", expires_at=min(expiry, latest["expires_at"]))
+                report.update(state="VERIFIED", code="EVIDENCE_VERIFIED", observed_at=closing, expires_at=min(expiry, latest["expires_at"]))
     except Exception:
         pass
     return report

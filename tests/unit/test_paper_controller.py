@@ -338,3 +338,14 @@ def test_cli_safe_output_initialization_halt_and_inspect(tmp_path,capsys):
     assert c.main(['initialize',*common,'--release',SHA,'--receipt',RECEIPT,'--factory',FACTORY])==1
     assert capsys.readouterr().out.strip()=='PAPER_CONTROLLER_UNVERIFIED'
     assert (directory/'state.json').read_bytes()==before
+
+
+@NATIVE
+@pytest.mark.parametrize('closing',[NOW+60,NOW-1])
+def test_live_observation_closes_clock_window_after_slow_inspection(tmp_path,monkeypatch,closing):
+    directory=tmp_path/'controller';c.initialize(directory,SHA,RECEIPT,FACTORY,now=NOW)
+    with c.controller(directory,tmp_path,inspector=Mock(return_value=verified()),clock=lambda:NOW) as owner:
+        owner.verify(REQUEST)
+        clock=iter([NOW,closing]);monkeypatch.setattr(c.time,'time',lambda:next(clock))
+        result=c.observation(directory,tmp_path,inspector=Mock(return_value=verified()))
+        assert result['state']=='BLOCKED' and result['code']=='REVERIFY_REQUIRED'
