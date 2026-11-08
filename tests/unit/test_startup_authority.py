@@ -166,3 +166,44 @@ raise SystemExit(7)
     child=subprocess.run([sys.executable,'-c',script,str(case['root']),SHA,case['startup']['request_sha256'],case['token']['request_sha256'],
                           'c'*64,'approved.factory:build',logical_cycle_key(RUN)],capture_output=True,text=True,timeout=10)
     assert child.returncode==0 and not child.stdout
+
+
+@pytest.mark.skipif(os.name!='posix',reason='Real controller journal and publisher leases')
+@pytest.mark.parametrize('fault',['missing','forged','stopped','cancel_wait'])
+def test_startup_without_independent_authority_never_opens_database_or_loads_factory(tmp_path,monkeypatch,fault):
+    import json
+    from pathlib import Path
+    from threading import Event
+    from hope.api import paper_startup as startup,paper_service as api,paper_controller as controller
+    from first_cycle_fixture import RECEIPT,FACTORY
+    case=startup_case(tmp_path,monkeypatch,RUN);root=case['root'];release=root/'releases'/SHA
+    release.mkdir(parents=True);(root/'current').symlink_to(release,target_is_directory=True)
+    directory=tmp_path/'controller';controller.initialize(directory,SHA,RECEIPT,FACTORY)
+    args=SimpleNamespace(status_file=tmp_path/'health.json',controller_directory=directory,deployment_receipt=RECEIPT,
+        factory=FACTORY,authority_wait_seconds=1 if fault=='cancel_wait' else 0,startup_request=case['startup']['request_sha256'],
+        handoff_request=case['token']['request_sha256'],expected_cycle_key=logical_cycle_key(RUN),first_cycle_execution_request=None)
+    stop=Event()
+    if fault=='stopped':stop.set()
+    if fault=='cancel_wait':monkeypatch.setattr(stop,'wait',lambda timeout:stop.set())
+    database=Mock(side_effect=AssertionError('No database before independent startup authority'))
+    factory=Mock(side_effect=AssertionError('No factory without execution authority'))
+    monkeypatch.setattr(api,'load_plan_factory',factory)
+    monkeypatch.setenv('HOPE_LIVE_ENABLED','false');monkeypatch.setenv('HOPE_DEPLOYED_COMMIT',SHA)
+    verifier=Mock(side_effect=RuntimeError('synthetic forged authority') if fault=='forged' else FileNotFoundError())
+    with pytest.raises((RuntimeError,FileNotFoundError)):
+        startup.run_startup(args,release,database,stop,startup_verifier=verifier)
+    database.assert_not_called();factory.assert_not_called()
+    raw=json.loads(Path(str(args.status_file)+'.startup.json').read_text())
+    assert raw['state']=='BLOCKED' and raw['execution_authorized'] is False and raw['startup_authorization_sha256'] is None
+    assert not args.status_file.exists()
+    if fault=='stopped':verifier.assert_not_called()
+    else:assert verifier.call_count==1
+
+
+@pytest.mark.parametrize('missing',['expected_cycle_key','once','require_certified','cycle_guard','require_new_cycle','transaction_check','successful_run_observer'])
+def test_completion_only_closing_gate_cannot_replace_ordinary_admission(missing):
+    from hope.infrastructure.paper_service import run_service
+    values=dict(expected_cycle_key='a'*64,once=True,require_certified=True,cycle_guard=Mock(),require_new_cycle=True,
+        transaction_check=Mock(),successful_run_observer=Mock(),cycle_closing_check=Mock())
+    del values[missing]
+    with pytest.raises(RuntimeError,match='GUARD_REQUIRED'):run_service(Mock(),Mock(),**values)

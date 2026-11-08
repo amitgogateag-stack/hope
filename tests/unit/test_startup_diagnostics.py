@@ -1,5 +1,6 @@
 from datetime import UTC,datetime,timedelta
 import json
+import os
 from unittest.mock import Mock
 import pytest
 from hope.api import paper_startup as p
@@ -19,6 +20,15 @@ def test_startup_diagnostics_never_promote_missing_or_contradictory_proof(tmp_pa
     elif fault=='stale':raw['generated_at']=(now-timedelta(seconds=6)).isoformat()
     elif fault=='fabricated_success':raw['state']='CYCLE_COMPLETED'
     path.write_text(json.dumps(raw) if fault!='oversize' else 'x'*4097);path.chmod(0o400)
+    if os.name=='nt':
+        # This projection unit models only the native file-read boundary on
+        # Windows: Python's lstat/fstat ctime projections differ there. Linux
+        # CI exercises the actual unchanged private-inode reader and publisher.
+        def modeled_read(candidate,limit):
+            payload=candidate.read_bytes()
+            if len(payload)>limit:raise ValueError('BOUNDED_READ_LIMIT')
+            return payload
+        monkeypatch.setattr('hope.infrastructure.durable_file.bounded_regular_read',modeled_read)
     owner=Mock(return_value=dict(state='BLOCKED' if fault=='dead_publisher' else 'VERIFIED'))
     monkeypatch.setattr(paper_history,'publisher_observation',owner)
     result=p.startup_observation(path,SHA,now=now)
@@ -29,3 +39,11 @@ def test_startup_diagnostics_never_promote_missing_or_contradictory_proof(tmp_pa
 
 def test_missing_startup_observation_remains_unverified(tmp_path):
     assert p.startup_observation(tmp_path/'missing',SHA)['state']=='UNVERIFIED'
+
+
+def test_untrusted_native_file_evidence_fails_closed(tmp_path,monkeypatch):
+    reader=Mock(side_effect=ValueError('BOUNDED_READ_UNTRUSTED_FILE'))
+    monkeypatch.setattr('hope.infrastructure.durable_file.bounded_regular_read',reader)
+    result=p.startup_observation(tmp_path/'untrusted',SHA)
+    assert result['state']=='UNVERIFIED' and result['execution_authorized'] is False
+    reader.assert_called_once_with(tmp_path/'untrusted',4096)

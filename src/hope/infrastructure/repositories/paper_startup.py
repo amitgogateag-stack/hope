@@ -86,6 +86,18 @@ class SqlAlchemyPaperStartupRepository:
             self._insert('paper_startup_completions',dict(self._common(current),job_run_id=run.job_run_id),current)
             SqlAlchemyPaperHandoffRepository(self.connection).finish(current.handoff,'ACKNOWLEDGED')
 
+    def assert_completed(self,permit):
+        current=self._ready(permit,'execution')
+        row=self.connection.execute(text("SELECT c.evidence_sha256,c.database_principal=current_user,c.job_run_id "
+            "FROM public.paper_startup_completions c JOIN public.paper_startup_executions e USING(authorization_sha256) "
+            "JOIN public.job_runs j ON j.job_run_id=c.job_run_id JOIN public.paper_certified_outcomes o ON o.job_run_id=j.job_run_id "
+            "JOIN public.paper_startup_commit_witnesses w USING(authorization_sha256) "
+            "WHERE c.authorization_sha256=:authorization AND j.status='SUCCEEDED' "
+            "AND EXISTS (SELECT 1 FROM public.audit_events a WHERE a.event_type='PAPER_RUN_RECONCILED' AND a.entity_id=j.job_run_id::text)"),
+            dict(authorization=current.authorization_sha256)).first()
+        require(row is not None and row[0]==current.evidence_sha256 and row[1] is True and row[2]==current.run.job_run_id)
+        current.assert_current()
+
     def observation(self,startup_authorization):
         from hope.api.paper_controller import is_hash
         require(is_hash(startup_authorization))

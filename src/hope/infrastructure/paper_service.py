@@ -328,6 +328,12 @@ def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
     if kwargs.get('expected_cycle_key') is not None and (kwargs.get('once') is not True
             or kwargs.get('require_certified') is not True or not callable(kwargs.get('cycle_guard'))):
         raise RuntimeError('PAPER_SINGLE_CYCLE_GUARD_REQUIRED')
+    closing=kwargs.get('cycle_closing_check')
+    if closing is not None and (not callable(closing) or kwargs.get('expected_cycle_key') is None
+            or kwargs.get('once') is not True or kwargs.get('require_certified') is not True or not callable(kwargs.get('cycle_guard'))
+            or kwargs.get('require_new_cycle') is not True
+            or not callable(kwargs.get('transaction_check')) or not callable(kwargs.get('successful_run_observer'))):
+        raise RuntimeError('PAPER_STARTUP_EXECUTION_GUARD_REQUIRED')
     try:
         with publisher_lease(kwargs["status_file"]) as lease:
             try:return _owned_service(engine,factory,lease,kwargs,History)
@@ -343,6 +349,7 @@ def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
 
 
 def _owned_service(engine,factory,lease,kwargs,History):
+    kwargs=dict(kwargs);closing=kwargs.pop('cycle_closing_check',None)
     def publish(path,value):return lease.publish(path,value,publish_service_status)
     if kwargs.get("cycle_guard") is None:return _run_service(engine,factory,publisher=publish,**kwargs)
     history=History(Path(str(kwargs["status_file"])+".history.json"),publish)
@@ -357,7 +364,11 @@ def _owned_service(engine,factory,lease,kwargs,History):
                 history.check()
                 if check is not None:check()
             admitted();yield admitted
-            admitted()
+            # Startup completion consumes admission. Its explicit closing gate
+            # authenticates committed completion; ordinary workers still use
+            # the unchanged active execution guard on both sides.
+            if closing is None:admitted()
+            else:history.check();closing()
     return _run_service(engine,factory,history=history,publisher=publish,**dict(kwargs,cycle_guard=guarded_history))
 
 

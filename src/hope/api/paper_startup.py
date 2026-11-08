@@ -127,10 +127,15 @@ def run_startup(args,release,database,stop,*,startup_verifier=authority.verify_s
                 # owner and signatures without treating consumed success as a
                 # still-active execution capability.
                 owner_check();execution.assert_current()
+            def closing_check():
+                owner_check()
+                with database().connect() as connection:
+                    connection.exec_driver_sql('SET TRANSACTION READ ONLY')
+                    SqlAlchemyPaperStartupRepository(connection).assert_completed(execution)
             result=run_service(database(),factory,migrations_dir=release/'migrations',status_file=args.status_file,
                 stop_event=stop,once=True,poll_seconds=args.poll_seconds,require_certified=True,cycle_guard=guard,
                 expected_cycle_key=args.expected_cycle_key,transaction_check=transaction_check,require_new_cycle=True,
-                successful_run_observer=complete)
+                successful_run_observer=complete,cycle_closing_check=closing_check)
             emit('CYCLE_COMPLETED' if result==0 else 'RECOVERY_REQUIRED')
             return result
         except BaseException:
