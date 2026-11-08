@@ -122,8 +122,29 @@ raise SystemExit(cli.main(sys.argv[1:]))
             time.sleep(0.05)
         else:
             pytest.fail("Certified child never published committed acceptance")
+        # A stays in its genuine 30-second poll wait while independent CLI
+        # processes contend. Neither a lease rejection nor startup failure may
+        # change A's shared evidence or execute another financial transaction.
+        history=Path(str(status)+".history.json")
+        owned_health=status.read_bytes();owned_history=history.read_bytes()
+        accepted_run=create_scheduled_job_run(f"paper:USA:{version}:process",scheduled)
+        with engine.connect() as connection:
+            reconciled_before=connection.execute(text("SELECT count(*) FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),{'id':str(accepted_run.job_run_id)}).scalar_one()
+        contender=subprocess.run(command+["--once"],env=environment,capture_output=True,timeout=10)
+        assert contender.returncode==1
+        assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
+        invalid=list(command);invalid[3]="invalid"
+        rejected=subprocess.run(invalid,env=environment,capture_output=True,timeout=10)
+        assert rejected.returncode==2 and rejected.stderr.strip()==b"PAPER_SERVICE_STARTUP_FAILED"
+        assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
+        accepted_run=create_scheduled_job_run(f"paper:USA:{version}:process",scheduled)
+        assert _counts(engine,accepted_run)==(1,1,1)
+        with engine.connect() as connection:
+            assert connection.execute(text("SELECT count(*) FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),{'id':str(accepted_run.job_run_id)}).scalar_one()==reconciled_before
         process.terminate()
         process.wait(timeout=10)
+        stopped=json.loads(status.read_text())
+        assert stopped["state"]=="STOPPED" and stopped["cycles_succeeded"]==1
         restarted = subprocess.run(command + ["--once"], env=environment, capture_output=True, timeout=25)
         assert restarted.returncode == 0
         assert json.loads(status.read_text())["jobs_skipped"] == 1
@@ -465,3 +486,50 @@ def test_lost_service_result_after_commit_restarts_from_durable_truth(admitted_p
     assert json.loads(status.read_text())["state"] == "UNAVAILABLE"
     assert _cycle(engine, lambda *_: plan()) == (0, 1)
     assert _counts(engine, run) == (1, 1, 1)
+
+@pytest.mark.integration
+def test_m5_repeated_failure_restart_history_and_lost_ack_preserve_exactly_once(admitted_plan,monkeypatch,tmp_path):
+    """Disposable PostgreSQL + genuine history/lease; no production admission."""
+    from contextlib import contextmanager
+    from sqlalchemy.exc import OperationalError
+    from hope.infrastructure.paper_history import read_history,history_observation
+    engine,plan,run=admitted_plan;status=tmp_path/'m5-health.json';history=Path(str(status)+'.history.json')
+    calls=[];admission={'valid':False}
+    @contextmanager
+    def reviewed_lab_guard():
+        def check():
+            if not admission['valid']:raise RuntimeError('PAPER_RUNTIME_UNVERIFIED')
+        check();yield check;check()
+    def factory(*_):calls.append(True);return plan()
+    arguments=dict(migrations_dir=MIGRATIONS,status_file=status,once=True,now=lambda:NOW,cycle_guard=reviewed_lab_guard)
+    for _ in range(2):
+        assert service.run_service(engine,factory,**arguments)==1
+        assert _counts(engine,run)==(0,0,0)
+    assert calls==[]
+    admission['valid']=True;original=service.run_due_operational_paper_jobs
+    def committed_ack_lost(*args,**kwargs):
+        original(*args,**kwargs)
+        raise OperationalError('SIMULATED_DISCONNECT_AFTER_COMMIT',{},Exception('disposable fixture'))
+    with monkeypatch.context() as patch:
+        patch.setattr(service,'run_due_operational_paper_jobs',committed_ack_lost)
+        assert service.run_service(engine,factory,**arguments)==1
+    assert _counts(engine,run)==(1,1,1)
+    engine.dispose()
+    for _ in range(3):
+        assert service.run_service(engine,factory,**arguments)==0
+        assert _counts(engine,run)==(1,1,1)
+        engine.dispose()
+    admitted_calls=len(calls);reviewed=history.read_bytes();read_history(history)
+    history.write_bytes(b'{"interrupted":')
+    assert service.run_service(engine,factory,**arguments)==1
+    assert len(calls)==admitted_calls and _counts(engine,run)==(1,1,1)
+    assert json.loads(status.read_text())['runtime_gate']=='UNVERIFIED'
+    assert history_observation(history)['state']=='UNVERIFIED'
+    # Explicit test-operator restoration of a validated prior private file.
+    # The product never repairs history or clears a financial recovery gate.
+    history.write_bytes(reviewed);read_history(history)
+    assert service.run_service(engine,factory,**arguments)==0
+    assert _counts(engine,run)==(1,1,1)
+    evidence=history_observation(history)
+    assert evidence['retained_starts']==7 and evidence['retained_failures']==3
+    assert evidence['execution_authorized'] is False

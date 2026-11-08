@@ -54,3 +54,26 @@ def test_reauthenticated_second_stage_keeps_scoped_database_preflight_and_worker
     assert authenticate.call_args.kwargs["expected_manifest"]=="a"*64
     if preflight:assert run.call_args.args[0][-2:]==["--database-component","paper"]
     else:run.assert_called_once_with(["--once"])
+
+@pytest.mark.parametrize('stage',['os','pinned'])
+def test_release_specific_runtime_selection_survives_both_bootstrap_stages(launch,monkeypatch,stage):
+    release,authenticate=launch;execute=Mock(return_value=0)
+    args=['--runtime-mode','release','--once']
+    if stage=='pinned':
+        from hope.api import paper_service
+        args+=['--approved-runtime-manifest','a'*64]
+        monkeypatch.setattr(m,'verify_interpreter',Mock())
+        worker=Mock(return_value=0);monkeypatch.setattr(paper_service,'main',worker)
+    assert m.main(args,release=release,execute=execute)==0
+    assert authenticate.call_args.args[1]=='release'
+    if stage=='os':
+        forwarded=execute.call_args.args[1];position=forwarded.index('--runtime-mode')
+        assert forwarded[position+1]=='release' and '--once' in forwarded
+    else:
+        execute.assert_not_called();worker.assert_called_once_with(['--once'])
+
+
+def test_unapproved_runtime_selector_never_reaches_authentication_or_exec(launch):
+    release,authenticate=launch;execute=Mock()
+    with pytest.raises(SystemExit):m.main(['--runtime-mode','/untrusted'],release=release,execute=execute)
+    authenticate.assert_not_called();execute.assert_not_called()

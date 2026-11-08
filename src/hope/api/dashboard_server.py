@@ -78,10 +78,20 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
     raw = bounded_regular_read(path, 8192)
     data = json.loads(raw)
     if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
-            or data["schema_version"] != 1 or data.get("paper_only") is not True
+            or data["schema_version"] not in {1,2} or data.get("paper_only") is not True
             or data.get("live_enabled") is not False
             or data.get("state") not in {"STARTING", "CURRENT", "HALTED", "UNAVAILABLE", "STOPPED"}):
         raise ValueError("HOPE_OPERATIONS_STATUS_INVALID")
+    if data['schema_version']==2:
+        if (not isinstance(data.get('publisher_instance'),str) or not fullmatch('[0-9a-f]{32}',data['publisher_instance'])
+                or not isinstance(data.get('publisher_identity_sha256'),str)
+                or not fullmatch('[0-9a-f]{64}',data['publisher_identity_sha256'])):
+            raise ValueError('HOPE_OPERATIONS_PUBLISHER_INVALID')
+        if data['state']=='CURRENT':
+            from hope.infrastructure.paper_history import publisher_observation
+            if publisher_observation(path,expected_instance=data['publisher_instance'],
+                    expected_identity=data['publisher_identity_sha256'])['state']!='VERIFIED':
+                raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     fields = ("cycles_succeeded", "cycles_failed", "jobs_executed", "jobs_skipped")
     if not all(type(data.get(k)) is int and 0 <= data[k] <= 9007199254740991 for k in fields):
         raise ValueError("HOPE_OPERATIONS_STATUS_COUNTS_INVALID")
@@ -306,6 +316,28 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/deployment.json":
+            from hope.api.deployment_contract import inspect_deployment
+            payload=json.dumps(inspect_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/publisher.json":
+            from hope.infrastructure.paper_history import publisher_observation
+            path=self.server.operations if self.server.operations is not None else self.server.snapshot.parent/'paper-health.json'
+            payload=json.dumps(publisher_observation(path),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/image.json":
+            from hope.api.image_diagnostics import image_observation
+            payload=json.dumps(image_observation(self.server.snapshot.parent/"image-evidence",self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/history.json":
+            from hope.infrastructure.paper_history import history_observation
+            path=Path(str(self.server.operations)+".history.json") if self.server.operations is not None else self.server.snapshot.parent/"paper-health.json.history.json"
+            payload=json.dumps(history_observation(path),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/acceptance.json":
             from hope.api.acceptance_evidence import read_acceptance
             payload=json.dumps(read_acceptance(self.server.snapshot.parent/"acceptance-result.json"),separators=(",",":")).encode()
