@@ -300,7 +300,7 @@ def test_startup_does_not_relax_calendar_freshness_or_separately_certified_imple
 
 
 
-@pytest.mark.parametrize('execute_cycle',[False,True])
+@pytest.mark.parametrize('execute_cycle',[False,True,'stopped_after_claim'])
 def test_real_cli_route_bootstraps_without_current_and_requires_separate_execution_before_factory(prepare,tmp_path,monkeypatch,execute_cycle):
     import shutil,signal
     from unittest.mock import Mock
@@ -320,7 +320,9 @@ def test_real_cli_route_bootstraps_without_current_and_requires_separate_executi
     def factory(spec,**options):
         with worker.connect() as connection:
             assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==1
-        factory_calls.append(spec);return lambda *_:value['plan']
+        factory_calls.append(spec)
+        if execute_cycle=='stopped_after_claim':signal.raise_signal(signal.SIGTERM)
+        return lambda *_:value['plan']
     monkeypatch.setattr(api,'load_plan_factory',factory)
     actual_startup=startup.run_startup
     def routed(args,release,database,stop):
@@ -335,15 +337,26 @@ def test_real_cli_route_bootstraps_without_current_and_requires_separate_executi
         '--expected-cycle-key',service.logical_cycle_key(value['run']),'--startup-request',case['startup']['request_sha256']]
     if execute_cycle:args+=['--first-cycle-execution-request',case['execution']['request_sha256']]
     previous={key:signal.getsignal(key) for key in (signal.SIGTERM,signal.SIGINT)}
-    try:assert api.main(args)==0,cycle_errors
+    try:
+        if execute_cycle=='stopped_after_claim':
+            with pytest.raises(SystemExit) as rejected:api.main(args)
+            assert rejected.value.code==2
+        else:assert api.main(args)==0,cycle_errors
     finally:
         for key,handler in previous.items():signal.signal(key,handler)
     import json
     diagnostic=json.loads(Path(str(health)+'.startup.json').read_text())
-    assert diagnostic['state']==('CYCLE_COMPLETED' if execute_cycle else 'BOOTSTRAPPED') and diagnostic['execution_authorized'] is False
-    assert factory_calls==([FACTORY] if execute_cycle else []) and len(value['strategy'].calls)==int(execute_cycle)
+    expected='RECOVERY_REQUIRED' if execute_cycle=='stopped_after_claim' else 'CYCLE_COMPLETED' if execute_cycle else 'BOOTSTRAPPED'
+    assert diagnostic['state']==expected and diagnostic['execution_authorized'] is False
+    assert factory_calls==([FACTORY] if execute_cycle else []) and len(value['strategy'].calls)==int(execute_cycle is True)
     ordinary.assert_not_called()
-    if execute_cycle:
+    if execute_cycle=='stopped_after_claim':
+        result=json.loads(health.read_text());assert result['state']=='UNAVAILABLE' and result['cycles_succeeded']==0
+        with worker.connect() as connection:
+            assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==1
+            assert connection.execute(text('SELECT count(*) FROM paper_startup_completions')).scalar_one()==0
+            assert connection.execute(text('SELECT count(*) FROM job_runs WHERE job_run_id=:id'),{'id':value['run'].job_run_id}).scalar_one()==0
+    elif execute_cycle:
         result=json.loads(health.read_text());assert result['state']=='STOPPED' and result['cycles_succeeded']==1
     else:assert not health.exists()
 
