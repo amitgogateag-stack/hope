@@ -175,3 +175,31 @@ def test_current_protocol_two_health_cannot_survive_lease_release_as_ready(tmp_p
         safe=json.loads(_verified_operations(status))
         assert safe['schema_version']==1 and 'publisher_instance' not in safe
     with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):_verified_operations(status)
+
+
+def test_lost_service_lease_never_overwrites_successor_health(tmp_path,monkeypatch):
+    from contextlib import nullcontext
+    status=tmp_path/'health';lock=Path(str(status)+'.history.lock');successor_bytes=[]
+    def replace_lease(*args,**kwargs):
+        lock.unlink()
+        with h.publisher_lease(status) as successor:
+            successor.publish(status,dict(health('CURRENT'),schema_version=1),service.publish_service_status)
+            successor_bytes.append(status.read_bytes())
+        return 0,0
+    monkeypatch.setattr(service,'run_service_cycle',replace_lease)
+    result=service.run_service(None,None,migrations_dir=tmp_path,status_file=status,once=True,
+        cycle_guard=lambda:nullcontext(lambda:None),notifier=Mock())
+    assert result==1 and status.read_bytes()==successor_bytes[0]
+    assert [event['state'] for event in h.read_history(Path(str(status)+'.history.json'))['events']]==['STARTING']
+
+
+def test_unsafe_publisher_directory_and_unapproved_target_fail_without_writes(tmp_path):
+    status=tmp_path/'health';tmp_path.chmod(0o777)
+    try:
+        assert service.publish_startup_failure(status,None) is False
+        assert not status.exists()
+    finally:tmp_path.chmod(0o700)
+    with h.publisher_lease(status) as owner:
+        with pytest.raises(RuntimeError,match='TARGET_INVALID'):
+            owner.publish(tmp_path/'unapproved',health(),service.publish_service_status)
+    assert not (tmp_path/'unapproved').exists()

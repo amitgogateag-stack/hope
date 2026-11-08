@@ -246,3 +246,41 @@ def test_layer_cannot_hide_trailing_concatenated_payload():
     assert image._members(payload)['safe'][0]==b'safe'
     with pytest.raises(RuntimeError):image._members(payload+b'hidden payload')
     with pytest.raises(RuntimeError):image._members(payload+payload)
+
+
+def test_real_image_process_is_bound_to_kernel_executable_root_and_exact_argv(approved_image):
+    import signal
+    from hope.api.deployment_contract import process_observation
+    args,candidate,verify,_,_,_,_=approved_image
+    layout=verify['layout'];index=r.strict_json((layout/'index.json').read_bytes())
+    manifest=r.strict_json((layout/'blobs/sha256'/index['manifests'][0]['digest'][7:]).read_bytes())
+    root=args['work']/'process-rootfs';root.mkdir(mode=0o755)
+    for layer in manifest['layers']:
+        for name,(payload,mode,directory) in image._members((layout/'blobs/sha256'/layer['digest'][7:]).read_bytes()).items():
+            target=root/name;target.parent.mkdir(parents=True,exist_ok=True)
+            if directory:target.mkdir(exist_ok=True)
+            else:target.write_bytes(payload)
+            target.chmod(mode)
+    logical='/opt/hope-operations/release-venvs/'+candidate['release_commit']+'/bin/python'
+    code='import os,time;print(os.getpid(),flush=True);time.sleep(60)'
+    child=subprocess.Popen(['sudo','-n','unshare','--net','chroot','--userspec='+str(os.geteuid())+':'+str(os.getegid()),
+        str(root),logical,'-I','-B','-c',code],stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
+        env={'PATH':'/usr/bin:/bin','LANG':'C'})
+    pid=None;identity=None
+    try:
+        pid=int(child.stdout.readline().strip())
+        identity=builder.operations._process_identity(pid)
+        with (Path('/proc')/str(pid)/'cmdline').open('rb') as stream:arguments=stream.read(65537)
+        receipt=dict(release_commit=candidate['release_commit'],python_sha256=r.strict_json(args['base_document'].read_bytes())['python_sha256'],
+            argv_sha256=r._digest(arguments))
+        observed=process_observation(dict(pid=pid),receipt)
+        assert observed==r._digest(r._canonical((pid,identity)))
+        with pytest.raises(RuntimeError):process_observation(dict(pid=pid),dict(receipt,argv_sha256='0'*64))
+        with pytest.raises(RuntimeError):process_observation(dict(pid=pid),dict(receipt,python_sha256='0'*64))
+    finally:
+        if pid is not None and child.poll() is None:
+            try:
+                if builder.operations._process_identity(pid)==identity:os.kill(pid,signal.SIGTERM)
+            except ProcessLookupError:pass
+        child.wait(timeout=10)
+        child.stdout.close();child.stderr.close()

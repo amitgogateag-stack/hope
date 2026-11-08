@@ -179,3 +179,17 @@ def test_independent_rollback_signature_archive_and_git_binding(build_case,monke
     with pytest.raises(RuntimeError):d.rollback_contract(root,SHA,digest,now)
     (release/'src/fixture.py').write_text('# corrupt prior source\n')
     with pytest.raises(Exception):d.rollback_contract(root,SHA,digest,now)
+
+
+@pytest.mark.parametrize('fault',[None,'revoked','role_reuse','image_role_reuse'])
+def test_all_new_approval_roles_are_independent_and_revocable(tmp_path,monkeypatch,fault):
+    keys={name:chr(97+index)*64 for index,name in enumerate((
+        'deployments-ed25519.pub','providers-ed25519.pub','data-acceptance-ed25519.pub','rollback-ed25519.pub',
+        'images-ed25519.pub','policy-ed25519.pub'))}
+    if fault=='role_reuse':keys['providers-ed25519.pub']=keys['deployments-ed25519.pub']
+    if fault=='image_role_reuse':keys['providers-ed25519.pub']=keys['images-ed25519.pub']
+    monkeypatch.setattr(d,'_key_digest',lambda path:keys[Path(path).name])
+    monkeypatch.setattr(d,'_policy',lambda *a,**k:dict(revoked_keys=[keys['rollback-ed25519.pub']] if fault=='revoked' else []))
+    if fault is None:assert len(d.authorities(tmp_path,tmp_path,0))==4
+    else:
+        with pytest.raises(RuntimeError):d.authorities(tmp_path,tmp_path,0)
