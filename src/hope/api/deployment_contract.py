@@ -17,6 +17,7 @@ from hope.api.artifact_approval import verify_document
 from hope.api.diagnostic_io import bounded_capture
 from hope.api.release_image import verify_image,_key_digest,_policy
 from hope.api.snapshot_contract import strict_json
+from hope.api.operations_deployment import _activation_guard
 
 ENV={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':'/nonexistent'}
 HASH=re.compile('[0-9a-f]{64}')
@@ -107,6 +108,9 @@ def runtime_observation(root,sha,container,receipt,*,node_stat=None):
     node_stat=node_stat or Path.lstat
     environment,_,_,before=r._inventory(root,sha,'release',deadline)
     source=r.source_snapshot(root/'releases'/sha)
+    from hope.api.release_builder import _source
+    tracked=_source(root/'releases'/sha,sha)
+    source.update({str(root/'releases'/sha/name):r._trusted(root/'releases'/sha/name) for name in tracked})
     proof=r.attest_runtime(root,sha,'release',expected_manifest=receipt['runtime_manifest_sha256'])
     image=strict_json(r._read(root/'image-evidence/approval.json',65536))
     require(proof['state']==proof['provenance_state']==proof['build_state']=='VERIFIED'
@@ -120,7 +124,9 @@ def runtime_observation(root,sha,container,receipt,*,node_stat=None):
         require(time.monotonic()<=deadline)
         actual=namespace/Path(name).relative_to(root)
         require(r._identity(node_stat(actual))==identity)
-    require(r._inventory(root,sha,'release',deadline)[3]==before and r.source_snapshot(root/'releases'/sha)==source)
+    require(r._inventory(root,sha,'release',deadline)[3]==before
+        and all(r._trusted(Path(name),directory=Path(name).is_dir())==identity for name,identity in source.items())
+        and _source(root/'releases'/sha,sha)==tracked)
     return proof
 
 
@@ -186,78 +192,81 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
         expires_at=None,blockers=['INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'],execution_authorized=False)
     blocker='INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'
     try:
-        sha=r._sha(sha);report['release_commit']=sha
-        reference=root/'deployment-receipts'/f'{sha}.ref'
-        pinned=r._read(reference,64).decode('ascii');require(HASH.fullmatch(pinned))
-        require(expected_receipt is None or pinned==expected_receipt)
-        reference_identity=r._trusted(reference)
-        receipt_path=root/'deployment-receipts'/f'{pinned}.json'
-        value,digest=signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')
-        fields={'schema','scope','release_commit','image_sha256','runtime_manifest_sha256','host_sha256','boot_sha256','container_id',
-            'engine','process_sha256','argv_sha256','python_sha256','os_release_sha256','postgres_major','minimum_systemd',
-            'provider_sha256','rollback_sha256','minimum_policy_generation','issued_at','expires_at'}
-        require(digest==pinned and set(value)==fields and value['schema']=='hope.deployment-receipt.v1' and value['scope']=='PRODUCTION_PAPER'
-            and value['release_commit']==sha and type(value['postgres_major']) is int and value['postgres_major'] in {16,17}
-            and type(value['minimum_systemd']) is int and value['minimum_systemd']>=249
-            and type(value['minimum_policy_generation']) is int and value['minimum_policy_generation']>0)
-        for field in fields-{'schema','scope','release_commit','engine','postgres_major','minimum_systemd','minimum_policy_generation','issued_at','expires_at'}:
-            require(isinstance(value[field],str) and HASH.fullmatch(value[field]))
-        fresh(value,now)
-        report.update(state='BLOCKED',receipt_sha256=digest,image_sha256=value['image_sha256'],expires_at=value['expires_at'],blockers=[])
-        blocker='SIGNED_PRODUCTION_IMAGE_REQUIRED'
-        folder=root/'image-evidence'
-        proof=verify_image(folder/'oci',folder/'approval.json',folder/'images-ed25519.pub',folder/'policy.json',
-            folder/'policy-ed25519.pub',expected_sha=sha,now=now,minimum_generation=value['minimum_policy_generation'])
-        require(proof['image_sha256']==value['image_sha256'] and proof['scope']=='PRODUCTION_PAPER')
-        require(_key_digest(root/'runtime-trust/deployments-ed25519.pub') not in
-            {_key_digest(folder/'images-ed25519.pub'),_key_digest(folder/'policy-ed25519.pub')})
-        approved_roles=authorities(root,folder,now)
-        report['provenance']='VERIFIED'
-        blocker='APPROVED_REAL_DATA_PROVIDER_AND_ACCEPTANCE_REQUIRED'
-        provider=provider_contract(root,sha,value['provider_sha256'],now)
-        require(expected_factory is None or expected_factory==provider['factory_module']+':'+provider['factory_name'])
-        accepted=data_acceptance(root,sha,provider,value['provider_sha256'],now);report['provider']='VERIFIED'
-        blocker='VERIFIED_ROLLBACK_RECEIPT_AND_RUNTIME_REQUIRED'
-        rollback_contract(root,sha,value['rollback_sha256'],now);report['rollback']='VERIFIED'
-        blocker='COMPATIBLE_HOST_AND_READONLY_DATABASE_OBSERVATION_REQUIRED'
-        host=host_probe()
-        require(host['python_version']==[3,13] and host['postgres_major']==value['postgres_major']
-            and host['systemd_major']>=value['minimum_systemd']
-            and all(host[field]==value[field] for field in ('host_sha256','boot_sha256','os_release_sha256')))
-        report['host']='VERIFIED'
-        blocker='RUNNING_CONTAINER_AND_KERNEL_IDENTITY_REQUIRED'
-        observed=container_probe(value['engine'],value['container_id'])
-        manifest=strict_json(r._read(folder/'oci/blobs/sha256'/proof['image_sha256'],65536))
-        require(observed['config_sha256']==manifest['config']['digest'][7:]
-            and process_probe(observed,value)==value['process_sha256'])
-        report['container']='VERIFIED'
-        report.update(container_id=observed['container_id'],process_sha256=value['process_sha256'])
-        blocker='SIGNED_IMAGE_TO_RUNNING_RUNTIME_BINDING_REQUIRED'
-        runtime=runtime_probe(root,sha,observed,value)
-        require(runtime['manifest_sha256']==value['runtime_manifest_sha256'])
-        if host_readiness is None:
-            from hope.api.aws_readiness import inspect_aws_readiness
-            host_readiness=inspect_aws_readiness
-        blocker='HOST_RUNTIME_AND_PAPER_READINESS_REQUIRED'
-        current=host_readiness(sha,root=root)
-        require(current['ready'] is True and type(current['units']['hope-paper.service']['MainPID']) in {str,int}
-            and int(current['units']['hope-paper.service']['MainPID'])==observed['pid'])
-        report['runtime_manifest_sha256']=value['runtime_manifest_sha256']
-        # Close on all identities: a current process must still match the same
-        # independently approved receipt after slow host/readiness observations.
-        blocker='CONCURRENT_CHANGE_OR_EXPIRED_ACCEPTANCE'
-        closing=int(time.time()) if live_clock else now
-        fresh(value,closing)
-        require(verify_image(folder/'oci',folder/'approval.json',folder/'images-ed25519.pub',folder/'policy.json',
-            folder/'policy-ed25519.pub',expected_sha=sha,now=closing,minimum_generation=value['minimum_policy_generation'])==proof)
-        require(authorities(root,folder,closing)==approved_roles)
-        require(runtime_probe(root,sha,observed,value)==runtime)
-        require(host_probe()==host and container_probe(value['engine'],value['container_id'])==observed
-            and process_probe(observed,value)==value['process_sha256']
-            and r._trusted(reference)==reference_identity and r._read(reference,64).decode('ascii')==pinned and signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')[1]==digest)
-        provider_contract(root,sha,value['provider_sha256'],closing);data_acceptance(root,sha,provider,value['provider_sha256'],closing)
-        rollback_contract(root,sha,value['rollback_sha256'],closing)
-        report.update(state='VERIFIED',expires_at=min(value['expires_at'],proof['expires_at'],accepted['expires_at']))
+        with _activation_guard(root,shared=True):
+            root_identity=r._trusted(root,directory=True)
+            sha=r._sha(sha);report['release_commit']=sha
+            reference=root/'deployment-receipts'/f'{sha}.ref'
+            pinned=r._read(reference,64).decode('ascii');require(HASH.fullmatch(pinned))
+            require(expected_receipt is None or pinned==expected_receipt)
+            reference_identity=r._trusted(reference)
+            receipt_path=root/'deployment-receipts'/f'{pinned}.json'
+            value,digest=signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')
+            fields={'schema','scope','release_commit','image_sha256','runtime_manifest_sha256','host_sha256','boot_sha256','container_id',
+                'engine','process_sha256','argv_sha256','python_sha256','os_release_sha256','postgres_major','minimum_systemd',
+                'provider_sha256','rollback_sha256','minimum_policy_generation','issued_at','expires_at'}
+            require(digest==pinned and set(value)==fields and value['schema']=='hope.deployment-receipt.v1' and value['scope']=='PRODUCTION_PAPER'
+                and value['release_commit']==sha and type(value['postgres_major']) is int and value['postgres_major'] in {16,17}
+                and type(value['minimum_systemd']) is int and value['minimum_systemd']>=249
+                and type(value['minimum_policy_generation']) is int and value['minimum_policy_generation']>0)
+            for field in fields-{'schema','scope','release_commit','engine','postgres_major','minimum_systemd','minimum_policy_generation','issued_at','expires_at'}:
+                require(isinstance(value[field],str) and HASH.fullmatch(value[field]))
+            fresh(value,now)
+            report.update(state='BLOCKED',receipt_sha256=digest,image_sha256=value['image_sha256'],expires_at=value['expires_at'],blockers=[])
+            blocker='SIGNED_PRODUCTION_IMAGE_REQUIRED'
+            folder=root/'image-evidence'
+            proof=verify_image(folder/'oci',folder/'approval.json',folder/'images-ed25519.pub',folder/'policy.json',
+                folder/'policy-ed25519.pub',expected_sha=sha,now=now,minimum_generation=value['minimum_policy_generation'])
+            require(proof['image_sha256']==value['image_sha256'] and proof['scope']=='PRODUCTION_PAPER')
+            require(_key_digest(root/'runtime-trust/deployments-ed25519.pub') not in
+                {_key_digest(folder/'images-ed25519.pub'),_key_digest(folder/'policy-ed25519.pub')})
+            approved_roles=authorities(root,folder,now)
+            report['provenance']='VERIFIED'
+            blocker='APPROVED_REAL_DATA_PROVIDER_AND_ACCEPTANCE_REQUIRED'
+            provider=provider_contract(root,sha,value['provider_sha256'],now)
+            require(expected_factory is None or expected_factory==provider['factory_module']+':'+provider['factory_name'])
+            accepted=data_acceptance(root,sha,provider,value['provider_sha256'],now);report['provider']='VERIFIED'
+            blocker='VERIFIED_ROLLBACK_RECEIPT_AND_RUNTIME_REQUIRED'
+            rollback_contract(root,sha,value['rollback_sha256'],now);report['rollback']='VERIFIED'
+            blocker='COMPATIBLE_HOST_AND_READONLY_DATABASE_OBSERVATION_REQUIRED'
+            host=host_probe()
+            require(host['python_version']==[3,13] and host['postgres_major']==value['postgres_major']
+                and host['systemd_major']>=value['minimum_systemd']
+                and all(host[field]==value[field] for field in ('host_sha256','boot_sha256','os_release_sha256')))
+            report['host']='VERIFIED'
+            blocker='RUNNING_CONTAINER_AND_KERNEL_IDENTITY_REQUIRED'
+            observed=container_probe(value['engine'],value['container_id'])
+            manifest=strict_json(r._read(folder/'oci/blobs/sha256'/proof['image_sha256'],65536))
+            require(observed['config_sha256']==manifest['config']['digest'][7:]
+                and process_probe(observed,value)==value['process_sha256'])
+            report['container']='VERIFIED'
+            report.update(container_id=observed['container_id'],process_sha256=value['process_sha256'])
+            blocker='SIGNED_IMAGE_TO_RUNNING_RUNTIME_BINDING_REQUIRED'
+            runtime=runtime_probe(root,sha,observed,value)
+            require(runtime['manifest_sha256']==value['runtime_manifest_sha256'])
+            if host_readiness is None:
+                from hope.api.aws_readiness import inspect_aws_readiness
+                host_readiness=inspect_aws_readiness
+            blocker='HOST_RUNTIME_AND_PAPER_READINESS_REQUIRED'
+            current=host_readiness(sha,root=root)
+            require(current['ready'] is True and type(current['units']['hope-paper.service']['MainPID']) in {str,int}
+                and int(current['units']['hope-paper.service']['MainPID'])==observed['pid'])
+            report['runtime_manifest_sha256']=value['runtime_manifest_sha256']
+            # Close on all identities: a current process must still match the same
+            # independently approved receipt after slow host/readiness observations.
+            blocker='CONCURRENT_CHANGE_OR_EXPIRED_ACCEPTANCE'
+            closing=int(time.time()) if live_clock else now
+            fresh(value,closing)
+            require(verify_image(folder/'oci',folder/'approval.json',folder/'images-ed25519.pub',folder/'policy.json',
+                folder/'policy-ed25519.pub',expected_sha=sha,now=closing,minimum_generation=value['minimum_policy_generation'])==proof)
+            require(authorities(root,folder,closing)==approved_roles)
+            require(runtime_probe(root,sha,observed,value)==runtime)
+            require(host_probe()==host and container_probe(value['engine'],value['container_id'])==observed
+                and process_probe(observed,value)==value['process_sha256']
+                and r._trusted(reference)==reference_identity and r._read(reference,64).decode('ascii')==pinned and signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')[1]==digest)
+            provider_contract(root,sha,value['provider_sha256'],closing);data_acceptance(root,sha,provider,value['provider_sha256'],closing)
+            rollback_contract(root,sha,value['rollback_sha256'],closing)
+            require(r._trusted(root,directory=True)==root_identity)
+            report.update(state='VERIFIED',expires_at=min(value['expires_at'],proof['expires_at'],accepted['expires_at']))
     except FileNotFoundError:
         report['blockers']=[blocker]
     except Exception:

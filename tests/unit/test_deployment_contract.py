@@ -13,6 +13,8 @@ SHA='a'*40
 
 @pytest.fixture
 def contract(tmp_path,monkeypatch):
+    from contextlib import nullcontext
+    monkeypatch.setattr(d,'_activation_guard',lambda *a,**k:nullcontext())
     now=int(time.time());root=tmp_path
     receipt=dict(schema='hope.deployment-receipt.v1',scope='PRODUCTION_PAPER',release_commit=SHA,image_sha256='b'*64,
         runtime_manifest_sha256='c'*64,host_sha256='d'*64,boot_sha256='e'*64,container_id='f'*64,engine='docker',
@@ -84,7 +86,11 @@ def test_every_independent_gate_and_closing_observation_is_required(contract,mon
     else:assert result['blockers']
 
 
-def test_absent_receipt_never_probes_host_or_echoes_private_paths(tmp_path):
+def test_absent_receipt_never_probes_host_or_echoes_private_paths(tmp_path,monkeypatch):
+    from contextlib import nullcontext
+    # Isolate missing authority from native ACL/flock preconditions.
+    monkeypatch.setattr(d,'_activation_guard',lambda *a,**k:nullcontext())
+    monkeypatch.setattr(r,'_trusted',lambda path,**kw:(Path(path).stat().st_ino,))
     probe=Mock(side_effect=AssertionError('must not probe before authority'))
     result=d.inspect_deployment(tmp_path,SHA,host_probe=probe)
     assert result['state']=='UNKNOWN' and result['receipt_sha256'] is None
@@ -196,13 +202,13 @@ def test_all_new_approval_roles_are_independent_and_revocable(tmp_path,monkeypat
     else:
         with pytest.raises(RuntimeError):d.authorities(tmp_path,tmp_path,0)
 
-@pytest.mark.parametrize('fault',[None,'namespace_substitution','source_substitution','wrong_build','wrong_packages','concurrent_inventory'])
+@pytest.mark.parametrize('fault',[None,'namespace_substitution','source_substitution','bootstrap_substitution','wrong_build','wrong_packages','concurrent_inventory'])
 def test_running_namespace_must_be_same_approved_runtime_not_a_lookalike(tmp_path,monkeypatch,fault):
     from types import SimpleNamespace
     root=tmp_path;environment=root/'release-venvs'/SHA;release=root/'releases'/SHA
     def metadata(number):
         return SimpleNamespace(st_dev=1,st_ino=number,st_mode=0o100644,st_uid=0,st_gid=0,st_nlink=1,st_size=1,st_mtime_ns=1,st_ctime_ns=1)
-    identities={name:metadata(index) for index,name in enumerate(('runtime','python','lib64','src','factory.py'),1)}
+    identities={name:metadata(index) for index,name in enumerate(('runtime','python','lib64','src','factory.py','paper.py'),1)}
     before=({'.':r._identity(identities['runtime'])},{'bin/python':r._identity(identities['python'])},
         {'lib64':('@runtime/lib',r._identity(identities['lib64']))},'interpreter',())
     inventory=(environment,environment/'bin/python',environment/'bin/python',before)
@@ -211,6 +217,9 @@ def test_running_namespace_must_be_same_approved_runtime_not_a_lookalike(tmp_pat
     else:monkeypatch.setattr(r,'_inventory',Mock(return_value=inventory))
     source={str(release/'src'):r._identity(identities['src']),str(release/'src/factory.py'):r._identity(identities['factory.py'])}
     monkeypatch.setattr(r,'source_snapshot',Mock(return_value=source))
+    from hope.api import release_builder
+    monkeypatch.setattr(release_builder,'_source',Mock(return_value={'deploy/paper.py':b'approved source'}))
+    monkeypatch.setattr(r,'_trusted',lambda path,**kw:r._identity(identities['runtime' if Path(path).name==SHA else Path(path).name]))
     proof=dict(state='VERIFIED',provenance_state='VERIFIED',build_state='VERIFIED',manifest_sha256='c'*64,
         build_sha256='d'*64,provenance_sha256='e'*64)
     if fault=='wrong_build':proof['build_sha256']='0'*64
@@ -219,10 +228,35 @@ def test_running_namespace_must_be_same_approved_runtime_not_a_lookalike(tmp_pat
     monkeypatch.setattr(r,'_read',lambda *a,**k:r._canonical(dict(release_approval_sha256='d'*64,hashes={'package-provenance.json':'e'*64})))
     def stat_node(path):
         name=Path(path).name;name='runtime' if name==SHA else name
-        if (fault=='namespace_substitution' and name=='python') or (fault=='source_substitution' and name=='factory.py'):return metadata(999)
+        if (fault=='namespace_substitution' and name=='python') or (fault=='source_substitution' and name=='factory.py') or (fault=='bootstrap_substitution' and name=='paper.py'):return metadata(999)
         return identities[name]
     if fault is None:
         assert d.runtime_observation(root,SHA,{'pid':1234},{'runtime_manifest_sha256':'c'*64},node_stat=stat_node)==proof
         attest.assert_called_once_with(root,SHA,'release',expected_manifest='c'*64)
     else:
         with pytest.raises(RuntimeError):d.runtime_observation(root,SHA,{'pid':1234},{'runtime_manifest_sha256':'c'*64},node_stat=stat_node)
+
+@pytest.mark.skipif(__import__('os').name!='posix',reason='Native read-only activation flock exercised on Linux CI')
+def test_complete_contract_holds_existing_activation_fence_during_authority_reads(contract,monkeypatch):
+    import subprocess,sys
+    from hope.api.operations_deployment import _activation_guard
+    root,_,_,_,_,_,probes=contract
+    monkeypatch.setattr(d,'_activation_guard',_activation_guard)
+    signed=d.signed;attempts=[]
+    code='''
+import fcntl,os,sys
+fd=os.open(sys.argv[1],os.O_RDONLY|os.O_DIRECTORY)
+try:
+ try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB);print('ACQUIRED')
+ except BlockingIOError:print('BLOCKED')
+finally:os.close(fd)
+'''
+    def observe_authority(path,key):
+        result=subprocess.run([sys.executable,'-c',code,str(root)],capture_output=True,text=True,check=True,timeout=5)
+        attempts.append(result.stdout.strip())
+        return signed(path,key)
+    monkeypatch.setattr(d,'signed',observe_authority)
+    assert d.inspect_deployment(root,SHA,**probes)['state']=='VERIFIED'
+    assert attempts and set(attempts)=={'BLOCKED'}
+    result=subprocess.run([sys.executable,'-c',code,str(root)],capture_output=True,text=True,check=True,timeout=5)
+    assert result.stdout.strip()=='ACQUIRED'

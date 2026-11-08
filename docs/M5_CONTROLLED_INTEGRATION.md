@@ -97,6 +97,8 @@ A separate lookalike container cannot borrow a native worker's health: systemd's
 PAPER MainPID must equal the independently observed container PID. Dashboard
 runtime evidence is not substituted for PAPER runtime evidence. These bindings
 require explicit controlled deployment configuration, never automatic mounts.
+The existing shared activation fence covers the entire contract observation;
+release switches cannot split its approval and closing observations.
 Host, process, container, receipt selector, policy, provider acceptance and
 rollback evidence are rechecked before returning VERIFIED.
 
