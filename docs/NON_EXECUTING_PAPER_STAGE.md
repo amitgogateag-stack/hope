@@ -79,6 +79,11 @@ after rechecking all independent approvals and source/runtime evidence under the
 shared activation fence. Its expiry is bounded by the last heartbeat's five-second
 window and every signed approval's expiry. A restarted process needs a new
 independent receipt because its kernel identity and publisher nonce change.
+The established activation journal validator is also used before and after
+inspection: interrupted, corrupt or concurrently changed journals block staging
+proof rather than being repaired, ignored or converted into running readiness.
+Full activation's durable lease must be ABSENT according to the existing recovery
+inspector; stale, corrupt or unreadable leases also fail closed.
 
 `paper_controller inspect-stage --directory <existing-controller> --root <approved-root>`
 reads the journal's pinned release/receipt/factory without recovering or writing

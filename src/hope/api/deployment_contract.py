@@ -208,6 +208,10 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
     try:
         with _activation_guard(root,shared=True):
             root_identity=r._trusted(root,directory=True)
+            if staged:
+                from hope.api.paper_stage import activation_snapshot
+                blocker='ACTIVATION_RECOVERY_REQUIRED'
+                activation=activation_snapshot(root)
             sha=r._sha(sha);report['release_commit']=sha
             reference=root/'deployment-receipts'/f'{sha}.ref'
             pinned=r._read(reference,64).decode('ascii');require(HASH.fullmatch(pinned))
@@ -286,6 +290,7 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
             rollback_contract(root,sha,value['rollback_sha256'],closing)
             stage_expiry=value['expires_at']
             if staged:
+                require(activation_snapshot(root)==activation)
                 closing_stage=staged_process_observation(root,observed,value,provider)
                 require(closing_stage['binding']==stage['binding'] and closing<closing_stage['expires_at'])
                 stage_expiry=closing_stage['expires_at']

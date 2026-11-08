@@ -73,6 +73,23 @@ def test_slow_closing_checks_cannot_outlive_approval_or_reverse_clock(contract,m
     assert result['state']=='BLOCKED' and result['execution_authorized'] is False
 
 
+@pytest.mark.parametrize('fault',['interrupted','corrupt','changed','stale_full_activation','unreadable_full_activation'])
+def test_staged_inspection_never_bypasses_activation_recovery(contract,monkeypatch,fault):
+    root,receipt,pin,image,host,container,probes=contract;probes.pop('host_readiness')
+    monkeypatch.setattr(s,'staged_process_observation',Mock(return_value=dict(binding=('same',),expires_at=probes['now']+4)))
+    if fault in {'stale_full_activation','unreadable_full_activation'}:
+        from hope.api import operations_deployment
+        helper=Mock(return_value={'state':'RECOVERY_REQUIRED'}) if fault=='stale_full_activation' else Mock(side_effect=PermissionError('private lock'))
+        monkeypatch.setattr(operations_deployment,'inspect_activation_recovery',helper)
+    elif fault=='changed':monkeypatch.setattr(s,'activation_snapshot',Mock(side_effect=[None,{'phase':'COMMITTED'}]))
+    else:
+        from hope.api import dashboard_activation
+        if fault=='interrupted':monkeypatch.setattr(dashboard_activation,'_record',Mock(return_value={'phase':'PREPARED'}))
+        else:monkeypatch.setattr(dashboard_activation,'_record',Mock(side_effect=RuntimeError('private corrupt journal')))
+    report=d.inspect_staged_deployment(root,SHA,**probes)
+    assert report['state']=='BLOCKED' and 'private' not in json.dumps(report)
+
+
 @pytest.mark.parametrize('phase',['os','pinned'])
 def test_stage_bootstrap_never_dispatches_worker_or_forwards_database_credentials(launch,monkeypatch,phase):
     release,authenticate=launch

@@ -26,6 +26,16 @@ def require(value):
 def status_path(root):return Path(root)/'staging/paper-stage.json'
 
 
+def activation_snapshot(root):
+    """Use the established journal validator; never repair or adopt an intent."""
+    from hope.api.dashboard_activation import Layout,_record
+    from hope.api.operations_deployment import inspect_activation_recovery
+    require(inspect_activation_recovery(Path(root))['state']=='ABSENT')
+    value=_record(Layout(root=Path(root)))
+    require(value is None or value['phase']=='COMMITTED')
+    return value
+
+
 def arguments(sha,manifest,factory,request,timeout):
     """Exact bootstrap argv suffix, also bound by the independent receipt."""
     _sha(sha);plan(sha,'0'*64,factory)
