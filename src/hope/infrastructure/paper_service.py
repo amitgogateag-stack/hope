@@ -277,39 +277,58 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     return "UNAVAILABLE", "PAPER_SERVICE_CYCLE_FAILED"
 
 
-def publish_startup_failure(path,commit):
-    """Invalidate a prior process's CURRENT observation before factory load."""
+def publish_startup_failure(path,commit,*,lease=None):
+    """Only an exclusive owner may invalidate shared health; contenders abstain."""
+    if lease is None:
+        from hope.infrastructure.paper_history import publisher_lease
+        try:
+            with publisher_lease(path) as owned:
+                return publish_startup_failure(path,commit,lease=owned)
+        except Exception:return False
     stamp=datetime.now(UTC).isoformat()
     commit=commit if isinstance(commit,str) and re.fullmatch(r"[0-9a-f]{40}",commit) else None
-    publish_service_status(path,dict(schema_version=1,deployed_commit=commit,schema_compatibility="UNKNOWN",
+    lease.publish(path,dict(schema_version=1,deployed_commit=commit,schema_compatibility="UNKNOWN",
         generated_at=stamp,state="UNAVAILABLE",last_success_at=None,cycles_succeeded=0,cycles_failed=1,
         jobs_executed=0,jobs_skipped=0,error_code="PAPER_RUNTIME_UNVERIFIED",last_failure_at=stamp,
-        last_failure_code="PAPER_RUNTIME_UNVERIFIED",runtime_gate="UNVERIFIED",paper_only=True,live_enabled=False))
+        last_failure_code="PAPER_RUNTIME_UNVERIFIED",runtime_gate="UNVERIFIED",paper_only=True,live_enabled=False),publish_service_status)
+    return True
 
 
 def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
     """Production guarded workers retain a private, exclusive recovery history."""
-    if kwargs.get("cycle_guard") is None:return _run_service(engine,factory,**kwargs)
-    from hope.infrastructure.paper_history import history_lease
+    from hope.infrastructure.paper_history import publisher_lease,History
+    _validate_poll(kwargs.get("poll_seconds",30))
     try:
-        with history_lease(kwargs["status_file"],publish_service_status) as history:
-            from contextlib import contextmanager
-            guard=kwargs["cycle_guard"]
-            @contextmanager
-            def guarded_history():
-                history.check()
-                with guard() as check:
-                    def admitted():
-                        history.check()
-                        if check is not None:check()
-                    admitted();yield admitted
-                    admitted()
-            return _run_service(engine,factory,history=history,**dict(kwargs,cycle_guard=guarded_history))
+        with publisher_lease(kwargs["status_file"]) as lease:
+            try:return _owned_service(engine,factory,lease,kwargs,History)
+            except Exception:
+                # A corrupt history can invalidate health while still owned.
+                # A lost lease cannot write, reacquire or overwrite a successor.
+                try:publish_startup_failure(kwargs["status_file"],os.getenv("HOPE_DEPLOYED_COMMIT"),lease=lease)
+                except Exception:pass
+                return 1
     except Exception:
-        # Corruption or a conflicting publisher must invalidate a previous
-        # CURRENT heartbeat before any factory can run in this instance.
-        publish_startup_failure(kwargs["status_file"],os.getenv("HOPE_DEPLOYED_COMMIT"))
+        # Pre-lease rejection owns no shared publication rights.
         return 1
+
+
+def _owned_service(engine,factory,lease,kwargs,History):
+    def publish(path,value):return lease.publish(path,value,publish_service_status)
+    if kwargs.get("cycle_guard") is None:return _run_service(engine,factory,publisher=publish,**kwargs)
+    history=History(Path(str(kwargs["status_file"])+".history.json"),publish)
+    history.check_lease=lease.check
+    from contextlib import contextmanager
+    guard=kwargs["cycle_guard"]
+    @contextmanager
+    def guarded_history():
+        history.check()
+        with guard() as check:
+            def admitted():
+                history.check()
+                if check is not None:check()
+            admitted();yield admitted
+            admitted()
+    return _run_service(engine,factory,history=history,publisher=publish,**dict(kwargs,cycle_guard=guarded_history))
 
 
 def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
@@ -317,10 +336,9 @@ def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | 
                 poll_seconds: float = 30, once: bool = False,
                 now: Callable[[], datetime] = lambda: datetime.now(UTC),
                 require_certified: bool = False,
-                notifier: SystemdNotifier | None = None,cycle_guard=None,history=None) -> int:
+                notifier: SystemdNotifier | None = None,cycle_guard=None,history=None,publisher=None) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
-    if isinstance(poll_seconds, bool) or not isinstance(poll_seconds, (int, float)) or not 1 <= poll_seconds <= 300:
-        raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
+    _validate_poll(poll_seconds)
     stop = stop_event if stop_event is not None else Event()
     service_notifier = notifier if notifier is not None else SystemdNotifier.from_environment()
     commit = os.getenv("HOPE_DEPLOYED_COMMIT")
@@ -332,8 +350,8 @@ def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | 
     def publish():
         health["generated_at"] = datetime.now(UTC).isoformat()
         if history is not None:history.append(health)
-        publish_service_status(status_file, health)
-        print(json.dumps(health, sort_keys=True, separators=(",", ":")), flush=True)
+        published=(publisher or publish_service_status)(status_file, health)
+        print(json.dumps(published or health, sort_keys=True, separators=(",", ":")), flush=True)
     publish()
     ready_notified = False
     failed = False
@@ -391,4 +409,9 @@ def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | 
     publish()
     service_notifier.stopping()
     return 0
+
+
+def _validate_poll(value):
+    if isinstance(value,bool) or not isinstance(value,(int,float)) or not 1 <= value <= 300:
+        raise ValueError("PAPER_SERVICE_POLL_OUT_OF_BOUNDS")
 

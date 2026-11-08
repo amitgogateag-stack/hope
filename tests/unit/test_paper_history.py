@@ -108,3 +108,70 @@ with history_lease(sys.argv[1],publish_service_status) as h:
         assert result['events'][0]['instance']!=result['events'][1]['instance']
     finally:
         if process.poll() is None:process.kill();process.wait(5)
+
+@pytest.mark.parametrize('guarded',[False,True])
+def test_competing_process_cannot_publish_failure_or_change_owner_evidence(tmp_path,guarded):
+    from contextlib import nullcontext
+    status=tmp_path/'health';path=Path(str(status)+'.history.json')
+    with h.publisher_lease(status) as owner:
+        history=h.History(path,lambda target,value:owner.publish(target,value,service.publish_service_status))
+        history.check_lease=owner.check
+        history.append(health('CURRENT'));owner.publish(status,health('CURRENT'),service.publish_service_status)
+        before=(status.read_bytes(),path.read_bytes())
+        code='''
+from contextlib import nullcontext
+import sys
+from hope.infrastructure.paper_service import run_service,publish_startup_failure
+args=dict(migrations_dir='unused',status_file=sys.argv[1],once=True)
+if sys.argv[2]=='True':args['cycle_guard']=lambda:nullcontext(lambda:None)
+assert run_service(None,None,**args)==1
+assert publish_startup_failure(sys.argv[1],None) is False
+'''
+        subprocess.run([sys.executable,'-c',code,str(status),str(guarded)],check=True,capture_output=True,timeout=10)
+        assert (status.read_bytes(),path.read_bytes())==before
+        history.append(health('CURRENT'));owner.publish(status,health('STOPPED'),service.publish_service_status)
+        assert len(h.read_history(path)['events'])==2
+    with pytest.raises(RuntimeError):owner.publish(status,health(),service.publish_service_status)
+
+
+def test_lost_owner_cannot_publish_status_or_history_after_successor(tmp_path):
+    status=tmp_path/'health';lock=Path(str(status)+'.history.lock')
+    with h.publisher_lease(status) as old:
+        old.publish(status,health('CURRENT'),service.publish_service_status)
+        lock.unlink()
+        with h.publisher_lease(status) as successor:
+            successor.publish(status,health('CURRENT'),service.publish_service_status)
+            before=status.read_bytes()
+            with pytest.raises(RuntimeError):old.publish(status,health('UNAVAILABLE'),service.publish_service_status)
+            assert status.read_bytes()==before
+    assert service.publish_startup_failure(status,None) is True
+    assert json.loads(status.read_text())['state']=='UNAVAILABLE'
+
+
+def test_publisher_evidence_binds_live_kernel_owner_and_health(tmp_path):
+    status=tmp_path/'health'
+    assert h.publisher_observation(status)['state']=='UNKNOWN'
+    with h.publisher_lease(status) as owner:
+        owner.publish(status,health('CURRENT'),service.publish_service_status)
+        proof=h.publisher_observation(status)
+        assert proof['state']=='VERIFIED' and len(proof['identity_sha256'])==64
+        value=json.loads(status.read_text());value['publisher_instance']='0'*32
+        service.publish_service_status(status,value)
+        assert h.publisher_observation(status)['state']=='BLOCKED'
+        owner.publish(status,health('CURRENT'),service.publish_service_status)
+        assert h.publisher_observation(status)['state']=='VERIFIED'
+    assert h.publisher_observation(status)['state']=='BLOCKED'
+
+
+def test_current_protocol_two_health_cannot_survive_lease_release_as_ready(tmp_path):
+    from hope.api.dashboard_server import _verified_operations
+    status=tmp_path/'health';stamp=datetime.now(timezone.utc).isoformat()
+    value=dict(schema_version=1,state='CURRENT',generated_at=stamp,last_success_at=stamp,
+        cycles_succeeded=1,cycles_failed=0,jobs_executed=0,jobs_skipped=1,error_code=None,
+        deployed_commit='a'*40,schema_compatibility='COMPATIBLE',runtime_gate='VERIFIED',paper_only=True,live_enabled=False)
+    with h.publisher_lease(status) as owner:
+        owner.publish(status,value,service.publish_service_status)
+        assert json.loads(status.read_text())['schema_version']==2
+        safe=json.loads(_verified_operations(status))
+        assert safe['schema_version']==1 and 'publisher_instance' not in safe
+    with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):_verified_operations(status)

@@ -122,8 +122,24 @@ raise SystemExit(cli.main(sys.argv[1:]))
             time.sleep(0.05)
         else:
             pytest.fail("Certified child never published committed acceptance")
+        # A stays in its genuine 30-second poll wait while independent CLI
+        # processes contend. Neither a lease rejection nor startup failure may
+        # change A's shared evidence or execute another financial transaction.
+        history=Path(str(status)+".history.json")
+        owned_health=status.read_bytes();owned_history=history.read_bytes()
+        contender=subprocess.run(command+["--once"],env=environment,capture_output=True,timeout=10)
+        assert contender.returncode==1
+        assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
+        invalid=list(command);invalid[3]="invalid"
+        rejected=subprocess.run(invalid,env=environment,capture_output=True,timeout=10)
+        assert rejected.returncode==2 and rejected.stderr.strip()==b"PAPER_SERVICE_STARTUP_FAILED"
+        assert status.read_bytes()==owned_health and history.read_bytes()==owned_history
+        accepted_run=create_scheduled_job_run(f"paper:USA:{version}:process",scheduled)
+        assert _counts(engine,accepted_run)==(1,1,1)
         process.terminate()
         process.wait(timeout=10)
+        stopped=json.loads(status.read_text())
+        assert stopped["state"]=="STOPPED" and stopped["cycles_succeeded"]==1
         restarted = subprocess.run(command + ["--once"], env=environment, capture_output=True, timeout=25)
         assert restarted.returncode == 0
         assert json.loads(status.read_text())["jobs_skipped"] == 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import os
+import re
 from pathlib import Path
 import signal
 from hope.infrastructure.signal_stop import SignalStop as Event
@@ -41,29 +42,48 @@ def main(argv=None) -> int:
     parser.add_argument("--status-file", required=True)
     parser.add_argument("--poll-seconds", type=float, default=30)
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--deployment-receipt",help="Independently approved immutable receipt SHA256; fail closed on absent evidence")
     args = parser.parse_args(argv)
+    if args.deployment_receipt is not None and not re.fullmatch('[0-9a-f]{64}',args.deployment_receipt):
+        parser.exit(2,"PAPER_SERVICE_DEPLOYMENT_RECEIPT_INVALID\n")
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         parser.exit(2, "PAPER_SERVICE_DATABASE_CONFIGURATION_REQUIRED\n")
     stop = Event()
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stop.set())
+    engine=None
+    def database():
+        nonlocal engine
+        if engine is None:
+            engine=create_engine(url,pool_pre_ping=True,pool_timeout=10,
+                connect_args={"connect_timeout":10,"options":"-c statement_timeout=30000 -c lock_timeout=10000"})
+        return engine
     try:
         release = Path(args.migrations_dir).resolve(strict=True).parent
-        with paper_operational_guard(release):
+        def host_probe():
+            # Called only after source/runtime/image/provider approvals pass.
+            # Observe the configured database without any data mutation.
+            from hope.api.deployment_contract import host_observation
+            with database().connect() as connection:
+                connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+                return host_observation(connection=connection)
+        def guard():
+            if args.deployment_receipt is None:return paper_operational_guard(release)
+            return paper_operational_guard(release,deployment_receipt=args.deployment_receipt,factory_spec=args.factory,host_probe=host_probe)
+        with guard():
             factory = load_plan_factory(args.factory, release=release)
-        engine = create_engine(url, pool_pre_ping=True, pool_timeout=10,
-            connect_args={"connect_timeout": 10, "options": "-c statement_timeout=30000 -c lock_timeout=10000"})
-        try:
-            return run_service(engine, factory, migrations_dir=args.migrations_dir,
-                status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once,
-                require_certified=True,cycle_guard=lambda:paper_operational_guard(release))
-        finally:
-            engine.dispose()
+        database()
+        return run_service(engine, factory, migrations_dir=args.migrations_dir,
+            status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once,
+            require_certified=True,cycle_guard=guard)
     except Exception:
-        try:publish_startup_failure(args.status_file,os.getenv("HOPE_DEPLOYED_COMMIT"))
-        except Exception:pass
+        # The helper acquires publication ownership independently. A rejected
+        # competing CLI must leave the active worker's health/history untouched.
+        publish_startup_failure(args.status_file,os.getenv("HOPE_DEPLOYED_COMMIT"))
         parser.exit(2, "PAPER_SERVICE_STARTUP_FAILED\n")
+    finally:
+        if engine is not None:engine.dispose()
 
 
 if __name__ == "__main__":

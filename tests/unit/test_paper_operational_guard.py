@@ -77,6 +77,14 @@ def test_unverified_runtime_cycle_never_reports_current_or_notifies_ready(tmp_pa
     # Status durability itself has native coverage; this test only models the
     # publish sink on Windows to isolate admission/control-flow from POSIX ACLs.
     published=[];monkeypatch.setattr(service,"publish_service_status",lambda path,value:published.append(dict(value)))
+    if os.name!="posix":
+        # Model an acquired native publication lease for this control-flow
+        # test. Real multi-process exclusion and writes remain Linux tests.
+        from hope.infrastructure import paper_history
+        @contextmanager
+        def acquired(path):
+            yield SimpleNamespace(check=lambda:None,publish=lambda target,value,sink:sink(target,value))
+        monkeypatch.setattr(paper_history,"publisher_lease",acquired)
     notifier=Mock()
     assert service.run_service(None,None,migrations_dir=tmp_path,status_file=tmp_path/"status",once=True,cycle_guard=denied,notifier=notifier)==1
     assert published[-1]["runtime_gate"]=="UNVERIFIED" and published[-1]["state"]=="UNAVAILABLE"

@@ -267,7 +267,7 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
     fields = {"schema","scope","state","release_commit","image_sha256","base_sha256","base_inventory_sha256",
         "release_approval_sha256","hashes","provenance_keys","execution_authorized","issued_at","expires_at"}
     _check(isinstance(approval,dict) and set(approval) == fields and approval["schema"] == "hope.image-approval.v1"
-        and approval["scope"] == "DISPOSABLE_LAB_ONLY" and approval["state"] == "APPROVED"
+        and approval["scope"] in {"DISPOSABLE_LAB_ONLY","PRODUCTION_PAPER"} and approval["state"] == "APPROVED"
         and approval["execution_authorized"] is False and approval["release_commit"] == r._sha(expected_sha)
         and type(approval["issued_at"]) is int and type(approval["expires_at"]) is int
         and approval["issued_at"] <= now < approval["expires_at"]
@@ -351,7 +351,7 @@ def verify_image(layout, approval_path, image_public, policy_path, policy_public
         and r._trusted(layout,directory=True) == directory
         and _policy(policy_path,policy_public,now=now) == policy and _signed(approval_path,image_public) == approval)
     _check(not live_clock or now <= int(time.time()) < min(approval["expires_at"],policy["expires_at"]))
-    return dict(schema="hope.image-observation.v1",scope="DISPOSABLE_LAB_ONLY",state="VERIFIED",
+    return dict(schema="hope.image-observation.v1",scope=approval["scope"],state="VERIFIED",
         release_commit=expected_sha,image_sha256=approval["image_sha256"],expires_at=min(approval["expires_at"],policy["expires_at"]),
         policy_generation=policy["generation"],execution_authorized=False)
 

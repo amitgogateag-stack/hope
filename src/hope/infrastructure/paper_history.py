@@ -84,28 +84,69 @@ class History:
 
 
 @contextmanager
-def history_lease(status_path,publisher):
-    """Native production only; no platform fallback can admit execution."""
+def publisher_lease(status_path):
+    """Acquire ownership before reading history or publishing any shared state."""
     import fcntl
+    status_path=Path(status_path).absolute()
     path=Path(str(status_path)+".history.json");path.parent.mkdir(parents=True,exist_ok=True)
+    parent=path.parent.lstat()
+    if not stat.S_ISDIR(parent.st_mode) or parent.st_mode & 0o022:
+        raise RuntimeError("PAPER_RUNTIME_HISTORY_UNVERIFIED")
     lock=Path(str(status_path)+".history.lock")
-    descriptor=os.open(lock,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,0o600)
+    descriptor=os.open(lock,os.O_RDWR|os.O_CREAT|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK,0o640)
+    active=[True]
+    owner_pid=os.getpid()
     try:
         info=os.fstat(descriptor);named=lock.lstat()
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) not in {0o600,0o640}
                 or info.st_nlink != 1 or (info.st_dev,info.st_ino) != (named.st_dev,named.st_ino)):
             raise RuntimeError("PAPER_RUNTIME_HISTORY_UNVERIFIED")
         try:fcntl.flock(descriptor,fcntl.LOCK_EX|fcntl.LOCK_NB)
         except BlockingIOError:raise RuntimeError("PAPER_RUNTIME_HISTORY_CONCURRENT") from None
-        history=History(path,publisher)
+        # Match the existing health-file read-only operations group. Never
+        # change permissions until ownership is acquired; no group writer.
+        os.fchmod(descriptor,0o640);info=os.fstat(descriptor)
+        from hope.api.operations_deployment import _process_identity
+        owner_sha=digest((owner_pid,_process_identity(owner_pid)))
+        instance=uuid4().hex
+        header=canonical(dict(schema='hope.paper-publisher.v1',pid=owner_pid,identity_sha256=owner_sha,instance=instance))
+        os.ftruncate(descriptor,0)
+        if os.write(descriptor,header)!=len(header):raise RuntimeError('PAPER_RUNTIME_HISTORY_UNVERIFIED')
+        os.fsync(descriptor)
         def check_lease():
+            if not active[0] or os.getpid()!=owner_pid:raise RuntimeError("PAPER_RUNTIME_HISTORY_UNVERIFIED")
+            opened=os.fstat(descriptor);directory=path.parent.lstat()
             current=lock.lstat()
-            if (current.st_dev,current.st_ino,current.st_mode,current.st_uid,current.st_nlink) != (
-                    info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_nlink):
+            if ((current.st_dev,current.st_ino,current.st_mode,current.st_uid,current.st_nlink) != (
+                    info.st_dev,info.st_ino,info.st_mode,info.st_uid,info.st_nlink)
+                    or (opened.st_dev,opened.st_ino) != (info.st_dev,info.st_ino)
+                    or (directory.st_dev,directory.st_ino,directory.st_mode,directory.st_uid) != (
+                        parent.st_dev,parent.st_ino,parent.st_mode,parent.st_uid)):
                 raise RuntimeError("PAPER_RUNTIME_HISTORY_UNVERIFIED")
-        history.check_lease=check_lease
+        class Publisher:
+            check=staticmethod(check_lease)
+            def publish(self,target,value,publisher):
+                if Path(target).absolute() not in {status_path,path}:
+                    raise RuntimeError("PAPER_RUNTIME_PUBLISH_TARGET_INVALID")
+                self.check()
+                if Path(target).absolute()==status_path:
+                    value=dict(value,publisher_instance=instance,publisher_identity_sha256=owner_sha)
+                    if 'schema_version' in value:value['schema_version']=2
+                publisher(target,value);self.check()
+                return value
+        yield Publisher()
+    finally:
+        active[0]=False
+        os.close(descriptor)
+
+
+@contextmanager
+def history_lease(status_path,publisher):
+    """Compatibility context for lab callers; history writes also own the lease."""
+    with publisher_lease(status_path) as lease:
+        history=History(Path(str(status_path)+".history.json"),lambda path,value:lease.publish(path,value,publisher))
+        history.check_lease=lease.check
         yield history
-    finally:os.close(descriptor)
 
 
 def history_observation(path,*,now=None):
@@ -119,3 +160,33 @@ def history_observation(path,*,now=None):
             retained_events=len(events),retained_starts=sum(e["state"] == "STARTING" for e in events),
             retained_failures=sum(e["state"] in {"UNAVAILABLE","HALTED"} for e in events),last_state=latest["state"])
     except (OSError,ValueError,RuntimeError,TypeError,KeyError):return absent
+
+
+def publisher_observation(status_path):
+    """Correlate a held kernel lock, process incarnation and persisted heartbeat."""
+    absent=dict(schema='hope.paper-publisher-observation.v1',state='UNKNOWN',identity_sha256=None,
+        generated_at=datetime.now(timezone.utc).isoformat(),execution_authorized=False)
+    descriptor=None
+    try:
+        import fcntl
+        from hope.api.operations_deployment import _process_identity
+        path=Path(str(status_path)+'.history.lock');info=path.lstat()
+        descriptor=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
+        opened=os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode) or stat.S_IMODE(info.st_mode) not in {0o600,0o640} or info.st_nlink!=1 or (info.st_dev,info.st_ino)!=(opened.st_dev,opened.st_ino):return absent
+        try:
+            fcntl.flock(descriptor,fcntl.LOCK_SH|fcntl.LOCK_NB)
+            return dict(absent,state='BLOCKED')
+        except BlockingIOError:pass
+        header=strict_json(os.read(descriptor,1025));health=strict_json(bounded_regular_read(status_path,8192))
+        if (set(header)!={'schema','pid','identity_sha256','instance'} or header['schema']!='hope.paper-publisher.v1'
+                or type(header['pid']) is not int or header['pid']<=0
+                or digest((header['pid'],_process_identity(header['pid'])))!=header['identity_sha256']
+                or health.get('publisher_instance')!=header['instance']
+                or health.get('publisher_identity_sha256')!=header['identity_sha256']):return dict(absent,state='BLOCKED')
+        after=path.lstat()
+        if (after.st_dev,after.st_ino,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns):return absent
+        return dict(absent,state='VERIFIED',identity_sha256=header['identity_sha256'])
+    except (OSError,ValueError,RuntimeError,TypeError,KeyError,ImportError):return absent
+    finally:
+        if descriptor is not None:os.close(descriptor)

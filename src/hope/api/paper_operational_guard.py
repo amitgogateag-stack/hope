@@ -11,7 +11,7 @@ from hope.api.runtime_identity import verify_interpreter
 
 
 @contextmanager
-def paper_operational_guard(release,*,root=Path("/opt/hope-operations")):
+def paper_operational_guard(release,*,root=Path("/opt/hope-operations"),deployment_receipt=None,factory_spec=None,host_probe=None):
     release=Path(release);root=Path(root)
     entered=False
     try:
@@ -31,6 +31,11 @@ def paper_operational_guard(release,*,root=Path("/opt/hope-operations")):
                 evidence=attest_runtime(root,sha,mode,release=release)
                 _require(evidence.get("provenance_state")=="VERIFIED","PACKAGE_PROVENANCE_REQUIRED")
                 _require(evidence.get("build_state")=="VERIFIED","RELEASE_BUILD_REQUIRED")
+                if deployment_receipt is not None:
+                    from hope.api.deployment_contract import inspect_deployment
+                    contract=inspect_deployment(root,sha,expected_receipt=deployment_receipt,expected_factory=factory_spec,
+                        **({"host_probe":host_probe} if host_probe is not None else {}))
+                    _require(contract['state']=='VERIFIED','DEPLOYMENT_CONTRACT_REQUIRED')
                 return evidence,source
             original=observe()
             def check():
