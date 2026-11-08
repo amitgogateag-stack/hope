@@ -119,8 +119,9 @@ group/world; no native Windows production support is claimed.
 
 ## Next dependencies in order
 
-1. Compose an operator read-only preflight with per-stage fixed diagnostics,
-   including migration compatibility; retain independent absent-evidence gates.
+1. Run the [unified read-only preflight](PAPER_READONLY_PREFLIGHT.md) after explicit
+   host authorization; it includes non-mutating migration compatibility and
+   retains every independent absent-evidence gate.
 2. Engineer and test the staged process/receipt handoff in disposable Linux:
    exact process identity, approved read-only bindings, signed receipt provision,
    restart/revocation and rollback, without automatic activation/signing.
