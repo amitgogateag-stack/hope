@@ -255,7 +255,8 @@ raise SystemExit(main(['--factory','never_import_stage_factory:build','--stage-r
             if child.poll() is not None:pytest.fail('stage child exited: '+child.stderr.read().decode())
             try:
                 raw=json.loads(path.read_bytes())
-                if raw['state']=='WAITING' and publisher_observation(path)['state']=='VERIFIED':return raw
+                if (raw['state']=='WAITING' and publisher_observation(path,expected_instance=raw['publisher_instance'],
+                        expected_identity=raw['publisher_identity_sha256'])['state']=='VERIFIED'):return raw
             except (OSError,ValueError):pass
             time.sleep(.02)
         pytest.fail('stage child did not publish owned WAITING')

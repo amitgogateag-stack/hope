@@ -163,9 +163,10 @@ def test_private_schema_upgrade_cannot_borrow_public_history(isolated_database):
         assert connection.execute(text(f"SELECT to_regclass('{schema}.job_runs')")).scalar_one() is not None
         assert apply_migrations(connection,MIGRATIONS,schema=schema)==[]
     with engine.begin() as connection:
-        connection.exec_driver_sql(f"UPDATE {schema}.hope_schema_migrations SET checksum=repeat('a',64) WHERE version='001_initial.sql'")
-    with engine.begin() as connection:
-        with pytest.raises(MigrationError,match='checksum mismatch'):apply_migrations(connection,MIGRATIONS,schema=schema)
+        with pytest.raises(DBAPIError,match='SCHEMA_MIGRATION_HISTORY_IMMUTABLE'):
+            with connection.begin_nested():
+                connection.exec_driver_sql(f"UPDATE {schema}.hope_schema_migrations SET checksum=repeat('a',64) WHERE version='001_initial.sql'")
+        assert apply_migrations(connection,MIGRATIONS,schema=schema)==[]
         assert apply_migrations(connection,MIGRATIONS,schema='public')==[]
 
 
