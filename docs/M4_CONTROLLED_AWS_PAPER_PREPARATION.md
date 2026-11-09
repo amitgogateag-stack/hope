@@ -478,4 +478,4 @@ cannot become an ordinary worker. Migration236's transaction fences do not fix
 the independent authority-writer trust gap. A reviewed external admission/DB
 verification design is required before integration or operating GO.
 
-Follow-up inventory: `237_paper_independent_admission_boundary.sql` SHA256 `ffcd9e28cc5420c1f744d352707e2e909ee7f27cb0738abdaec2261c7f29dffe`.
+Follow-up inventory: `237_paper_independent_admission_boundary.sql` SHA256 `43d9e369f6edbcc2b4502396e049c1df2559f9a66e85d971ba43ed96f65ed35d`.

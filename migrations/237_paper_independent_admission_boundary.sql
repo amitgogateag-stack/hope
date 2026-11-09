@@ -145,7 +145,7 @@ BEGIN
             EXECUTE 'CREATE TRIGGER aaa_independent_admission BEFORE INSERT ON public.'||quote_ident(target)||
                 ' FOR EACH ROW EXECUTE FUNCTION public.hope_require_independent_admission()';
             EXECUTE 'CREATE CONSTRAINT TRIGGER zzzz_independent_admission_commit AFTER INSERT ON public.'||quote_ident(target)||
-                ' DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hope_verify_independent_admission_commit()';
+                ' DEFERRABLE INITIALLY DEFERRED FOR EACH ROW WHEN (public.hope_admission_mode()<>''ADMINISTRATOR'') EXECUTE FUNCTION public.hope_verify_independent_admission_commit()';
         END LOOP;
         FOREACH target IN ARRAY ARRAY['signals','orders','fills','paper_effects','paper_portfolios',
             'paper_portfolio_positions','paper_portfolio_fill_applications','paper_portfolio_pnl_events',
