@@ -24,37 +24,14 @@ def model_external_admission(admin,role,monkeypatch):
                 dict(table=table,authorization=values['authorization_sha256'],role=role,
                     payload=json.dumps(values,default=str),expiry=values['witness_expires_at']))
 
-    original_insert=SqlAlchemyPaperStartupRepository._insert
-    @wraps(original_insert)
-    def insert(repository,table,values,permit):
-        permit.assert_current()
-        approve(table,values)
-        return original_insert(repository,table,values,permit)
-    monkeypatch.setattr(SqlAlchemyPaperStartupRepository,'_insert',insert)
-
-    original_claim=SqlAlchemyPaperHandoffRepository.claim
-    @wraps(original_claim)
-    def claim(repository,proof):
-        current=proof.assert_current();token=current.token
-        values={key:token[key] for key in ('request_sha256','first_cycle_key_sha256','release_commit',
-            'controller_process_sha256','stage_process_sha256','deployment_receipt_sha256','database_sha256',
-            'issued_at','expires_at','max_cycles','paper_only','live_enabled')}
-        values.update(authorization_sha256=current.authorization_sha256,evidence_sha256=current.evidence_sha256,
-            authorizer_key_sha256=current.authorizer_key_sha256,policy_authority_sha256=current.policy_authority_sha256,
-            minimum_policy_generation=token['minimum_policy_generation'],observed_policy_generation=current.policy_generation,
-            witness_expires_at=current.expires_at)
-        approve('paper_handoff_intents',values)
-        return original_claim(repository,proof)
-    monkeypatch.setattr(SqlAlchemyPaperHandoffRepository,'claim',claim)
-
-    original_finish=SqlAlchemyPaperHandoffRepository.finish
-    @wraps(original_finish)
-    def finish(repository,proof,outcome):
-        current=proof.assert_current()
-        approve('paper_handoff_outcomes',dict(authorization_sha256=current.authorization_sha256,
-            controller_process_sha256=current.token['controller_process_sha256'],evidence_sha256=current.evidence_sha256,
-            policy_authority_sha256=current.policy_authority_sha256,observed_policy_generation=current.policy_generation,
-            outcome=outcome,witness_expires_at=current.expires_at))
-        return original_finish(repository,proof,outcome)
-    monkeypatch.setattr(SqlAlchemyPaperHandoffRepository,'finish',finish)
+    for repository_type in (SqlAlchemyPaperStartupRepository,SqlAlchemyPaperHandoffRepository):
+        original=repository_type._insert
+        def model(original):
+            @wraps(original)
+            def insert(repository,table,values,permit):
+                permit.assert_current()
+                approve(table,values)
+                return original(repository,table,values,permit)
+            return insert
+        monkeypatch.setattr(repository_type,'_insert',model(original))
     return approve

@@ -218,10 +218,55 @@ def test_missing_independent_approval_blocks_verified_in_process_permit(prepare,
     value=prepare();case=value['case'];permit=case['verify_startup']()
     # Remove only the explicit TEST external-approval producer; production has
     # none. Keep genuine signature/runtime checks and original repository code.
-    monkeypatch.setattr(SqlAlchemyPaperHandoffRepository,'claim',SqlAlchemyPaperHandoffRepository.claim.__wrapped__)
+    monkeypatch.setattr(SqlAlchemyPaperHandoffRepository,'_insert',SqlAlchemyPaperHandoffRepository._insert.__wrapped__)
     with pytest.raises(DBAPIError,match='PAPER_ADMISSION_INDEPENDENT_APPROVAL_REQUIRED'):
         startup.bootstrap(value['worker'],permit,MIGRATIONS)
     with value['worker'].connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM paper_handoff_intents')).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_startup_claims')).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0
+
+
+@pytest.mark.parametrize('field',['controller_process_sha256','evidence_sha256','database_sha256',
+    'policy_authority_sha256','observed_policy_generation','job_run_id','database_principal'])
+def test_exact_independent_approval_cannot_be_borrowed_for_contradictory_rows(prepare,startup_database,field):
+    from hope.infrastructure.repositories.paper_startup import SqlAlchemyPaperStartupRepository
+    value=prepare();case=value['case'];worker=value['worker']
+    startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
+    permit=case['verify_execution']();token=permit.token
+    with worker.connect() as connection:values=SqlAlchemyPaperStartupRepository(connection)._common(permit)
+    values.update({key:token[key] for key in ('request_sha256','startup_authorization_sha256','handoff_authorization_sha256',
+        'first_cycle_key_sha256','database_sha256','job_run_id','job_key','scheduled_for','issued_at','expires_at','paper_only','live_enabled','max_cycles')})
+    values.update(authorizer_key_sha256=permit.authorizer_key_sha256,job_run_id=permit.run.job_run_id,
+        scheduled_for=permit.run.scheduled_for,database_principal=startup_database['role'])
+    startup_database['approve']('paper_startup_executions',values)
+    values[field]=(permit.policy_generation+1 if field=='observed_policy_generation' else uuid4() if field=='job_run_id'
+        else 'synthetic_foreign_principal' if field=='database_principal' else '0'*64)
+    with pytest.raises(DBAPIError,match='PAPER_ADMISSION_INDEPENDENT_APPROVAL_REQUIRED'):
+        with worker.begin() as connection:
+            connection.execute(text('INSERT INTO paper_startup_executions ('+','.join(values)+') VALUES ('+
+                ','.join(':'+key for key in values)+')'),values)
+    with worker.connect() as connection:
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==0
+        assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0
+
+
+def test_unknown_login_cannot_become_ordinary_financial_writer(startup_database):
+    from sqlalchemy import create_engine
+    admin=startup_database['admin'];role='hope_unknown_'+uuid4().hex;password=uuid4().hex
+    with admin.begin() as connection:
+        connection.exec_driver_sql(f"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS")
+        connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO {role}')
+        connection.exec_driver_sql(f'GRANT SELECT,INSERT ON ALL TABLES IN SCHEMA public TO {role}')
+    unknown=create_engine(admin.url.set(username=role,password=password))
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_ADMISSION_PRINCIPAL_UNCLASSIFIED'):
+            with unknown.begin() as connection:
+                connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+        with unknown.connect() as connection:
+            assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==0
+    finally:
+        unknown.dispose()
+        with admin.begin() as connection:
+            connection.exec_driver_sql('DROP OWNED BY '+role)
+            connection.exec_driver_sql('DROP ROLE '+role)

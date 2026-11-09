@@ -19,6 +19,11 @@ def database_identity(connection):
 class SqlAlchemyPaperHandoffRepository:
     def __init__(self,connection):self.connection=connection
 
+    def _insert(self,table,values,proof):
+        require(table in {'paper_handoff_intents','paper_handoff_outcomes'})
+        columns=','.join(values);parameters=','.join(':'+key for key in values)
+        self.connection.execute(text(f'INSERT INTO public.{table} ({columns}) VALUES ({parameters})'),values)
+
     def _ready(self,proof):
         require(type(proof) is VerifiedHandoff)
         current=proof.assert_current()
@@ -41,8 +46,7 @@ class SqlAlchemyPaperHandoffRepository:
                           authorizer_key_sha256=current.authorizer_key_sha256,policy_authority_sha256=current.policy_authority_sha256,
                           minimum_policy_generation=token['minimum_policy_generation'],observed_policy_generation=current.policy_generation,
                           witness_expires_at=current.expires_at)
-            columns=','.join(values);parameters=','.join(':'+key for key in values)
-            self.connection.execute(text(f'INSERT INTO public.paper_handoff_intents ({columns}) VALUES ({parameters})'),values)
+            self._insert('paper_handoff_intents',values,current)
             current.assert_current()
             require(self.connection.execute(text('SELECT clock_timestamp() < to_timestamp(:expiry)'),
                                             {'expiry':current.expires_at}).scalar_one() is True)
@@ -52,12 +56,10 @@ class SqlAlchemyPaperHandoffRepository:
         require(outcome in {'ACKNOWLEDGED','ABORTED'})
         with self.connection.begin_nested():
             current=self._ready(proof)
-            self.connection.execute(text('INSERT INTO public.paper_handoff_outcomes '
-                '(authorization_sha256,controller_process_sha256,evidence_sha256,policy_authority_sha256,observed_policy_generation,outcome,witness_expires_at) '
-                'VALUES (:auth,:owner,:evidence,:policy,:generation,:outcome,:expiry)'),
-                dict(auth=current.authorization_sha256,owner=current.token['controller_process_sha256'],
-                     evidence=current.evidence_sha256,policy=current.policy_authority_sha256,generation=current.policy_generation,
-                     outcome=outcome,expiry=current.expires_at))
+            self._insert('paper_handoff_outcomes',dict(authorization_sha256=current.authorization_sha256,
+                controller_process_sha256=current.token['controller_process_sha256'],evidence_sha256=current.evidence_sha256,
+                policy_authority_sha256=current.policy_authority_sha256,observed_policy_generation=current.policy_generation,
+                outcome=outcome,witness_expires_at=current.expires_at),current)
             current.assert_current()
             require(self.connection.execute(text('SELECT clock_timestamp() < to_timestamp(:expiry)'),
                                             {'expiry':current.expires_at}).scalar_one() is True)
