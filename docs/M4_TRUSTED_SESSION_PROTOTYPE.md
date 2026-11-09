@@ -14,6 +14,14 @@ authority. Under scheduling delay it expired there, before intended financial SQ
 It also attempted an INSERT after expiry, not a successful transaction rejected at COMMIT.
 No authority refresh is bypassed and no production code or deadline is relaxed.
 
+`security/reproduce_pr87_expiry.py` copies the frozen #87 function body (only its
+name changes) and records its original commit/function digest in JUnit. A real
+four-second scheduling stall after execution INSERT forces its original three-second
+authority to fail during admission refresh before any financial SQL. If native setup
+already expires it, that earlier rejection is recorded too. The reproduction requires
+the original RuntimeError and zero execution/economic rows; it does not claim a
+financial COMMIT proof. No historical source or production refresh is patched.
+
 The three-second deadline is retained in the before-admission expiry test. It waits four
 real seconds, then requires DEPLOYMENT_EVIDENCE_INVALID and zero execution/economic rows.
 A second admission test uses the normal signed fixture lifetime and stalls after the actual
