@@ -15,23 +15,34 @@ def main(argv=None,*,release,execute=None):
     parser.add_argument("--approved-runtime-manifest")
     parser.add_argument("--runtime-mode",choices=("shared","release"),default="shared")
     parser.add_argument("--preflight",action="store_true")
+    parser.add_argument("--stage-only",action="store_true")
     args,forwarded=parser.parse_known_args(argv)
     try:
         _require(sys.flags.isolated,"ISOLATION_REQUIRED")
         python,evidence=authenticate_control(release,args.runtime_mode,expected_manifest=args.approved_runtime_manifest)
         _require(os.environ.get("HOPE_DEPLOYED_COMMIT")==Path(release).name
             and os.environ.get("HOPE_LIVE_ENABLED")=="false","PAPER_DEPLOYMENT_UNVERIFIED")
+        _require(not (args.preflight and args.stage_only),"PAPER_STAGE_ARGUMENTS_INVALID")
+        _require(not args.stage_only or args.runtime_mode=='release',"PAPER_STAGE_RELEASE_RUNTIME_REQUIRED")
+        if args.stage_only:
+            _require(evidence.get('state')==evidence.get('provenance_state')==evidence.get('build_state')=='VERIFIED',
+                "PAPER_STAGE_BUILD_PROVENANCE_REQUIRED")
         if args.approved_runtime_manifest is None:
             _require(sys.flags.no_site,"NO_SITE_REQUIRED")
             environment={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C","LC_ALL":"C"}
             for name in ("HOPE_DATABASE_URL","HOPE_DEPLOYED_COMMIT","HOPE_LIVE_ENABLED","NOTIFY_SOCKET","WATCHDOG_PID","WATCHDOG_USEC"):
+                if args.stage_only and name not in {'HOPE_DEPLOYED_COMMIT','HOPE_LIVE_ENABLED'}:continue
                 if name in os.environ:environment[name]=os.environ[name]
             arguments=[str(python),"-I","-B","-X",CACHE_PREFIX,str(Path(release)/"deploy/operations/paper_release.py"),
                 "--approved-runtime-manifest",evidence["manifest_sha256"],"--runtime-mode",args.runtime_mode]
             if args.preflight:arguments.append("--preflight")
+            if args.stage_only:arguments.append("--stage-only")
             return (execute or os.execve)(str(python),arguments+forwarded,environment)
         verify_interpreter(python)
         _require(sys.version_info[:2]==(3,13),"PYTHON_VERSION_REQUIRED")
+        if args.stage_only:
+            from hope.api.paper_stage import main as stage
+            return stage(forwarded,release=release)
         if args.preflight:
             _require(not forwarded,"PREFLIGHT_ARGUMENTS_INVALID")
             from hope.api.operations_deployment import main as preflight
