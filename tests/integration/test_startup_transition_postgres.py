@@ -43,9 +43,13 @@ def startup_database(isolated_database,monkeypatch):
         connection.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA public TO {role}')
         connection.exec_driver_sql(f'GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO {role}')
         connection.exec_driver_sql(f'GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO {role}')
+        connection.execute(text("INSERT INTO paper_admission_principals(principal_oid,principal_name,admission_mode) "
+            "SELECT oid,rolname,'CONTROLLED' FROM pg_roles WHERE rolname=:role"),{'role':role})
     worker=create_engine(admin.url.set(username=role,password=password),connect_args={'options':'-c statement_timeout=10000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=5000'})
     monkeypatch.setenv('HOPE_DATABASE_URL',admin.url.render_as_string(hide_password=False))
-    try:yield dict(admin=admin,worker=worker,role=role)
+    from admission_fixture import model_external_admission
+    approve=model_external_admission(admin,role,monkeypatch)
+    try:yield dict(admin=admin,worker=worker,role=role,approve=approve)
     finally:
         worker.dispose()
         with admin.begin() as connection:

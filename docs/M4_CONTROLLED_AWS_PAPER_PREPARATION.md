@@ -1,3 +1,10 @@
+> Admission follow-up: migration237 introduces a protected default-deny database
+> boundary. There is NO production independent approval/verifier service yet.
+> Startup remains BLOCKED; engineering integration and operational PAPER NO-GO.
+> Do not provision approvals from a worker or infer trust from green tests.
+> The follow-up has237 migrations /229 pending from exact008; historical236
+> inventory below is retained as the original PR85 procedure, not authorization.
+
 # Controlled AWS PAPER deployment preparation
 
 This is one review procedure, not permission to execute it. No AWS/host access,
@@ -470,3 +477,5 @@ which consumed startup authority remains constrained by immutable history and
 cannot become an ordinary worker. Migration236's transaction fences do not fix
 the independent authority-writer trust gap. A reviewed external admission/DB
 verification design is required before integration or operating GO.
+
+Follow-up inventory: `237_paper_independent_admission_boundary.sql` SHA256 `1cb1ab02b9eba2d7aa87e041a009a0b63f705d8aa93d469eb8675231dd7c07d1`.

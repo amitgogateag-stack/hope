@@ -136,7 +136,7 @@ def test_set_role_cannot_drop_the_consumed_login_scope(prepare,startup_database)
         connection.exec_driver_sql('GRANT INSERT ON public.paper_portfolios TO '+delegate)
         connection.exec_driver_sql('GRANT '+delegate+' TO '+startup_database['role'])
     try:
-        with pytest.raises(DBAPIError,match='PAPER_STARTUP_'):
+        with pytest.raises(DBAPIError,match='PAPER_ADMISSION_PRINCIPAL_SUBSTITUTION'):
             with worker.begin() as connection:
                 connection.exec_driver_sql('SET LOCAL ROLE '+delegate)
                 connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
@@ -189,3 +189,39 @@ def test_dead_scheduler_backend_preserves_primary_failure_and_never_reports_succ
     if primary_failure:assert caught.value is original
     with worker.connect() as connection:
         assert connection.execute(text('SELECT pg_try_advisory_xact_lock(hashtext(:name)::bigint)'),{'name':_PAPER_SCHEDULER_LOCK_NAME}).scalar_one() is True
+
+
+@pytest.mark.parametrize('table',['paper_admission_principals','paper_admission_approvals'])
+def test_worker_cannot_provision_independent_trust_even_with_all_table_insert_grant(startup_database,table):
+    worker=startup_database['worker']
+    sql=("INSERT INTO paper_admission_principals SELECT principal_oid,principal_name,admission_mode,recorded_at FROM paper_admission_principals"
+         if table=='paper_admission_principals' else
+         "INSERT INTO paper_admission_approvals(target_table,authorization_sha256,principal_oid,approved_row,valid_until) "
+         "SELECT 'paper_startup_claims',repeat('a',64),principal_oid,jsonb_build_object('authorization_sha256',repeat('a',64),'database_principal',principal_name),extract(epoch FROM clock_timestamp())::bigint+10 FROM paper_admission_principals")
+    with pytest.raises(DBAPIError,match='PAPER_ADMISSION_TRUSTED_WRITER_REQUIRED'):
+        with worker.begin() as connection:connection.exec_driver_sql(sql)
+
+
+@pytest.mark.parametrize('table',['paper_admission_principals','paper_admission_approvals'])
+@pytest.mark.parametrize('operation',['UPDATE','DELETE','TRUNCATE'])
+def test_independent_trust_is_append_only_even_for_owner(startup_database,prepare,table,operation):
+    value=prepare();startup.bootstrap(value['worker'],value['case']['verify_startup'](),MIGRATIONS)
+    sql=(f'UPDATE {table} SET recorded_at=recorded_at' if operation=='UPDATE' else
+         f'DELETE FROM {table}' if operation=='DELETE' else f'TRUNCATE {table} CASCADE')
+    with pytest.raises(DBAPIError,match='AUDIT_EVENT_IMMUTABLE'):
+        with startup_database['admin'].begin() as connection:connection.exec_driver_sql(sql)
+
+
+def test_missing_independent_approval_blocks_verified_in_process_permit(prepare,monkeypatch):
+    """Real signatures alone cannot cause admission through the worker connection."""
+    from hope.infrastructure.repositories.paper_handoff import SqlAlchemyPaperHandoffRepository
+    value=prepare();case=value['case'];permit=case['verify_startup']()
+    # Remove only the explicit TEST external-approval producer; production has
+    # none. Keep genuine signature/runtime checks and original repository code.
+    monkeypatch.setattr(SqlAlchemyPaperHandoffRepository,'claim',SqlAlchemyPaperHandoffRepository.claim.__wrapped__)
+    with pytest.raises(DBAPIError,match='PAPER_ADMISSION_INDEPENDENT_APPROVAL_REQUIRED'):
+        startup.bootstrap(value['worker'],permit,MIGRATIONS)
+    with value['worker'].connect() as connection:
+        assert connection.execute(text('SELECT count(*) FROM paper_handoff_intents')).scalar_one()==0
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_claims')).scalar_one()==0
+        assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0

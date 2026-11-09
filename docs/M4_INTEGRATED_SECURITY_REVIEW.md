@@ -147,3 +147,57 @@ the failed session and preserves the primary error with fixed diagnostic notes;
 a cleanup failure after otherwise successful work still fails closed. Real
 backend-termination cases verify both paths and lock release. No timeout,
 assertion, expiry policy, lock ownership or retry behavior is loosened.
+
+
+## Admission-trust remediation follow-up: containment, not completed verification
+
+The latest HIGH A1 report was checked against PR85 reviews (none adding a separate
+finding), the actual repository path and real restricted-LOGIN regressions.
+At remediation regression commit75b65e89550760714c8e4d8d998da354602a0d9e,
+source1696 and PR1697 each failed both strict denial cases on PG16 and PG17:
+2 failed,16 passed per job, DID NOT RAISE. A wrong-scope digest became execution
+metadata; an unadmitted login committed synthetic cash. These were real
+localhost disposable databases, not production incidents.
+
+Append-only migration237 adds an owner-protected principal registry bound to
+both role OID and login name. Unknown financial writers are denied before any
+claim; a worker cannot choose ORDINARY classification or escape via SET ROLE.
+Only explicitly classified controlled principals can insert startup records.
+Seven handoff/startup tables require an exact JSONB row approval for that login,
+table, authority and bounded expiry, written through a separate owner connection.
+Workers cannot create those approvals even with accidental broad INSERT grants.
+All registry/approval rows are immutable, with no inferred/backfilled trust.
+The existing transaction, risk, certification, HALT, expiry, recovery and
+reconciliation gates remain mandatory. Database owners remain trusted DDL/data
+administrators; they are already prohibited as operational workers by preflight.
+Historical standalone owner-written handoff audit remains non-executing.
+
+**Important limit / unresolved HIGH A1:** this is a real fail-closed database
+containment boundary, not a completed independent verifier service. No production
+approval producer, login, signature, grant or admission is supplied. Production
+startup is BLOCKED without exact independently supplied approvals. A secure
+producer must independently observe the target controller/kernel incarnation,
+attest its runtime/namespaces/approved observer, validate all independent signed
+roles and current refs, bind the database login, and coordinate policy revocation
+and closing COMMIT admission without giving the worker its database capability.
+The existing self-process verifier cannot simply be run as a different process
+and certify itself on behalf of a target; accepting an in-process Permit as a
+remote broker request would reproduce the flaw. Designing that authenticated
+peer/observer and current-policy protocol safely is the remaining blocker.
+No production callable approval-issuing API is added to hide that missing boundary.
+Owner-supplied approvals alone must never be represented as verified signatures.
+
+Positive PostgreSQL lifecycle tests explicitly model that external authority in
+tests/admission_fixture.py using the real separate disposable database-owner
+connection after genuine ephemeral signature verification. Runtime/observer
+witnesses remain explicitly modeled, as before. These test-only approvals are
+not production evidence and do not establish that the missing service exists.
+A separate regression removes that model and requires even a genuine in-process
+Permit to fail with zero handoff, startup and economic rows. Both original HIGH
+characterizations are strict denial/no-effect assertions now, not xfails.
+
+Engineering integration NO-GO and operational PAPER NO-GO remain in effect.
+Independent human review of both PR85 and this isolated follow-up is required.
+No AWS, credentials, host access, production migration or operational execution
+is authorized or performed. This follow-up does not alter PR85 or the frozen
+baseline. The final exact-source/PR matrix evidence is recorded in its PR.
