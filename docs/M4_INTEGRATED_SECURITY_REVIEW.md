@@ -201,3 +201,11 @@ Independent human review of both PR85 and this isolated follow-up is required.
 No AWS, credentials, host access, production migration or operational execution
 is authorized or performed. This follow-up does not alter PR85 or the frozen
 baseline. The final exact-source/PR matrix evidence is recorded in its PR.
+
+
+Full regression also exposed the historical M3 acceptance fixture's admin-session
+SET ROLE model. It is replaced with a genuine restricted LOGIN and explicit
+separate-owner ORDINARY classification in the disposable database. Current user
+and session user must both equal that login. All original acceptance, concurrency,
+rollback and no-replay assertions remain unchanged; no production substitution
+exception is introduced. These legacy cases also run in the early PG preflight.
