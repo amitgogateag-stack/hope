@@ -74,3 +74,52 @@ least-privilege credentials/grants; current backup/restored-host rehearsal; fina
 review/merge decision and separate production installation/activation approvals.
 Missing evidence remains BLOCKED. Historical AWS release f17a54929a8ecb7745a62c118893b55494aeb2f1,
 PG16.15/schema008 and stale dashboard observations do not establish current facts.
+
+
+## Final financial security audit (supersedes previous engineering GO)
+
+**Engineering integration NO-GO; operational PAPER NO-GO.** The source/PR CI
+links in the PR identify the exact tested commit; prior green results do not
+approve this changed candidate. Human review remains mandatory.
+
+Confirmed HIGH F9: four restricted-login direct-SQL regressions committed new
+PAPER cash in bootstrap-only mode, without a completed job, after completion,
+and after execution expiry. Regression-first source CI1686/run42602410027 and
+PR CI1687/run42602420271 failed all four cases on PostgreSQL16/17. A deferred
+job_runs trigger cannot cover transactions that never modify job_runs.
+
+Append-only migration236 preserves all historical001-235 source/checksums.
+It guards DML on thirteen financial relations, persists an immutable one-cycle
+financial transaction identity, binds the witness to that actual xid8, requires
+SUCCEEDED plus certified outcome and current expiry at COMMIT, and prevents
+reuse in another transaction. Per-row deferred checks follow existing financial
+projection checks. SET CONSTRAINTS cannot spend the expiry check early: controlled
+validation accepts the driver's canonical COMMIT only, refusing immediate,
+prepared and procedure contexts. Startup logins cannot possess TEMPORARY, schema
+CREATE, privileged or reachable privileged roles, preventing worker-installed
+late deferred trigger code. Bootstrap verifies this before consuming authority.
+Truncation by scoped startup logins is forbidden. Existing ordinary principals,
+financial/risk/eligibility/PIT gates and private dashboard copies are unchanged.
+A consumed startup principal must never be repurposed as an ordinary worker.
+This is commit-phase validation, not a guarantee that WAL fsync or the client's
+acknowledgment finishes before an absolute wall-clock deadline.
+
+**Unresolved HIGH A1: database admission is not an independent signature
+verifier.** The existing worker LOGIN can INSERT authority audit rows. PostgreSQL
+checks metadata and fences but does not authenticate Ed25519 documents, scope,
+current filesystem refs or external revocation policy. A characterization test
+checks whether application verification rejects a wrong scope while direct SQL can still
+persist that document's digest as an execution row. No economic action is taken
+by that characterization. This test records a vulnerability, not approval or a
+weakened security expectation. No test is xfailed or assertion relaxed.
+
+Meeting the requested invariant against a SQL-capable/compromised worker requires
+a separately trusted admission writer/verifier and removal of worker authority
+INSERT privileges, or a reviewed database cryptographic/commit enforcement design.
+The current in-process repository cannot both retain worker INSERT capability
+and claim independent database authorization. No issuer, trust key, privileged
+extension, production grant or approval is invented here. Do not merge or activate
+this candidate as production-ready merely because transaction regressions turn
+green. Independent security review and that architectural correction remain
+engineering blockers, in addition to all existing genuine host/provider/data/
+calendar/restore/signing and activation prerequisites.

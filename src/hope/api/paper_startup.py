@@ -24,6 +24,7 @@ def bootstrap(engine,permit,directory,*,role_probe=verify_database_role):
     with engine.connect() as connection:
         connection.exec_driver_sql('SET TRANSACTION READ ONLY')
         role_probe(connection,component='paper');assert_public_schema(connection)
+        connection.execute(text('SELECT public.hope_require_startup_financial_role()'))
         handoff.require(database_identity(connection)==permit.handoff.token['database_sha256'])
     # Commit one-use consumption before bootstrap work. Never reset on error.
     with engine.begin() as connection:SqlAlchemyPaperStartupRepository(connection).claim_startup(permit)

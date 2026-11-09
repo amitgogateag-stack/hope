@@ -8,7 +8,9 @@ instructions. Keep LIVE disabled; preserve NO_TRADE/HALTED and the frozen
 
 ## Current decision
 
-**Engineering candidate: validate the exact combined PR and independent review.
+**Engineering integration NO-GO: independent database authority admission is
+not yet enforced against a SQL-capable worker. Read the final financial security
+audit in M4_INTEGRATED_SECURITY_REVIEW.md before any integration decision.
 GO only for offline preparation/disposable rehearsal. NO-GO for AWS installation,
 production migration/activation and the first operational PAPER cycle until all
 genuine independent evidence and explicit approvals exist.**
@@ -49,13 +51,13 @@ No claim is made that current AWS is compatible with this branch.
    backup provenance, tables/data counts, logical identities and restore time.
    The CI008 fixture explicitly recreates the historical runner ledger (including
    DEFAULT now()); it is representative, not a copy of the actual host's data.
-4. Read the exact migration inventory below. The chain has235 migrations;
-   an exact verified008 prefix has227 pending (009 through235). Verify every
+4. Read the exact migration inventory below. The chain has236 migrations;
+   an exact verified008 prefix has228 pending (009 through236). Verify every
    applied checksum against approved source, prefix order and unknown records.
    NULL checksums, missing checksum columns, gaps or altered history require
    independent investigation. This runner does not backfill unverifiable history.
    Migration008's historical backfill remains unchanged and is not a new bypass.
-5. In the disposable restored database, review all227 pending SQL files, data
+5. In the disposable restored database, review all228 pending SQL files, data
    constraints, new functions/triggers, required privileges, locks and disk/RAM
    headroom. Apply using apply_migrations inside an explicit READ COMMITTED
    transaction. The runner supports PostgreSQL16/17, takes the schema migration
@@ -150,7 +152,7 @@ No claim is made that current AWS is compatible with this branch.
     WatchdogSec=0 and no inherited NOTIFY_SOCKET/WATCHDOG_PID/WATCHDOG_USEC. It
     must launch in the exact approved namespace, not merely reuse the ordinary
     host unit. Do not enable/start it or convert --stage-only into execution.
-    Source bootstrap, least-privilege DB login, schema235, restore proof, signed
+    Source bootstrap, least-privilege DB login, schema236, restore proof, signed
     authorities and provider/data/calendar acceptance must all be current.
     Namespace/launcher/observer facts and production installation/activation each
     need separate explicit approval. The normal long-running unit remains
@@ -456,3 +458,15 @@ data. These hashes are source inventory, never independent deployment approval.
 | 233 | 233_paper_certified_outcomes.sql | `950733ceeb97e26da2e9f902807b759cf24319b2586dd1baa0548d93b94cd211` |
 | 234 | 234_paper_handoff_intents.sql | `09ac97d2010058e2fba036eb3058c3567d1b38eb474fce3ead3160a30b014ecc` |
 | 235 | 235_paper_startup_authorities.sql | `f855d24ccdb999e495bc82c13f2ec87a895f391b70951b6621c5f1d2511975bc` |
+
+| 236 | 236_paper_startup_financial_transactions.sql | `325c43ce39dd25aaf8f2c177e1cb06f0d646a0f716f4e47f062dbd6c1a38cc21` |
+
+
+Startup-specific database prerequisite: use a dedicated login with no reachable
+privileged/schema-creation/TEMPORARY grants. PostgreSQL commonly grants TEMPORARY
+to PUBLIC; any eventual revocation/regrant plan requires explicit DBA approval
+and disposable rehearsal. Nothing here changes production grants. A principal
+which consumed startup authority remains constrained by immutable history and
+cannot become an ordinary worker. Migration236's transaction fences do not fix
+the independent authority-writer trust gap. A reviewed external admission/DB
+verification design is required before integration or operating GO.

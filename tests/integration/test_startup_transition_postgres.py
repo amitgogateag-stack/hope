@@ -36,6 +36,8 @@ def startup_database(isolated_database,monkeypatch):
     assert re.fullmatch('hope_startup_[0-9a-f]{32}',role)
     with admin.begin() as connection:
         apply_migrations(connection,MIGRATIONS)
+        database_name=connection.dialect.identifier_preparer.quote(admin.url.database)
+        connection.exec_driver_sql(f'REVOKE TEMPORARY ON DATABASE {database_name} FROM PUBLIC')
         connection.exec_driver_sql(f"CREATE ROLE {role} LOGIN PASSWORD '{password}' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS")
         connection.exec_driver_sql(f'GRANT USAGE ON SCHEMA public TO {role}')
         connection.exec_driver_sql(f'GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA public TO {role}')
@@ -382,9 +384,12 @@ def test_witness_expiring_after_success_before_actual_commit_rolls_back_financia
 
 
 
-def test_temporary_financial_schema_shadow_is_refused_before_any_startup_consumption(prepare):
+def test_temporary_financial_schema_shadow_is_refused_before_any_startup_consumption(prepare,startup_database):
     from hope.infrastructure.repositories.paper_startup import assert_public_schema
     value=prepare();worker=value['worker']
+    with startup_database['admin'].begin() as connection:
+        name=connection.dialect.identifier_preparer.quote(startup_database['admin'].url.database)
+        connection.exec_driver_sql('GRANT TEMPORARY ON DATABASE '+name+' TO '+startup_database['role'])
     with worker.connect() as connection:
         connection.exec_driver_sql('CREATE TEMP TABLE paper_environment_control_events (state text)')
         with pytest.raises(RuntimeError):assert_public_schema(connection)
