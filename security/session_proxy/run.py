@@ -72,6 +72,20 @@ def main():
             owner.execute(sql.SQL('GRANT INSERT ON session_prototype.approvals,session_prototype.effects TO {}').format(role))
             owner.execute(sql.SQL('GRANT EXECUTE ON FUNCTION session_prototype.check_commit() TO {}').format(role))
         admin.execute(sql.SQL('GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO {}').format(sql.Identifier(urls['broker'].username)))
+        # This independent SQL boundary is executable even if host attestation
+        # is BLOCKED. Do not abandon unaffected tests on a missing capability.
+        sql_denials=[]
+        with psycopg.connect(urls['worker'].set(drivername='postgresql').render_as_string(hide_password=False),autocommit=True) as worker:
+            for attack in ("INSERT INTO session_prototype.effects VALUES ('forged',1)",
+                           "UPDATE session_prototype.control SET halted=false,revoked=false",
+                           "INSERT INTO session_prototype.approvals(nonce) VALUES ('forged')",
+                           'SET ROLE '+urls['broker'].username):
+                try:worker.execute(attack)
+                except psycopg.errors.InsufficientPrivilege as exc:sql_denials.append(exc.sqlstate)
+                else:raise AssertionError('direct SQL boundary bypass')
+        require(admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]==0,'unauthorized SQL effect')
+        results['direct_sql_outside_boundary']={'status':'VERIFIED','scope':'disposable prototype only',
+                                               'sqlstates':sql_denials,'committed_effects':0}
         root=Path(tempfile.mkdtemp(prefix='hope-proxy-'));root.chmod(0o755)
         socketdir=root/'socket';socketdir.mkdir();os.chown(socketdir,BROKER_UID,BROKER_UID);socketdir.chmod(0o755)
         audit=socketdir/'audit.jsonl'
@@ -164,6 +178,7 @@ def main():
             raise AssertionError('missing kernel denial audit: '+reason)
 
         for name in CASES:
+            if results[name]['status']=='VERIFIED':continue
             state()
             try:
                 if name=='authorized_prototype_commit':
@@ -196,14 +211,6 @@ def main():
                     else:time.sleep(4)  # signed three-second lease; actual PG COMMIT check
                     response=denied(a,{'commit':True})
                     require(response['reason']=='CheckViolation','not rejected by database commit fence')
-                elif name=='direct_sql_outside_boundary':
-                    with psycopg.connect(urls['worker'].set(drivername='postgresql').render_as_string(hide_password=False),autocommit=True) as worker:
-                        for query in ('INSERT INTO session_prototype.effects VALUES (\'forged\',1)',
-                                      'SET ROLE '+urls['broker'].username):
-                            try:worker.execute(query)
-                            except psycopg.errors.InsufficientPrivilege:pass
-                            else:raise AssertionError('direct SQL escalation succeeded')
-                    require(admin.execute("SELECT count(*) FROM session_prototype.effects WHERE nonce='forged'").fetchone()[0]==0,'direct SQL effect')
                 results[name]={'status':'VERIFIED','scope':'disposable prototype only'}
             except Blocked as exc:results[name]={'status':'BLOCKED','reason':str(exc)}
             except Exception as exc:results[name]={'status':'FAILED','reason':type(exc).__name__+': '+str(exc)[:180]}
