@@ -1,0 +1,22 @@
+[
+  "forged_authority_signature",
+  "wrong_key_or_scope",
+  "borrowed_session_approval",
+  "controller_replacement",
+  "wrong_namespace_or_image",
+  "expired_or_revoked_authority",
+  "halt_concurrent_admission",
+  "policy_generation_rollback",
+  "duplicate_or_replayed_approval",
+  "worker_privilege_escalation",
+  "bootstrap_financial_write",
+  "direct_sql_bypass",
+  "commit_after_expiry",
+  "unknown_commit_outcome",
+  "restart_partial_admission",
+  "concurrent_controllers",
+  "missing_or_crashed_verifier",
+  "revocation_running_transaction",
+  "authorized_one_cycle_paper",
+  "failed_reconciliation_or_missing_audit"
+]
