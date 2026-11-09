@@ -49,6 +49,7 @@ def run() -> int:
                 admin.execute(sql.SQL("CREATE ROLE {} LOGIN PASSWORD {} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS NOINHERIT").format(sql.Identifier(role), sql.Literal(password)))
                 credentials[kind] = url.set(username=role, password=password)
             owner = credentials["owner"].username
+            admin.execute(sql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(sql.Identifier(url.database), sql.Identifier(owner)))
             admin.execute(sql.SQL("ALTER SCHEMA public OWNER TO {}").format(sql.Identifier(owner)))
             admin.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
             admin.execute(sql.SQL("REVOKE TEMPORARY ON DATABASE {} FROM PUBLIC").format(sql.Identifier(url.database)))
@@ -95,6 +96,7 @@ def run() -> int:
         report["error_frames"] = [f.name for f in traceback.extract_tb(exc.__traceback__)]
     finally:
         (OUT / "report.json").write_text(json.dumps(report, indent=2) + "\n")
+        print(json.dumps({k: v for k, v in report.items() if k != "migration_checksums"}, sort_keys=True))
         lines = ["# Independent admission security evidence", "", "A1 OPEN; engineering and operational PAPER NO-GO.",
             "All 20 required scenario proofs remain FAIL until a trusted positive session attestor exists.",
             "Denial experiments below are containment evidence only.", ""]
