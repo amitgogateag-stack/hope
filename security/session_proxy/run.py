@@ -187,6 +187,7 @@ def main():
         for name in CASES:
             if results[name]['status']=='VERIFIED':continue
             state()
+            economic_before=admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]
             try:
                 if name=='authorized_prototype_commit':
                     a=Client();prepared(a);response=a.send({'commit':True})
@@ -217,8 +218,15 @@ def main():
                     elif name=='halt_during_execution':state(halted=True)
                     else:time.sleep(4)  # signed three-second lease; actual PG COMMIT check
                     response=denied(a,{'commit':True})
-                    require(response['reason']=='CheckViolation','not rejected by database commit fence')
-                results[name]={'status':'VERIFIED','scope':'disposable prototype only'}
+                    expected={'revoked_authority':'PROTOTYPE_AUTHORITY_REVOKED',
+                              'halt_during_execution':'PROTOTYPE_HALTED',
+                              'expiry_at_commit':'PROTOTYPE_AUTHORITY_EXPIRED'}[name]
+                    require(response['reason']==expected,'wrong COMMIT rejection boundary: '+response['reason'])
+                economic_after=admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]
+                allowed=1 if name in ('authorized_prototype_commit','approval_replay') else 0
+                require(economic_after-economic_before==allowed,'unexpected committed economic effects')
+                results[name]={'status':'VERIFIED','scope':'disposable prototype only',
+                               'authorized_effects':allowed,'unauthorized_committed_effects':0}
             except Blocked as exc:results[name]={'status':'BLOCKED','reason':str(exc)}
             except Exception as exc:results[name]={'status':'FAILED','reason':type(exc).__name__+': '+str(exc)[:180]}
             finally:

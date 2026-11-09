@@ -68,7 +68,7 @@ def test_financial_commit_after_actual_authority_expiry_rolls_back_certified_eff
         if not count:return  # execution admission is a different transaction
         assert count==5
         row=connection.execute(text('SELECT e.expires_at,w.financial_transaction_id=pg_current_xact_id(),'
-            'clock_timestamp()<to_timestamp(e.expires_at) FROM paper_startup_executions e '
+            'clock_timestamp()<least(to_timestamp(e.expires_at),to_timestamp(w.witness_expires_at)) FROM paper_startup_executions e '
             'JOIN paper_startup_commit_witnesses w USING(authorization_sha256) WHERE e.job_run_id=:id'),
             {'id':value['run'].job_run_id}).one()
         assert tuple(row[1:])==(True,True)

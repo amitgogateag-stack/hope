@@ -25,9 +25,11 @@ BEGIN
  END IF;
  SELECT * INTO c FROM session_prototype.control WHERE id=1 FOR SHARE;
  SELECT * INTO a FROM session_prototype.approvals WHERE nonce=NEW.nonce;
- IF c.halted OR c.revoked OR c.generation<>a.generation OR a.backend_pid<>pg_backend_pid()
-   OR a.transaction_id<>pg_current_xact_id() OR a.login_name<>session_user
-   OR clock_timestamp()>=a.expires_at THEN
+ IF c.halted THEN RAISE EXCEPTION 'PROTOTYPE_HALTED' USING ERRCODE='23514'; END IF;
+ IF c.revoked THEN RAISE EXCEPTION 'PROTOTYPE_AUTHORITY_REVOKED' USING ERRCODE='23514'; END IF;
+ IF clock_timestamp()>=a.expires_at THEN RAISE EXCEPTION 'PROTOTYPE_AUTHORITY_EXPIRED' USING ERRCODE='23514'; END IF;
+ IF c.generation<>a.generation OR a.backend_pid<>pg_backend_pid()
+   OR a.transaction_id<>pg_current_xact_id() OR a.login_name<>session_user THEN
   RAISE EXCEPTION 'PROTOTYPE_COMMIT_DENIED' USING ERRCODE='23514';
  END IF;
  RETURN NULL;

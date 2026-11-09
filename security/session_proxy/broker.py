@@ -132,6 +132,9 @@ def serve(config_path):
                     raise
         except Exception as exc:
             reason = str(exc) if isinstance(exc, Denied) else type(exc).__name__
+            if isinstance(exc, psycopg.errors.CheckViolation) and exc.diag.message_primary in {
+                    'PROTOTYPE_HALTED', 'PROTOTYPE_AUTHORITY_REVOKED', 'PROTOTYPE_AUTHORITY_EXPIRED'}:
+                reason = exc.diag.message_primary
             audit(dict(nonce=nonce, result='DENIED', reason=reason))
             try:
                 send(peer, {'result': 'DENIED', 'reason': reason})
