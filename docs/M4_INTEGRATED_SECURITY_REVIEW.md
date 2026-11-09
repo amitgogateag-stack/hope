@@ -107,10 +107,13 @@ acknowledgment finishes before an absolute wall-clock deadline.
 **Unresolved HIGH A1: database admission is not an independent signature
 verifier.** The existing worker LOGIN can INSERT authority audit rows. PostgreSQL
 checks metadata and fences but does not authenticate Ed25519 documents, scope,
-current filesystem refs or external revocation policy. A characterization test
-checks whether application verification rejects a wrong scope while direct SQL can still
-persist that document's digest as an execution row. No economic action is taken
-by that characterization. This test records a vulnerability, not approval or a
+current filesystem refs or external revocation policy. The initial native security suite (13 cases per PG16/17 job) confirmed that
+application verification rejects a wrong scope while direct SQL can still
+persist that document's digest as an execution row. No economic action is taken by the scope characterization. A second
+characterization records synthetic cash before admission: until the login has
+consumed a startup claim, these guards cannot distinguish it from an ordinary
+financial writer. This requires trusted pre-admission role classification, not
+an allowlist inferred from worker-controlled rows. This test records a vulnerability, not approval or a
 weakened security expectation. No test is xfailed or assertion relaxed.
 
 Meeting the requested invariant against a SQL-capable/compromised worker requires
@@ -123,3 +126,13 @@ this candidate as production-ready merely because transaction regressions turn
 green. Independent security review and that architectural correction remain
 engineering blockers, in addition to all existing genuine host/provider/data/
 calendar/restore/signing and activation prerequisites.
+
+
+Additional scope hardening binds the consumed session login as well as current
+role, so SET ROLE cannot erase an established startup restriction. Every one of
+the thirteen tables is checked for enabled DML, truncate and deferred row guards.
+Failed terminal jobs cannot commit partial financial work. The full source and
+PR PG16/17 results and exact SHA in the PR supersede the initial installation
+failure caused by psycopg interpreting a PL/pgSQL format placeholder; identifier
+quoting fixed the installation without changing migration runner behavior or
+assertions. These additional checks do not resolve HIGH A1.

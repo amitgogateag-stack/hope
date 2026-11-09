@@ -7,10 +7,12 @@ CREATE TABLE paper_startup_financial_transactions (
     database_principal TEXT NOT NULL DEFAULT current_user,
     recorded_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
 );
+CREATE INDEX paper_startup_claims_database_principal ON paper_startup_claims(database_principal);
+CREATE INDEX paper_startup_executions_database_principal ON paper_startup_executions(database_principal);
 CREATE FUNCTION hope_require_startup_financial_role()
 RETURNS void LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
 BEGIN
-    IF EXISTS(SELECT 1 FROM pg_roles r WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER'))
+    IF current_user IS DISTINCT FROM session_user OR EXISTS(SELECT 1 FROM pg_roles r WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER'))
         AND (r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication OR r.rolbypassrls
             OR has_database_privilege(r.oid,current_database(),'TEMPORARY')
             OR has_database_privilege(r.oid,current_database(),'CREATE')
@@ -63,7 +65,7 @@ DECLARE authority RECORD; durable_transaction xid8; active_count BIGINT;
 BEGIN
     -- Ordinary principals retain their established financial contracts. A login
     -- which has consumed startup authority cannot become an ordinary worker.
-    IF NOT EXISTS(SELECT 1 FROM paper_startup_claims WHERE database_principal=current_user) THEN
+    IF NOT EXISTS(SELECT 1 FROM paper_startup_claims WHERE database_principal IN (current_user,session_user)) THEN
         IF TG_OP='TRUNCATE' THEN RETURN NULL; END IF;
         IF TG_TABLE_NAME='paper_effects' AND TG_OP<>'DELETE' THEN
             IF EXISTS(SELECT 1 FROM paper_startup_executions WHERE job_run_id=NEW.job_run_id) THEN
@@ -71,6 +73,9 @@ BEGIN
             END IF;
         END IF;
         IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
+    END IF;
+    IF current_user IS DISTINCT FROM session_user THEN
+        RAISE EXCEPTION 'PAPER_STARTUP_FINANCIAL_OWNER_UNVERIFIED' USING ERRCODE='23514';
     END IF;
     IF TG_OP='TRUNCATE' THEN
         RAISE EXCEPTION 'PAPER_STARTUP_FINANCIAL_TRUNCATE_FORBIDDEN' USING ERRCODE='23514';
@@ -149,7 +154,7 @@ CREATE FUNCTION hope_verify_startup_financial_row_commit()
 RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
 DECLARE target RECORD; authority RECORD; witness RECORD;
 BEGIN
-    IF NOT EXISTS(SELECT 1 FROM paper_startup_claims WHERE database_principal=current_user) THEN RETURN NULL; END IF;
+    IF NOT EXISTS(SELECT 1 FROM paper_startup_claims WHERE database_principal IN (current_user,session_user)) THEN RETURN NULL; END IF;
     SELECT t.* INTO target FROM paper_startup_financial_transactions t
         WHERE t.database_principal=current_user AND t.transaction_id=pg_current_xact_id();
     SELECT * INTO authority FROM paper_startup_executions WHERE authorization_sha256=target.authorization_sha256;

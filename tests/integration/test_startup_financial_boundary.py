@@ -35,8 +35,8 @@ def test_every_financial_relation_has_enabled_native_write_and_truncate_guards(s
     with startup_database['worker'].connect() as connection:
         rows=connection.execute(text("SELECT c.relname,t.tgname,t.tgenabled FROM pg_catalog.pg_trigger t "
             "JOIN pg_catalog.pg_class c ON c.oid=t.tgrelid JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
-            "WHERE n.nspname='public' AND t.tgname IN ('trg_startup_financial_write','trg_startup_financial_truncate')")).all()
-    assert set(rows)=={(table,name,'O') for table in FINANCIAL_TABLES for name in ('trg_startup_financial_write','trg_startup_financial_truncate')}
+            "WHERE n.nspname='public' AND t.tgname IN ('trg_startup_financial_write','trg_startup_financial_truncate','zzzz_startup_financial_commit')")).all()
+    assert set(rows)=={(table,name,'O') for table in FINANCIAL_TABLES for name in ('trg_startup_financial_write','trg_startup_financial_truncate','zzzz_startup_financial_commit')}
 
 
 def test_genuine_certified_cycle_binds_financial_rows_and_witness_to_one_transaction(prepare):
@@ -128,3 +128,51 @@ def test_characterize_database_admission_does_not_verify_independent_signature_s
     with worker.connect() as connection:
         assert connection.execute(text('SELECT authorization_sha256 FROM paper_startup_executions')).scalar_one()==forged
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0
+
+
+
+def test_set_role_cannot_drop_the_consumed_login_scope(prepare,startup_database):
+    value=prepare();worker=value['worker'];admin=startup_database['admin'];delegate='hope_delegate_'+uuid4().hex
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('CREATE ROLE '+delegate+' NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS')
+        connection.exec_driver_sql('GRANT USAGE ON SCHEMA public TO '+delegate)
+        connection.exec_driver_sql('GRANT SELECT ON ALL TABLES IN SCHEMA public TO '+delegate)
+        connection.exec_driver_sql('GRANT INSERT ON public.paper_portfolios TO '+delegate)
+        connection.exec_driver_sql('GRANT '+delegate+' TO '+startup_database['role'])
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_'):
+            with worker.begin() as connection:
+                connection.exec_driver_sql('SET LOCAL ROLE '+delegate)
+                connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('DROP OWNED BY '+delegate)
+            connection.exec_driver_sql('DROP ROLE '+delegate)
+
+
+def test_failed_job_cannot_commit_partial_financial_work(prepare):
+    from hope.application.jobs import JobRunStatus,create_job_run_completion
+    from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
+    value=prepare();worker=value['worker'];startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    startup.execution_callbacks(worker,value['case']['verify_execution']())
+    with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_COMMIT_UNVERIFIED'):
+        with worker.begin() as connection:
+            jobs=SqlAlchemyJobRunRepository(connection);assert jobs.claim(value['run'])
+            assert jobs.complete(create_job_run_completion(value['run'],JobRunStatus.FAILED,
+                value['run'].scheduled_for+timedelta(minutes=1),failure_code='SYNTHETIC_SECURITY_FAILURE'))
+            connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+    with worker.connect() as connection:
+        assert connection.execute(text('SELECT count(*) FROM job_runs WHERE job_run_id=:id'),{'id':value['run'].job_run_id}).scalar_one()==0
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_financial_transactions')).scalar_one()==0
+
+
+
+def test_characterize_unadmitted_login_is_indistinguishable_from_ordinary_writer(startup_database):
+    """Known HIGH admission/role-classification gap; retain integration NO-GO."""
+    worker=startup_database['worker'];target=uuid4()
+    with worker.begin() as connection:
+        connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
+    with worker.connect() as connection:
+        assert connection.execute(text('SELECT cash FROM paper_portfolios WHERE portfolio_id=:id'),{'id':target}).scalar_one()==50
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_claims')).scalar_one()==0
