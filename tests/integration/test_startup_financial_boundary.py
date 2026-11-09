@@ -3,28 +3,90 @@ from datetime import timedelta
 import time
 from uuid import uuid4
 import pytest
-from sqlalchemy import text
+from sqlalchemy import text,event
 from sqlalchemy.exc import DBAPIError
 from test_startup_transition_postgres import isolated_database,startup_database,seeded,prepare,certified_case,execute,MIGRATIONS
 from hope.api import paper_startup as startup
 
 pytestmark=pytest.mark.integration
 
-@pytest.mark.parametrize('phase',['bootstrap_only','claimed_without_job','completed','expired'])
+@pytest.mark.parametrize('phase',['bootstrap_only','claimed_without_job','completed'])
 def test_direct_financial_commit_requires_live_same_transaction_execution(prepare,phase):
     value=prepare();case=value['case'];worker=value['worker'];target=uuid4()
     startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
     if phase=='completed':execute(value)
     elif phase!='bootstrap_only':
-        if phase=='expired':
-            case['execution']['expires_at']=int(time.time())+3;case['pin_authority']('execution')
         startup.execution_callbacks(worker,case['verify_execution']())
-        if phase=='expired':time.sleep(4)
     with pytest.raises(DBAPIError,match='PAPER_STARTUP_'):
         with worker.begin() as connection:
             connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
     with worker.connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM public.paper_portfolios WHERE portfolio_id=:id'),{'id':target}).scalar_one()==0
+
+
+@pytest.mark.parametrize('stall',['before_admission','after_sql_before_closing_refresh'])
+def test_execution_expiry_rejects_admission_at_intended_boundary(prepare,stall):
+    """Real PG, real clock; reproduce the former premature failure explicitly."""
+    value=prepare();case=value['case'];worker=value['worker']
+    startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
+    if stall=='before_admission':
+        case['execution']['expires_at']=int(time.time())+3
+        case['pin_authority']('execution')
+    reached=[]
+    def delay(connection,cursor,statement,parameters,context,executemany):
+        if statement.startswith('INSERT INTO public.paper_startup_executions '):
+            reached.append(True)
+            while connection.execute(text('SELECT clock_timestamp()<to_timestamp(:expiry)'),
+                    {'expiry':case['execution']['expires_at']}).scalar_one():
+                connection.execute(text('SELECT pg_sleep(0.1)'))
+    if stall=='before_admission':time.sleep(4)
+    else:event.listen(worker,'after_cursor_execute',delay)
+    try:
+        with pytest.raises(RuntimeError,match='DEPLOYMENT_EVIDENCE_INVALID'):
+            startup.execution_callbacks(worker,case['verify_execution']())
+    finally:
+        if stall!='before_admission':event.remove(worker,'after_cursor_execute',delay)
+    assert bool(reached)==(stall=='after_sql_before_closing_refresh')
+    with worker.connect() as connection:
+        for table in ('paper_startup_executions','paper_startup_financial_transactions','paper_effects'):
+            assert connection.execute(text('SELECT count(*) FROM '+table)).scalar_one()==0
+
+
+def test_financial_commit_after_actual_authority_expiry_rolls_back_certified_effects(prepare):
+    """Admission succeeds first. Delay only the real COMMIT, after ALL refreshes.
+
+    Keep the separate admission experiment's three-second limit unchanged.
+    Here use the fixture's ordinary signed lifetime, without extending it, so
+    setup latency cannot cause an admission failure to masquerade as COMMIT proof.
+    """
+    value=prepare('FILLED');worker=value['worker'];case=value['case']
+    startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
+    reached=[]
+    def expire_at_commit(connection):
+        count=connection.execute(text('SELECT count(*) FROM paper_effects WHERE job_run_id=:id'),
+            {'id':value['run'].job_run_id}).scalar_one()
+        if not count:return  # execution admission is a different transaction
+        assert count==5
+        row=connection.execute(text('SELECT e.expires_at,w.financial_transaction_id=pg_current_xact_id(),'
+            'clock_timestamp()<least(to_timestamp(e.expires_at),to_timestamp(w.witness_expires_at)) FROM paper_startup_executions e '
+            'JOIN paper_startup_commit_witnesses w USING(authorization_sha256) WHERE e.job_run_id=:id'),
+            {'id':value['run'].job_run_id}).one()
+        assert tuple(row[1:])==(True,True)
+        reached.append({'effects':count,'expiry':row[0]})
+        # Active bounded SQL waits avoid idle-session timeout. Use PostgreSQL's
+        # clock, not a monkeypatched authority clock or a modified deadline.
+        while connection.execute(text('SELECT clock_timestamp()<to_timestamp(:expiry)'),{'expiry':row[0]}).scalar_one():
+            connection.execute(text('SELECT pg_sleep(0.1)'))
+    event.listen(worker,'commit',expire_at_commit)
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_COMMIT_UNVERIFIED'):
+            execute(value)
+    finally:event.remove(worker,'commit',expire_at_commit)
+    assert len(reached)==1 and reached[0]['effects']==5
+    with worker.connect() as connection:
+        for table in ('paper_effects','orders','fills','paper_startup_financial_transactions',
+                      'paper_startup_commit_witnesses','paper_startup_completions','paper_certified_outcomes'):
+            assert connection.execute(text('SELECT count(*) FROM '+table)).scalar_one()==0
 
 
 FINANCIAL_TABLES={'signals','orders','fills','paper_effects','paper_portfolios','paper_portfolio_positions',

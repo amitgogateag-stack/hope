@@ -1,0 +1,76 @@
+name: M4 trusted session prototype
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  prototype:
+    name: Kernel session prototype (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: hope
+          POSTGRES_PASSWORD: disposable_only
+          POSTGRES_DB: hope
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U hope -d hope"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Install disposable test dependencies
+        run: python -m pip install -c constraints/ci-test.txt -e '.[test]' -r security/session_proxy/requirements.txt
+      - name: Record exact source and harness digests
+        run: |
+          git rev-parse HEAD > tested-commit.txt
+          sha256sum security/session_proxy/*.* > harness-sha256.txt
+      - name: Reproduce frozen PR87 three-second admission race
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+          PYTHONPATH: src:tests:tests/integration
+        run: pytest -v --junitxml=reproduction-results.xml security/reproduce_pr87_expiry.py
+      - name: Separate admission refresh and financial COMMIT expiry proofs
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+        run: >-
+          pytest -v --junitxml=expiry-results.xml tests/integration/test_startup_financial_boundary.py
+          -k 'execution_expiry_rejects_admission_at_intended_boundary or financial_commit_after_actual_authority_expiry'
+      - name: Genuine Linux peer and actual PostgreSQL session attacks
+        if: always()
+        env:
+          PROXY_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
+          PROXY_POSTGRES_MAJOR: ${{ matrix.postgres }}
+          PROXY_EVIDENCE_DIR: proxy-evidence
+        run: sudo --preserve-env=PROXY_DATABASE_URL,PROXY_POSTGRES_MAJOR,PROXY_EVIDENCE_DIR "$(command -v python)" security/session_proxy/run.py
+      - name: Publish prototype evidence
+        if: always()
+        run: |
+          test -s proxy-evidence/report.json
+          cat proxy-evidence/report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: kernel-session-prototype-pg${{ matrix.postgres }}
+          path: |
+            proxy-evidence/
+            expiry-results.xml
+            reproduction-results.xml
+            tested-commit.txt
+            harness-sha256.txt
+          if-no-files-found: error
