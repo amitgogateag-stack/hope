@@ -99,12 +99,8 @@ def test_financial_transaction_ledger_is_immutable_even_to_owner(prepare,startup
             with startup_database['admin'].begin() as connection:connection.exec_driver_sql(sql)
 
 
-def test_characterize_database_admission_does_not_verify_independent_signature_scope(prepare):
-    """Known HIGH architecture gap, not an expected-security assertion/approval.
-
-    Correct application verification refuses this scope. SQL-only authority
-    admission lacks a trusted cryptographic verifier. Keep integration NO-GO.
-    """
+def test_database_admission_rejects_wrong_scope_even_with_worker_sql(prepare):
+    """A valid signature for the wrong role/scope cannot become DB authority."""
     value=prepare();case=value['case'];worker=value['worker']
     startup.bootstrap(worker,case['verify_startup'](),MIGRATIONS)
     valid=case['verify_execution']()
@@ -119,15 +115,14 @@ def test_characterize_database_admission_does_not_verify_independent_signature_s
         controller_process_sha256=valid.handoff.token['controller_process_sha256'],authorizer_key_sha256=valid.authorizer_key_sha256,
         policy_authority_sha256=valid.policy_authority_sha256,observed_policy_generation=valid.policy_generation,
         witness_expires_at=valid.expires_at,job_run_id=valid.run.job_run_id,scheduled_for=valid.run.scheduled_for)
-    # A real restricted LOGIN can insert the out-of-scope authority's digest.
-    # This explicitly records why transaction guards alone cannot certify the
-    # stronger independent-authorization invariant requested by the audit.
-    with worker.begin() as connection:
-        connection.execute(text('INSERT INTO public.paper_startup_executions ('+','.join(values)+') VALUES ('+
-            ','.join(':'+key for key in values)+')'),values)
+    with pytest.raises(DBAPIError,match='PAPER_ADMISSION_'):
+        with worker.begin() as connection:
+            connection.execute(text('INSERT INTO public.paper_startup_executions ('+','.join(values)+') VALUES ('+
+                ','.join(':'+key for key in values)+')'),values)
     with worker.connect() as connection:
-        assert connection.execute(text('SELECT authorization_sha256 FROM paper_startup_executions')).scalar_one()==forged
+        assert connection.execute(text('SELECT count(*) FROM paper_startup_executions')).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0
+
 
 
 
@@ -168,14 +163,15 @@ def test_failed_job_cannot_commit_partial_financial_work(prepare):
 
 
 
-def test_characterize_unadmitted_login_is_indistinguishable_from_ordinary_writer(startup_database):
-    """Known HIGH admission/role-classification gap; retain integration NO-GO."""
+def test_unadmitted_login_cannot_create_economic_state(startup_database):
     worker=startup_database['worker'];target=uuid4()
-    with worker.begin() as connection:
-        connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
+    with pytest.raises(DBAPIError,match='PAPER_ADMISSION_'):
+        with worker.begin() as connection:
+            connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
     with worker.connect() as connection:
-        assert connection.execute(text('SELECT cash FROM paper_portfolios WHERE portfolio_id=:id'),{'id':target}).scalar_one()==50
+        assert connection.execute(text('SELECT count(*) FROM paper_portfolios WHERE portfolio_id=:id'),{'id':target}).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_startup_claims')).scalar_one()==0
+
 
 
 
