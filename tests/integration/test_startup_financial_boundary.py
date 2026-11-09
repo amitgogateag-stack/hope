@@ -176,3 +176,20 @@ def test_characterize_unadmitted_login_is_indistinguishable_from_ordinary_writer
     with worker.connect() as connection:
         assert connection.execute(text('SELECT cash FROM paper_portfolios WHERE portfolio_id=:id'),{'id':target}).scalar_one()==50
         assert connection.execute(text('SELECT count(*) FROM paper_startup_claims')).scalar_one()==0
+
+
+
+@pytest.mark.parametrize('primary_failure',[False,True])
+def test_dead_scheduler_backend_preserves_primary_failure_and_never_reports_success(startup_database,primary_failure):
+    from hope.infrastructure.scheduling.paper import _operational_paper_scheduler_lock,_PAPER_SCHEDULER_LOCK_NAME
+    worker=startup_database['worker'];admin=startup_database['admin'];original=ValueError('SYNTHETIC_FINANCIAL_FAILURE')
+    expected=ValueError if primary_failure else DBAPIError
+    with pytest.raises(expected) as caught:
+        with _operational_paper_scheduler_lock(worker) as lease:
+            pid=lease.execute(text('SELECT pg_backend_pid()')).scalar_one()
+            with admin.begin() as connection:
+                assert connection.execute(text('SELECT pg_terminate_backend(:pid)'),{'pid':pid}).scalar_one() is True
+            if primary_failure:raise original
+    if primary_failure:assert caught.value is original
+    with worker.connect() as connection:
+        assert connection.execute(text('SELECT pg_try_advisory_xact_lock(hashtext(:name)::bigint)'),{'name':_PAPER_SCHEDULER_LOCK_NAME}).scalar_one() is True

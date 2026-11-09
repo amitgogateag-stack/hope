@@ -136,3 +136,14 @@ PR PG16/17 results and exact SHA in the PR supersede the initial installation
 failure caused by psycopg interpreting a PL/pgSQL format placeholder; identifier
 quoting fixed the installation without changing migration runner behavior or
 assertions. These additional checks do not resolve HIGH A1.
+
+
+Confirmed MEDIUM F10: an expired scheduler lease connection could mask the
+primary financial-COMMIT rejection during cleanup. A prior PG17 full run failed
+its strict expiry-error assertion; server logs show the scheduler idle-timeout
+and financial rejection on different backend PIDs milliseconds apart. A local
+regression reproduced replacement of the primary exception. Cleanup now discards
+the failed session and preserves the primary error with fixed diagnostic notes;
+a cleanup failure after otherwise successful work still fails closed. Real
+backend-termination cases verify both paths and lock release. No timeout,
+assertion, expiry policy, lock ownership or retry behavior is loosened.
