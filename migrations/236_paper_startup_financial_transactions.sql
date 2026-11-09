@@ -188,9 +188,9 @@ BEGIN
             'paper_portfolio_positions','paper_portfolio_fill_applications','paper_portfolio_pnl_events',
             'paper_risk_assessments','paper_order_terminal_events','paper_no_trade_decisions',
             'paper_strategy_authorizations','paper_certified_outcomes'] LOOP
-            EXECUTE format('CREATE TRIGGER trg_startup_financial_write BEFORE INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.hope_require_startup_financial_write()',target);
-            EXECUTE format('CREATE TRIGGER trg_startup_financial_truncate BEFORE TRUNCATE ON public.%I FOR EACH STATEMENT EXECUTE FUNCTION public.hope_require_startup_financial_write()',target);
-            EXECUTE format('CREATE CONSTRAINT TRIGGER zzzz_startup_financial_commit AFTER INSERT OR UPDATE OR DELETE ON public.%I DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hope_verify_startup_financial_row_commit()',target);
+            EXECUTE 'CREATE TRIGGER trg_startup_financial_write BEFORE INSERT OR UPDATE OR DELETE ON public.'||quote_ident(target)||' FOR EACH ROW EXECUTE FUNCTION public.hope_require_startup_financial_write()';
+            EXECUTE 'CREATE TRIGGER trg_startup_financial_truncate BEFORE TRUNCATE ON public.'||quote_ident(target)||' FOR EACH STATEMENT EXECUTE FUNCTION public.hope_require_startup_financial_write()';
+            EXECUTE 'CREATE CONSTRAINT TRIGGER zzzz_startup_financial_commit AFTER INSERT OR UPDATE OR DELETE ON public.'||quote_ident(target)||' DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION public.hope_verify_startup_financial_row_commit()';
         END LOOP;
     END IF;
 END;

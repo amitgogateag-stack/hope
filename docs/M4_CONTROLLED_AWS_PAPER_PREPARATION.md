@@ -459,7 +459,7 @@ data. These hashes are source inventory, never independent deployment approval.
 | 234 | 234_paper_handoff_intents.sql | `09ac97d2010058e2fba036eb3058c3567d1b38eb474fce3ead3160a30b014ecc` |
 | 235 | 235_paper_startup_authorities.sql | `f855d24ccdb999e495bc82c13f2ec87a895f391b70951b6621c5f1d2511975bc` |
 
-| 236 | 236_paper_startup_financial_transactions.sql | `325c43ce39dd25aaf8f2c177e1cb06f0d646a0f716f4e47f062dbd6c1a38cc21` |
+| 236 | 236_paper_startup_financial_transactions.sql | `c3d1bd3a68a58b7dfeb274371f327f51cf106cdc70540a984df720a52423753d` |
 
 
 Startup-specific database prerequisite: use a dedicated login with no reachable
