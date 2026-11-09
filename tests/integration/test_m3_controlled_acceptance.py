@@ -6,7 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from threading import Barrier
 
 import pytest
-from sqlalchemy import create_engine,event,text
+from sqlalchemy import create_engine,text
 
 from test_certified_paper_bridge import certified_case
 from hope.application.jobs import create_scheduled_job_run
@@ -23,16 +23,19 @@ from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding,Oper
 def acceptance_case(certified_case,monkeypatch,tmp_path):
     owner,make=certified_case
     name="m3_test_"+uuid4().hex
+    password=uuid4().hex
     with owner.begin() as connection:
-        connection.execute(text(f'CREATE ROLE "{name}" NOLOGIN'))
+        connection.execute(text(f'CREATE ROLE "{name}" LOGIN PASSWORD \'{password}\' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS'))
         connection.execute(text(f'GRANT USAGE ON SCHEMA public TO "{name}"'))
         connection.execute(text(f'GRANT SELECT,INSERT,UPDATE ON ALL TABLES IN SCHEMA public TO "{name}"'))
         connection.execute(text(f'GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO "{name}"'))
-    writer=create_engine(owner.url)
-    @event.listens_for(writer,"connect")
-    def assume_role(connection,record):
-        with connection.cursor() as cursor:cursor.execute(f'SET ROLE "{name}"')
-        connection.commit()
+        # Explicit disposable-owner classification of the pre-existing M3
+        # ordinary path. Never infer this from worker-controlled audit rows.
+        connection.execute(text("INSERT INTO paper_admission_principals(principal_oid,principal_name,admission_mode) "
+            "SELECT oid,rolname,'ORDINARY' FROM pg_roles WHERE rolname=:name"),{'name':name})
+    writer=create_engine(owner.url.set(username=name,password=password))
+    with writer.connect() as connection:
+        assert tuple(connection.execute(text('SELECT current_user,session_user')).one())==(name,name)
     monkeypatch.setenv("HOPE_DEPLOYED_COMMIT","a"*40)
     def build(path="NO_TRADE",sessions=1):
         data,_,strategy,work,_=make(emit=path!="NO_TRADE",blocked=path=="RISK_BLOCKED")

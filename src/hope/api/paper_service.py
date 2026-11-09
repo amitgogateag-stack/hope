@@ -1,6 +1,7 @@
 """Run the opt-in, PAPER-only autonomous service with a reviewed local factory."""
 from __future__ import annotations
 import argparse
+from contextlib import contextmanager
 import importlib
 import os
 import re
@@ -43,9 +44,29 @@ def main(argv=None) -> int:
     parser.add_argument("--poll-seconds", type=float, default=30)
     parser.add_argument("--once", action="store_true")
     parser.add_argument("--deployment-receipt",help="Independently approved immutable receipt SHA256; fail closed on absent evidence")
+    parser.add_argument("--controller-directory",type=Path,help="Optional staged controller admission gate; requires --deployment-receipt")
+    parser.add_argument('--expected-cycle-key',help='Additional one-run constraint; never substitutes for independently approved execution authority')
+    parser.add_argument('--handoff-request',help='One-use intent admission in addition to existing running authority; requires exact single-cycle mode')
+    parser.add_argument('--startup-request',help='Separately signed bootstrap-only authority; never implicit from STAGED')
+    parser.add_argument('--first-cycle-execution-request',help='Distinct signed one-certified-cycle authority')
+    parser.add_argument('--authority-wait-seconds',type=int,default=0)
     args = parser.parse_args(argv)
+    if args.startup_request is not None and (not args.once or args.handoff_request is None or args.expected_cycle_key is None
+            or args.deployment_receipt is None or args.controller_directory is None
+            or re.fullmatch('[0-9a-f]{64}',args.startup_request) is None or not 0<=args.authority_wait_seconds<=60):
+        parser.exit(2,'PAPER_STARTUP_ARGUMENTS_INVALID\n')
+    if (args.first_cycle_execution_request is not None and (args.startup_request is None
+            or re.fullmatch('[0-9a-f]{64}',args.first_cycle_execution_request) is None)) or (args.startup_request is None and args.authority_wait_seconds!=0):
+        parser.exit(2,'PAPER_STARTUP_ARGUMENTS_INVALID\n')
+    if args.handoff_request is not None and (args.expected_cycle_key is None or re.fullmatch('[0-9a-f]{64}',args.handoff_request) is None):
+        parser.exit(2,'PAPER_HANDOFF_REQUEST_INVALID\n')
+    if args.expected_cycle_key is not None and (not args.once or args.controller_directory is None
+            or args.deployment_receipt is None or re.fullmatch('[0-9a-f]{64}',args.expected_cycle_key) is None):
+        parser.exit(2,'PAPER_SINGLE_CYCLE_GUARD_REQUIRED\n')
     if args.deployment_receipt is not None and not re.fullmatch('[0-9a-f]{64}',args.deployment_receipt):
         parser.exit(2,"PAPER_SERVICE_DEPLOYMENT_RECEIPT_INVALID\n")
+    if args.controller_directory is not None and args.deployment_receipt is None:
+        parser.exit(2,"PAPER_SERVICE_CONTROLLER_RECEIPT_REQUIRED\n")
     url = os.getenv("HOPE_DATABASE_URL")
     if not url:
         parser.exit(2, "PAPER_SERVICE_DATABASE_CONFIGURATION_REQUIRED\n")
@@ -56,11 +77,16 @@ def main(argv=None) -> int:
     def database():
         nonlocal engine
         if engine is None:
+            options="-c statement_timeout=30000 -c lock_timeout=10000 -c idle_in_transaction_session_timeout=5000"
+            if args.startup_request is not None:options+=" -c search_path=pg_catalog,public,pg_temp"
             engine=create_engine(url,pool_pre_ping=True,pool_timeout=10,
-                connect_args={"connect_timeout":10,"options":"-c statement_timeout=30000 -c lock_timeout=10000"})
+                connect_args={"connect_timeout":10,"options":options})
         return engine
     try:
         release = Path(args.migrations_dir).resolve(strict=True).parent
+        if args.startup_request is not None:
+            from hope.api.paper_startup import run_startup
+            return run_startup(args,release,database,stop)
         def host_probe():
             # Called only after source/runtime/image/provider approvals pass.
             # Observe the configured database without any data mutation.
@@ -70,13 +96,27 @@ def main(argv=None) -> int:
                 return host_observation(connection=connection)
         def guard():
             if args.deployment_receipt is None:return paper_operational_guard(release)
-            return paper_operational_guard(release,deployment_receipt=args.deployment_receipt,factory_spec=args.factory,host_probe=host_probe)
+            options={} if args.controller_directory is None else {'controller_directory':args.controller_directory}
+            return paper_operational_guard(release,deployment_receipt=args.deployment_receipt,factory_spec=args.factory,host_probe=host_probe,**options)
+        @contextmanager
+        def execution_guard():
+            with guard() as runtime_check:
+                if args.handoff_request is None:
+                    yield runtime_check
+                else:
+                    from hope.api.paper_handoff import handoff_guard
+                    with handoff_guard(database(),release.parent.parent,release.name,args.handoff_request,
+                                       args.deployment_receipt,args.factory,args.expected_cycle_key) as handoff_check:
+                        def check():
+                            runtime_check();handoff_check()
+                        check();yield check;check()
         with guard():
             factory = load_plan_factory(args.factory, release=release)
         database()
         return run_service(engine, factory, migrations_dir=args.migrations_dir,
             status_file=args.status_file, stop_event=stop, poll_seconds=args.poll_seconds, once=args.once,
-            require_certified=True,cycle_guard=guard)
+            require_certified=True,cycle_guard=execution_guard,
+            **({"expected_cycle_key":args.expected_cycle_key} if args.expected_cycle_key is not None else {}))
     except Exception:
         # The helper acquires publication ownership independently. A rejected
         # competing CLI must leave the active worker's health/history untouched.

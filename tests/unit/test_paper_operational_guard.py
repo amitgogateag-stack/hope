@@ -90,3 +90,44 @@ def test_unverified_runtime_cycle_never_reports_current_or_notifies_ready(tmp_pa
     assert published[-1]["runtime_gate"]=="UNVERIFIED" and published[-1]["state"]=="UNAVAILABLE"
     assert published[-1]["error_code"]=="PAPER_RUNTIME_UNVERIFIED"
     cycle.assert_not_called();notifier.ready.assert_not_called()
+
+
+def test_cli_controller_requires_receipt_before_database_or_factory(tmp_path,monkeypatch,capsys):
+    engine=Mock();factory=Mock()
+    monkeypatch.setattr(cli,'create_engine',engine);monkeypatch.setattr(cli,'load_plan_factory',factory)
+    with pytest.raises(SystemExit) as error:
+        cli.main(['--factory','reviewed:build','--migrations-dir',str(tmp_path),'--status-file',str(tmp_path/'health'),
+                  '--controller-directory',str(tmp_path/'controller')])
+    assert error.value.code==2 and capsys.readouterr().err=='PAPER_SERVICE_CONTROLLER_RECEIPT_REQUIRED\n'
+    engine.assert_not_called();factory.assert_not_called()
+
+
+@pytest.mark.parametrize('fault',[None,'HALTED','BLOCKED','UNAVAILABLE','release','receipt'])
+def test_optional_controller_admission_gate_rechecks_each_cycle(guarded,monkeypatch,fault):
+    from hope.api import paper_controller,deployment_contract
+    root,env,mode,path=guarded
+    receipt='b'*64
+    contract={'state':'VERIFIED'}
+    deployed=Mock(return_value=contract);monkeypatch.setattr(deployment_contract,'inspect_deployment',deployed)
+    result=dict(state='VERIFIED',release_commit=SHA,receipt_sha256=receipt)
+    if fault in {'HALTED','BLOCKED','UNAVAILABLE'}:result['state']=fault
+    elif fault=='release':result['release_commit']='f'*40
+    elif fault=='receipt':result['receipt_sha256']='f'*64
+    def observe(directory,selected_root,*,inspector,expected_plan):
+        assert directory==root/'controller' and selected_root==root
+        assert expected_plan==dict(release_commit=SHA,receipt_sha256=receipt,factory='reviewed:build')
+        assert inspector(root,SHA,expected_receipt=receipt,expected_factory='reviewed:build') is contract
+        return dict(result)
+    observed=Mock(side_effect=observe);monkeypatch.setattr(paper_controller,'observation',observed)
+    def guard():return gate.paper_operational_guard(root/'releases'/SHA,root=root,deployment_receipt=receipt,
+                                                   factory_spec='reviewed:build',controller_directory=root/'controller')
+    if fault is not None:
+        with pytest.raises(RuntimeError,match='PAPER_RUNTIME_UNVERIFIED'):
+            with guard():pytest.fail('unsafe controller admitted')
+    else:
+        with pytest.raises(RuntimeError,match='PAPER_RUNTIME_UNVERIFIED'):
+            with guard() as check:
+                check()
+                result['state']='HALTED'
+                check()
+        assert observed.call_count>=3

@@ -179,21 +179,33 @@ _STRATEGY_CANDIDATE_CAPACITY_LOCK_NAME = "hope:strategy-candidate-capacity"
 
 @contextmanager
 def _operational_paper_scheduler_lock(engine: Engine):
-    with engine.connect() as connection:
-        acquired = connection.execute(
-            text(
-                "SELECT pg_try_advisory_xact_lock("
-                "hashtext(:lock_name)::bigint)"
-            ),
-            {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
-        ).scalar_one()
-        if acquired is not True:
-            raise RuntimeError("PAPER_SCHEDULER_CONCURRENT_RUN")
-        # The connection's implicit transaction owns the lock. Closing this
-        # context rolls that transaction back and releases the lock on every
-        # success or failure path, before the physical session returns to the
-        # SQLAlchemy pool.
-        yield connection
+    primary_error = None
+    try:
+        with engine.connect() as connection:
+            try:
+                acquired = connection.execute(
+                    text("SELECT pg_try_advisory_xact_lock(hashtext(:lock_name)::bigint)"),
+                    {"lock_name": _PAPER_SCHEDULER_LOCK_NAME},
+                ).scalar_one()
+                if acquired is not True:
+                    raise RuntimeError("PAPER_SCHEDULER_CONCURRENT_RUN")
+                # The implicit transaction owns the lock; no session unlock or
+                # retry is permitted. Success must also survive context cleanup.
+                yield connection
+            except BaseException as error:
+                primary_error = error
+                try:
+                    # Discard an errored/dead lease session before rollback can
+                    # replace the financial failure with a secondary disconnect.
+                    connection.invalidate(error)
+                except BaseException:
+                    error.add_note("PAPER_SCHEDULER_LEASE_INVALIDATION_FAILED")
+                raise
+    except BaseException as cleanup_error:
+        if primary_error is not None and cleanup_error is not primary_error:
+            primary_error.add_note("PAPER_SCHEDULER_LEASE_CLEANUP_FAILED")
+            raise primary_error from cleanup_error
+        raise
 
 
 def _assert_recovery_report_matches_due(
@@ -240,6 +252,7 @@ def run_due_operational_paper_jobs(
     max_lateness: timedelta,
     authorize: Callable[[Connection], None] | None = None,
     before_execute: Callable[[], None] | None = None,
+    transaction_check=None,
 ) -> tuple[tuple[ScheduledJobRun, PaperCycleOutcome], ...]:
     """Execute due PAPER work after durable restart reconciliation and safety preflight."""
     if not isinstance(registry, PaperJobRegistry):
@@ -339,6 +352,7 @@ def run_due_operational_paper_jobs(
                                 execution_time,
                                 job_run.scheduled_for + max_lateness,
                             ),
+                            **({'transaction_check':transaction_check} if transaction_check is not None else {}),
                         ),
                     )
                 )
