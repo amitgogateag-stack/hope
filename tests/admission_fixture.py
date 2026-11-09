@@ -19,7 +19,7 @@ def model_external_admission(admin,role,monkeypatch):
         with admin.begin() as connection:
             connection.execute(text('INSERT INTO public.paper_admission_approvals '
                 '(target_table,authorization_sha256,principal_oid,approved_row,valid_until) '
-                'SELECT :table,:authorization,r.oid,to_jsonb(jsonb_populate_record(NULL::public.'+table+',CAST(:payload AS jsonb)))-\'recorded_at\',:expiry '
+                'SELECT :table,:authorization,r.oid,to_jsonb(jsonb_populate_record(NULL::public.'+table+',CAST(:payload AS jsonb)))-ARRAY[\'recorded_at\',\'claimed_at\'],:expiry '
                 'FROM pg_catalog.pg_roles r WHERE r.rolname=:role ON CONFLICT DO NOTHING'),
                 dict(table=table,authorization=values['authorization_sha256'],role=role,
                     payload=json.dumps(values,default=str),expiry=values['witness_expires_at']))

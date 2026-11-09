@@ -101,7 +101,7 @@ BEGIN
     SELECT oid INTO role_oid FROM pg_roles WHERE rolname=session_user;
     SELECT * INTO approved FROM paper_admission_approvals
       WHERE target_table=TG_TABLE_NAME AND authorization_sha256=NEW.authorization_sha256 AND principal_oid=role_oid;
-    IF approved IS NULL OR approved.approved_row IS DISTINCT FROM (to_jsonb(NEW)-'recorded_at')
+    IF approved IS NULL OR approved.approved_row IS DISTINCT FROM (to_jsonb(NEW)-ARRAY['recorded_at','claimed_at'])
        OR clock_timestamp()>=to_timestamp(approved.valid_until) THEN
         RAISE EXCEPTION 'PAPER_ADMISSION_INDEPENDENT_APPROVAL_REQUIRED' USING ERRCODE='23514';
     END IF;
