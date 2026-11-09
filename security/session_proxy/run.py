@@ -88,10 +88,21 @@ def main():
         server=subprocess.Popen(['/usr/bin/setpriv','--reuid='+str(BROKER_UID),'--regid='+str(BROKER_UID),'--groups='+str(WORKER_UID),
             '--inh-caps=+sys_ptrace','--ambient-caps=+sys_ptrace',sys.executable,str(HERE/'broker.py'),str(config_path)],
             env=clean_env,stdout=serverlog,stderr=serverlog)
+        report['host_capabilities']={line.split(':',1)[0]:line.split(':',1)[1].strip()
+            for line in Path('/proc/self/status').read_text().splitlines() if line.startswith(('CapBnd:','CapEff:'))}
         until=time.monotonic()+10
         while not Path(config['socket']).exists():
             if server.poll() is not None or time.monotonic()>until:
-                raise Blocked('Dedicated broker cannot start with CAP_SYS_PTRACE; host capability unavailable')
+                serverlog.flush();serverlog.seek(0)
+                diagnostics=serverlog.read()
+                # Configuration contents/credentials are never logged. Keep only
+                # the launcher's own diagnostics and exception type lines.
+                report['broker_startup']={'exit_code':server.poll(),'diagnostics':[line for line in diagnostics.splitlines()
+                    if line.startswith('setpriv:') or line.startswith(('PermissionError:','ModuleNotFoundError:','ImportError:'))]}
+                bounded=int(report['host_capabilities']['CapBnd'],16) & (1 << 19)
+                reason=('CAP_SYS_PTRACE absent from root capability bounding set' if not bounded
+                    else 'Dedicated broker startup failed; see sanitized broker_startup evidence')
+                raise Blocked(reason)
             time.sleep(.05)
 
         class Client:
