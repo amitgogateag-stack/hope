@@ -53,11 +53,13 @@ def main():
         if sys.platform!='linux' or os.geteuid()!=0:
             raise Blocked('Linux disposable root orchestrator required; applications stay non-root')
         url=make_url(os.environ['PROXY_DATABASE_URL'])
+        require(url.host in ('localhost','127.0.0.1') and url.database=='hope','disposable localhost hope database required')
         admin=psycopg.connect(url.set(drivername='postgresql').render_as_string(hide_password=False),autocommit=True)
         major=admin.info.server_version//10000
         require(major in (16,17) and str(major)==os.environ['PROXY_POSTGRES_MAJOR'],'wrong PostgreSQL')
         report['postgres_major']=major
         require(not admin.execute("SELECT 1 FROM pg_namespace WHERE nspname='session_prototype'").fetchone(),'fresh database required')
+        require(admin.execute("SELECT count(*) FROM pg_tables WHERE schemaname='public'").fetchone()[0]==0,'fresh public schema required')
         suffix=os.urandom(8).hex();urls={}
         for kind in ('owner','broker','worker'):
             role='proxy_'+kind+'_'+suffix;password=os.urandom(32).hex()
@@ -87,6 +89,11 @@ def main():
         results['direct_sql_outside_boundary']={'status':'VERIFIED','scope':'disposable prototype only',
                                                'sqlstates':sql_denials,'committed_effects':0}
         root=Path(tempfile.mkdtemp(prefix='hope-proxy-'));root.chmod(0o755)
+        # The runner checkout may not be traversable by dedicated UIDs. Copy
+        # reviewed executable sources to a root-owned, read-only runtime path.
+        runtime=root/'runtime';runtime.mkdir();runtime.chmod(0o755)
+        for name in ('broker.py','worker.py'):
+            target=runtime/name;target.write_bytes((HERE/name).read_bytes());target.chmod(0o644)
         socketdir=root/'socket';socketdir.mkdir();os.chown(socketdir,BROKER_UID,BROKER_UID);socketdir.chmod(0o755)
         audit=socketdir/'audit.jsonl'
         private=Ed25519PrivateKey.generate()
@@ -100,7 +107,7 @@ def main():
         clean_env={'PATH':'/usr/bin:/bin','PYTHONUNBUFFERED':'1','LANG':'C.UTF-8'}
         serverlog=(root/'broker.log').open('w+')
         server=subprocess.Popen(['/usr/bin/setpriv','--reuid='+str(BROKER_UID),'--regid='+str(BROKER_UID),'--groups='+str(WORKER_UID),
-            '--inh-caps=+sys_ptrace','--ambient-caps=+sys_ptrace',sys.executable,str(HERE/'broker.py'),str(config_path)],
+            '--inh-caps=+sys_ptrace','--ambient-caps=+sys_ptrace',sys.executable,str(runtime/'broker.py'),str(config_path)],
             env=clean_env,stdout=serverlog,stderr=serverlog)
         report['host_capabilities']={line.split(':',1)[0]:line.split(':',1)[1].strip()
             for line in Path('/proc/self/status').read_text().splitlines() if line.startswith(('CapBnd:','CapEff:'))}
@@ -112,7 +119,7 @@ def main():
                 # Configuration contents/credentials are never logged. Keep only
                 # the launcher's own diagnostics and exception type lines.
                 report['broker_startup']={'exit_code':server.poll(),'diagnostics':[line for line in diagnostics.splitlines()
-                    if line.startswith('setpriv:') or line.startswith(('PermissionError:','ModuleNotFoundError:','ImportError:'))]}
+                    if line.startswith('setpriv:') or "can't open file" in line or line.startswith(('PermissionError:','ModuleNotFoundError:','ImportError:'))]}
                 bounded=int(report['host_capabilities']['CapBnd'],16) & (1 << 19)
                 reason=('CAP_SYS_PTRACE absent from root capability bounding set' if not bounded
                     else 'Dedicated broker startup failed; see sanitized broker_startup evidence')
@@ -121,7 +128,7 @@ def main():
 
         class Client:
             def __init__(self, uid=WORKER_UID, namespace=False):
-                command=[sys.executable,str(HERE/'worker.py'),config['socket']]
+                command=[sys.executable,str(runtime/'worker.py'),config['socket']]
                 kwargs=dict(user=uid,group=WORKER_UID,extra_groups=[])
                 if namespace:
                     command=['/usr/bin/unshare','--mount','--','/usr/bin/setpriv','--reuid='+str(uid),
