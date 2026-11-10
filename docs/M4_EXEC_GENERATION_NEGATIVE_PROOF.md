@@ -43,3 +43,13 @@ harness and real PostgreSQL session binding.
 This change intentionally does not modify the proxy or loosen any gate.
 A1 remains OPEN. Engineering integration NO-GO; operational PAPER NO-GO.
 PRs #85–88 remain unmerged. No AWS, migrations, or credentials changed.
+
+## Denial-only native-attestation contract
+
+`trust_policy.py` specifies the required independent evidence fields: authenticated
+supervisor, process generation, release digest, loaded-code digest and exact
+session nonce. Its result is **always DENY**, even when all fields match,
+because the actual native supervisor, trusted signer, PostgreSQL session
+binding and COMMIT serialization do not yet exist. The adversarial unit tests
+exercise absent, forged, incomplete, replaced and replayed evidence. This is
+specification/test work only; do not connect it to production admission.
