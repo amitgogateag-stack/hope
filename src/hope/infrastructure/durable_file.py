@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import os
+import hashlib
+import re
 import stat
 from pathlib import Path
 
 
-def bounded_regular_read(path: str | Path, limit: int) -> bytes:
+def bounded_regular_read(path: str | Path, limit: int, *, expected_sha256: str | None = None) -> bytes:
     """Read one unchanged, private regular-file inode through a pinned descriptor.
 
     Operational HTTP inputs are replaced atomically by trusted producers, but
@@ -16,6 +18,9 @@ def bounded_regular_read(path: str | Path, limit: int) -> bytes:
     """
     if type(limit) is not int or limit < 0:
         raise ValueError("BOUNDED_READ_INVALID_LIMIT")
+    if expected_sha256 is not None and (not isinstance(expected_sha256, str) or
+            re.fullmatch(r'[0-9a-f]{64}', expected_sha256) is None):
+        raise ValueError('BOUNDED_READ_INVALID_DIGEST')
     path = Path(path)
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode):
@@ -48,7 +53,10 @@ def bounded_regular_read(path: str | Path, limit: int) -> bytes:
         if (len(payload) != opened.st_size or identity(after) != identity(opened)
                 or identity(named) != identity(opened)):
             raise ValueError("BOUNDED_READ_FILE_CHANGED")
-        return bytes(payload)
+        result = bytes(payload)
+        if expected_sha256 is not None and hashlib.sha256(result).hexdigest() != expected_sha256:
+            raise ValueError('BOUNDED_READ_DIGEST_MISMATCH')
+        return result
     finally:
         os.close(descriptor)
 
