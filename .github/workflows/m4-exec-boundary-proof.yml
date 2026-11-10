@@ -1,0 +1,21 @@
+name: M4 exec-generation negative proof
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  same-interpreter-exec:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Install pinned test dependencies
+        run: python -m pip install -c constraints/ci-test.txt -e '.[test]' -r security/session_proxy/requirements.txt
+      - name: Run negative exec-generation proof
+        run: python -m unittest discover -s security/session_proxy -p 'test_*.py' -v
