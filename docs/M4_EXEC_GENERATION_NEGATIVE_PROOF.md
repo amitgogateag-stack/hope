@@ -25,7 +25,7 @@ Do not treat this passing test as an authorization to use the current
 `observation(pid)` for production trust. The test does not require root,
 PostgreSQL, CAP_SYS_PTRACE or an external signer.
 
-## Required fix and acceptance
+A second regression mutates a disposable Python module before the already-running\ninterpreter imports it. Its process/executable observation remains unchanged,\nshowing that interpreter identity also does not attest loaded Python code.\nBoth are negative evidence; neither is a production authorization test.\n\n## Required fix and acceptance
 
 A reviewed native supervisor must establish an authenticated, non-worker-
 forgeable process lifetime/exec generation, or prevent all subsequent exec
