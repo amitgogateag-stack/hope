@@ -64,7 +64,7 @@ class SameExecutableExecBlindSpot(unittest.TestCase):
         # unchanged. The file is owned by this test, never by production HOPE.
         with tempfile.TemporaryDirectory(prefix="hope-m4-module-") as root:
             module = Path(root) / "payload.py"
-            module.write_text("VALUE = 'ORIGINAL'\\n")
+            module.write_text("VALUE = 'ORIGINAL'\n")
             child = (
                 "import importlib.util,sys;"
                 "print('READY',flush=True);"
@@ -84,8 +84,8 @@ class SameExecutableExecBlindSpot(unittest.TestCase):
                 self.assertTrue(select.select([proc.stdout], [], [], 5)[0], "module stage timeout")
                 self.assertEqual(proc.stdout.readline().strip(), "READY")
                 before = observation(proc.pid)
-                module.write_text("VALUE = 'REPLACED'\\n")
-                proc.stdin.write("load\\n")
+                module.write_text("VALUE = 'REPLACED'\n")
+                proc.stdin.write("load\n")
                 proc.stdin.flush()
                 self.assertTrue(select.select([proc.stdout], [], [], 5)[0], "module load timeout")
                 self.assertEqual(proc.stdout.readline().strip(), "LOADED:REPLACED")
