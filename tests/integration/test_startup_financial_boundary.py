@@ -332,3 +332,46 @@ def test_unknown_login_cannot_become_ordinary_financial_writer(startup_database)
         with admin.begin() as connection:
             connection.exec_driver_sql('DROP OWNED BY '+role)
             connection.exec_driver_sql('DROP ROLE '+role)
+
+
+def test_r1_controlled_cycle_cannot_provision_unrelated_capital_at_commit(prepare):
+    """R1 regression: a certified cycle cannot smuggle unrelated funding.
+
+    Use the existing restricted worker and explicitly modeled independent
+    admission fixture; no production approval issuer is invoked.
+    """
+    value = prepare('FILLED')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    extra = uuid4()
+
+    def inject_unrelated_portfolio(connection, phase):
+        if phase == 'commit':
+            connection.execute(text(
+                'INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) '
+                'VALUES (:id,123456789,123456789)'
+            ), {'id': extra})
+
+    with pytest.raises(DBAPIError, match='PAPER_CONTROLLED_PORTFOLIO_PROVISIONING_FORBIDDEN'):
+        _run_mutated(value, inject_unrelated_portfolio)
+
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_portfolios WHERE portfolio_id=:id'
+        ), {'id': extra}).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_effects WHERE job_run_id=:id'
+        ), {'id': value['run'].job_run_id}).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_startup_financial_transactions'
+        )).scalar_one() == 0
+
+
+def test_r1_portfolio_provisioning_guard_is_enabled(startup_database):
+    with startup_database['worker'].connect() as connection:
+        rows = connection.execute(text(
+            "SELECT tgname,tgenabled FROM pg_catalog.pg_trigger "
+            "WHERE tgrelid='public.paper_portfolios'::regclass "
+            "AND tgname='aaaa_reject_controlled_portfolio_provisioning'"
+        )).all()
+    assert rows == [('aaaa_reject_controlled_portfolio_provisioning', 'O')]
