@@ -45,3 +45,30 @@ def test_wrong_trusted_digest_fails_even_with_unchanged_metadata(tmp_path):
     path.write_bytes(b"stable")
     with pytest.raises(ValueError, match="BOUNDED_READ_DIGEST_MISMATCH"):
         bounded_regular_read(path, 1024, expected_sha256="0" * 64)
+
+
+def test_authenticated_read_rejects_mutation_during_descriptor_read(tmp_path, monkeypatch):
+    """Mutation after descriptor pinning cannot bypass trusted content digest."""
+    path = tmp_path / "snapshot"
+    original = b"A" * 128
+    modified = b"B" * 128
+    path.write_bytes(original)
+    expected = hashlib.sha256(original).hexdigest()
+    real_read = os.read
+    modified_once = False
+
+    def mutate_before_read(fd, count):
+        nonlocal modified_once
+        if not modified_once:
+            modified_once = True
+            before = path.stat()
+            with path.open("r+b") as stream:
+                stream.write(modified)
+                stream.flush()
+            os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        return real_read(fd, count)
+
+    monkeypatch.setattr(os, "read", mutate_before_read)
+    with pytest.raises(ValueError, match="BOUNDED_READ_(FILE_CHANGED|DIGEST_MISMATCH)"):
+        bounded_regular_read(path, 1024, expected_sha256=expected)
+    assert modified_once
