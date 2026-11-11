@@ -375,3 +375,26 @@ def test_r1_portfolio_provisioning_guard_is_enabled(startup_database):
             "AND tgname='aaaa_reject_controlled_portfolio_provisioning'"
         )).all()
     assert rows == [('aaaa_reject_controlled_portfolio_provisioning', 'O')]
+
+
+def test_r1_controlled_worker_cannot_change_independently_funded_initial_cash(prepare):
+    """An existing portfolio does not grant trading workers funding authority."""
+    value = prepare('NO_TRADE')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    funded = value['data']['configuration']['paper_execution']
+    with worker.connect() as connection:
+        original = connection.execute(text(
+            'SELECT initial_cash,cash FROM public.paper_portfolios WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one()
+    with pytest.raises(DBAPIError, match='PAPER_CONTROLLED_INITIAL_CAPITAL_MUTATION_FORBIDDEN'):
+        with worker.begin() as connection:
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET initial_cash=initial_cash+1 '
+                'WHERE portfolio_id=:id'
+            ), {'id':funded['portfolio_id']})
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT initial_cash,cash FROM public.paper_portfolios WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one() == original
+        assert connection.execute(text('SELECT count(*) FROM public.paper_effects')).scalar_one() == 0
