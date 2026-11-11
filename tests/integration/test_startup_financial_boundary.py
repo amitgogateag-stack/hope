@@ -140,9 +140,14 @@ def test_later_transaction_cannot_reuse_a_committed_financial_witness(prepare):
     value=prepare('FILLED');startup.bootstrap(value['worker'],value['case']['verify_startup'](),MIGRATIONS)
     def lost_completion(run):raise RuntimeError('synthetic crash after financial commit')
     with pytest.raises(RuntimeError,match='synthetic crash'):execute(value,complete_override=lost_completion)
+    # R1 rejects creation immediately; exercise the older transaction-replay
+    # boundary using an already funded portfolio instead of creating capital.
+    funded_id = value['data']['configuration']['paper_execution']['portfolio_id']
     with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_TRANSACTION_REPLAY'):
         with value['worker'].begin() as connection:
-            connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET cash=cash+1 WHERE portfolio_id=:id'
+            ), {'id':funded_id})
     with value['worker'].connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==5
         assert connection.execute(text('SELECT count(*) FROM paper_startup_financial_transactions')).scalar_one()==1
@@ -220,7 +225,11 @@ def test_failed_job_cannot_commit_partial_financial_work(prepare):
             jobs=SqlAlchemyJobRunRepository(connection);assert jobs.claim(value['run'])
             assert jobs.complete(create_job_run_completion(value['run'],JobRunStatus.FAILED,
                 value['run'].scheduled_for+timedelta(minutes=1),failure_code='SYNTHETIC_SECURITY_FAILURE'))
-            connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+            # Use an already funded portfolio to test the deferred commit
+            # guard, not the independent R1 no-new-capital trigger.
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET cash=cash+1 WHERE portfolio_id=:id'
+            ), {'id':value['data']['configuration']['paper_execution']['portfolio_id']})
     with worker.connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM job_runs WHERE job_run_id=:id'),{'id':value['run'].job_run_id}).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_startup_financial_transactions')).scalar_one()==0
