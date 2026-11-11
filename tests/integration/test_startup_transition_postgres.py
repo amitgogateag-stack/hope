@@ -67,6 +67,15 @@ def prepare(startup_database,seeded,tmp_path,monkeypatch):
     def build(path='NO_TRADE',market=StrategyMarket.USA,*,receipt=RECEIPT):
         data,_,strategy,work,_=make(emit=path!='NO_TRADE',blocked=path=='RISK_BLOCKED',market=market)
         run,plan=_constrained_service_plan(data,work);strategy.run=run
+        # The independent database administrator provisions the disposable
+        # starting capital before any CONTROLLED startup/cycle transaction.
+        # A trading worker cannot legally bootstrap a new portfolio (R1).
+        funding = data['configuration']['paper_execution']
+        with startup_database['admin'].begin() as connection:
+            connection.execute(text(
+                'INSERT INTO public.paper_portfolios (portfolio_id,initial_cash,cash) '
+                'VALUES (:id,:cash,:cash)'
+            ), {'id':funding['portfolio_id'], 'cash':funding['initial_cash']})
         with worker.connect().execution_options(isolation_level='REPEATABLE READ') as connection:
             connection.exec_driver_sql('SET TRANSACTION READ ONLY');identity=database_identity(connection)
             catalog=schema_observation(connection)['sha256']
