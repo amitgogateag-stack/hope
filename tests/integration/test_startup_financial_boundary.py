@@ -17,7 +17,9 @@ def test_direct_financial_commit_requires_live_same_transaction_execution(prepar
     if phase=='completed':execute(value)
     elif phase!='bootstrap_only':
         startup.execution_callbacks(worker,case['verify_execution']())
-    with pytest.raises(DBAPIError,match='PAPER_STARTUP_'):
+    # R1 denies worker capital creation earlier than the general financial
+    # commit guard. Require the specific database rejection, not any failure.
+    with pytest.raises(DBAPIError,match='PAPER_CONTROLLED_PORTFOLIO_PROVISIONING_FORBIDDEN'):
         with worker.begin() as connection:
             connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
     with worker.connect() as connection:
