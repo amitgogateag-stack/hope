@@ -102,7 +102,7 @@ def test_invalid_008_history_is_not_repaired_or_partially_upgraded(isolated_data
 def test_interrupted_upgrade_rolls_back_even_if_caller_catches_and_commits(isolated_database,tmp_path,fault):
     engine=isolated_database;prepare_eight(engine,tmp_path)
     chain=tmp_path/'chain';shutil.copytree(MIGRATIONS,chain)
-    if fault=='late_sql':(chain/'237_paper_independent_admission_boundary.sql').write_text('SELECT * FROM synthetic_missing_relation;')
+    if fault=='late_sql':(chain/'238_paper_controlled_portfolio_provisioning.sql').write_text('SELECT * FROM synthetic_missing_relation;')
     else:
         @event.listens_for(engine,'after_cursor_execute')
         def change_source(connection,cursor,statement,parameters,context,executemany):
