@@ -95,10 +95,19 @@ It requires PostgreSQL 16/17 and refuses a populated public schema. Run only on 
 infrastructure: it deliberately leaves randomly named roles to the service's destruction.
 It never writes connection secrets into evidence.
 
-The six containment experiments are self-classification, self-approval, superuser grant,
-verifier impersonation, direct cash insertion, and missing-attestor denial. They do NOT
+The standalone runner now attempts twelve deny-only containment experiments:
+worker self-classification, self-approval, superuser grant, verifier impersonation,
+schema-owner impersonation, self-granted verifier membership, shadow attestor function
+creation, direct cash insertion; separately, the restricted verifier attempts approval
+issuance, portfolio funding, and self-classification; finally the missing-attestor
+executable must deny. These checks require genuine PostgreSQL privilege/trigger
+denials and leave the protected financial/admission tables empty. They do NOT
 constitute the twenty required lifecycle/security proofs. All twenty are separately
-inventoried as FAIL, including the genuine authorized PAPER cycle. No case is skipped,
+inventoried as FAIL, including the genuine authorized PAPER cycle. The independent
+negative-evidence validator now demands the exact 12-probe name/SQLSTATE set,
+rejecting omitted, duplicated, unexpected or forged PASS records before setting
+`containment_verified`. This label applies only to disposable denial checks and
+never changes `production_verification: false` or the required A1 FAIL gate. No case is skipped,
 xfail, or passed merely because a verifier is absent. The runner always exits nonzero
 until implemented proofs can replace this incomplete gate. The JSON and Markdown reports
 explicitly label this distinction. Infrastructure exceptions also fail and produce evidence.
