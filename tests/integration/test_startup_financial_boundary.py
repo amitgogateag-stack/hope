@@ -378,6 +378,67 @@ def test_r1_controlled_cycle_cannot_provision_unrelated_capital_at_commit(prepar
         )).scalar_one() == 0
 
 
+
+@pytest.mark.parametrize('attack,denial', [
+    ('existing_portfolio_upsert', 'PAPER_CONTROLLED_PORTFOLIO_PROVISIONING_FORBIDDEN'),
+    ('initial_capital_update', 'PAPER_CONTROLLED_INITIAL_CAPITAL_MUTATION_FORBIDDEN'),
+])
+def test_r1_certified_cycle_rejects_capital_rewrite_and_rolls_back(prepare, attack, denial):
+    """A valid certified execution cannot use its COMMIT callback to fund itself.
+
+    The portfolio is independently pre-funded; the worker's successful trading
+    authority must not permit changes to initial capital. An UPSERT must not
+    sidestep the INSERT guard by targeting an already existing portfolio.
+    """
+    value = prepare('FILLED')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    funded_id = value['data']['configuration']['paper_execution']['portfolio_id']
+    with worker.connect() as connection:
+        baseline = connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).one()
+    reached = []
+
+    def attack_during_commit(connection, phase):
+        if phase != 'commit':
+            return
+        reached.append(phase)
+        if attack == 'existing_portfolio_upsert':
+            connection.execute(text(
+                'INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) '
+                'VALUES (:id,123456789,123456789) '
+                'ON CONFLICT (portfolio_id) DO UPDATE '
+                'SET initial_cash=EXCLUDED.initial_cash'
+            ), {'id': funded_id})
+        else:
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET initial_cash=initial_cash+1 '
+                'WHERE portfolio_id=:id'
+            ), {'id': funded_id})
+
+    with pytest.raises(DBAPIError, match=denial):
+        _run_mutated(value, attack_during_commit)
+    assert reached == ['commit']
+
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).one() == baseline
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_effects WHERE job_run_id=:id'
+        ), {'id': value['run'].job_run_id}).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_startup_financial_transactions'
+        )).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_portfolio_fill_applications '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).scalar_one() == 0
+
+
 def test_r1_portfolio_provisioning_guard_is_enabled(startup_database):
     with startup_database['worker'].connect() as connection:
         rows = connection.execute(text(
