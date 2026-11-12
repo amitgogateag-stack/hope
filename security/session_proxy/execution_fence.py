@@ -29,7 +29,7 @@ class ExecutionFence:
         if sys.platform != 'linux' or type(pid) is not int or pid <= 0 or pid == os.getpid():
             raise FenceDenied('EXEC_FENCE_UNSUPPORTED_TARGET')
         self.pid, self.tid = pid, threading.get_native_id()
-        self.pidfd = os.pidfd_open(pid)
+        self.pidfd: int | None = os.pidfd_open(pid)
         self.attached = self.paused = False
         self.violation = None
         self.events = []
@@ -75,6 +75,9 @@ class ExecutionFence:
             self._deny('EXEC_FENCE_UNEXPECTED_STOP')
 
     def check(self):
+        descriptor = self.pidfd
+        if descriptor is None or not self.attached:
+            raise FenceDenied('EXEC_FENCE_CLOSED')
         if self.violation:
             raise FenceDenied(self.violation)
         if self.paused:
@@ -82,7 +85,7 @@ class ExecutionFence:
         target, status = os.waitpid(self.pid, os.WNOHANG | WALL)
         if target:
             self._status(status)
-        if select.select([self.pidfd], [], [], 0)[0]:
+        if select.select([descriptor], [], [], 0)[0]:
             self._deny('EXEC_FENCE_PROCESS_EXITED')
 
     def _pause(self):

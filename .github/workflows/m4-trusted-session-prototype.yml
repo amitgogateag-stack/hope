@@ -38,6 +38,11 @@ jobs:
         run: |
           git rev-parse HEAD > tested-commit.txt
           sha256sum security/session_proxy/*.* > harness-sha256.txt
+      - name: Type-check new execution fence and strict evidence accounting
+        run: |
+          python -m venv /tmp/hope-fence-types
+          /tmp/hope-fence-types/bin/python -m pip install -r constraints/m4-type-review.txt
+          /tmp/hope-fence-types/bin/python -m mypy --platform linux --python-version 3.13 --check-untyped-defs security/session_proxy/execution_fence.py src/hope/security/denial_evidence.py
       - name: Reproduce frozen PR87 three-second admission race
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope

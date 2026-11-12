@@ -12,3 +12,14 @@ module=runpy.run_path(str(Path(__file__).parents[2]/'security/session_proxy/exec
 def test_invalid_or_self_target_is_never_attached(pid):
     with pytest.raises(module['FenceDenied'],match='EXEC_FENCE_UNSUPPORTED_TARGET'):
         module['ExecutionFence'](pid)
+
+
+def test_closed_execution_lease_cannot_be_checked_or_reentered():
+    fence=module['ExecutionFence'].__new__(module['ExecutionFence'])
+    fence.pidfd=None
+    fence.attached=False
+    with pytest.raises(module['FenceDenied'],match='EXEC_FENCE_CLOSED'):
+        fence.check()
+    with pytest.raises(module['FenceDenied'],match='EXEC_FENCE_CLOSED'):
+        with fence.stopped():
+            raise AssertionError('closed lease entered a commit barrier')

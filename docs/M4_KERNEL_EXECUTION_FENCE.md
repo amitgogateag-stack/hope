@@ -89,3 +89,26 @@ production attestor, image/code, signer isolation, adapter and independent revie
 
 Kernel semantics reference: https://man7.org/linux/man-pages/man2/ptrace.2.html
 (per-thread tracing, exec events, seize/interrupt and EXITKILL).
+
+## Recorded engineering evidence
+
+The initial native candidate167798aacc6df5bf8635c384608560a9108b4cf1 ran
+24 actual prototype cases on each PostgreSQL16/17 job, with no failed/blocked
+prototype cases. Kernel audit shows a real tracing stop through a blocked
+COMMIT. Separate owner reads resolved zero effects after pre-COMMIT tracer death
+and one effect after transport loss during COMMIT; old signed responses failed
+on restart. This is implementing-agent evidence, not human approval or any of
+the twenty mandatory production acceptance proofs.
+
+Local pinned mypy1.15.0 caught an int/closed-pidfd lifecycle mismatch; the final
+candidate adds an explicit closed-lease refusal and regression. Type checking
+passes for the new fence and denial-accounting modules. Final-head CI and exact
+counts are recorded in the delivery PR rather than inferred from the first run.
+
+R2 remains separate in PR91: its authenticated bounded-reader primitive requires
+an independently supplied digest. It is not integrated here; deriving a digest
+from the inspected untrusted file would manufacture provenance. Descriptor,
+no-follow, size and mutation guards remain untouched.
+
+G7FX is retained in `docs/G7FX_RESEARCH_ROADMAP.md` as **NOT STARTED**. Its
+independent research assessment does not activate a strategy or delay A1 testing.
