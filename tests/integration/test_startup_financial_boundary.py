@@ -470,3 +470,40 @@ def test_r1_controlled_worker_cannot_change_independently_funded_initial_cash(pr
             'SELECT initial_cash,cash FROM public.paper_portfolios WHERE portfolio_id=:id'
         ), {'id':funded['portfolio_id']}).one() == original
         assert connection.execute(text('SELECT count(*) FROM public.paper_effects')).scalar_one() == 0
+
+
+@pytest.mark.parametrize('attack', ['delete', 'truncate'])
+def test_r1_controlled_worker_cannot_remove_independently_funded_portfolio(
+        prepare, attack):
+    """Trading authority cannot destroy independently provisioned capital."""
+    value = prepare('NO_TRADE')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    funded = value['data']['configuration']['paper_execution']
+    with worker.connect() as connection:
+        baseline = connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one()
+
+    with pytest.raises(
+            DBAPIError, match='PAPER_CONTROLLED_PORTFOLIO_REMOVAL_FORBIDDEN'):
+        with worker.begin() as connection:
+            if attack == 'delete':
+                connection.execute(text(
+                    'DELETE FROM public.paper_portfolios WHERE portfolio_id=:id'
+                ), {'id':funded['portfolio_id']})
+            else:
+                connection.execute(text(
+                    'TRUNCATE TABLE public.paper_portfolios CASCADE'
+                ))
+
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one() == baseline
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_effects'
+        )).scalar_one() == 0
+
