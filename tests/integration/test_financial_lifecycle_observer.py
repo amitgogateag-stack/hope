@@ -128,6 +128,43 @@ def test_read_only_login_cannot_fund_portfolio_or_create_approval(prepare, obser
     assert inspect_committed_cycle(observer, ref)['execution_authorized'] is False
 
 
+def test_control_event_writer_is_rejected_and_cannot_hide_rollback_probe(
+        prepare, observer, startup_database):
+    _, ref = completed(prepare)
+    role = observer.url.username
+    assert role is not None
+    with startup_database['admin'].begin() as connection:
+        connection.exec_driver_sql(
+            'GRANT INSERT ON public.paper_environment_control_events TO '+role)
+        connection.exec_driver_sql(
+            'GRANT USAGE, SELECT ON SEQUENCE '
+            'public.paper_environment_control_events_control_sequence_seq TO '+role)
+
+    # This exact privilege mistake previously passed the observer inventory.
+    with pytest.raises(LifecycleDenied, match='OBSERVER_RELATION_BOUNDARY_UNSAFE'):
+        inspect_committed_cycle(observer, ref)
+
+    # Prove the misgrant reaches the HALT append path, but roll it back so the
+    # disposable test ledger retains its pre-attack control state.
+    with observer.connect() as connection:
+        transaction = connection.begin()
+        before = connection.execute(text(
+            'SELECT count(*) FROM public.paper_environment_control_events'
+        )).scalar_one()
+        connection.execute(text(
+            "INSERT INTO public.paper_environment_control_events(state, reason) "
+            "VALUES ('HALTED', 'ADVERSARIAL_OBSERVER_PRIVILEGE_PROBE')"
+        ))
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_environment_control_events'
+        )).scalar_one() == before + 1
+        transaction.rollback()
+    with observer.connect() as connection:
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_environment_control_events'
+        )).scalar_one() == before
+
+
 @pytest.mark.parametrize('damage', ['audit', 'effect'])
 def test_incomplete_restored_history_cannot_be_reported_complete(prepare, observer, startup_database, damage):
     _, ref = completed(prepare)

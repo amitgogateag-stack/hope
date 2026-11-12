@@ -61,7 +61,8 @@ RELATIONS = (
     'paper_portfolio_pnl_events', 'paper_risk_assessments',
     'paper_order_terminal_events', 'paper_no_trade_decisions',
     'paper_strategy_authorizations', 'paper_certified_outcomes', 'job_runs',
-    'audit_events', 'paper_startup_executions', 'paper_startup_completions',
+    'audit_events', 'paper_environment_control_events',
+    'paper_startup_executions', 'paper_startup_completions',
     'paper_startup_commit_witnesses', 'paper_startup_financial_transactions',
 )
 
