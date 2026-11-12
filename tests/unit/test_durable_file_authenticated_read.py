@@ -5,14 +5,19 @@ from pathlib import Path
 
 import pytest
 
-from hope.infrastructure.durable_file import bounded_regular_read
+from hope.infrastructure.durable_file import (
+    authenticated_bounded_regular_read,
+    bounded_regular_read,
+)
 
 
 def test_authenticated_bounded_read_accepts_exact_digest(tmp_path):
     path = tmp_path / "snapshot"
     payload = b"known trusted bytes"
     path.write_bytes(payload)
-    assert bounded_regular_read(path, 1024, expected_sha256=hashlib.sha256(payload).hexdigest()) == payload
+    assert authenticated_bounded_regular_read(
+        path, 1024, expected_sha256=hashlib.sha256(payload).hexdigest()
+    ) == payload
 
 
 def test_authenticated_bounded_read_rejects_same_size_modified_bytes(tmp_path):
@@ -26,7 +31,7 @@ def test_authenticated_bounded_read_rejects_same_size_modified_bytes(tmp_path):
     path.write_bytes(modified)
     os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
     with pytest.raises(ValueError, match="BOUNDED_READ_DIGEST_MISMATCH"):
-        bounded_regular_read(path, 1024, expected_sha256=expected)
+        authenticated_bounded_regular_read(path, 1024, expected_sha256=expected)
 
 
 @pytest.mark.parametrize("bad", ["", "0" * 63, "G" * 64, "a" * 65, 123, None])
@@ -37,14 +42,14 @@ def test_authenticated_bounded_read_digest_validation(tmp_path, bad):
         assert bounded_regular_read(path, 2) == b"ok"
     else:
         with pytest.raises(ValueError, match="BOUNDED_READ_INVALID_DIGEST"):
-            bounded_regular_read(path, 2, expected_sha256=bad)
+            authenticated_bounded_regular_read(path, 2, expected_sha256=bad)
 
 
 def test_wrong_trusted_digest_fails_even_with_unchanged_metadata(tmp_path):
     path = tmp_path / "snapshot"
     path.write_bytes(b"stable")
     with pytest.raises(ValueError, match="BOUNDED_READ_DIGEST_MISMATCH"):
-        bounded_regular_read(path, 1024, expected_sha256="0" * 64)
+        authenticated_bounded_regular_read(path, 1024, expected_sha256="0" * 64)
 
 
 def test_authenticated_read_rejects_mutation_during_descriptor_read(tmp_path, monkeypatch):
@@ -70,5 +75,15 @@ def test_authenticated_read_rejects_mutation_during_descriptor_read(tmp_path, mo
 
     monkeypatch.setattr(os, "read", mutate_before_read)
     with pytest.raises(ValueError, match="BOUNDED_READ_(FILE_CHANGED|DIGEST_MISMATCH)"):
-        bounded_regular_read(path, 1024, expected_sha256=expected)
+        authenticated_bounded_regular_read(path, 1024, expected_sha256=expected)
     assert modified_once
+
+
+def test_authenticated_reader_cannot_silently_downgrade_to_metadata_only(tmp_path):
+    path = tmp_path / "snapshot"
+    path.write_bytes(b"attacker-controlled")
+
+    with pytest.raises(ValueError, match="BOUNDED_READ_INVALID_DIGEST"):
+        authenticated_bounded_regular_read(path, 1024, expected_sha256=None)
+    with pytest.raises(TypeError):
+        bounded_regular_read(path, 1024, expected_sha256=None)

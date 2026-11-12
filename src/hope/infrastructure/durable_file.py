@@ -1,14 +1,42 @@
 """Crash-durable publication primitives for private operational files."""
 from __future__ import annotations
 
-import os
 import hashlib
+import os
 import re
 import stat
 from pathlib import Path
 
 
-def bounded_regular_read(path: str | Path, limit: int, *, expected_sha256: str | None = None) -> bytes:
+def bounded_regular_read(path: str | Path, limit: int) -> bytes:
+    """Read metadata-stable bytes without claiming content authenticity."""
+    return _bounded_regular_read(path, limit, expected_sha256=None)
+
+
+def authenticated_bounded_regular_read(
+    path: str | Path,
+    limit: int,
+    *,
+    expected_sha256: str,
+) -> bytes:
+    """Read bytes that must match one independently trusted SHA-256 digest.
+
+    This separate entry point prevents a security-sensitive caller from
+    accidentally downgrading to metadata-only validation by passing ``None``.
+    """
+    if not isinstance(expected_sha256, str) or re.fullmatch(
+        r"[0-9a-f]{64}", expected_sha256
+    ) is None:
+        raise ValueError("BOUNDED_READ_INVALID_DIGEST")
+    return _bounded_regular_read(path, limit, expected_sha256=expected_sha256)
+
+
+def _bounded_regular_read(
+    path: str | Path,
+    limit: int,
+    *,
+    expected_sha256: str | None,
+) -> bytes:
     """Read one unchanged, private regular-file inode through a pinned descriptor.
 
     Operational HTTP inputs are replaced atomically by trusted producers, but
@@ -18,9 +46,6 @@ def bounded_regular_read(path: str | Path, limit: int, *, expected_sha256: str |
     """
     if type(limit) is not int or limit < 0:
         raise ValueError("BOUNDED_READ_INVALID_LIMIT")
-    if expected_sha256 is not None and (not isinstance(expected_sha256, str) or
-            re.fullmatch(r'[0-9a-f]{64}', expected_sha256) is None):
-        raise ValueError('BOUNDED_READ_INVALID_DIGEST')
     path = Path(path)
     before = path.lstat()
     if not stat.S_ISREG(before.st_mode):
@@ -54,8 +79,11 @@ def bounded_regular_read(path: str | Path, limit: int, *, expected_sha256: str |
                 or identity(named) != identity(opened)):
             raise ValueError("BOUNDED_READ_FILE_CHANGED")
         result = bytes(payload)
-        if expected_sha256 is not None and hashlib.sha256(result).hexdigest() != expected_sha256:
-            raise ValueError('BOUNDED_READ_DIGEST_MISMATCH')
+        if (
+            expected_sha256 is not None
+            and hashlib.sha256(result).hexdigest() != expected_sha256
+        ):
+            raise ValueError("BOUNDED_READ_DIGEST_MISMATCH")
         return result
     finally:
         os.close(descriptor)
