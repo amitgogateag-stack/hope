@@ -19,6 +19,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 from hope.infrastructure.postgres.migrations import apply_migrations, migration_inventory
+from hope.security.denial_evidence import verify_denial_evidence
 
 ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(os.environ.get("SECURITY_EVIDENCE_DIR", "security-evidence"))
@@ -112,6 +113,10 @@ def run() -> int:
             evidence = json.loads(result.stdout)
             assert result.returncode == 78 and evidence["decision"] == "DENY" and evidence["approval_issued"] is False
             report["experiments"].append({"name": "missing_trusted_attestor_denied", "status": "PASS"})
+            # Completeness is asserted independently of the attack loop, so
+            # silently omitted/mislabeled probes cannot be reported as 12 PASS.
+            verify_denial_evidence(report["experiments"])
+            report["containment_verified"] = True
             report["separation"] = "three fresh LOGINs; verifier has no approval-write privilege; issuance disabled"
     except Exception as exc:
         # Do not serialize exception messages that might contain connection secrets.
