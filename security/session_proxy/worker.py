@@ -42,6 +42,12 @@ with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as peer:
             import threading
             threading.Thread(target=lambda: time.sleep(15), daemon=True).start()
             continue
+        if value == {'new_fork': True}:
+            child = os.fork()
+            if child == 0:
+                print('UNAUTHORIZED_FORK_USERSPACE', flush=True)
+                os._exit(1)
+            continue
         if value == {'drop_ack': True}:
             peer.shutdown(socket.SHUT_RD)
             peer.sendall(b'{"commit":true}')

@@ -32,7 +32,8 @@ CASES = ('authorized_prototype_commit','borrowed_session','reconnected_worker',
          'expiry_at_commit','direct_sql_outside_boundary','same_interpreter_exec','new_thread_creation',
          'commit_peer_kernel_stopped','wrong_signing_key','wrong_signed_scope','non_boolean_commit',
          'untrusted_identity_fields','policy_generation_changed','lost_commit_acknowledgment',
-         'broker_crash_before_commit','broker_commit_transport_loss_reconciled','concurrent_same_approval','preexisting_multithreaded_target')
+         'broker_crash_before_commit','broker_commit_transport_loss_reconciled','concurrent_same_approval','preexisting_multithreaded_target',
+         'new_fork_creation','wrong_signed_cluster','wrong_signed_transaction','wrong_signed_issuer','wrong_signed_generation')
 
 
 class Blocked(Exception):
@@ -267,12 +268,14 @@ def main():
                 elif name=='preexisting_multithreaded_target':
                     a=Client(threaded=True)
                     audit_event(None,'DENIED','EXEC_FENCE_MULTITHREADED_TARGET',a.p.pid)
-                elif name in ('same_interpreter_exec','new_thread_creation'):
+                elif name in ('same_interpreter_exec','new_thread_creation','new_fork_creation'):
                     a=Client();prepared(a);nonce=a.first['challenge']['nonce']
-                    a.send({'same_exec':True} if name=='same_interpreter_exec' else {'new_thread':True},reply=False)
+                    command={'same_interpreter_exec': 'same_exec','new_thread_creation':'new_thread','new_fork_creation':'new_fork'}[name]
+                    a.send({command:True},reply=False)
                     reason='EXEC_FENCE_EXEC_EVENT' if name=='same_interpreter_exec' else 'EXEC_FENCE_TASK_CREATION'
                     event=audit_event(nonce,'DENIED',reason)
-                    require(any(row['event']==(4 if name=='same_interpreter_exec' else 3) for row in event['kernel_events']),'missing actual kernel event')
+                    expected_event={'same_interpreter_exec':4,'new_thread_creation':3,'new_fork_creation':1}[name]
+                    require(any(row['event']==expected_event for row in event['kernel_events']),'missing actual kernel event')
                     require(count(nonce)==0,'invalid execution committed')
                 elif name in ('wrong_signing_key','wrong_signed_scope','untrusted_identity_fields'):
                     a=Client();t=a.first['challenge']
@@ -280,6 +283,15 @@ def main():
                     elif name=='wrong_signed_scope':packet={'signature':private.sign(canonical(dict(t,scope='BOOTSTRAP_ONLY'))).hex()}
                     else:packet=dict(sign(a),pid=a.p.pid,backend_pid=t['backend_pid'])
                     denied(a,packet)
+                elif name in ('wrong_signed_cluster','wrong_signed_transaction','wrong_signed_issuer','wrong_signed_generation'):
+                    a=Client();transcript=a.first['challenge']
+                    field={'wrong_signed_cluster':'cluster','wrong_signed_transaction':'xid',
+                           'wrong_signed_issuer':'issuer_role','wrong_signed_generation':'generation'}[name]
+                    changed=dict(transcript)
+                    changed[field]=transcript[field]+1 if field=='generation' else str(transcript[field])+'-foreign'
+                    packet={'signature':private.sign(canonical(changed)).hex()}
+                    denied(a,packet)
+                    require(count(transcript['nonce'])==0,'foreign signed identity committed')
                 elif name=='non_boolean_commit':
                     a=Client();prepared(a);response=denied(a,{'commit':1})
                     require(response['reason']=='COMMIT_PROTOCOL','numeric commit was accepted')
