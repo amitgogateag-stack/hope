@@ -201,7 +201,9 @@ def main():
                 matches=[r for r in rows if r.get('nonce')==nonce and r.get('result')==result and (reason is None or r.get('reason')==reason) and (peer_pid is None or r.get('peer_pid')==peer_pid)]
                 if matches:return matches[-1]
                 time.sleep(.05)
-            raise AssertionError('missing kernel audit: '+str(result)+'/'+str(reason))
+            observed=[{k:r.get(k) for k in ('result','reason','peer_pid')} for r in rows
+                      if peer_pid is not None and r.get('peer_pid')==peer_pid]
+            raise AssertionError('missing kernel audit: '+str(result)+'/'+str(reason)+' observed='+json.dumps(observed))
 
         def wait_backend_gone(pid):
             until=time.monotonic()+6
@@ -334,7 +336,7 @@ def main():
                               'expiry_at_commit':'PROTOTYPE_AUTHORITY_EXPIRED'}[name]
                     require(response['reason']==expected,'wrong COMMIT rejection boundary: '+response['reason'])
                 economic_after=admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]
-                allowed=1 if name in ('authorized_prototype_commit','approval_replay','commit_peer_kernel_stopped','lost_commit_acknowledgment','concurrent_same_approval','preexisting_multithreaded_target') else report.get('recovery_observations',{}).get(name,{}).get('read_only_resolved_effects',0)
+                allowed=1 if name in ('authorized_prototype_commit','approval_replay','commit_peer_kernel_stopped','lost_commit_acknowledgment','concurrent_same_approval') else report.get('recovery_observations',{}).get(name,{}).get('read_only_resolved_effects',0)
                 require(economic_after-economic_before==allowed,'unexpected committed economic effects')
                 results[name]={'status':'VERIFIED','scope':'disposable prototype only',
                                'authorized_effects':allowed,'unauthorized_committed_effects':0}
