@@ -112,5 +112,3 @@ an independently supplied digest. It is not integrated here; deriving a digest
 from the inspected untrusted file would manufacture provenance. Descriptor,
 no-follow, size and mutation guards remain untouched.
 
-G7FX is retained in `docs/G7FX_RESEARCH_ROADMAP.md` as **NOT STARTED**. Its
-independent research assessment does not activate a strategy or delay A1 testing.
