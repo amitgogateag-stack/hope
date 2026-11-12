@@ -32,7 +32,7 @@ CASES = ('authorized_prototype_commit','borrowed_session','reconnected_worker',
          'expiry_at_commit','direct_sql_outside_boundary','same_interpreter_exec','new_thread_creation',
          'commit_peer_kernel_stopped','wrong_signing_key','wrong_signed_scope','non_boolean_commit',
          'untrusted_identity_fields','policy_generation_changed','lost_commit_acknowledgment',
-         'broker_crash_before_commit','broker_commit_transport_loss_reconciled','concurrent_same_approval')
+         'broker_crash_before_commit','broker_commit_transport_loss_reconciled','concurrent_same_approval','preexisting_multithreaded_target')
 
 
 class Blocked(Exception):
@@ -133,9 +133,10 @@ def main():
             time.sleep(.05)
 
         class Client:
-            def __init__(self, uid=WORKER_UID, namespace=False, delegation=False):
+            def __init__(self, uid=WORKER_UID, namespace=False, delegation=False, threaded=False):
                 command=[sys.executable,str(runtime/'worker.py'),config['socket']]
                 if delegation:command.append('delegate')
+                if threaded:command.append('threaded')
                 kwargs=dict(user=uid,group=WORKER_UID,extra_groups=[])
                 if namespace:
                     command=['/usr/bin/unshare','--mount','--','/usr/bin/setpriv','--reuid='+str(uid),
@@ -144,6 +145,11 @@ def main():
                 self.p=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                     text=True,env=clean_env,**kwargs)
                 clients.append(self)
+                if threaded:
+                    self.first={}
+                    self.p.wait(timeout=5)
+                    require(self.p.returncode==-signal.SIGKILL,'multithreaded lease was not refused')
+                    return
                 self.first=self.read()
                 if self.first.get('reason') in ('PermissionError','ProcessLookupError'):
                     raise Blocked('Dedicated observer cannot read genuine peer /proc identity; no synthetic fallback')
@@ -188,11 +194,11 @@ def main():
             require(response.get('result')=='DENIED','attack admitted')
             require(count(client.first['challenge']['nonce'])==0,'unauthorized economic effect')
             return response
-        def audit_event(nonce,result,reason=None):
+        def audit_event(nonce,result,reason=None,peer_pid=None):
             until=time.monotonic()+5
             while time.monotonic()<until:
                 rows=[json.loads(l) for l in audit.read_text().splitlines()]
-                matches=[r for r in rows if r.get('nonce')==nonce and r.get('result')==result and (reason is None or r.get('reason')==reason)]
+                matches=[r for r in rows if r.get('nonce')==nonce and r.get('result')==result and (reason is None or r.get('reason')==reason) and (peer_pid is None or r.get('peer_pid')==peer_pid)]
                 if matches:return matches[-1]
                 time.sleep(.05)
             raise AssertionError('missing kernel audit: '+str(result)+'/'+str(reason))
@@ -256,6 +262,9 @@ def main():
                     require(a.send({'commit':True}).get('result')=='COMMITTED','initial commit failed')
                     b=Client();denied(b,signature)
                     require(count(a.first['challenge']['nonce'])==1,'approval repeated')
+                elif name=='preexisting_multithreaded_target':
+                    a=Client(threaded=True)
+                    audit_event(None,'DENIED','EXEC_FENCE_MULTITHREADED_TARGET',a.p.pid)
                 elif name in ('same_interpreter_exec','new_thread_creation'):
                     a=Client();prepared(a);nonce=a.first['challenge']['nonce']
                     a.send({'same_exec':True} if name=='same_interpreter_exec' else {'new_thread':True},reply=False)
@@ -325,7 +334,7 @@ def main():
                               'expiry_at_commit':'PROTOTYPE_AUTHORITY_EXPIRED'}[name]
                     require(response['reason']==expected,'wrong COMMIT rejection boundary: '+response['reason'])
                 economic_after=admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]
-                allowed=1 if name in ('authorized_prototype_commit','approval_replay','commit_peer_kernel_stopped','lost_commit_acknowledgment','concurrent_same_approval') else report.get('recovery_observations',{}).get(name,{}).get('read_only_resolved_effects',0)
+                allowed=1 if name in ('authorized_prototype_commit','approval_replay','commit_peer_kernel_stopped','lost_commit_acknowledgment','concurrent_same_approval','preexisting_multithreaded_target') else report.get('recovery_observations',{}).get(name,{}).get('read_only_resolved_effects',0)
                 require(economic_after-economic_before==allowed,'unexpected committed economic effects')
                 results[name]={'status':'VERIFIED','scope':'disposable prototype only',
                                'authorized_effects':allowed,'unauthorized_committed_effects':0}
@@ -335,7 +344,7 @@ def main():
                 for client in clients:client.close()
                 clients.clear()
         report['kernel_audit']=[json.loads(l) for l in audit.read_text().splitlines()]
-        report['execution_fence_scope']='Kernel exec/task events after successful SEIZE only; single-threaded targets; no loaded-code or pre-attachment proof'
+        report['execution_fence_scope']='Kernel exec/task events after kernel-stopped singleton baseline only; single-threaded targets; no loaded-code or pre-attachment proof'
         report['remaining_proofs']={name:'BLOCKED' for name in (
             'same_executable_exec_generation','loaded_python_code_integrity','production_OCI_image_attestation',
             'remote_signer_isolation_from_observer_capability','HOPE_financial_path_integration',

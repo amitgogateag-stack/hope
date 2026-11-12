@@ -24,6 +24,18 @@ class FenceDenied(Exception):
     pass
 
 
+def require_singleton_stop(status, pid, tracer_tid):
+    """Refusal parser; its input must come from the observer's real /proc."""
+    fields = dict(line.split(':', 1) for line in status.splitlines() if ':' in line)
+    if fields.get('Threads', '').strip() != '1':
+        raise FenceDenied('EXEC_FENCE_MULTITHREADED_TARGET')
+    if (fields.get('Pid', '').strip() != str(pid)
+            or fields.get('Tgid', '').strip() != str(pid)
+            or fields.get('TracerPid', '').strip() != str(tracer_tid)
+            or not fields.get('State', '').strip().startswith('t (')):
+        raise FenceDenied('EXEC_FENCE_KERNEL_STOP_UNVERIFIED')
+
+
 class ExecutionFence:
     def __init__(self, pid):
         if sys.platform != 'linux' or type(pid) is not int or pid <= 0 or pid == os.getpid():
@@ -98,6 +110,17 @@ class ExecutionFence:
             target, status = os.waitpid(self.pid, os.WNOHANG | WALL)
             if target:
                 self._status(status, expected_stop=True)
+                # A getdents listing is not an atomic thread-count assertion.
+                # With the leader stopped and the kernel reporting Threads=1,
+                # no untraced thread remains to race creation after baseline.
+                with (Path('/proc') / str(self.pid) / 'status').open() as stream:
+                    native = stream.read(16385)
+                if len(native) > 16384 or select.select([self.pidfd], [], [], 0)[0]:
+                    self._deny('EXEC_FENCE_KERNEL_STOP_UNVERIFIED')
+                try:
+                    require_singleton_stop(native, self.pid, self.tid)
+                except FenceDenied as exc:
+                    self._deny(str(exc))
                 return
             time.sleep(.001)
         self._deny('EXEC_FENCE_STOP_TIMEOUT')

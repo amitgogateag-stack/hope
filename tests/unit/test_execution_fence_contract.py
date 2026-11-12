@@ -23,3 +23,18 @@ def test_closed_execution_lease_cannot_be_checked_or_reentered():
     with pytest.raises(module['FenceDenied'],match='EXEC_FENCE_CLOSED'):
         with fence.stopped():
             raise AssertionError('closed lease entered a commit barrier')
+
+
+@pytest.mark.parametrize('change',['threads','tracer','pid','tgid','not_stopped','missing'])
+def test_nonmatching_kernel_stop_metadata_is_refused(change):
+    # Negative parser cases only. Actual positive /proc data is tested by the
+    # separate-UID native runner, never supplied by a trading worker.
+    fields={'Pid':'123','Tgid':'123','TracerPid':'456','Threads':'1','State':'t (tracing stop)'}
+    if change=='threads':fields['Threads']='2'
+    elif change=='tracer':fields['TracerPid']='789'
+    elif change=='pid':fields['Pid']='789'
+    elif change=='tgid':fields['Tgid']='789'
+    elif change=='not_stopped':fields['State']='S (sleeping)'
+    else:fields.pop('Threads')
+    with pytest.raises(module['FenceDenied']):
+        module['require_singleton_stop']('\n'.join(k+': '+v for k,v in fields.items()),123,456)

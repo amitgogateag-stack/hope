@@ -22,8 +22,10 @@ SO_PEERCRED and every packet's SCM_CREDENTIALS, and the proxy still owns the
 actual PostgreSQL cluster/login/backend/start/xid connection being committed.
 
 The prototype supports only a single-threaded target. It interrupts and checks
-the task set before establishing the baseline. Thread/fork/exec events after
-attachment invalidate the lease. Existing multithreaded targets, unexpected
+the task set before establishing the baseline. The real stopped /proc status must also report Threads=1, the exact Pid/Tgid
+and this native tracer TID. A directory listing alone cannot establish absence
+of concurrently exiting/untraced tasks. Thread/fork/exec events after this
+validated baseline invalidate the lease. Existing multithreaded targets, unexpected
 signal stops, unavailable ptrace and tracer-thread substitution fail closed.
 The observer remains attached on the same native tracer thread. A final kernel
 stop is held through actual SQL COMMIT, so the supported target cannot run a
@@ -39,7 +41,7 @@ production isolated authority; CAP_SYS_PTRACE is still a broad privilege.
 
 ## Exact limitations
 
-This proves exec/task exclusion only AFTER successful attachment, not absence
+This proves exec/task exclusion only AFTER a kernel-stopped singleton baseline, not absence
 of earlier exec or integrity of loaded Python code/memory. It does not attest
 a production OCI image. Ptrace commands address numeric TIDs; pidfd liveness
 and repeated observations are essential and require independent kernel review.

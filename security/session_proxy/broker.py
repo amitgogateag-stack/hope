@@ -82,6 +82,7 @@ def serve(config_path):
         pidfd = None
         fence = None
         nonce = None
+        credentials = None
         commit_started = committed = False
         try:
             peer.settimeout(12)
@@ -161,6 +162,7 @@ def serve(config_path):
                 reason = exc.diag.message_primary
                 result = 'DENIED'
             audit(dict(nonce=nonce, result=result, reason=reason,
+                       peer_pid=None if credentials is None else credentials[0],
                        kernel_events=[] if fence is None else fence.events))
             try:
                 send(peer, {'result': result, 'reason': reason})

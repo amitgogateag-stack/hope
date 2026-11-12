@@ -7,6 +7,9 @@ import array
 import time
 
 delegation = None
+if len(sys.argv) > 2 and sys.argv[2] == 'threaded':
+    import threading
+    threading.Thread(target=lambda: time.sleep(15), daemon=True).start()
 if len(sys.argv) > 2 and sys.argv[2] == 'delegate':
     delegation, child_end = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
     child = os.fork()  # Before connecting/attaching the controller execution lease.
