@@ -8,13 +8,16 @@ provider/normalize/persist path did not repeat completeness checks: a two-bar
 request then returned one normalized bar with `safe_to_persist=True`. The sink
 could append a partial window as if the provider response were complete.
 
-The fix retains an immutable tuple snapshot, copies the request, and revalidates
-the returned batch before normalization. The adapter receives a separate request
-from the private expected request captured before provider callbacks. A response
-which bypasses frozen fields or changes its request echo cannot redefine what
-the caller requested. Bad response types, generators and invalid bar containers
-fail before reaching persistence; existing tuple/list adapter inputs remain
-supported. No provider is imported, selected or approved by this change.
+The fix retains an immutable tuple of detached `RawMarketBar` snapshots, copies
+the request, and revalidates the returned batch before normalization. Detaching
+each bar matters because a frozen dataclass does not prevent a caller retaining
+and force-mutating the same object after validation. The adapter receives a
+separate request from the private expected request captured before provider
+callbacks. A response which bypasses frozen fields or changes its request echo
+cannot redefine what the caller requested. Bad response types, generators and
+invalid bar containers fail before reaching persistence; existing tuple/list
+adapter inputs remain supported. No provider is imported, selected or approved
+by this change.
 
 An ordinary caller-owned list changing later cannot change the retained complete
 response. An adapter returning an already corrupted/incomplete object is refused.

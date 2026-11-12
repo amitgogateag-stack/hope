@@ -74,6 +74,24 @@ def _snapshot_request(request: MarketDataRequest) -> MarketDataRequest:
                              start=request.start, end=request.end, interval=request.interval)
 
 
+def _snapshot_bar(bar: RawMarketBar) -> RawMarketBar:
+    if not isinstance(bar, RawMarketBar):
+        raise TypeError("PROVIDER_BATCH_BAR_TYPE_INVALID")
+    return RawMarketBar(
+        source=bar.source,
+        source_symbol=bar.source_symbol,
+        event_time=bar.event_time,
+        available_time=bar.available_time,
+        ingestion_time=bar.ingestion_time,
+        open=bar.open,
+        high=bar.high,
+        low=bar.low,
+        close=bar.close,
+        volume=bar.volume,
+        effective_time=bar.effective_time,
+    )
+
+
 @dataclass(frozen=True)
 class ProviderMarketDataBatch:
     source: str
@@ -83,14 +101,13 @@ class ProviderMarketDataBatch:
 
     def __post_init__(self) -> None:
         # Frozen dataclasses do not freeze caller-owned containers. Retain one
-        # immutable response snapshot before checking completeness; never a
-        # list/generator that can change between validation and persistence.
+        # detached response snapshot before checking completeness; never a
+        # container or RawMarketBar object that a provider can change between
+        # validation and persistence.
         if not isinstance(self.bars, (tuple, list)):
             raise TypeError("PROVIDER_BATCH_BAR_CONTAINER_INVALID")
-        object.__setattr__(self, "bars", tuple(self.bars))
+        object.__setattr__(self, "bars", tuple(_snapshot_bar(bar) for bar in self.bars))
         object.__setattr__(self, "request", _snapshot_request(self.request))
-        if any(not isinstance(bar, RawMarketBar) for bar in self.bars):
-            raise TypeError("PROVIDER_BATCH_BAR_TYPE_INVALID")
         if self.source != self.request.source:
             raise ValueError("PROVIDER_BATCH_SOURCE_MISMATCH")
         if self.fetched_at.tzinfo is None or self.fetched_at.utcoffset() is None:

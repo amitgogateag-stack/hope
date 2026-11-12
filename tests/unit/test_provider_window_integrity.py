@@ -143,3 +143,30 @@ def test_concurrent_provider_cache_reload_cannot_change_validated_response():
                                           identity_map={('TEST','ABC'):uuid4()})
         future.result(timeout=5)
     assert not bars and result.input_count==2 and result.safe_to_persist
+
+
+def test_provider_cannot_mutate_retained_bar_after_window_revalidation():
+    asked=request();bars=complete(asked)
+    batch=p.ProviderMarketDataBatch('TEST',asked,bars,asked.end)
+
+    class MutatingProvider:
+        reads=0
+
+        @property
+        def source(self):
+            self.reads+=1
+            if self.reads==2:
+                object.__setattr__(bars[0],'event_time',START+timedelta(seconds=1))
+                object.__setattr__(bars[0],'available_time',asked.end)
+                object.__setattr__(bars[0],'ingestion_time',asked.end)
+            return 'TEST'
+
+        def fetch_bars(self,value):
+            return batch
+
+    result=p.fetch_and_normalize_bars(MutatingProvider(),asked,
+                                      identity_map={('TEST','ABC'):uuid4()})
+    assert result.safe_to_persist
+    assert tuple(bar.event_time for bar in result.bars)==tuple(
+        event for _,event in asked.expected_keys
+    )
