@@ -11,7 +11,7 @@ import json
 import re
 from uuid import UUID
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Connection, Engine, text
 
 
 class LifecycleDenied(RuntimeError):
@@ -72,6 +72,31 @@ def _require(condition: bool, reason: str) -> None:
         raise LifecycleDenied(reason)
 
 
+def _require_public_capability_closure(connection: Connection) -> None:
+    """Refuse public writes hidden by column ACLs or non-inherited membership.
+
+    MEMBER is deliberately conservative: even currently non-inheritable or
+    non-settable memberships are not accepted as an observer capability root.
+    Built-in ACL inquiry functions include PUBLIC and inherited ACL grants.
+    This is not an attestation of SECURITY DEFINER function bodies or owners.
+    """
+    mutable = connection.execute(text(
+        "WITH reachable AS MATERIALIZED ("
+        " SELECT r.oid FROM pg_catalog.pg_roles r WHERE r.rolname=current_user "
+        " OR pg_catalog.pg_has_role(current_user,r.oid,'MEMBER')) "
+        "SELECT EXISTS(SELECT 1 FROM reachable r CROSS JOIN pg_catalog.pg_class c "
+        " JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+        " WHERE n.nspname='public' AND c.relkind IN ('r','p','v','m','f','S') AND "
+        " CASE WHEN c.relkind='S' THEN "
+        " pg_catalog.has_sequence_privilege(r.oid,c.oid,'USAGE,UPDATE') ELSE "
+        " pg_catalog.has_table_privilege(r.oid,c.oid,'INSERT,UPDATE,DELETE,TRUNCATE,TRIGGER,REFERENCES') "
+        " OR pg_catalog.has_any_column_privilege(r.oid,c.oid,'INSERT,UPDATE,REFERENCES') "
+        " OR CASE WHEN pg_catalog.current_setting('server_version_num')::int>=170000 THEN "
+        " pg_catalog.has_table_privilege(r.oid,c.oid,'MAINTAIN') ELSE false END END)"
+    )).scalar_one()
+    _require(mutable is False, 'OBSERVER_CAPABILITY_BOUNDARY_UNSAFE')
+
+
 def inspect_committed_cycle(engine: Engine, reference: CycleReference) -> dict:
     """Inspect one real committed lifecycle in a bounded READ ONLY snapshot.
 
@@ -116,6 +141,7 @@ def inspect_committed_cycle(engine: Engine, reference: CycleReference) -> dict:
                 "has_sequence_privilege(current_user,c.oid,'USAGE,UPDATE')"
             )).all()
             _require(not mutable_sequences, 'OBSERVER_SEQUENCE_BOUNDARY_UNSAFE')
+            _require_public_capability_closure(connection)
             # Imports are read-only repository/domain logic, never a work factory.
             from hope.infrastructure.repositories.paper_handoff import database_identity
             actual_database = database_identity(connection)

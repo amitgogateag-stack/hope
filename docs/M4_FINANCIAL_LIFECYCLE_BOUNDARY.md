@@ -23,6 +23,35 @@ The observer has no grant-installation path. Timeouts and a pre-read effect-coun
 bound prevent an unbounded history fetch. SQL errors propagate, never becoming
 an affirmative report.
 
+The privilege boundary also scans every public ordinary/partitioned/foreign
+table, view, materialized view and sequence for mutation capabilities held by
+the current login or ANY directly/indirectly reachable MEMBER role. Table-only
+inquiries miss column grants; current-user inquiries miss non-inherited roles
+that can be assumed with SET ROLE. Column INSERT/UPDATE/REFERENCES, table
+TRIGGER/REFERENCES and PostgreSQL17 MAINTAIN are therefore included alongside
+ordinary DML and sequence USAGE/UPDATE. PostgreSQL16 never evaluates the unknown
+MAINTAIN privilege selector. Membership closure is deliberately conservative,
+including memberships whose current INHERIT/SET options restrict use. A role
+with latent write capabilities is not accepted as an observer root.
+
+Native tests demonstrate actual column-only scratch writes, one/two-hop
+non-inherited SET ROLE writes, sequence mutation surviving transaction close,
+and trigger creation, with rollback or separate-owner sequence restoration in
+disposable databases. Financial cash and approval misgrants still encounter the
+original migration237 denials; their guards are not bypassed to make a test
+positive. PostgreSQL16 compatibility and PostgreSQL17 maintenance rights are
+tested as distinct native behaviors, with no skip/xfail substitution.
+
+This closes catalog-visible PUBLIC-schema relation/column/sequence capabilities,
+not arbitrary SECURITY DEFINER function semantics, foreign schemas, malicious
+owners or concurrent administrator privilege changes. The fixed read-only
+queries never invoke worker-selected functions. Independent deployment/root
+review remains necessary; no production admission requirement becomes PASS.
+
+PostgreSQL semantics: [ACL inquiry functions](https://www.postgresql.org/docs/16/functions-info.html),
+[role membership](https://www.postgresql.org/docs/17/role-membership.html),
+[PostgreSQL17 grants](https://www.postgresql.org/docs/17/sql-grant.html).
+
 An immutable reference specifies the expected database digest, authorization,
 job UUID, financial xid8, writer principal and portfolio. These are comparison
 inputs, NOT independent identity attestations. The observer checks actual

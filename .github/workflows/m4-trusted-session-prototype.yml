@@ -48,7 +48,7 @@ jobs:
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
-        run: pytest -v --junitxml=financial-lifecycle-results.xml tests/integration/test_financial_lifecycle_observer.py tests/unit/test_financial_lifecycle_boundary.py
+        run: pytest -v --junitxml=financial-lifecycle-results.xml tests/integration/test_financial_lifecycle_observer.py tests/integration/test_observer_capability_closure.py tests/unit/test_financial_lifecycle_boundary.py
       - name: Reproduce frozen PR87 three-second admission race
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
