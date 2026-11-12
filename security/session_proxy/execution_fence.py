@@ -149,23 +149,36 @@ class ExecutionFence:
             if self.attached:
                 try:
                     if self.violation:
-                        signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
-                        for child in self.children:
-                            try:
-                                fd = os.pidfd_open(child)
-                                try: signal.pidfd_send_signal(fd, signal.SIGKILL)
-                                finally: os.close(fd)
-                            except OSError:
-                                pass
+                        self._kill_tracee()
                     else:
                         self._pause()
                         self._call(DETACH)
                 except (OSError, ChildProcessError, FenceDenied):
                     # A failed detach is never acceptance. EXITKILL is the
                     # final kernel safeguard when this tracer thread exits.
-                    try: signal.pidfd_send_signal(self.pidfd, signal.SIGKILL)
-                    except ProcessLookupError: pass
+                    try: self._kill_tracee()
+                    except (OSError, ChildProcessError, FenceDenied): pass
         finally:
             os.close(self.pidfd)
             self.pidfd = None
             self.attached = self.paused = False
+
+    def _kill_tracee(self):
+        # CAP_SYS_PTRACE does not grant cross-UID pidfd_send_signal. Deliver
+        # SIGKILL through the existing ptrace relationship instead of adding
+        # CAP_KILL or letting cleanup mask the primary denial. EXITKILL also
+        # covers traced descendants when this dedicated tracer thread exits.
+        if not self.paused:
+            self._call(INTERRUPT)
+            until = time.monotonic() + 2
+            while time.monotonic() < until:
+                target, status = os.waitpid(self.pid, os.WNOHANG | WALL)
+                if target:
+                    if not os.WIFSTOPPED(status): return
+                    self.paused = True
+                    break
+                time.sleep(.001)
+            else:
+                raise FenceDenied('EXEC_FENCE_KILL_STOP_TIMEOUT')
+        self._call(CONT, signal.SIGKILL)
+        self.paused = False
