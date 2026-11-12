@@ -165,6 +165,43 @@ def test_control_event_writer_is_rejected_and_cannot_hide_rollback_probe(
         )).scalar_one() == before
 
 
+def test_sequence_mutation_privilege_is_rejected_and_probe_is_restored(
+        prepare, observer, startup_database):
+    _, ref = completed(prepare)
+    role = observer.url.username
+    assert role is not None
+    sequence = 'public.paper_environment_control_events_control_sequence_seq'
+    with startup_database['admin'].begin() as connection:
+        before = tuple(connection.execute(text(
+            'SELECT last_value,is_called FROM '+sequence
+        )).one())
+        connection.exec_driver_sql('GRANT USAGE ON SEQUENCE '+sequence+' TO '+role)
+
+    with pytest.raises(LifecycleDenied, match='OBSERVER_SEQUENCE_BOUNDARY_UNSAFE'):
+        inspect_committed_cycle(observer, ref)
+
+    try:
+        # nextval is nontransactional: rollback/connection close cannot undo it.
+        with observer.connect() as connection:
+            advanced = connection.execute(text(
+                "SELECT nextval('"+sequence+"')"
+            )).scalar_one()
+        assert advanced == before[0] + 1
+        with startup_database['admin'].connect() as connection:
+            assert tuple(connection.execute(text(
+                'SELECT last_value,is_called FROM '+sequence
+            )).one()) == (advanced, True)
+    finally:
+        with startup_database['admin'].begin() as connection:
+            connection.execute(text(
+                "SELECT setval('"+sequence+"',:value,:called)"
+            ), {'value':before[0], 'called':before[1]})
+    with startup_database['admin'].connect() as connection:
+        assert tuple(connection.execute(text(
+            'SELECT last_value,is_called FROM '+sequence
+        )).one()) == before
+
+
 @pytest.mark.parametrize('damage', ['audit', 'effect'])
 def test_incomplete_restored_history_cannot_be_reported_complete(prepare, observer, startup_database, damage):
     _, ref = completed(prepare)

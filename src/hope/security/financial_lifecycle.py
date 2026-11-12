@@ -109,6 +109,13 @@ def inspect_committed_cycle(engine: Engine, reference: CycleReference) -> dict:
             _require(len(catalog) == len(RELATIONS) and all(
                 r[1] == 'r' and r[2] is False and r[3] is False and r[4] is True
                 for r in catalog), 'OBSERVER_RELATION_BOUNDARY_UNSAFE')
+            mutable_sequences = connection.execute(text(
+                "SELECT c.relname FROM pg_catalog.pg_class c "
+                "JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='public' AND c.relkind='S' AND "
+                "has_sequence_privilege(current_user,c.oid,'USAGE,UPDATE')"
+            )).all()
+            _require(not mutable_sequences, 'OBSERVER_SEQUENCE_BOUNDARY_UNSAFE')
             # Imports are read-only repository/domain logic, never a work factory.
             from hope.infrastructure.repositories.paper_handoff import database_identity
             actual_database = database_identity(connection)
