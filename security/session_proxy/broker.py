@@ -19,6 +19,7 @@ import time
 
 import psycopg
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from execution_fence import ExecutionFence, FenceDenied
 
 LIMIT = 16384
 
@@ -70,6 +71,7 @@ def serve(config_path):
     require(sys.platform == 'linux' and os.geteuid() != 0, 'UNPRIVILEGED_LINUX_BROKER_REQUIRED')
     key = Ed25519PublicKey.from_public_bytes(bytes.fromhex(config['public_key']))
     audit_lock = threading.Lock()
+    capacity = threading.BoundedSemaphore(8)
 
     def audit(value):
         with audit_lock:
@@ -78,20 +80,29 @@ def serve(config_path):
 
     def handle(peer):
         pidfd = None
+        fence = None
         nonce = None
+        commit_started = committed = False
         try:
             peer.settimeout(12)
             credentials = struct.unpack('3i', peer.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
             pid, uid, gid = credentials
             require(uid == config['worker_uid'], 'WRONG_KERNEL_UID')
             pidfd = os.pidfd_open(pid)
+            fence = ExecutionFence(pid)
             identity = observation(pid)
             require(identity['executable_sha256'] == config['executable_sha256'], 'WRONG_EXECUTABLE')
             require(identity['namespaces'] == config['namespaces'], 'WRONG_NAMESPACE')
 
             def current():
+                fence.check()
                 require(not select.select([pidfd], [], [], 0)[0], 'PROCESS_EXITED')
                 require(observation(pid) == identity, 'PROCESS_REPLACED')
+
+            current()
+            execution_lease = dict(kind='ptrace-single-thread-since-attach-v1',
+                                   tracer_tid=fence.tid, lease_nonce=secrets.token_hex(32))
+            fence.resume()
 
             with psycopg.connect(config['dsn'], autocommit=True) as db:
                 db.execute("SET statement_timeout='5000ms'")
@@ -108,6 +119,7 @@ def serve(config_path):
                     require(not state[0] and not state[1], 'POLICY_DENIED')
                     nonce = secrets.token_hex(32)
                     transcript = dict(nonce=nonce, peer=identity, uid=uid, gid=gid,
+                        execution_lease=execution_lease,
                         backend_pid=session[0], xid=session[1], login=session[2], database_oid=session[3],
                         backend_start=session[4], cluster=session[5], expires_at=session[6]+3,
                         generation=state[2], release_tree=config['release_tree'],
@@ -122,28 +134,45 @@ def serve(config_path):
                         (nonce, json.dumps(transcript), transcript['expires_at'], transcript['generation']))
                     db.execute('INSERT INTO session_prototype.effects VALUES(%s,1)', (nonce,))
                     send(peer, {'prepared': nonce})
-                    require(receive(peer, credentials, current) == {'commit': True}, 'COMMIT_PROTOCOL')
+                    command = receive(peer, credentials, current)
+                    require(set(command) == {'commit'} and command['commit'] is True, 'COMMIT_PROTOCOL')
                     current()
-                    db.execute('COMMIT')
+                    with fence.stopped():
+                        current()
+                        audit(dict(nonce=nonce, result='COMMIT_BARRIER_HELD', peer=identity,
+                                   tracer_tid=fence.tid, backend_pid=session[0], xid=session[1]))
+                        commit_started = True
+                        db.execute('COMMIT')
+                        committed = True
                     audit(dict(nonce=nonce, result='COMMITTED', peer=identity, session=list(session[:6])))
                     send(peer, {'result': 'COMMITTED', 'nonce': nonce})
                 except Exception:
-                    db.execute('ROLLBACK')
+                    # Never turn a lost COMMIT response into a claim of rollback.
+                    # Closing an uncertain connection is not authority to replay.
+                    if not commit_started:
+                        db.execute('ROLLBACK')
                     raise
         except Exception as exc:
-            reason = str(exc) if isinstance(exc, Denied) else type(exc).__name__
+            reason = str(exc) if isinstance(exc, (Denied, FenceDenied)) else type(exc).__name__
+            result = 'COMMITTED_ACK_LOST' if committed else 'RECOVERY_REQUIRED' if commit_started else 'DENIED'
             if isinstance(exc, psycopg.errors.CheckViolation) and exc.diag.message_primary in {
-                    'PROTOTYPE_HALTED', 'PROTOTYPE_AUTHORITY_REVOKED', 'PROTOTYPE_AUTHORITY_EXPIRED'}:
+                    'PROTOTYPE_HALTED', 'PROTOTYPE_AUTHORITY_REVOKED', 'PROTOTYPE_AUTHORITY_EXPIRED',
+                    'PROTOTYPE_COMMIT_DENIED', 'PROTOTYPE_COMMIT_CONTEXT'}:
                 reason = exc.diag.message_primary
-            audit(dict(nonce=nonce, result='DENIED', reason=reason))
+                result = 'DENIED'
+            audit(dict(nonce=nonce, result=result, reason=reason,
+                       kernel_events=[] if fence is None else fence.events))
             try:
-                send(peer, {'result': 'DENIED', 'reason': reason})
+                send(peer, {'result': result, 'reason': reason})
             except OSError:
                 pass
         finally:
+            if fence is not None:
+                fence.close()
             if pidfd is not None:
                 os.close(pidfd)
             peer.close()
+            capacity.release()
 
     with socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET) as listener:
         listener.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
@@ -154,7 +183,10 @@ def serve(config_path):
         audit({'result': 'LISTENING', 'uid': os.getuid()})
         while True:
             peer, _ = listener.accept()
-            threading.Thread(target=handle, args=(peer,), daemon=True).start()
+            if capacity.acquire(blocking=False):
+                threading.Thread(target=handle, args=(peer,), daemon=True).start()
+            else:
+                peer.close()
 
 
 if __name__ == '__main__':
