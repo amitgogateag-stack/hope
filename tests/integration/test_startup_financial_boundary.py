@@ -496,10 +496,17 @@ def test_r1_privilege_drift_cannot_remove_independently_funded_portfolio(
     role = worker.url.username
     assert role is not None
     with startup_database['admin'].begin() as connection:
-        connection.exec_driver_sql(
-            'GRANT DELETE, TRUNCATE ON public.paper_portfolios TO '+role)
+        if attack == 'delete':
+            connection.exec_driver_sql(
+                'GRANT DELETE ON public.paper_portfolios TO '+role)
+        else:
+            # CASCADE checks every referencing relation's privilege before
+            # firing table triggers. Model the complete destructive misgrant.
+            connection.exec_driver_sql(
+                'GRANT TRUNCATE ON ALL TABLES IN SCHEMA public TO '+role)
+    expected_privileges = (True, False) if attack == 'delete' else (False, True)
     with worker.connect() as connection:
-        assert tuple(connection.execute(privilege_query).one()) == (True, True)
+        assert tuple(connection.execute(privilege_query).one()) == expected_privileges
 
     with pytest.raises(
             DBAPIError, match='PAPER_CONTROLLED_PORTFOLIO_REMOVAL_FORBIDDEN'):
