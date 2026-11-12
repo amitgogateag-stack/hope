@@ -3,7 +3,7 @@
 These are history/denial proofs, not positive independent production admission.
 """
 from dataclasses import replace
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 from sqlalchemy import create_engine, text
@@ -53,7 +53,7 @@ def completed(prepare, path='FILLED', market=StrategyMarket.USA):
         database = database_identity(connection)
         principal = connection.execute(text('SELECT session_user')).scalar_one()
     return value, CycleReference(database, permit.authorization_sha256, value['run'].job_run_id,
-        xid, principal, value['data']['configuration']['paper_execution']['portfolio_id'])
+        xid, principal, UUID(value['data']['configuration']['paper_execution']['portfolio_id']))
 
 
 @pytest.mark.parametrize('market', [StrategyMarket.USA, StrategyMarket.INDIA])
@@ -105,7 +105,7 @@ def test_unknown_commit_with_missing_completion_remains_incomplete(prepare, obse
         row = connection.execute(text('SELECT authorization_sha256,transaction_id::text,database_principal '
             'FROM public.paper_startup_financial_transactions')).one()
         ref = CycleReference(database_identity(connection), row[0], value['run'].job_run_id, row[1], row[2],
-            value['data']['configuration']['paper_execution']['portfolio_id'])
+            UUID(value['data']['configuration']['paper_execution']['portfolio_id']))
     with pytest.raises(LifecycleDenied, match='LIFECYCLE_INCOMPLETE'):
         inspect_committed_cycle(observer, ref)
     with value['worker'].connect() as connection:
