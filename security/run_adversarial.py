@@ -71,6 +71,10 @@ def run() -> int:
                 "self_approve": "INSERT INTO paper_admission_approvals VALUES ('paper_startup_claims',repeat('a',64),(SELECT oid FROM pg_roles WHERE rolname=session_user),'{}',extract(epoch FROM clock_timestamp())::bigint+30,clock_timestamp())",
                 "self_superuser": sql.SQL("ALTER ROLE {} SUPERUSER").format(sql.Identifier(worker)),
                 "impersonate_verifier": sql.SQL("SET ROLE {}").format(sql.Identifier(credentials["verifier"].username)),
+                "impersonate_owner": sql.SQL("SET ROLE {}").format(sql.Identifier(owner)),
+                "grant_self_verifier_role": sql.SQL("GRANT {} TO {}").format(
+                    sql.Identifier(credentials["verifier"].username), sql.Identifier(worker)),
+                "create_shadow_attestor": "CREATE FUNCTION public.hope_attest_untrusted() RETURNS boolean LANGUAGE sql AS 'SELECT true'",
                 "direct_financial_insert": "INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES ('00000000-0000-0000-0000-000000000001',50,50)",
             }
             with psycopg.connect(credentials["worker"].set(drivername="postgresql").render_as_string(hide_password=False), autocommit=True) as connection:
@@ -84,6 +88,25 @@ def run() -> int:
                     else:
                         raise RuntimeError("unauthorized SQL accepted: " + name)
                 for table in ("paper_portfolios", "paper_effects", "orders", "fills", "paper_admission_approvals", "paper_admission_principals"):
+                    assert connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0] == 0
+            # The purported verifier is also a separately restricted LOGIN.
+            # It must not have an independent financial or admission write path.
+            verifier_attacks = {
+                "verifier_cannot_approve": "INSERT INTO paper_admission_approvals VALUES ('paper_startup_claims',repeat('b',64),(SELECT oid FROM pg_roles WHERE rolname=session_user),'{}',extract(epoch FROM clock_timestamp())::bigint+30,clock_timestamp())",
+                "verifier_cannot_fund": "INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES ('00000000-0000-0000-0000-000000000002',50,50)",
+                "verifier_cannot_self_classify": "INSERT INTO paper_admission_principals SELECT oid,rolname,'ORDINARY',clock_timestamp() FROM pg_roles WHERE rolname=session_user",
+            }
+            with psycopg.connect(credentials["verifier"].set(drivername="postgresql").render_as_string(hide_password=False), autocommit=True) as connection:
+                for name, statement in verifier_attacks.items():
+                    try:
+                        connection.execute(statement)
+                    except psycopg.Error as exc:
+                        if exc.sqlstate != "42501":
+                            raise RuntimeError("verifier denial used unexpected SQLSTATE: " + str(exc.sqlstate)) from None
+                        report["experiments"].append({"name": name, "status": "PASS", "sqlstate": exc.sqlstate})
+                    else:
+                        raise RuntimeError("verifier acquired write authority: " + name)
+                for table in ("paper_portfolios", "paper_admission_approvals", "paper_admission_principals"):
                     assert connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0] == 0
             result = subprocess.run([sys.executable, "-m", "hope.security.admission_verifier"], input=b'{"verified":true}', capture_output=True, timeout=10, check=False)
             evidence = json.loads(result.stdout)
