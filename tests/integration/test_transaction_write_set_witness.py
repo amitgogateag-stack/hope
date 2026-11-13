@@ -58,7 +58,7 @@ def witness_case(startup_database, prepare):
         connection.exec_driver_sql('GRANT USAGE ON SCHEMA financial_witness TO '+role)
         for function in ('open_envelope(uuid)', 'snapshot(uuid)', 'challenge(uuid)', 'seal(uuid)', 'digest(jsonb)'):
             connection.exec_driver_sql('GRANT EXECUTE ON FUNCTION financial_witness.'+function+' TO '+role)
-    def build(path='FILLED', market=StrategyMarket.USA):
+    def build(path='FILLED', market=StrategyMarket.USA, *, before_execution=None):
         # Generate fixture-only keys before acquiring the short-lived actual
         # execution witness. Do not refresh or extend its deadline.
         private = Ed25519PrivateKey.generate()
@@ -69,6 +69,7 @@ def witness_case(startup_database, prepare):
             connection.execute(text('UPDATE financial_witness.policy SET generation=:generation'),
                 {'generation':value['case']['policy']['generation']})
         startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+        if before_execution is not None: before_execution(admin, role)
         permit = value['case']['verify_execution']()
         check, original, complete = startup.execution_callbacks(worker, permit)
         state = dict(value=value, permit=permit, root=root, private=private, outcome=path, nonce=None)
@@ -130,6 +131,31 @@ def zero_effects(admin):
             name = table if '.' in table else 'public.'+table
             assert connection.exec_driver_sql('SELECT count(*) FROM '+name).scalar_one() == 0
         assert connection.execute(text('SELECT count(*) FROM financial_witness.claims')).scalar_one() == 1
+
+
+def test_private_catalog_drift_cannot_enter_write_set_witness(
+        witness_case, startup_database):
+    """Migration 239 must deny drift before the prototype consumes authority."""
+    admin=startup_database['admin'];role=startup_database['role']
+    def grant_private_catalog(owner, principal):
+        assert owner is admin and principal==role
+        with owner.begin() as connection:
+            connection.exec_driver_sql(
+                'GRANT SELECT ON pg_catalog.pg_authid TO '+principal)
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            witness_case(before_execution=grant_private_catalog)
+        with admin.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+            assert connection.execute(text(
+                'SELECT count(*) FROM financial_witness.claims'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql(
+                'REVOKE SELECT ON pg_catalog.pg_authid FROM '+role)
 
 
 @pytest.mark.parametrize('market', [StrategyMarket.USA, StrategyMarket.INDIA])

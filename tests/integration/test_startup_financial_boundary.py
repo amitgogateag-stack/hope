@@ -215,6 +215,172 @@ def test_set_role_cannot_drop_the_consumed_login_scope(prepare,startup_database)
             connection.exec_driver_sql('DROP ROLE '+delegate)
 
 
+def test_predefined_server_program_role_blocks_startup_before_consumption(
+        prepare,startup_database):
+    """Relation-safe flags do not make a server-program role a safe worker."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,'pg_execute_server_program','MEMBER'), "
+                "has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY')"
+            )).one()==(True,False)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_claims'
+            )).scalar_one()==0
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_bootstraps'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
+
+
+def test_predefined_role_drift_blocks_execution_claim_before_consumption(
+        prepare,startup_database):
+    """A safe bootstrap cannot authorize a later capability-escalated worker."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_claims'
+            )).scalar_one()==1
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
+
+
+def test_direct_catalog_routine_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A direct privileged routine grant is equivalent to a predefined role."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];routine='pg_catalog.pg_read_file(text)'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT EXECUTE ON FUNCTION '+routine+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_function_privilege(current_user,"
+                "'pg_catalog.pg_read_file(text)','EXECUTE'), "
+                "length(pg_catalog.pg_read_file('PG_VERSION')) > 0"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE EXECUTE ON FUNCTION '+routine+' FROM '+role)
+
+
+def test_direct_catalog_relation_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A private system-catalog grant must not reach execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];relation='pg_catalog.pg_authid'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT SELECT ON '+relation+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_table_privilege(current_user,'pg_catalog.pg_authid',"
+                "'SELECT'),(SELECT rolpassword IS NOT NULL FROM pg_catalog.pg_authid "
+                "WHERE rolname=current_user)"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE SELECT ON '+relation+' FROM '+role)
+
+
+def test_relation_ownership_drift_blocks_execution_claim_before_consumption(
+        prepare,startup_database):
+    """A post-bootstrap table owner must not reach one-use execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        owner=connection.execute(text(
+            "SELECT pg_get_userbyid(c.relowner) FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname='public' AND c.relname='paper_portfolios'"
+        )).scalar_one()
+        connection.exec_driver_sql('ALTER TABLE public.paper_portfolios OWNER TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,c.relowner,'MEMBER') FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='public' AND c.relname='paper_portfolios'"
+            )).scalar_one() is True
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE public.paper_portfolios OWNER TO '+owner)
+
+
+def test_trigger_function_ownership_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A guard-function owner must not consume controlled execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];function='public.hope_require_startup_financial_write()'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        owner=connection.execute(text(
+            "SELECT pg_get_userbyid(p.proowner) FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid=p.pronamespace "
+            "WHERE n.nspname='public' AND p.proname="
+            "'hope_require_startup_financial_write'"
+        )).scalar_one()
+        connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,p.proowner,'MEMBER') FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='public' AND p.proname="
+                "'hope_require_startup_financial_write'"
+            )).scalar_one() is True
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+owner)
+
+
 def test_failed_job_cannot_commit_partial_financial_work(prepare):
     from hope.application.jobs import JobRunStatus,create_job_run_completion
     from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
