@@ -1,0 +1,61 @@
+name: M4 transaction write-set prototype
+on:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  witness:
+    name: Transaction witness (PostgreSQL ${{ matrix.postgres }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ['16', '17']
+    services:
+      postgres:
+        image: postgres:${{ matrix.postgres }}
+        env:
+          POSTGRES_USER: hope
+          POSTGRES_PASSWORD: disposable_only
+          POSTGRES_DB: hope
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U hope -d hope"
+          --health-interval 5s --health-timeout 5s --health-retries 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - run: python -m pip install -c constraints/ci-test.txt -e '.[test]'
+      - name: Record exact source and disposable schema
+        run: |
+          git rev-parse HEAD > tested-commit.txt
+          sha256sum security/transaction_witness/schema.sql > witness-schema-sha256.txt
+      - name: Full-row capture and actual COMMIT adversarial tests
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:disposable_only@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres }}
+        run: pytest -v --junitxml=witness-results.xml tests/integration/test_transaction_write_set_witness.py tests/unit/test_write_set_witness.py
+      - name: Type and high-severity security checks
+        run: |
+          python -m venv /tmp/witness-types
+          /tmp/witness-types/bin/python -m pip install -r constraints/m4-type-review.txt
+          /tmp/witness-types/bin/python -m mypy --python-executable "$(command -v python)" --follow-imports=silent --platform linux --python-version 3.13 --check-untyped-defs src/hope/security/write_set_witness.py
+          python -m venv /tmp/witness-security
+          /tmp/witness-security/bin/python -m pip install -r constraints/security-review.txt
+          /tmp/witness-security/bin/python -m bandit -r src/hope/security/write_set_witness.py -lll
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: transaction-witness-pg${{ matrix.postgres }}
+          path: |
+            witness-results.xml
+            tested-commit.txt
+            witness-schema-sha256.txt
+          if-no-files-found: error
