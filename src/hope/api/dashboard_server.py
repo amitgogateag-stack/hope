@@ -89,11 +89,6 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
                 or not isinstance(data.get('publisher_identity_sha256'),str)
                 or not fullmatch('[0-9a-f]{64}',data['publisher_identity_sha256'])):
             raise ValueError('HOPE_OPERATIONS_PUBLISHER_INVALID')
-        if data['state']=='CURRENT':
-            from hope.infrastructure.paper_history import publisher_observation
-            if publisher_observation(path,expected_instance=data['publisher_instance'],
-                    expected_identity=data['publisher_identity_sha256'])['state']!='VERIFIED':
-                raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     fields = ("cycles_succeeded", "cycles_failed", "jobs_executed", "jobs_skipped")
     if not all(type(data.get(k)) is int and 0 <= data[k] <= 9007199254740991 for k in fields):
         raise ValueError("HOPE_OPERATIONS_STATUS_COUNTS_INVALID")
@@ -116,6 +111,16 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
         raise ValueError("HOPE_OPERATIONS_COMMIT_INVALID")
     if expected_commit is not None and commit != expected_commit:
         raise ValueError("HOPE_OPERATIONS_COMMIT_MISMATCH")
+    if data['state']=='CURRENT':
+        # Legacy status is not an authentication downgrade route. A real
+        # publisher lock also cannot attest same-UID-writable heartbeat bytes.
+        if data['schema_version']!=2:
+            raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
+        from hope.infrastructure.paper_history import publisher_observation
+        proof=publisher_observation(path,expected_instance=data['publisher_instance'],
+            expected_identity=data['publisher_identity_sha256'])
+        if proof['state']!='VERIFIED' or proof.get('heartbeat_authenticated') is not True:
+            raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     if compatibility not in {"UNKNOWN", "COMPATIBLE", "INCOMPATIBLE"}:
         raise ValueError("HOPE_OPERATIONS_SCHEMA_INVALID")
     # A closed vocabulary prevents a valid-looking file from leaking arbitrary
@@ -128,7 +133,8 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
         "state": data["state"], "last_success_at": success.isoformat() if success else None,
         "paper_only": True, "live_enabled": False, "error_code": error,
         "deployed_commit": commit, "schema_compatibility": compatibility,
-        "runtime_gate": "VERIFIED" if data.get("runtime_gate")=="VERIFIED" else "UNVERIFIED",
+        # Noncurrent unsigned diagnostics cannot authenticate a runtime claim.
+        "runtime_gate": "VERIFIED" if data['state']=='CURRENT' and data.get("runtime_gate")=="VERIFIED" else "UNVERIFIED",
         **{key: data[key] for key in fields},
     }
     if "last_failure_at" in data or "last_failure_code" in data:

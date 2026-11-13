@@ -59,3 +59,27 @@ consumer bindings. No such production authority is supplied by this repair.
 Acceptance/rehearsal evidence and all operating readiness remain UNVERIFIED
 without their independent roots; all production execution admission stays DENY.
 No human security review or AWS operating acceptance is manufactured.
+
+## Unsigned heartbeat containment
+
+Publisher observation now reports a genuine held lease as UNVERIFIED with
+lock_state=HELD and heartbeat_authenticated=false. Lease metadata remains
+diagnostic; no production positive heartbeat attestor exists. CURRENT operations
+requires independently authenticated content and cannot downgrade to legacy v1.
+Staging opening/closing and startup observations require that same authentication
+boundary. Unsigned noncurrent diagnostics remain available, with runtime_gate
+UNVERIFIED. Dashboard service liveness does not imply publisher authenticity.
+
+Native adversarial tests run a same-UID child that atomically replaces stale
+heartbeat content with fresh CURRENT content while the genuine exclusive lock
+remains held. Both v1 downgrade and v2 identity-copy attempts must be refused.
+State-machine positive fixtures explicitly model an external attestor; they are
+not independent acceptance evidence. No digest, sidecar, key or worker-supplied
+boolean is introduced as a production trust root.
+
+The external requirement remains a reviewed independent producer identity and
+key custody or enforced writer isolation, replay protection, and a binding of
+the authenticated message to the exact content, release, publisher incarnation,
+session, sequence and observation deadline. Until supplied and independently
+validated, even legitimate unsigned CURRENT publishers cannot establish ready
+status. Engineering integration and operational PAPER remain NO-GO.

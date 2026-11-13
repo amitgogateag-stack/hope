@@ -9,7 +9,7 @@ from hope.infrastructure import paper_history
 SHA='a'*40
 
 
-@pytest.mark.parametrize('fault',[None,'extra','wrong_release','future','stale','dead_publisher','fabricated_success','oversize'])
+@pytest.mark.parametrize('fault',[None,'extra','wrong_release','future','stale','dead_publisher','unsigned_publisher','fabricated_success','oversize'])
 def test_startup_diagnostics_never_promote_missing_or_contradictory_proof(tmp_path,monkeypatch,fault):
     now=datetime.now(UTC);path=tmp_path/'startup.json'
     raw=dict(schema='hope.paper-startup-observation.v1',state='BOOTSTRAPPED',release_commit=SHA,startup_authorization_sha256='b'*64,
@@ -29,7 +29,9 @@ def test_startup_diagnostics_never_promote_missing_or_contradictory_proof(tmp_pa
             if len(payload)>limit:raise ValueError('BOUNDED_READ_LIMIT')
             return payload
         monkeypatch.setattr('hope.infrastructure.durable_file.bounded_regular_read',modeled_read)
-    owner=Mock(return_value=dict(state='BLOCKED' if fault=='dead_publisher' else 'VERIFIED'))
+    # Explicit external-authentication MODEL; no production producer exists.
+    owner=Mock(return_value=dict(state='BLOCKED' if fault=='dead_publisher' else 'VERIFIED',
+        heartbeat_authenticated=fault not in {'dead_publisher','unsigned_publisher'}))
     monkeypatch.setattr(paper_history,'publisher_observation',owner)
     result=p.startup_observation(path,SHA,now=now)
     assert result['state']==('BOOTSTRAPPED' if fault is None else 'STALE' if fault=='stale' else 'UNVERIFIED')
