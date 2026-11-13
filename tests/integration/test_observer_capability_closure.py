@@ -219,6 +219,22 @@ def test_column_reference_capability_is_not_a_read_only_grant(prepare, observer,
     _deny(observer, ref)
 
 
+def test_predefined_server_program_role_is_not_an_observer_capability(
+        prepare, observer, startup_database):
+    """A role without table DML can still launch server-side OS commands."""
+    _, ref = completed(prepare)
+    role = observer.url.username
+    with startup_database['admin'].begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    with observer.connect() as connection:
+        assert connection.execute(text(
+            "SELECT pg_has_role(current_user,'pg_execute_server_program','MEMBER'), "
+            "has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY')"
+        )).one() == (True, False)
+    with pytest.raises(LifecycleDenied, match='OBSERVER_ROLE_UNSAFE'):
+        inspect_committed_cycle(observer, ref)
+
+
 def test_version_specific_maintenance_privilege_is_handled(prepare, observer, capability_probe):
     _, ref = completed(prepare)
     p = capability_probe

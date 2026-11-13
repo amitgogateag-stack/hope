@@ -34,6 +34,11 @@ MAINTAIN privilege selector. Membership closure is deliberately conservative,
 including memberships whose current INHERIT/SET options restrict use. A role
 with latent write capabilities is not accepted as an observer root.
 
+Any reachable PostgreSQL predefined `pg_*` role is also rejected. Capabilities
+such as `pg_execute_server_program` do not appear in relation ACL inquiries but
+can cross the database/host boundary, so they are incompatible with a restricted
+financial-history observer even when the login has no table DML.
+
 Native tests demonstrate actual column-only scratch writes, one/two-hop
 non-inherited SET ROLE writes, sequence mutation surviving transaction close,
 and trigger creation, with rollback or separate-owner sequence restoration in
