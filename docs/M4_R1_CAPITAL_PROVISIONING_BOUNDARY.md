@@ -35,6 +35,12 @@ every controlled one-use startup/execution authority insert. Privilege drift
 after a safe bootstrap therefore cannot consume an execution claim before the
 financial-write boundary notices the escalation.
 
+The same recheck rejects ownership of any public relation by the login or a
+reachable role. Relation ownership is an implicit DDL capability: an owner can
+disable the financial triggers even when ordinary CREATE and DML grants look
+restricted. The adversarial ownership-transfer regression restores the exact
+prior owner after its disposable proof.
+
 Reviewers must verify both PG16 and PG17 full migrations and integration
 regressions; the new migration is unverified until those CI results exist.
 Do not interpret an unrelated green unit test as migration proof.
