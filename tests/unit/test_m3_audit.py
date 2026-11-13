@@ -11,7 +11,9 @@ import pytest
 from hope.api import m3_audit as module
 from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.dashboard_server import DashboardHTTPServer
-from test_dashboard_m1_operations_surface import health
+# Explicit external-authentication MODEL for downstream state-machine tests.
+# Real unsigned CURRENT and same-UID replacement denial run in separate suites.
+from test_m3_dashboard_readiness import health, modeled_external_heartbeat_authority
 from test_dashboard_server import valid_snapshot
 
 
