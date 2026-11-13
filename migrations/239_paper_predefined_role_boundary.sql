@@ -18,6 +18,15 @@ BEGIN
             OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n
                       ON n.oid=p.pronamespace
                       WHERE n.nspname='public' AND p.proowner=r.oid)
+            OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n
+                      ON n.oid=p.pronamespace
+                      WHERE n.nspname='pg_catalog'
+                        AND p.oid<>'pg_catalog.pg_control_system()'::regprocedure
+                        AND has_function_privilege(r.oid,p.oid,'EXECUTE')
+                        AND NOT EXISTS(
+                            SELECT 1 FROM aclexplode(COALESCE(
+                                p.proacl,acldefault('f',p.proowner))) a
+                            WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))
             OR EXISTS(SELECT 1 FROM pg_namespace n
                       WHERE has_schema_privilege(r.oid,n.oid,'CREATE')))
     ) THEN

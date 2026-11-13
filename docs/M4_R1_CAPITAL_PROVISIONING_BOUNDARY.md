@@ -35,6 +35,15 @@ every controlled one-use startup/execution authority insert. Privilege drift
 after a safe bootstrap therefore cannot consume an execution claim before the
 financial-write boundary notices the escalation.
 
+Direct grants on privileged `pg_catalog` routines are rejected too. PostgreSQL
+allows an administrator to grant a superuser-only routine such as
+`pg_read_file(text)` without granting its equivalent predefined role. Migration
+239 rejects catalog EXECUTE capabilities that PUBLIC does not possess, while
+retaining the explicitly required read-only `pg_control_system()` identity
+probe. The regression demonstrates the restricted worker can read only the
+disposable test server's `PG_VERSION`, then requires refusal before an execution
+claim is consumed and revokes the test grant.
+
 The same recheck rejects ownership of any public relation by the login or a
 reachable role. Relation ownership is an implicit DDL capability: an owner can
 disable the financial triggers even when ordinary CREATE and DML grants look

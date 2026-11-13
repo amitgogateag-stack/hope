@@ -265,6 +265,32 @@ def test_predefined_role_drift_blocks_execution_claim_before_consumption(
             connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
 
 
+def test_direct_catalog_routine_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A direct privileged routine grant is equivalent to a predefined role."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];routine='pg_catalog.pg_read_file(text)'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT EXECUTE ON FUNCTION '+routine+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_function_privilege(current_user,"
+                "'pg_catalog.pg_read_file(text)','EXECUTE'), "
+                "trim(pg_catalog.pg_read_file('PG_VERSION')) ~ '^[0-9]+$'"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE EXECUTE ON FUNCTION '+routine+' FROM '+role)
+
+
 def test_relation_ownership_drift_blocks_execution_claim_before_consumption(
         prepare,startup_database):
     """A post-bootstrap table owner must not reach one-use execution authority."""
