@@ -77,7 +77,11 @@ BEGIN
   OR NEW.cluster_id<>(SELECT system_identifier::text FROM pg_control_system())
   OR NEW.database_oid<>(SELECT oid FROM pg_database WHERE datname=current_database())
   OR authority.database_principal<>NEW.principal_name OR authority.job_run_id<>NEW.job_run_id
-  OR NEW.expires_at>least(authority.expires_at,authority.witness_expires_at)
+  -- This reservation has its own explicitly modeled authority deadline. The
+  -- initial execution row's short observation is not a renewable authority:
+  -- existing public COMMIT guards still require the fresh closing witness.
+  OR NEW.expires_at>authority.expires_at
+  OR NEW.expires_at>extract(epoch FROM clock_timestamp())+15
   OR NEW.expires_at<=extract(epoch FROM clock_timestamp())
   OR NEW.generation<>authority.observed_policy_generation THEN
   RAISE EXCEPTION 'WRITE_SET_CLAIM_BINDING_INVALID' USING ERRCODE='23514';

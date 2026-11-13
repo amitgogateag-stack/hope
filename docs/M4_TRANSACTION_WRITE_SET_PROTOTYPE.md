@@ -13,6 +13,10 @@ installer refuses TRUNCATE and bounds individual rows, event count and total
 snapshot size. A separately committed one-use reservation binds authorization,
 job, actual full xid, backend/start time, database/cluster, login, deadline and
 policy generation. Financial rollback does not restore that reservation.
+The modeled reservation has a separate deadline bounded to fifteen seconds and
+the signed execution expiry. It does not reuse the initial execution row's
+short observation deadline as if it were renewable authority. All original
+fresh closing-witness checks and deadlines remain active and unchanged.
 
 The executor cannot insert capture/approval records even following the tested
 accidental INSERT grant. Ledger UPDATE/DELETE/TRUNCATE is refused. At canonical

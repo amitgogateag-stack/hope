@@ -36,7 +36,7 @@ def reserve(admin, connection, authorization, outcome, *, ttl=None, alter=None):
     with admin.begin() as root:
         root.execute(text('SELECT pg_stat_clear_snapshot()'))
         authority = root.execute(text('SELECT job_run_id,observed_policy_generation AS generation, '
-            'least(expires_at,witness_expires_at) AS expires_at FROM public.paper_startup_executions '
+            'least(expires_at,extract(epoch FROM clock_timestamp())::bigint+14) AS expires_at FROM public.paper_startup_executions '
             'WHERE authorization_sha256=:auth'), {'auth': authorization}).mappings().one()
         values = dict(identity, **dict(authority), authorization_sha256=authorization, outcome=outcome)
         if ttl is not None:
@@ -59,17 +59,18 @@ def witness_case(startup_database, prepare):
         for function in ('open_envelope(uuid)', 'snapshot(uuid)', 'challenge(uuid)', 'seal(uuid)', 'digest(jsonb)'):
             connection.exec_driver_sql('GRANT EXECUTE ON FUNCTION financial_witness.'+function+' TO '+role)
     def build(path='FILLED', market=StrategyMarket.USA):
-        value = prepare(path, market)
-        startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
-        permit = value['case']['verify_execution']()
-        check, original, complete = startup.execution_callbacks(worker, permit)
-        with admin.begin() as connection:
-            generation = connection.execute(text('SELECT observed_policy_generation FROM public.paper_startup_executions '
-                'WHERE authorization_sha256=:auth'), {'auth': permit.authorization_sha256}).scalar_one()
-            connection.execute(text('UPDATE financial_witness.policy SET generation=:generation'), {'generation': generation})
+        # Generate fixture-only keys before acquiring the short-lived actual
+        # execution witness. Do not refresh or extend its deadline.
         private = Ed25519PrivateKey.generate()
         root = PrototypeAuthorityRoot(private.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw),
             'MODELED_EXTERNAL_TEST_AUTHORITY', 'a'*64, 'b'*64)
+        value = prepare(path, market)
+        with admin.begin() as connection:
+            connection.execute(text('UPDATE financial_witness.policy SET generation=:generation'),
+                {'generation':value['case']['policy']['generation']})
+        startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+        permit = value['case']['verify_execution']()
+        check, original, complete = startup.execution_callbacks(worker, permit)
         state = dict(value=value, permit=permit, root=root, private=private, outcome=path, nonce=None)
         def run(*, manifest=None, signed_change=None, wrong_key=False, omit_approval=False, omit_seal=False,
                 ttl=None, after_seal=None, completion=None):
@@ -79,6 +80,13 @@ def witness_case(startup_database, prepare):
                     connection.execute(text('SELECT financial_witness.open_envelope(:nonce)'), {'nonce': state['nonce']})
                 original(connection, phase)
                 if phase != 'commit': return
+                # Ordinary successful cycles do not create reconciliation
+                # audit events. Exercise capture with a clearly experimental
+                # event, without fabricating a reconciliation receipt.
+                connection.execute(text("INSERT INTO public.audit_events "
+                    "(audit_event_id,event_type,entity_type,entity_id,payload) "
+                    "VALUES (gen_random_uuid(),'PROTOTYPE_WRITE_SET_TEST','JOB_RUN',:job,'{\"prototype_only\":true}')"),
+                    {'job':str(permit.run.job_run_id)})
                 nonce = state['nonce']; raw, actual_digest = capture_snapshot(connection, nonce)
                 expected = raw if manifest is None else json.dumps(manifest(json.loads(raw)), separators=(',', ':'))
                 with admin.connect() as owner:
