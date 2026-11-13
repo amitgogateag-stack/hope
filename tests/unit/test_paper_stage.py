@@ -161,7 +161,9 @@ def leaf(tmp_path,monkeypatch):
     def mapped(value):return MappedPath(proc) if str(value)=='/proc' else MappedPath(value)
     monkeypatch.setattr(s,'Path',mapped)
     if os.name!='posix':monkeypatch.setattr(s,'bounded_regular_read',lambda path,limit:path.read_bytes())
-    publisher=Mock(return_value=dict(state='VERIFIED',identity_sha256=process_hash))
+    # Explicit external-attestation MODEL for namespace/argv state-machine tests.
+    # Real unsigned publisher behavior is exercised separately and stays denied.
+    publisher=Mock(return_value=dict(state='VERIFIED',identity_sha256=process_hash,heartbeat_authenticated=True))
     monkeypatch.setattr(s,'publisher_observation',publisher)
     argv=[f'/opt/hope-operations/release-venvs/{SHA}/bin/python','-I','-B','-X',s.CACHE_PREFIX,
           f'/opt/hope-operations/releases/{SHA}/deploy/operations/paper_release.py']
@@ -172,7 +174,7 @@ def leaf(tmp_path,monkeypatch):
 
 
 @pytest.mark.parametrize('fault',[None,'stale','future','naive','state','factory','execution','extra','nonce','timeout',
-                                 'publisher','kernel','namespace','argv','manifest','receipt_process','closing_status'])
+                                 'publisher','unsigned_publisher','kernel','namespace','argv','manifest','receipt_process','closing_status'])
 def test_exact_stage_identity_namespace_argv_and_fresh_lease_are_mandatory(leaf,monkeypatch,fault):
     root,path,raw,cmd,receipt,publisher,namespace_fault,now=leaf
     if fault=='stale':raw['generated_at']=(now-timedelta(seconds=6)).isoformat()
@@ -185,6 +187,7 @@ def test_exact_stage_identity_namespace_argv_and_fresh_lease_are_mandatory(leaf,
     elif fault=='nonce':raw['request']='bad'
     elif fault=='timeout':raw['timeout']=301
     elif fault=='publisher':publisher.return_value['state']='BLOCKED'
+    elif fault=='unsigned_publisher':publisher.return_value['heartbeat_authenticated']=False
     elif fault=='kernel':
         from hope.api import operations_deployment as ops
         ops._process_identity.side_effect=[('a','123'),('b','456')]
@@ -255,8 +258,11 @@ raise SystemExit(main(['--factory','never_import_stage_factory:build','--stage-r
             if child.poll() is not None:pytest.fail('stage child exited: '+child.stderr.read().decode())
             try:
                 raw=json.loads(path.read_bytes())
-                if (raw['state']=='WAITING' and publisher_observation(path,expected_instance=raw['publisher_instance'],
-                        expected_identity=raw['publisher_identity_sha256'])['state']=='VERIFIED'):return raw
+                observed=publisher_observation(path,expected_instance=raw['publisher_instance'],
+                        expected_identity=raw['publisher_identity_sha256'])
+                if raw['state']=='WAITING' and observed['lock_state']=='HELD':
+                    assert observed['state']=='UNVERIFIED' and observed['heartbeat_authenticated'] is False
+                    return raw
             except (OSError,ValueError):pass
             time.sleep(.02)
         pytest.fail('stage child did not publish owned WAITING')

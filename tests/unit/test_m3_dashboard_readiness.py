@@ -6,10 +6,25 @@ from urllib.error import HTTPError
 
 import pytest
 
-from test_dashboard_m1_operations_surface import health
+from test_dashboard_m1_operations_surface import health as unsigned_health
 from test_dashboard_server import valid_snapshot
 from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.dashboard_server import DashboardHTTPServer,_verified_operations
+
+
+def health():
+    return dict(unsigned_health(),schema_version=2,publisher_instance='c'*32,publisher_identity_sha256='d'*64)
+
+
+@pytest.fixture(autouse=True)
+def modeled_external_heartbeat_authority(monkeypatch):
+    """State-machine input MODEL only, not independent publisher acceptance.
+
+    Genuine unsigned leases/forgeries are denied by the separate native and
+    unsigned-boundary suites. Production has no affirmative attestor adapter.
+    """
+    monkeypatch.setattr('hope.infrastructure.paper_history.publisher_observation',
+        lambda *a,**k:dict(state='VERIFIED',heartbeat_authenticated=True))
 
 
 def verified_runtime(commit="a"*40):

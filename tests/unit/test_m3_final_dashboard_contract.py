@@ -13,7 +13,9 @@ from hope.api import dashboard_activation as activation
 from hope.api import operations_deployment as operations
 from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.m3_audit import _readiness
-from test_dashboard_m1_operations_surface import health
+# Explicit external-authentication MODEL for downstream state-machine tests.
+# Real unsigned CURRENT and same-UID replacement denial run in separate suites.
+from test_m3_dashboard_readiness import health, modeled_external_heartbeat_authority
 from test_dashboard_server import valid_snapshot
 from test_dashboard_only_activation import setup, activate, OLD, NEW, THIRD
 from test_activation_guard import guard_platform
