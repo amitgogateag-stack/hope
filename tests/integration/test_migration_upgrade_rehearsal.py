@@ -58,7 +58,7 @@ def test_full_chain_fresh_and_008_upgrade_preserve_data_and_verify_postcondition
         changed=apply_migrations(connection,MIGRATIONS)
         assert len(changed)==len(migration_inventory(MIGRATIONS))-initial
         assert apply_migrations(connection,MIGRATIONS)==[]
-        assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==237
+        assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==239
         assert connection.execute(text("SELECT state FROM public.paper_environment_control_events ORDER BY control_sequence DESC LIMIT 1")).scalar_one()=='RUNNING'
         assert connection.execute(text("SELECT count(*) FROM pg_catalog.pg_trigger WHERE tgname IN ('trg_paper_handoff_intent_insert','trg_paper_handoff_outcome_insert') AND tgenabled='O'")).scalar_one()==2
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==0
@@ -77,9 +77,9 @@ def test_eight_to_current_plan_is_exact_and_never_grants_go(isolated_database,tm
         connection.exec_driver_sql('SET TRANSACTION READ ONLY')
         observed=upgrade_plan(connection,MIGRATIONS)
         assert observed['prefix_verified'] is True and observed['state']=='BLOCKED'
-        assert observed['applied']==8 and len(observed['pending'])==229
+        assert observed['applied']==8 and len(observed['pending'])==231
         assert observed['pending'][0]['name']=='009_job_run_identity.sql'
-        assert observed['pending'][-1]['name']=='237_paper_independent_admission_boundary.sql'
+        assert observed['pending'][-1]['name']=='239_paper_predefined_role_boundary.sql'
         assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==8
 
 
@@ -102,7 +102,7 @@ def test_invalid_008_history_is_not_repaired_or_partially_upgraded(isolated_data
 def test_interrupted_upgrade_rolls_back_even_if_caller_catches_and_commits(isolated_database,tmp_path,fault):
     engine=isolated_database;prepare_eight(engine,tmp_path)
     chain=tmp_path/'chain';shutil.copytree(MIGRATIONS,chain)
-    if fault=='late_sql':(chain/'237_paper_independent_admission_boundary.sql').write_text('SELECT * FROM synthetic_missing_relation;')
+    if fault=='late_sql':(chain/'239_paper_predefined_role_boundary.sql').write_text('SELECT * FROM synthetic_missing_relation;')
     else:
         @event.listens_for(engine,'after_cursor_execute')
         def change_source(connection,cursor,statement,parameters,context,executemany):
@@ -111,7 +111,7 @@ def test_interrupted_upgrade_rolls_back_even_if_caller_catches_and_commits(isola
         with pytest.raises((DBAPIError,MigrationError)):apply_migrations(connection,chain)
         assert connection.execute(text('SELECT count(*) FROM hope_schema_migrations')).scalar_one()==8
         assert connection.execute(text("SELECT to_regclass('public.job_runs')")).scalar_one() is None
-    with engine.begin() as connection:assert len(apply_migrations(connection,MIGRATIONS))==229
+    with engine.begin() as connection:assert len(apply_migrations(connection,MIGRATIONS))==231
 
 
 def test_concurrent_runner_refuses_then_can_retry_from_committed_prefix(isolated_database,tmp_path):
@@ -121,7 +121,7 @@ def test_concurrent_runner_refuses_then_can_retry_from_committed_prefix(isolated
         apply_migrations(first,old)
         with engine.begin() as contender:
             with pytest.raises(MigrationError,match='concurrent'):apply_migrations(contender,MIGRATIONS)
-    with engine.begin() as connection:assert len(apply_migrations(connection,MIGRATIONS))==229
+    with engine.begin() as connection:assert len(apply_migrations(connection,MIGRATIONS))==231
 
 
 def test_repeatable_read_runner_is_refused_without_ddl(isolated_database):
@@ -160,9 +160,9 @@ def test_private_schema_upgrade_cannot_borrow_public_history(isolated_database):
     with engine.begin() as connection:
         connection.exec_driver_sql('CREATE SCHEMA '+schema)
         connection.exec_driver_sql('SET LOCAL search_path='+schema+',public')
-        assert len(apply_migrations(connection,MIGRATIONS))==237
-        assert connection.execute(text(f'SELECT count(*) FROM {schema}.hope_schema_migrations')).scalar_one()==237
-        assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==237
+        assert len(apply_migrations(connection,MIGRATIONS))==239
+        assert connection.execute(text(f'SELECT count(*) FROM {schema}.hope_schema_migrations')).scalar_one()==239
+        assert connection.execute(text('SELECT count(*) FROM public.hope_schema_migrations')).scalar_one()==239
         assert connection.execute(text(f"SELECT to_regclass('{schema}.job_runs')")).scalar_one() is not None
         assert apply_migrations(connection,MIGRATIONS,schema=schema)==[]
     with engine.begin() as connection:

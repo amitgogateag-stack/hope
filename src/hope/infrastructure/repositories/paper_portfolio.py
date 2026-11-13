@@ -225,16 +225,26 @@ class SqlAlchemyPaperPortfolioRepository:
         if not initial_cash.is_finite() or initial_cash < 0:
             raise ValueError("PAPER_PORTFOLIO_INITIAL_CASH_INVALID")
         self._lock_portfolio_identity(portfolio_id)
-        self._connection.execute(
-            pg_insert(self._portfolios)
-            .values(portfolio_id=portfolio_id, initial_cash=initial_cash, cash=initial_cash, version=0)
-            .on_conflict_do_nothing(index_elements=["portfolio_id"])
-        )
-        row = self._connection.execute(
+        # Lock an existing portfolio before attempting creation. PostgreSQL
+        # executes BEFORE INSERT guards even for ON CONFLICT DO NOTHING, so a
+        # CONTROLLED startup worker must not make a speculative funding INSERT
+        # while applying a fill to an independently provisioned portfolio.
+        locked = (
             select(self._portfolios)
             .where(self._portfolios.c.portfolio_id == portfolio_id)
             .with_for_update()
-        ).mappings().one()
+        )
+        row = self._connection.execute(locked).mappings().one_or_none()
+        if row is None:
+            # For ordinary callers, retain the existing first-create behavior.
+            # A CONTROLLED worker remains forbidden to provision initial cash
+            # by the independent database trigger (migration 238).
+            self._connection.execute(
+                pg_insert(self._portfolios)
+                .values(portfolio_id=portfolio_id, initial_cash=initial_cash, cash=initial_cash, version=0)
+                .on_conflict_do_nothing(index_elements=["portfolio_id"])
+            )
+            row = self._connection.execute(locked).mappings().one()
         if row["initial_cash"] != initial_cash:
             raise ValueError("PAPER_PORTFOLIO_INITIAL_CASH_CONFLICT")
         return row

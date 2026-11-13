@@ -17,7 +17,9 @@ def test_direct_financial_commit_requires_live_same_transaction_execution(prepar
     if phase=='completed':execute(value)
     elif phase!='bootstrap_only':
         startup.execution_callbacks(worker,case['verify_execution']())
-    with pytest.raises(DBAPIError,match='PAPER_STARTUP_'):
+    # R1 denies worker capital creation earlier than the general financial
+    # commit guard. Require the specific database rejection, not any failure.
+    with pytest.raises(DBAPIError,match='PAPER_CONTROLLED_PORTFOLIO_PROVISIONING_FORBIDDEN'):
         with worker.begin() as connection:
             connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':target})
     with worker.connect() as connection:
@@ -138,9 +140,14 @@ def test_later_transaction_cannot_reuse_a_committed_financial_witness(prepare):
     value=prepare('FILLED');startup.bootstrap(value['worker'],value['case']['verify_startup'](),MIGRATIONS)
     def lost_completion(run):raise RuntimeError('synthetic crash after financial commit')
     with pytest.raises(RuntimeError,match='synthetic crash'):execute(value,complete_override=lost_completion)
+    # R1 rejects creation immediately; exercise the older transaction-replay
+    # boundary using an already funded portfolio instead of creating capital.
+    funded_id = value['data']['configuration']['paper_execution']['portfolio_id']
     with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_TRANSACTION_REPLAY'):
         with value['worker'].begin() as connection:
-            connection.execute(text('INSERT INTO paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET cash=cash+1 WHERE portfolio_id=:id'
+            ), {'id':funded_id})
     with value['worker'].connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM paper_effects')).scalar_one()==5
         assert connection.execute(text('SELECT count(*) FROM paper_startup_financial_transactions')).scalar_one()==1
@@ -208,6 +215,172 @@ def test_set_role_cannot_drop_the_consumed_login_scope(prepare,startup_database)
             connection.exec_driver_sql('DROP ROLE '+delegate)
 
 
+def test_predefined_server_program_role_blocks_startup_before_consumption(
+        prepare,startup_database):
+    """Relation-safe flags do not make a server-program role a safe worker."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,'pg_execute_server_program','MEMBER'), "
+                "has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY')"
+            )).one()==(True,False)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_claims'
+            )).scalar_one()==0
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_bootstraps'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
+
+
+def test_predefined_role_drift_blocks_execution_claim_before_consumption(
+        prepare,startup_database):
+    """A safe bootstrap cannot authorize a later capability-escalated worker."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_claims'
+            )).scalar_one()==1
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
+
+
+def test_direct_catalog_routine_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A direct privileged routine grant is equivalent to a predefined role."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];routine='pg_catalog.pg_read_file(text)'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT EXECUTE ON FUNCTION '+routine+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_function_privilege(current_user,"
+                "'pg_catalog.pg_read_file(text)','EXECUTE'), "
+                "length(pg_catalog.pg_read_file('PG_VERSION')) > 0"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE EXECUTE ON FUNCTION '+routine+' FROM '+role)
+
+
+def test_direct_catalog_relation_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A private system-catalog grant must not reach execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];relation='pg_catalog.pg_authid'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT SELECT ON '+relation+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_table_privilege(current_user,'pg_catalog.pg_authid',"
+                "'SELECT'),(SELECT rolpassword IS NOT NULL FROM pg_catalog.pg_authid "
+                "WHERE rolname=current_user)"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE SELECT ON '+relation+' FROM '+role)
+
+
+def test_relation_ownership_drift_blocks_execution_claim_before_consumption(
+        prepare,startup_database):
+    """A post-bootstrap table owner must not reach one-use execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        owner=connection.execute(text(
+            "SELECT pg_get_userbyid(c.relowner) FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid=c.relnamespace "
+            "WHERE n.nspname='public' AND c.relname='paper_portfolios'"
+        )).scalar_one()
+        connection.exec_driver_sql('ALTER TABLE public.paper_portfolios OWNER TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,c.relowner,'MEMBER') FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid=c.relnamespace "
+                "WHERE n.nspname='public' AND c.relname='paper_portfolios'"
+            )).scalar_one() is True
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('ALTER TABLE public.paper_portfolios OWNER TO '+owner)
+
+
+def test_trigger_function_ownership_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A guard-function owner must not consume controlled execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];function='public.hope_require_startup_financial_write()'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        owner=connection.execute(text(
+            "SELECT pg_get_userbyid(p.proowner) FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid=p.pronamespace "
+            "WHERE n.nspname='public' AND p.proname="
+            "'hope_require_startup_financial_write'"
+        )).scalar_one()
+        connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,p.proowner,'MEMBER') FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='public' AND p.proname="
+                "'hope_require_startup_financial_write'"
+            )).scalar_one() is True
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+owner)
+
+
 def test_failed_job_cannot_commit_partial_financial_work(prepare):
     from hope.application.jobs import JobRunStatus,create_job_run_completion
     from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -218,7 +391,11 @@ def test_failed_job_cannot_commit_partial_financial_work(prepare):
             jobs=SqlAlchemyJobRunRepository(connection);assert jobs.claim(value['run'])
             assert jobs.complete(create_job_run_completion(value['run'],JobRunStatus.FAILED,
                 value['run'].scheduled_for+timedelta(minutes=1),failure_code='SYNTHETIC_SECURITY_FAILURE'))
-            connection.execute(text('INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) VALUES (:id,50,50)'),{'id':uuid4()})
+            # Use an already funded portfolio to test the deferred commit
+            # guard, not the independent R1 no-new-capital trigger.
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET cash=cash+1 WHERE portfolio_id=:id'
+            ), {'id':value['data']['configuration']['paper_execution']['portfolio_id']})
     with worker.connect() as connection:
         assert connection.execute(text('SELECT count(*) FROM job_runs WHERE job_run_id=:id'),{'id':value['run'].job_run_id}).scalar_one()==0
         assert connection.execute(text('SELECT count(*) FROM paper_startup_financial_transactions')).scalar_one()==0
@@ -367,6 +544,67 @@ def test_r1_controlled_cycle_cannot_provision_unrelated_capital_at_commit(prepar
         )).scalar_one() == 0
 
 
+
+@pytest.mark.parametrize('attack,denial', [
+    ('existing_portfolio_upsert', 'PAPER_CONTROLLED_PORTFOLIO_PROVISIONING_FORBIDDEN'),
+    ('initial_capital_update', 'PAPER_CONTROLLED_INITIAL_CAPITAL_MUTATION_FORBIDDEN'),
+])
+def test_r1_certified_cycle_rejects_capital_rewrite_and_rolls_back(prepare, attack, denial):
+    """A valid certified execution cannot use its COMMIT callback to fund itself.
+
+    The portfolio is independently pre-funded; the worker's successful trading
+    authority must not permit changes to initial capital. An UPSERT must not
+    sidestep the INSERT guard by targeting an already existing portfolio.
+    """
+    value = prepare('FILLED')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    funded_id = value['data']['configuration']['paper_execution']['portfolio_id']
+    with worker.connect() as connection:
+        baseline = connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).one()
+    reached = []
+
+    def attack_during_commit(connection, phase):
+        if phase != 'commit':
+            return
+        reached.append(phase)
+        if attack == 'existing_portfolio_upsert':
+            connection.execute(text(
+                'INSERT INTO public.paper_portfolios(portfolio_id,initial_cash,cash) '
+                'VALUES (:id,123456789,123456789) '
+                'ON CONFLICT (portfolio_id) DO UPDATE '
+                'SET initial_cash=EXCLUDED.initial_cash'
+            ), {'id': funded_id})
+        else:
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET initial_cash=initial_cash+1 '
+                'WHERE portfolio_id=:id'
+            ), {'id': funded_id})
+
+    with pytest.raises(DBAPIError, match=denial):
+        _run_mutated(value, attack_during_commit)
+    assert reached == ['commit']
+
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).one() == baseline
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_effects WHERE job_run_id=:id'
+        ), {'id': value['run'].job_run_id}).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_startup_financial_transactions'
+        )).scalar_one() == 0
+        assert connection.execute(text(
+            'SELECT count(*) FROM public.paper_portfolio_fill_applications '
+            'WHERE portfolio_id=:id'
+        ), {'id': funded_id}).scalar_one() == 0
+
+
 def test_r1_portfolio_provisioning_guard_is_enabled(startup_database):
     with startup_database['worker'].connect() as connection:
         rows = connection.execute(text(
@@ -375,3 +613,26 @@ def test_r1_portfolio_provisioning_guard_is_enabled(startup_database):
             "AND tgname='aaaa_reject_controlled_portfolio_provisioning'"
         )).all()
     assert rows == [('aaaa_reject_controlled_portfolio_provisioning', 'O')]
+
+
+def test_r1_controlled_worker_cannot_change_independently_funded_initial_cash(prepare):
+    """An existing portfolio does not grant trading workers funding authority."""
+    value = prepare('NO_TRADE')
+    worker = value['worker']
+    startup.bootstrap(worker, value['case']['verify_startup'](), MIGRATIONS)
+    funded = value['data']['configuration']['paper_execution']
+    with worker.connect() as connection:
+        original = connection.execute(text(
+            'SELECT initial_cash,cash FROM public.paper_portfolios WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one()
+    with pytest.raises(DBAPIError, match='PAPER_CONTROLLED_INITIAL_CAPITAL_MUTATION_FORBIDDEN'):
+        with worker.begin() as connection:
+            connection.execute(text(
+                'UPDATE public.paper_portfolios SET initial_cash=initial_cash+1 '
+                'WHERE portfolio_id=:id'
+            ), {'id':funded['portfolio_id']})
+    with worker.connect() as connection:
+        assert connection.execute(text(
+            'SELECT initial_cash,cash FROM public.paper_portfolios WHERE portfolio_id=:id'
+        ), {'id':funded['portfolio_id']}).one() == original
+        assert connection.execute(text('SELECT count(*) FROM public.paper_effects')).scalar_one() == 0

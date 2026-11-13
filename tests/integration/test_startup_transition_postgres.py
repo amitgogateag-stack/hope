@@ -66,6 +66,40 @@ def prepare(startup_database,seeded,tmp_path,monkeypatch):
     _,make=seeded;worker=startup_database['worker']
     def build(path='NO_TRADE',market=StrategyMarket.USA,*,receipt=RECEIPT):
         data,_,strategy,work,_=make(emit=path!='NO_TRADE',blocked=path=='RISK_BLOCKED',market=market)
+        # The independent database administrator provisions the disposable
+        # starting capital before any CONTROLLED startup/cycle transaction.
+        # A trading worker cannot legally bootstrap a new portfolio (R1).
+        funding = data['configuration']['paper_execution']
+        with startup_database['admin'].begin() as connection:
+            connection.execute(text(
+                'INSERT INTO public.paper_portfolios (portfolio_id,initial_cash,cash) '
+                'VALUES (:id,:cash,:cash)'
+            ), {'id':funding['portfolio_id'], 'cash':funding['initial_cash']})
+        # Disposable-only positive risk context: prove the seeded account is
+        # still an untouched zero-position funding baseline. Never infer
+        # session/peak equity from an arbitrary existing production portfolio.
+        from decimal import Decimal
+        from hope.infrastructure.certified_paper import CertifiedPaperRiskContext
+        funded_cash = Decimal(funding['initial_cash'])
+        def verified_fixture_anchors(connection, _plan, _signal, state, _marks):
+            row = connection.execute(text(
+                'SELECT initial_cash,cash,version FROM public.paper_portfolios '
+                'WHERE portfolio_id=:id FOR SHARE'
+            ), {'id':funding['portfolio_id']}).one()
+            history = connection.execute(text(
+                'SELECT count(*) FROM public.paper_portfolio_fill_applications '
+                'WHERE portfolio_id=:id'
+            ), {'id':funding['portfolio_id']}).scalar_one()
+            positions = connection.execute(text(
+                'SELECT count(*) FROM public.paper_portfolio_positions '
+                'WHERE portfolio_id=:id'
+            ), {'id':funding['portfolio_id']}).scalar_one()
+            if (tuple(row) != (funded_cash, funded_cash, 0) or history != 0
+                    or positions != 0 or state.cash != funded_cash or state.positions):
+                raise RuntimeError('PAPER_TEST_FUNDING_ANCHORS_NOT_PRISTINE')
+            return CertifiedPaperRiskContext(funded_cash, funded_cash, Decimal(0))
+        work = replace(work, definition=replace(
+            work.definition, risk_context_factory=verified_fixture_anchors))
         run,plan=_constrained_service_plan(data,work);strategy.run=run
         with worker.connect().execution_options(isolation_level='REPEATABLE READ') as connection:
             connection.exec_driver_sql('SET TRANSACTION READ ONLY');identity=database_identity(connection)
