@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import os
 import re
 import stat
@@ -24,7 +25,7 @@ def authenticated_bounded_regular_read(
     This separate entry point prevents a security-sensitive caller from
     accidentally downgrading to metadata-only validation by passing ``None``.
     """
-    if not isinstance(expected_sha256, str) or re.fullmatch(
+    if type(expected_sha256) is not str or re.fullmatch(
         r"[0-9a-f]{64}", expected_sha256
     ) is None:
         raise ValueError("BOUNDED_READ_INVALID_DIGEST")
@@ -81,7 +82,9 @@ def _bounded_regular_read(
         result = bytes(payload)
         if (
             expected_sha256 is not None
-            and hashlib.sha256(result).hexdigest() != expected_sha256
+            and not hmac.compare_digest(
+                hashlib.sha256(result).hexdigest(), expected_sha256
+            )
         ):
             raise ValueError("BOUNDED_READ_DIGEST_MISMATCH")
         return result

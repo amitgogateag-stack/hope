@@ -87,3 +87,22 @@ def test_authenticated_reader_cannot_silently_downgrade_to_metadata_only(tmp_pat
         authenticated_bounded_regular_read(path, 1024, expected_sha256=None)
     with pytest.raises(TypeError):
         bounded_regular_read(path, 1024, expected_sha256=None)
+
+
+def test_authenticated_reader_rejects_digest_object_with_forged_equality(tmp_path):
+    """A string-like object cannot override digest equality and authenticate bytes."""
+    path = tmp_path / "snapshot"
+    payload = b"attacker-controlled"
+    path.write_bytes(payload)
+
+    class ForgedDigest(str):
+        def __eq__(self, other):
+            return True
+
+        def __ne__(self, other):
+            return False
+
+    forged = ForgedDigest("0" * 64)
+    assert str(forged) != hashlib.sha256(payload).hexdigest()
+    with pytest.raises(ValueError, match="BOUNDED_READ_INVALID_DIGEST"):
+        authenticated_bounded_regular_read(path, 1024, expected_sha256=forged)
