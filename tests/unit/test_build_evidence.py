@@ -30,6 +30,19 @@ def test_runtime_requires_independent_build_approval_and_complete_sbom(signed_ru
     assert str(root) not in json.dumps(result)
 
 
+def test_signed_release_archive_supplies_preview_digest(signed_runtime):
+    root,_,mode,manifest,_=signed_runtime
+    result=r.attest_runtime(root,SHA,mode,release_source="docs/dashboard/preview.html")
+    assert result["release_source_sha256"]==hashlib.sha256(b"<h1>HOPE</h1>\n").hexdigest()
+
+
+@pytest.mark.parametrize("source",["../preview.html","/preview.html","docs\\preview.html","missing.html"])
+def test_release_source_lookup_rejects_escape_and_missing_members(signed_runtime,source):
+    root,_,mode,_,_=signed_runtime
+    with pytest.raises(RuntimeError):
+        r.attest_runtime(root,SHA,mode,release_source=source)
+
+
 def test_tar_order_permissions_and_metadata_are_deterministic(tmp_path):
     files={"b.txt":(b"two",0o644),"a.txt":(b"one",0o755)}
     b._tar(tmp_path/"a.tar",files,1700000000);b._tar(tmp_path/"b.tar",dict(reversed(list(files.items()))),1700000000)

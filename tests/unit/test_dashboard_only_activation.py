@@ -51,9 +51,11 @@ def setup(tmp_path_factory,monkeypatch,guard_platform):
     # Orchestration fixtures model approved runtime evidence; separate integrity
     # tests exercise real files, hashes, permissions and independent manifests.
     def attested(root,sha,mode,**kwargs):
-        return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        result=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
             release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
             inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
+        if kwargs.get("release_source") is not None:result["release_source_sha256"]="d"*64
+        return result
     monkeypatch.setattr(module,"attest_runtime",attested)
     if os.name=="nt":
         # Windows cannot grant POSIX symlinks/fsync/ownership. Model pointer

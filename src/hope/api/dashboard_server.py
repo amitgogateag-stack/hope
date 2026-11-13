@@ -17,7 +17,7 @@ from threading import BoundedSemaphore, Lock, Timer
 from hope.api.dashboard_projection import verified_projections
 from hope.api.snapshot_contract import verified_snapshot_payload
 from hope.api.runtime_integrity import safe_evidence,unverified
-from hope.infrastructure.durable_file import bounded_regular_read
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read,bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
     "PAPER_RUNTIME_UNVERIFIED",
@@ -300,6 +300,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif self.server.activation_check is not None:
                 evidence=self.server.activation_check()
             self.runtime_evidence=safe_evidence(evidence.get("runtime_integrity") if isinstance(evidence,dict) else None)
+            self.preview_sha256=evidence.get("preview_sha256") if isinstance(evidence,dict) else None
+            if self.server.activation_view is not None and not (
+                    isinstance(self.preview_sha256,str) and fullmatch(r"[0-9a-f]{64}",self.preview_sha256)):
+                raise RuntimeError("PREVIEW_EVIDENCE_UNVERIFIED")
             if (self.runtime_evidence["state"]=="VERIFIED"
                     and self.runtime_evidence["release_commit"]!=self.server.deployed_commit):
                 raise RuntimeError("RUNTIME_RELEASE_MISMATCH")
@@ -371,7 +375,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path in {"/", "/index.html"}:
             try:
-                payload = bounded_regular_read(self.server.preview, 65536)
+                payload = (authenticated_bounded_regular_read(self.server.preview,65536,
+                    expected_sha256=self.preview_sha256) if self.server.activation_view is not None
+                    else bounded_regular_read(self.server.preview, 65536))
             except (OSError, ValueError):
                 self._respond(503, b"Dashboard unavailable")
                 return

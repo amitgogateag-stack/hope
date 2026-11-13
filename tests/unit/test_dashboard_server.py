@@ -1,5 +1,6 @@
 """Private dashboard HTTP surface: loopback, read-only and no path traversal."""
 import json
+import hashlib
 import os
 import socket
 import time
@@ -9,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
+from unittest.mock import Mock
 
 import pytest
 
@@ -91,15 +93,15 @@ def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,mo
     @contextmanager
     def activation_view():
         entered.set()
-        try:yield
+        try:yield {"preview_sha256":hashlib.sha256(preview.read_bytes()).hexdigest()}
         finally:exited.set()
-    original=module.bounded_regular_read
-    def blocked_read(path,limit):
+    original=module.authenticated_bounded_regular_read
+    def blocked_read(path,limit,*,expected_sha256):
         if path==preview:
             assert entered.is_set() and not exited.is_set()
             reading.set();assert release.wait(5)
-        return original(path,limit)
-    monkeypatch.setattr(module,"bounded_regular_read",blocked_read)
+        return original(path,limit,expected_sha256=expected_sha256)
+    monkeypatch.setattr(module,"authenticated_bounded_regular_read",blocked_read)
     with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             activation_view=activation_view) as server:
         serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
@@ -113,6 +115,37 @@ def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,mo
             release.set();server.shutdown();serving.join(timeout=5);client.join(timeout=5)
 
 
+def test_activation_preview_rejects_same_size_content_substitution_with_restored_mtime(tmp_path):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    identity=preview.stat();expected=hashlib.sha256(preview.read_bytes()).hexdigest()
+    preview.write_text("NOPE")
+    os.utime(preview,ns=(identity.st_atime_ns,identity.st_mtime_ns))
+    @contextmanager
+    def activation_view():
+        yield {"preview_sha256":expected}
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",activation_view=activation_view) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        try:
+            status,_,body=request(server,"/")
+            assert status==503 and body==b"Dashboard unavailable"
+        finally:server.shutdown();serving.join(timeout=5)
+
+
+def test_activation_preview_requires_independent_digest_before_local_read(tmp_path,monkeypatch):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    reader=Mock()
+    monkeypatch.setattr(module,"authenticated_bounded_regular_read",reader)
+    @contextmanager
+    def activation_view():
+        yield {"preview_sha256":None}
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",activation_view=activation_view) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        try:
+            assert request(server,"/")[0]==503
+            reader.assert_not_called()
+        finally:server.shutdown();serving.join(timeout=5)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Native socket backpressure is exercised on Linux CI")
 def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
     preview=tmp_path/"preview.html";preview.write_bytes(b"x"*65536)
@@ -120,7 +153,7 @@ def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
     @contextmanager
     def activation_view():
         entered.set()
-        try:yield
+        try:yield {"preview_sha256":hashlib.sha256(preview.read_bytes()).hexdigest()}
         finally:exited.set()
     with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             activation_view=activation_view,client_io_timeout_seconds=0.2) as server:

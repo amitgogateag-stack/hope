@@ -2,7 +2,7 @@
 from pathlib import Path
 import subprocess
 from hope.api import runtime_integrity as r,package_provenance as p
-from hope.api.release_builder import build_sbom
+from hope.api.release_builder import _tar,build_sbom
 
 
 def sign(path,private):
@@ -16,7 +16,8 @@ def approve_fixture_build(root,sha,mode,manifest,private):
     descriptor=r.strict_json((root/"artifact-provenance"/(sha+"-"+mode+".json")).read_bytes())
     sbom=build_sbom(descriptor,"f"*64);sbom_bytes=r._canonical(sbom)
     (folder/(sha+"-"+mode+".sbom.json")).write_bytes(sbom_bytes)
-    archive=folder/(sha+"-"+mode+".tar");archive.write_bytes(b"explicit synthetic fixture archive, not deployment acceptance\n")
+    archive=folder/(sha+"-"+mode+".tar")
+    _tar(archive,{"release/docs/dashboard/preview.html":(b"<h1>HOPE</h1>\n",0o644)},1700000000)
     plan=dict(schema="hope.build-input.v1",release_commit=sha,builder_id="c"*64,
         builder=dict(python_sha256=manifest["interpreter"]["sha256"],os_release_sha256="f"*64,platform=p.target_platform()),
         epoch=1700000000,deployment_root=str(root),requested_extras=descriptor["requested_extras"],

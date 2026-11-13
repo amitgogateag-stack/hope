@@ -316,11 +316,15 @@ def runtime_gate(layout,target):
     _interpreter_identity(_python(layout,target))
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
     evidence=unverified()
+    preview_sha256=None
     if record["schema"]=="hope.dashboard-activation.v3":
         digest=record["previous_runtime_manifest"] if record["phase"]=="ROLLING_BACK" else record["runtime_manifest"]
-        evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest)
+        evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest,
+            release_source="docs/dashboard/preview.html")
+        preview_sha256=evidence.pop("release_source_sha256")
     return {"status":"GATE_PASSED","dashboard_commit":target,
-        "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence)}
+        "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence),
+        "preview_sha256":preview_sha256}
 
 
 @contextmanager
