@@ -7,7 +7,7 @@ BEGIN
     IF current_user IS DISTINCT FROM session_user OR EXISTS(
         SELECT 1 FROM pg_roles r
         WHERE (r.rolname=current_user OR pg_has_role(current_user,r.oid,'MEMBER'))
-          AND (r.rolname LIKE 'pg\_%' ESCAPE '\'
+          AND (left(r.rolname,3)='pg_'
             OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole
             OR r.rolreplication OR r.rolbypassrls
             OR has_database_privilege(r.oid,current_database(),'TEMPORARY')
