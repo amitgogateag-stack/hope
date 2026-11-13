@@ -55,6 +55,20 @@ def test_server_is_loopback_only_and_serves_private_preview(tmp_path):
         assert "default-src 'none'" in headers["Content-Security-Policy"]
 
 
+def test_acceptance_endpoint_never_promotes_unauthenticated_local_result(tmp_path):
+    (tmp_path/"acceptance-result.json").write_text(json.dumps({
+        "schema":"hope.operational-acceptance.v1","scope":"DISPOSABLE_LAB_ONLY",
+        "state":"VERIFIED","release_commit":"a"*40,
+        "generated_at":datetime.now(timezone.utc).isoformat(),"blockers":[],
+        "execution_authorized":False,
+    }))
+    with dashboard(tmp_path) as server:
+        status,_,body=request(server,"/acceptance.json")
+        result=json.loads(body)
+        assert status==200 and result["state"]=="UNVERIFIED"
+        assert result["execution_authorized"] is False
+
+
 def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,monkeypatch):
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
     entered=threading.Event();reading=threading.Event();release=threading.Event();exited=threading.Event()
