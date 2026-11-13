@@ -27,6 +27,20 @@ BEGIN
                             SELECT 1 FROM aclexplode(COALESCE(
                                 p.proacl,acldefault('f',p.proowner))) a
                             WHERE a.grantee=0 AND a.privilege_type='EXECUTE'))
+            OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n
+                      ON n.oid=c.relnamespace
+                      CROSS JOIN (VALUES ('SELECT'),('INSERT'),('UPDATE'),
+                          ('DELETE'),('TRUNCATE'),('REFERENCES'),('TRIGGER'))
+                          AS required(privilege_type)
+                      WHERE n.nspname='pg_catalog'
+                        AND c.relkind IN ('r','v','m','f','p')
+                        AND has_table_privilege(
+                            r.oid,c.oid,required.privilege_type)
+                        AND NOT EXISTS(
+                            SELECT 1 FROM aclexplode(COALESCE(
+                                c.relacl,acldefault('r',c.relowner))) a
+                            WHERE a.grantee=0
+                              AND a.privilege_type=required.privilege_type))
             OR EXISTS(SELECT 1 FROM pg_namespace n
                       WHERE has_schema_privilege(r.oid,n.oid,'CREATE')))
     ) THEN

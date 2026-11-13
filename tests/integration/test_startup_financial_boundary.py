@@ -291,6 +291,32 @@ def test_direct_catalog_routine_grant_drift_blocks_execution_claim(
             connection.exec_driver_sql('REVOKE EXECUTE ON FUNCTION '+routine+' FROM '+role)
 
 
+def test_direct_catalog_relation_grant_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A private system-catalog grant must not reach execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];relation='pg_catalog.pg_authid'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT SELECT ON '+relation+' TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT has_table_privilege(current_user,'pg_catalog.pg_authid',"
+                "'SELECT'),(SELECT rolpassword IS NOT NULL FROM pg_catalog.pg_authid "
+                "WHERE rolname=current_user)"
+            )).one()==(True,True)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE SELECT ON '+relation+' FROM '+role)
+
+
 def test_relation_ownership_drift_blocks_execution_claim_before_consumption(
         prepare,startup_database):
     """A post-bootstrap table owner must not reach one-use execution authority."""

@@ -44,6 +44,13 @@ probe. The regression demonstrates the restricted worker can read only the
 disposable test server's `PG_VERSION`, then requires refusal before an execution
 claim is consumed and revokes the test grant.
 
+The same rule applies to private `pg_catalog` relations. A direct `SELECT`
+grant on `pg_authid`, for example, exposes authentication material without
+making the worker a member of a predefined role. Migration 239 rejects every
+catalog table/view privilege absent from PUBLIC. The disposable regression
+proves the worker can observe that its password verifier exists, then requires
+execution refusal, zero consumed execution claims, and exact grant revocation.
+
 The same recheck rejects ownership of any public relation by the login or a
 reachable role. Relation ownership is an implicit DDL capability: an owner can
 disable the financial triggers even when ordinary CREATE and DML grants look
