@@ -26,6 +26,13 @@ portfolio/instrument/quantity/effect manifest. It does not remove ordinary
 portfolio-provisioning privileges or introduce a separate funding authority.
 Those remain required before operational admission.
 
+Migration 239 additionally rejects every directly or indirectly reachable
+PostgreSQL predefined `pg_*` role at the controlled worker preflight. Powers
+such as `pg_execute_server_program` do not appear in table/schema ACL checks but
+cross the database/host boundary and are incompatible with a restricted PAPER
+financial principal. The check runs at each bootstrap, so privilege drift after
+principal registration fails before startup authority is consumed.
+
 Reviewers must verify both PG16 and PG17 full migrations and integration
 regressions; the new migration is unverified until those CI results exist.
 Do not interpret an unrelated green unit test as migration proof.

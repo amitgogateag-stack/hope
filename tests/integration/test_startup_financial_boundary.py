@@ -215,6 +215,33 @@ def test_set_role_cannot_drop_the_consumed_login_scope(prepare,startup_database)
             connection.exec_driver_sql('DROP ROLE '+delegate)
 
 
+def test_predefined_server_program_role_blocks_startup_before_consumption(
+        prepare,startup_database):
+    """Relation-safe flags do not make a server-program role a safe worker."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role']
+    with admin.begin() as connection:
+        connection.exec_driver_sql('GRANT pg_execute_server_program TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,'pg_execute_server_program','MEMBER'), "
+                "has_database_privilege(current_user,current_database(),'CREATE,TEMPORARY')"
+            )).one()==(True,False)
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_claims'
+            )).scalar_one()==0
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_bootstraps'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('REVOKE pg_execute_server_program FROM '+role)
+
+
 def test_failed_job_cannot_commit_partial_financial_work(prepare):
     from hope.application.jobs import JobRunStatus,create_job_run_completion
     from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
