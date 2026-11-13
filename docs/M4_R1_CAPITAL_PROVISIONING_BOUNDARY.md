@@ -41,6 +41,12 @@ disable the financial triggers even when ordinary CREATE and DML grants look
 restricted. The adversarial ownership-transfer regression restores the exact
 prior owner after its disposable proof.
 
+Public routine ownership is rejected for the same reason. Owning a trigger
+function is destructive DDL authority over a guard even without relation
+ownership. The routine regression transfers the financial-write trigger
+function after bootstrap, requires execution refusal, and restores its exact
+prior owner.
+
 Reviewers must verify both PG16 and PG17 full migrations and integration
 regressions; the new migration is unverified until those CI results exist.
 Do not interpret an unrelated green unit test as migration proof.

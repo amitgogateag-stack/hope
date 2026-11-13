@@ -296,6 +296,39 @@ def test_relation_ownership_drift_blocks_execution_claim_before_consumption(
             connection.exec_driver_sql('ALTER TABLE public.paper_portfolios OWNER TO '+owner)
 
 
+def test_trigger_function_ownership_drift_blocks_execution_claim(
+        prepare,startup_database):
+    """A guard-function owner must not consume controlled execution authority."""
+    value=prepare();worker=value['worker'];admin=startup_database['admin']
+    role=startup_database['role'];function='public.hope_require_startup_financial_write()'
+    startup.bootstrap(worker,value['case']['verify_startup'](),MIGRATIONS)
+    with admin.begin() as connection:
+        owner=connection.execute(text(
+            "SELECT pg_get_userbyid(p.proowner) FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid=p.pronamespace "
+            "WHERE n.nspname='public' AND p.proname="
+            "'hope_require_startup_financial_write'"
+        )).scalar_one()
+        connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+role)
+    try:
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                "SELECT pg_has_role(current_user,p.proowner,'MEMBER') FROM pg_proc p "
+                "JOIN pg_namespace n ON n.oid=p.pronamespace "
+                "WHERE n.nspname='public' AND p.proname="
+                "'hope_require_startup_financial_write'"
+            )).scalar_one() is True
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            startup.execution_callbacks(worker,value['case']['verify_execution']())
+        with worker.connect() as connection:
+            assert connection.execute(text(
+                'SELECT count(*) FROM public.paper_startup_executions'
+            )).scalar_one()==0
+    finally:
+        with admin.begin() as connection:
+            connection.exec_driver_sql('ALTER FUNCTION '+function+' OWNER TO '+owner)
+
+
 def test_failed_job_cannot_commit_partial_financial_work(prepare):
     from hope.application.jobs import JobRunStatus,create_job_run_completion
     from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository

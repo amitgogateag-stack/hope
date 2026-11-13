@@ -15,6 +15,9 @@ BEGIN
             OR EXISTS(SELECT 1 FROM pg_class c JOIN pg_namespace n
                       ON n.oid=c.relnamespace
                       WHERE n.nspname='public' AND c.relowner=r.oid)
+            OR EXISTS(SELECT 1 FROM pg_proc p JOIN pg_namespace n
+                      ON n.oid=p.pronamespace
+                      WHERE n.nspname='public' AND p.proowner=r.oid)
             OR EXISTS(SELECT 1 FROM pg_namespace n
                       WHERE has_schema_privilege(r.oid,n.oid,'CREATE')))
     ) THEN
