@@ -321,7 +321,10 @@ def runtime_gate(layout,target):
         digest=record["previous_runtime_manifest"] if record["phase"]=="ROLLING_BACK" else record["runtime_manifest"]
         evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest,
             release_source="docs/dashboard/preview.html")
-        preview_sha256=evidence.pop("release_source_sha256")
+        preview_sha256=evidence.get("release_source_sha256")
+        _require(type(preview_sha256) is str and re.fullmatch('[0-9a-f]{64}',preview_sha256) is not None,
+            "BUILD_SOURCE_UNVERIFIED")
+        evidence.pop("release_source_sha256")
     return {"status":"GATE_PASSED","dashboard_commit":target,
         "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence),
         "preview_sha256":preview_sha256}

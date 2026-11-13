@@ -7,8 +7,21 @@ from hope.api import runtime_integrity as r
 from hope.api.snapshot_contract import strict_json
 from hope.api.artifact_approval import verify_document
 
-_CACHE={}
-
+def _verified_archive(payload,archive_sha256,source_sha256):
+    """Verify bounded bytes against digests from an ALREADY signed approval."""
+    r._require(r._digest(payload)==archive_sha256,"BUILD_ARCHIVE_MISMATCH")
+    from hope.api.release_image import _members
+    entries=_members(payload)
+    source={}
+    for name,(data,_,directory_entry) in entries.items():
+        prefix,separator,relative=name.partition('/')
+        r._require(separator and relative and prefix in {'release','runtime','evidence'}
+            and not directory_entry,"BUILD_ARCHIVE_MEMBER_INVALID")
+        if prefix=='release':
+            r._require('.git' not in relative.split('/'),"BUILD_ARCHIVE_MEMBER_INVALID")
+            source[relative]=r._digest(data)
+    r._require(source and r._digest(r._canonical(source))==source_sha256,"BUILD_SOURCE_MAP_MISMATCH")
+    return entries
 
 def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None):
     deadline=deadline or time.monotonic()+r.MAX_SECONDS
@@ -47,18 +60,16 @@ def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadl
         and sorted(plan["artifacts"],key=lambda a:a["filename"])==sorted([
             {k:a[k] for k in ("filename","sha256","name","version")} for a in descriptor["artifacts"]],key=lambda a:a["filename"])
         and build_sbom(descriptor,approval["source_sha256"])==sbom,"BUILD_SBOM_MISMATCH")
-    archive=folder/(sha+"-"+mode+".tar");identity=r._trusted(archive);cache_key=(str(archive),identity,hashes["release.tar"])
-    if cache_key not in _CACHE:
-        r._require(r._fingerprint(archive,deadline)[0]==hashes["release.tar"],"BUILD_ARCHIVE_MISMATCH")
-        if len(_CACHE)>=8:_CACHE.clear()
-        _CACHE[cache_key]=True
+    archive=folder/(sha+"-"+mode+".tar");identity=r._trusted(archive)
+    # Authenticate the SAME bounded bytes that are parsed. A valid archive
+    # signature alone does not prove agreement with the approved source map.
+    payload=r._read(archive,128*1024*1024,deadline=deadline)
+    entries=_verified_archive(payload,hashes['release.tar'],approval['source_sha256'])
     source_sha256=None
     if source_path is not None:
         r._require(isinstance(source_path,str) and source_path and not source_path.startswith("/")
             and "\\" not in source_path and all(part not in {"", ".", ".."} for part in source_path.split("/")),
             "BUILD_SOURCE_PATH_INVALID")
-        from hope.api.release_image import _members
-        entries=_members(r._read(archive,128*1024*1024,deadline=deadline))
         entry=entries.get("release/"+source_path)
         r._require(entry is not None and entry[2] is False,"BUILD_SOURCE_MISSING")
         source_sha256=r._digest(entry[0])

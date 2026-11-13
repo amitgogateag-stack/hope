@@ -36,6 +36,37 @@ def test_signed_release_archive_supplies_preview_digest(signed_runtime):
     assert result["release_source_sha256"]==hashlib.sha256(b"<h1>HOPE</h1>\n").hexdigest()
 
 
+@pytest.mark.parametrize('requested',[None,'docs/dashboard/preview.html'])
+@pytest.mark.parametrize('fault',['preview','other','missing','extra'])
+def test_valid_signatures_and_archive_hash_cannot_hide_contradictory_source_map(signed_runtime,requested,fault):
+    root,_,mode,manifest,_=signed_runtime
+    # Warm any implementation cache before a separately signed contradiction.
+    assert r.attest_runtime(root,SHA,mode)['state']=='VERIFIED'
+    folder=root/'release-builds';prefix=SHA+'-'+mode
+    archive=folder/(prefix+'.tar');approval_path=folder/(prefix+'.json')
+    approval=r.strict_json(approval_path.read_bytes())
+    from hope.api.release_image import _members
+    entries={name:(data,permissions) for name,(data,permissions,_) in _members(archive.read_bytes()).items()}
+    if fault=='preview': entries['release/docs/dashboard/preview.html']=(b'contradictory preview\n',0o644)
+    elif fault=='other': entries['release/README.md']=(b'contradictory unrequested source\n',0o644)
+    elif fault=='missing': del entries['release/README.md']
+    else: entries['release/unapproved.py']=(b'contradictory extra source\n',0o644)
+    b._tar(archive,entries,approval['epoch'])
+    # All individual signatures/digests remain valid; only the aggregate
+    # source map contradicts the independently signed source_sha256.
+    approval['hashes']['release.tar']=r._digest(archive.read_bytes())
+    approval_path.write_bytes(r._canonical(approval))
+    private=root.parent/'fixture-only.key';sign(approval_path,private)
+    manifest=dict(manifest,release_build_sha256=r._digest(approval_path.read_bytes()))
+    r.manifest_path(root,SHA,mode).write_bytes(r._canonical(manifest))
+    from hope.api.artifact_approval import verify_document
+    assert verify_document(approval_path,approval_path.with_suffix('.sig'),
+        root/'runtime-trust/releases-ed25519.pub',expected_digest=manifest['release_build_sha256'])==approval
+    assert r._digest(archive.read_bytes())==approval['hashes']['release.tar']
+    with pytest.raises(RuntimeError,match='RELEASE_BUILD_UNVERIFIED'):
+        r.attest_runtime(root,SHA,mode,release_source=requested)
+
+
 @pytest.mark.parametrize("source",["../preview.html","/preview.html","docs\\preview.html","missing.html"])
 def test_release_source_lookup_rejects_escape_and_missing_members(signed_runtime,source):
     root,_,mode,_,_=signed_runtime

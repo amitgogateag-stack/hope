@@ -318,3 +318,18 @@ def test_owner_unknown_is_not_treated_as_dead(monkeypatch):
     with pytest.raises(PermissionError):module._owner_alive(record)
     monkeypatch.setattr(operations,"_process_identity",Mock(side_effect=FileNotFoundError()))
     assert not module._owner_alive(record)
+
+
+@pytest.mark.parametrize('digest',[None,True,'invalid','F'*64])
+def test_manifest_bound_gate_refuses_missing_or_invalid_preview_provenance(setup,monkeypatch,digest):
+    layout,host=setup;host.runtime_manifests={OLD:'a'*64,NEW:'b'*64}
+    module.activate(layout,host,target=NEW,shared=OLD,ci_run=123,ci_attempt=1)
+    original=module.attest_runtime
+    def incomplete(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if digest is None: result.pop('release_source_sha256',None)
+        else: result['release_source_sha256']=digest
+        return result
+    monkeypatch.setattr(module,'attest_runtime',incomplete)
+    with pytest.raises(RuntimeError,match='BUILD_SOURCE_UNVERIFIED'):
+        module.runtime_gate(layout,NEW)
