@@ -4,14 +4,18 @@ import re
 
 from hope.api.runtime_integrity import safe_evidence
 from hope.api.snapshot_contract import strict_json
-from hope.infrastructure.durable_file import bounded_regular_read
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read
 
 
-def read_rehearsal(path):
+def read_rehearsal(path, *, expected_sha256=None):
     missing=dict(schema="hope.rehearsal-observation.v1",state="UNVERIFIED",scope="DISPOSABLE_LAB_ONLY",
         release_commit=None,generated_at=None,execution_authorized=False)
+    # Historical lab output is not its own authority.  Until a separately
+    # trusted publisher supplies its digest, expose only the fail-closed view.
+    if expected_sha256 is None:return missing
     try:
-        value=strict_json(bounded_regular_read(path,8192))
+        value=strict_json(authenticated_bounded_regular_read(
+            path,8192,expected_sha256=expected_sha256))
         if (not isinstance(value,dict) or value.get("schema")!="hope.deployment-rehearsal.v1"
                 or value.get("scope")!="DISPOSABLE_LAB_ONLY" or value.get("state")!="VERIFIED"
                 or value.get("execution_authorized") is not False or value.get("host_changes") is not False):return missing

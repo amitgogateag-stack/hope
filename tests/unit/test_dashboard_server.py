@@ -69,6 +69,22 @@ def test_acceptance_endpoint_never_promotes_unauthenticated_local_result(tmp_pat
         assert result["execution_authorized"] is False
 
 
+def test_rehearsal_endpoint_never_promotes_unauthenticated_local_result(tmp_path):
+    from test_m3_dashboard_readiness import verified_runtime
+    (tmp_path/"rehearsal-result.json").write_text(json.dumps({
+        "schema":"hope.deployment-rehearsal.v1","scope":"DISPOSABLE_LAB_ONLY",
+        "state":"VERIFIED","release_commit":"a"*40,
+        "generated_at":datetime.now(timezone.utc).isoformat(),
+        "runtime_integrity":verified_runtime(),"execution_authorized":False,
+        "host_changes":False,
+    }))
+    with dashboard(tmp_path) as server:
+        status,_,body=request(server,"/rehearsal.json")
+        result=json.loads(body)
+        assert status==200 and result["state"]=="UNVERIFIED"
+        assert result["execution_authorized"] is False
+
+
 def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,monkeypatch):
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
     entered=threading.Event();reading=threading.Event();release=threading.Event();exited=threading.Event()
