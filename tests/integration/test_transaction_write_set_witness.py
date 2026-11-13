@@ -85,7 +85,7 @@ def witness_case(startup_database, prepare):
                 # event, without fabricating a reconciliation receipt.
                 connection.execute(text("INSERT INTO public.audit_events "
                     "(audit_event_id,event_type,entity_type,entity_id,payload) "
-                    "VALUES (gen_random_uuid(),'PROTOTYPE_WRITE_SET_TEST','JOB_RUN',:job,'{\"prototype_only\":true}')"),
+                    "VALUES (gen_random_uuid(),'PROTOTYPE_WRITE_SET_TEST','JOB_RUN',:job,jsonb_build_object('prototype_only',true))"),
                     {'job':str(permit.run.job_run_id)})
                 nonce = state['nonce']; raw, actual_digest = capture_snapshot(connection, nonce)
                 expected = raw if manifest is None else json.dumps(manifest(json.loads(raw)), separators=(',', ':'))
@@ -288,3 +288,31 @@ def test_owner_cannot_rewrite_durable_reservation(witness_case,startup_database)
             with pytest.raises(DBAPIError,match='WRITE_SET_AUDIT_IMMUTABLE'):
                 with connection.begin_nested(): connection.exec_driver_sql(statement)
     zero_effects(startup_database['admin'])
+
+
+def test_overlapping_controller_session_cannot_borrow_or_reserve_authority(witness_case,startup_database):
+    state=witness_case(); observed=[]
+    def concurrent_session(first,value):
+        first_pid=first.execute(text('SELECT pg_backend_pid()')).scalar_one()
+        with value['value']['worker'].begin() as second:
+            assert second.execute(text('SELECT pg_backend_pid()')).scalar_one()!=first_pid
+            with pytest.raises(DBAPIError,match='WRITE_SET_SESSION_MISMATCH'):
+                with second.begin_nested():
+                    second.execute(text('SELECT financial_witness.open_envelope(:nonce)'),{'nonce':value['nonce']})
+            with pytest.raises(DBAPIError,match='duplicate key'):
+                reserve(startup_database['admin'],second,value['permit'].authorization_sha256,'FILLED')
+            observed.append(True)
+    assert state['run'](after_seal=concurrent_session)==(1,0)
+    assert observed==[True]
+    assert recovery(startup_database['admin'],state)['state']=='FINANCIAL_COMMIT_RECORDED'
+
+
+def test_backend_death_after_seal_leaves_only_consumed_reservation(witness_case,startup_database):
+    state=witness_case()
+    def kill(connection,_value):
+        pid=connection.execute(text('SELECT pg_backend_pid()')).scalar_one()
+        with startup_database['admin'].begin() as owner:
+            assert owner.execute(text('SELECT pg_terminate_backend(:pid)'),{'pid':pid}).scalar_one() is True
+    with pytest.raises(DBAPIError): state['run'](after_seal=kill)
+    zero_effects(startup_database['admin'])
+    assert recovery(startup_database['admin'],state)['state']=='RECOVERY_REQUIRED'
