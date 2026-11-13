@@ -30,8 +30,10 @@ Migration 239 additionally rejects every directly or indirectly reachable
 PostgreSQL predefined `pg_*` role at the controlled worker preflight. Powers
 such as `pg_execute_server_program` do not appear in table/schema ACL checks but
 cross the database/host boundary and are incompatible with a restricted PAPER
-financial principal. The check runs at each bootstrap, so privilege drift after
-principal registration fails before startup authority is consumed.
+financial principal. The check runs at bootstrap and, inside PostgreSQL, before
+every controlled one-use startup/execution authority insert. Privilege drift
+after a safe bootstrap therefore cannot consume an execution claim before the
+financial-write boundary notices the escalation.
 
 Reviewers must verify both PG16 and PG17 full migrations and integration
 regressions; the new migration is unverified until those CI results exist.

@@ -20,3 +20,31 @@ BEGIN
     END IF;
 END;
 $$;
+
+-- Recheck the controlled principal inside PostgreSQL before any one-use
+-- startup/execution authority row is consumed.  The Python bootstrap performs
+-- the same preflight, but privileges can drift after bootstrap and direct SQL
+-- must not bypass the boundary.
+CREATE FUNCTION hope_require_controlled_startup_authority_role()
+RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog,public,pg_temp AS $$
+BEGIN
+    IF hope_admission_mode()='CONTROLLED' THEN
+        PERFORM hope_require_startup_financial_role();
+    END IF;
+    RETURN NEW;
+END;
+$$;
+DO $$
+DECLARE target TEXT;
+BEGIN
+    IF current_schema()='public' THEN
+        FOREACH target IN ARRAY ARRAY['paper_handoff_intents','paper_handoff_outcomes',
+            'paper_startup_claims','paper_startup_bootstraps','paper_startup_executions',
+            'paper_startup_commit_witnesses','paper_startup_completions'] LOOP
+            EXECUTE 'CREATE TRIGGER aa_startup_authority_role BEFORE INSERT ON public.'||
+                quote_ident(target)||' FOR EACH ROW EXECUTE FUNCTION public.'||
+                'hope_require_controlled_startup_authority_role()';
+        END LOOP;
+    END IF;
+END;
+$$;
