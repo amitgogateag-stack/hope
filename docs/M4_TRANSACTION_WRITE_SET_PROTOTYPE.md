@@ -1,10 +1,18 @@
 # Transaction-owned write-set prototype — production NO-GO
 
-This candidate depends on PR95 at caff75df0a758d1b5b1a1a232447a2a13fa20b73.
-It does not incorporate PR93's subsequent migration239. Migrations001–238,
-the kernel execution fence, the DENY-only admission verifier, strategies and
-risk thresholds are unchanged. The SQL installer is an explicit disposable
-experiment, not a numbered migration or production startup component.
+The isolated integration candidate combines PR96 at
+71868c74b066e48f44eefcd77e1fed1f40d2fd15 (including PR95) with PR93 at
+594a358c1ca8a99cebfd77ffd8ea1391aac04e3f. Migration239 is preserved from
+PR93, including its ownership/catalog capability checks and seven authority
+admission triggers. Migration240 adds the missing deferred actual-COMMIT
+principal privilege recheck: the catalog-routine escalation regression proved
+that admission/write-time checks alone allowed five effects to commit before
+completion refused the escalated principal. Migrations001–239 remain unchanged
+from their preserved parents. The kernel fence, the DENY-only verifier,
+strategies and risk thresholds are unchanged. The witness SQL installer remains
+an explicit disposable experiment, not a numbered migration or production path.
+Both source branches remain unchanged and unmerged. Independent branch CI does
+not establish combined behavior; use this candidate's exact-head evidence.
 
 For explicitly registered experimental executors, triggers capture every
 INSERT/UPDATE/DELETE with complete OLD/NEW JSON rows on seventeen real HOPE
@@ -59,6 +67,18 @@ python -m pytest -v tests/integration/test_transaction_write_set_witness.py test
 The dedicated workflow records the exact tested commit, SQL checksum and JUnit
 results per major. Existing full HOPE and native kernel workflows remain intact.
 Results must be taken from the final exact head, not this design description.
+The integrated adversarial cases grant a predefined server-program role or a
+privileged catalog routine only after the actual write-set seal. They invoke
+neither capability, require the new financial COMMIT guard to reject the
+changed principal, assert zero committed effects and preserve the consumed
+reservation for recovery. Existing positive India/USA cases still exercise the
+same guards. No assertion or expiry deadline is relaxed for integration.
+The separate disposable owner proves the grant before commit; a worker's cached
+membership observation is not used as authority. The grant is revoked in
+finally cleanup. A new guard rechecks database privileges at its COMMIT
+validation point; it does not claim atomic coordination with hostile superuser
+DDL or a grant committed after that point, independent signer custody or kernel
+state. Those remain separate trust/protocol requirements.
 Engineering integration and operational PAPER remain NO-GO. Human security
 review, production root provisioning and independent acceptance remain required.
 G7FX is NOT STARTED and deferred.

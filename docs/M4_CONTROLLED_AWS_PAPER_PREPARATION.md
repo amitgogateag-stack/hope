@@ -479,3 +479,13 @@ the independent authority-writer trust gap. A reviewed external admission/DB
 verification design is required before integration or operating GO.
 
 Follow-up inventory: `237_paper_independent_admission_boundary.sql` SHA256 `43d9e369f6edbcc2b4502396e049c1df2559f9a66e85d971ba43ed96f65ed35d`.
+
+
+## R1 integration additions (source inventory only)
+
+Migration239 is preserved from PR93;240 rechecks the controlled financial role at actual COMMIT. Full chain240, pending from008232. Neither source inventory nor disposable CI authorizes a production migration. Earlier inventories above are historical checkpoints.
+
+| Order | Migration | SHA256 |
+|---|---|---|
+| 239 | 239_paper_predefined_role_boundary.sql | 2908fb681e3f1b990287004c5b02a0959e9184817a97ab15c3d4db4e2d30b4a5 |
+| 240 | 240_paper_financial_commit_role_boundary.sql | 7f8ac0600c2257495ba7cef7dc4ef38429d1bf0e5b6544cef97f5e0499f23f60 |

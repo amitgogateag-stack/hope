@@ -316,3 +316,32 @@ def test_backend_death_after_seal_leaves_only_consumed_reservation(witness_case,
     with pytest.raises(DBAPIError): state['run'](after_seal=kill)
     zero_effects(startup_database['admin'])
     assert recovery(startup_database['admin'],state)['state']=='RECOVERY_REQUIRED'
+
+
+@pytest.mark.parametrize('capability',['predefined_role','catalog_routine'])
+def test_privilege_drift_after_write_set_seal_refuses_actual_commit(
+        witness_case,startup_database,capability):
+    """Migration239 must still fence the real sealed financial transaction."""
+    state=witness_case(); admin=startup_database['admin']; role=startup_database['role']
+    grant=('GRANT pg_execute_server_program TO '+role if capability=='predefined_role' else
+           'GRANT EXECUTE ON FUNCTION pg_catalog.pg_read_file(text) TO '+role)
+    revoke=('REVOKE pg_execute_server_program FROM '+role if capability=='predefined_role' else
+            'REVOKE EXECUTE ON FUNCTION pg_catalog.pg_read_file(text) FROM '+role)
+    observed=[]
+    def drift(connection,value):
+        with admin.begin() as owner:
+            owner.exec_driver_sql(grant)
+            query=("SELECT pg_has_role(:role,'pg_execute_server_program','MEMBER')"
+                   if capability=='predefined_role' else
+                   "SELECT has_function_privilege(:role,'pg_catalog.pg_read_file(text)','EXECUTE')")
+            assert owner.execute(text(query),{'role':role}).scalar_one() is True
+        # Do not invoke the capability: membership/ACL drift itself must deny.
+        observed.append(value['nonce'])
+    try:
+        with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
+            state['run'](after_seal=drift)
+    finally:
+        with admin.begin() as owner: owner.exec_driver_sql(revoke)
+    assert observed==[state['nonce']]
+    zero_effects(admin)
+    assert recovery(admin,state)['state']=='RECOVERY_REQUIRED'
