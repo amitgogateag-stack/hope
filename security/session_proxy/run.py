@@ -29,7 +29,11 @@ BROKER_UID, WORKER_UID, OTHER_UID = 21001, 21002, 21003
 CASES = ('authorized_prototype_commit','borrowed_session','reconnected_worker',
          'replaced_process','wrong_kernel_uid','wrong_namespace','delegated_socket',
          'approval_replay','revoked_authority','halt_during_execution',
-         'expiry_at_commit','direct_sql_outside_boundary')
+         'expiry_at_commit','direct_sql_outside_boundary','same_interpreter_exec','new_thread_creation',
+         'commit_peer_kernel_stopped','wrong_signing_key','wrong_signed_scope','non_boolean_commit',
+         'untrusted_identity_fields','policy_generation_changed','lost_commit_acknowledgment',
+         'broker_crash_before_commit','broker_commit_transport_loss_reconciled','concurrent_same_approval','preexisting_multithreaded_target',
+         'new_fork_creation','wrong_signed_cluster','wrong_signed_transaction','wrong_signed_issuer','wrong_signed_generation')
 
 
 class Blocked(Exception):
@@ -92,7 +96,7 @@ def main():
         # The runner checkout may not be traversable by dedicated UIDs. Copy
         # reviewed executable sources to a root-owned, read-only runtime path.
         runtime=root/'runtime';runtime.mkdir();runtime.chmod(0o755)
-        for name in ('broker.py','worker.py'):
+        for name in ('broker.py','worker.py','execution_fence.py'):
             target=runtime/name;target.write_bytes((HERE/name).read_bytes());target.chmod(0o644)
         socketdir=root/'socket';socketdir.mkdir();os.chown(socketdir,BROKER_UID,BROKER_UID);socketdir.chmod(0o755)
         audit=socketdir/'audit.jsonl'
@@ -102,13 +106,16 @@ def main():
             'worker_uid':WORKER_UID,'socket_gid':WORKER_UID,'public_key':private.public_key().public_bytes(Encoding.Raw,PublicFormat.Raw).hex(),
             'dsn':urls['broker'].set(drivername='postgresql').render_as_string(hide_password=False),
             'executable_sha256':executable,'namespaces':observation(os.getpid())['namespaces'],
-            'release_tree':hashlib.sha256(b''.join((HERE/n).read_bytes() for n in ('broker.py','worker.py','schema.sql'))).hexdigest()}
+            'release_tree':hashlib.sha256(b''.join((HERE/n).read_bytes() for n in ('broker.py','worker.py','execution_fence.py','schema.sql'))).hexdigest()}
         config_path=root/'broker.json';config_path.write_text(json.dumps(config));os.chown(config_path,BROKER_UID,BROKER_UID);config_path.chmod(0o600)
         clean_env={'PATH':'/usr/bin:/bin','PYTHONUNBUFFERED':'1','LANG':'C.UTF-8'}
         serverlog=(root/'broker.log').open('w+')
-        server=subprocess.Popen(['/usr/bin/setpriv','--reuid='+str(BROKER_UID),'--regid='+str(BROKER_UID),'--groups='+str(WORKER_UID),
+        def launch_server():
+            return subprocess.Popen(['/usr/bin/setpriv','--reuid='+str(BROKER_UID),'--regid='+str(BROKER_UID),'--groups='+str(WORKER_UID),
             '--inh-caps=+sys_ptrace','--ambient-caps=+sys_ptrace',sys.executable,str(runtime/'broker.py'),str(config_path)],
-            env=clean_env,stdout=serverlog,stderr=serverlog)
+                env=clean_env,stdout=serverlog,stderr=serverlog)
+        server=launch_server()
+
         report['host_capabilities']={line.split(':',1)[0]:line.split(':',1)[1].strip()
             for line in Path('/proc/self/status').read_text().splitlines() if line.startswith(('CapBnd:','CapEff:'))}
         until=time.monotonic()+10
@@ -127,8 +134,10 @@ def main():
             time.sleep(.05)
 
         class Client:
-            def __init__(self, uid=WORKER_UID, namespace=False):
+            def __init__(self, uid=WORKER_UID, namespace=False, delegation=False, threaded=False):
                 command=[sys.executable,str(runtime/'worker.py'),config['socket']]
+                if delegation:command.append('delegate')
+                if threaded:command.append('threaded')
                 kwargs=dict(user=uid,group=WORKER_UID,extra_groups=[])
                 if namespace:
                     command=['/usr/bin/unshare','--mount','--','/usr/bin/setpriv','--reuid='+str(uid),
@@ -137,6 +146,11 @@ def main():
                 self.p=subprocess.Popen(command,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,
                     text=True,env=clean_env,**kwargs)
                 clients.append(self)
+                if threaded:
+                    self.first={}
+                    self.p.wait(timeout=5)
+                    require(self.p.returncode==-signal.SIGKILL,'multithreaded lease was not refused')
+                    return
                 self.first=self.read()
                 if self.first.get('reason') in ('PermissionError','ProcessLookupError'):
                     raise Blocked('Dedicated observer cannot read genuine peer /proc identity; no synthetic fallback')
@@ -159,6 +173,11 @@ def main():
             return admin.execute('SELECT count(*) FROM session_prototype.effects WHERE nonce=%s',(nonce,)).fetchone()[0]
         def sign(client):
             t=client.first['challenge']
+            native={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path('/proc',str(client.p.pid),'status').read_text().splitlines() if ':' in line}
+            lease=t['execution_lease'];require(lease['kind']=='ptrace-single-thread-since-attach-v1','missing kernel fence')
+            require(int(native['TracerPid'])==lease['tracer_tid'],'signer tracer mismatch')
+            tracer={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path('/proc',str(lease['tracer_tid']),'status').read_text().splitlines() if ':' in line}
+            require(int(tracer['Tgid'])==server.pid and int(tracer['Uid'].split()[0])==BROKER_UID,'untrusted tracer identity')
             # Authority independently observes the target kernel process and
             # pg_stat_activity of the broker-owned upstream transaction.
             require(t['peer']==observation(client.p.pid),'signer peer mismatch')
@@ -176,13 +195,47 @@ def main():
             require(response.get('result')=='DENIED','attack admitted')
             require(count(client.first['challenge']['nonce'])==0,'unauthorized economic effect')
             return response
-        def audit_denial(nonce,reason):
+        def audit_event(nonce,result,reason=None,peer_pid=None):
             until=time.monotonic()+5
             while time.monotonic()<until:
                 rows=[json.loads(l) for l in audit.read_text().splitlines()]
-                if any(r.get('nonce')==nonce and r.get('reason')==reason for r in rows):return
+                matches=[r for r in rows if r.get('nonce')==nonce and r.get('result')==result and (reason is None or r.get('reason')==reason) and (peer_pid is None or r.get('peer_pid')==peer_pid)]
+                if matches:return matches[-1]
                 time.sleep(.05)
-            raise AssertionError('missing kernel denial audit: '+reason)
+            observed=[{k:r.get(k) for k in ('result','reason','peer_pid')} for r in rows
+                      if peer_pid is not None and r.get('peer_pid')==peer_pid]
+            raise AssertionError('missing kernel audit: '+str(result)+'/'+str(reason)+' observed='+json.dumps(observed))
+
+        def wait_backend_gone(pid):
+            until=time.monotonic()+6
+            while time.monotonic()<until:
+                if not admin.execute('SELECT 1 FROM pg_stat_activity WHERE pid=%s',(pid,)).fetchone():return
+                time.sleep(.02)
+            raise AssertionError('upstream backend survived broker death')
+        def restart():
+            nonlocal server
+            require(server.poll() is not None,'old broker is still running')
+            Path(config['socket']).unlink()  # Fresh disposable orchestrator-owned directory only.
+            server=launch_server()
+            until=time.monotonic()+5
+            while not Path(config['socket']).exists():
+                require(server.poll() is None and time.monotonic()<until,'broker restart failed')
+                time.sleep(.01)
+        def commit_blocked(client):
+            # Exact actual upstream session is observed executing COMMIT while
+            # its mandatory control-row fence is blocked by the test authority.
+            client.send({'commit':True},reply=False)
+            t=client.first['challenge'];audit_event(t['nonce'],'COMMIT_BARRIER_HELD')
+            until=time.monotonic()+1
+            while time.monotonic()<until:
+                admin.execute('SELECT pg_stat_clear_snapshot()')
+                row=admin.execute('SELECT state,wait_event_type,query FROM pg_stat_activity WHERE pid=%s',(t['backend_pid'],)).fetchone()
+                if row and row[0]=='active' and row[1]=='Lock' and row[2]=='COMMIT':
+                    status={line.split(':',1)[0]:line.split(':',1)[1].strip() for line in Path('/proc',str(client.p.pid),'status').read_text().splitlines() if ':' in line}
+                    require(status['State'].startswith('t') and int(status['TracerPid'])==t['execution_lease']['tracer_tid'],'COMMIT peer was not kernel stopped')
+                    return dict(state=status['State'],tracer_tid=int(status['TracerPid']),backend_pid=t['backend_pid'])
+                time.sleep(.005)
+            raise AssertionError('actual COMMIT lock wait not observed')
 
         for name in CASES:
             if results[name]['status']=='VERIFIED':continue
@@ -200,18 +253,90 @@ def main():
                     b=Client();denied(b,signature);a.close()
                 elif name=='replaced_process':
                     a=Client();prepared(a);nonce=a.first['challenge']['nonce'];a.send({'replace':True},reply=False)
-                    audit_denial(nonce,'PROCESS_REPLACED');require(count(nonce)==0,'replacement committed')
+                    audit_event(nonce,'DENIED','EXEC_FENCE_EXEC_EVENT');require(count(nonce)==0,'replacement committed')
                 elif name=='wrong_kernel_uid':
                     a=Client(OTHER_UID);require(a.first.get('reason')=='WRONG_KERNEL_UID','wrong UID accepted')
                 elif name=='wrong_namespace':
                     a=Client(namespace=True);require(a.first.get('reason')=='WRONG_NAMESPACE','wrong namespace accepted')
                 elif name=='delegated_socket':
-                    a=Client();prepared(a);denied(a,{'delegate':True})
+                    a=Client(delegation=True);prepared(a);denied(a,{'delegate':True})
                 elif name=='approval_replay':
                     a=Client();signature=sign(a);require(a.send(signature).get('prepared'),'not prepared')
                     require(a.send({'commit':True}).get('result')=='COMMITTED','initial commit failed')
                     b=Client();denied(b,signature)
                     require(count(a.first['challenge']['nonce'])==1,'approval repeated')
+                elif name=='preexisting_multithreaded_target':
+                    a=Client(threaded=True)
+                    audit_event(None,'DENIED','EXEC_FENCE_MULTITHREADED_TARGET',a.p.pid)
+                elif name in ('same_interpreter_exec','new_thread_creation','new_fork_creation'):
+                    a=Client();prepared(a);nonce=a.first['challenge']['nonce']
+                    command={'same_interpreter_exec': 'same_exec','new_thread_creation':'new_thread','new_fork_creation':'new_fork'}[name]
+                    a.send({command:True},reply=False)
+                    reason='EXEC_FENCE_EXEC_EVENT' if name=='same_interpreter_exec' else 'EXEC_FENCE_TASK_CREATION'
+                    event=audit_event(nonce,'DENIED',reason)
+                    expected_event={'same_interpreter_exec':4,'new_thread_creation':3,'new_fork_creation':1}[name]
+                    require(any(row['event']==expected_event for row in event['kernel_events']),'missing actual kernel event')
+                    require(count(nonce)==0,'invalid execution committed')
+                elif name in ('wrong_signing_key','wrong_signed_scope','untrusted_identity_fields'):
+                    a=Client();t=a.first['challenge']
+                    if name=='wrong_signing_key':packet={'signature':Ed25519PrivateKey.generate().sign(canonical(t)).hex()}
+                    elif name=='wrong_signed_scope':packet={'signature':private.sign(canonical(dict(t,scope='BOOTSTRAP_ONLY'))).hex()}
+                    else:packet=dict(sign(a),pid=a.p.pid,backend_pid=t['backend_pid'])
+                    denied(a,packet)
+                elif name in ('wrong_signed_cluster','wrong_signed_transaction','wrong_signed_issuer','wrong_signed_generation'):
+                    a=Client();transcript=a.first['challenge']
+                    field={'wrong_signed_cluster':'cluster','wrong_signed_transaction':'xid',
+                           'wrong_signed_issuer':'issuer_role','wrong_signed_generation':'generation'}[name]
+                    changed=dict(transcript)
+                    changed[field]=transcript[field]+1 if field=='generation' else str(transcript[field])+'-foreign'
+                    packet={'signature':private.sign(canonical(changed)).hex()}
+                    denied(a,packet)
+                    require(count(transcript['nonce'])==0,'foreign signed identity committed')
+                elif name=='non_boolean_commit':
+                    a=Client();prepared(a);response=denied(a,{'commit':1})
+                    require(response['reason']=='COMMIT_PROTOCOL','numeric commit was accepted')
+                elif name=='policy_generation_changed':
+                    a=Client();prepared(a)
+                    admin.execute('UPDATE session_prototype.control SET generation=generation+1 WHERE id=1')
+                    response=denied(a,{'commit':True})
+                    require(response['reason']=='PROTOTYPE_COMMIT_DENIED','policy fence was not checked')
+                elif name=='commit_peer_kernel_stopped':
+                    a=Client();prepared(a)
+                    with admin.transaction():
+                        admin.execute('SELECT 1 FROM session_prototype.control WHERE id=1 FOR UPDATE')
+                        report['commit_barrier_observation']=commit_blocked(a)
+                    response=a.read();require(response.get('result')=='COMMITTED' and count(response['nonce'])==1,'fenced COMMIT did not finish')
+                elif name=='lost_commit_acknowledgment':
+                    a=Client();old_signature=sign(a);require(a.send(old_signature).get('prepared'),'not prepared')
+                    require(a.send({'drop_ack':True})=='ACK_UNAVAILABLE','transport shutdown not exercised')
+                    nonce=a.first['challenge']['nonce'];audit_event(nonce,'COMMITTED_ACK_LOST')
+                    require(count(nonce)==1,'owner could not resolve actual committed effect')
+                    b=Client();denied(b,old_signature)
+                    require(count(nonce)==1,'lost ACK triggered replay')
+                elif name in ('broker_crash_before_commit','broker_commit_transport_loss_reconciled'):
+                    a=Client();old_signature=sign(a);require(a.send(old_signature).get('prepared'),'not prepared')
+                    t=a.first['challenge']
+                    if name=='broker_commit_transport_loss_reconciled':
+                        with admin.transaction():
+                            admin.execute('SELECT 1 FROM session_prototype.control WHERE id=1 FOR UPDATE')
+                            report['unknown_commit_observation']=commit_blocked(a)
+                            server.kill();server.wait(timeout=3)
+                    else:server.kill();server.wait(timeout=3)
+                    a.p.wait(timeout=3)
+                    require(a.p.returncode==-signal.SIGKILL,'EXITKILL did not terminate the leased worker')
+                    wait_backend_gone(t['backend_pid']);resolved=count(t['nonce'])
+                    require(resolved in (0,1) and (name!='broker_crash_before_commit' or resolved==0),'unexpected crash outcome')
+                    report.setdefault('recovery_observations',{})[name]=dict(read_only_resolved_effects=resolved,automatic_replays=0)
+                    restart();b=Client();denied(b,old_signature)
+                    require(count(t['nonce'])==resolved,'old execution replayed after restart')
+                elif name=='concurrent_same_approval':
+                    from concurrent.futures import ThreadPoolExecutor
+                    a=Client();b=Client();old_signature=sign(a)
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        responses=list(pool.map(lambda c:c.send(old_signature),(a,b)))
+                    require(responses[0].get('prepared') and responses[1].get('result')=='DENIED','session signature borrowed concurrently')
+                    require(a.send({'commit':True}).get('result')=='COMMITTED','authorized concurrent winner failed')
+                    require(count(b.first['challenge']['nonce'])==0,'borrowed concurrent effect')
                 elif name in ('revoked_authority','halt_during_execution','expiry_at_commit'):
                     a=Client();prepared(a)
                     if name=='revoked_authority':state(revoked=True)
@@ -223,7 +348,7 @@ def main():
                               'expiry_at_commit':'PROTOTYPE_AUTHORITY_EXPIRED'}[name]
                     require(response['reason']==expected,'wrong COMMIT rejection boundary: '+response['reason'])
                 economic_after=admin.execute('SELECT count(*) FROM session_prototype.effects').fetchone()[0]
-                allowed=1 if name in ('authorized_prototype_commit','approval_replay') else 0
+                allowed=1 if name in ('authorized_prototype_commit','approval_replay','commit_peer_kernel_stopped','lost_commit_acknowledgment','concurrent_same_approval') else report.get('recovery_observations',{}).get(name,{}).get('read_only_resolved_effects',0)
                 require(economic_after-economic_before==allowed,'unexpected committed economic effects')
                 results[name]={'status':'VERIFIED','scope':'disposable prototype only',
                                'authorized_effects':allowed,'unauthorized_committed_effects':0}
@@ -233,6 +358,7 @@ def main():
                 for client in clients:client.close()
                 clients.clear()
         report['kernel_audit']=[json.loads(l) for l in audit.read_text().splitlines()]
+        report['execution_fence_scope']='Kernel exec/task events after kernel-stopped singleton baseline only; single-threaded targets; no loaded-code or pre-attachment proof'
         report['remaining_proofs']={name:'BLOCKED' for name in (
             'same_executable_exec_generation','loaded_python_code_integrity','production_OCI_image_attestation',
             'remote_signer_isolation_from_observer_capability','HOPE_financial_path_integration',
