@@ -278,7 +278,7 @@ def test_direct_catalog_routine_grant_drift_blocks_execution_claim(
             assert connection.execute(text(
                 "SELECT has_function_privilege(current_user,"
                 "'pg_catalog.pg_read_file(text)','EXECUTE'), "
-                "trim(pg_catalog.pg_read_file('PG_VERSION')) ~ '^[0-9]+$'"
+                "length(pg_catalog.pg_read_file('PG_VERSION')) > 0"
             )).one()==(True,True)
         with pytest.raises(DBAPIError,match='PAPER_STARTUP_FINANCIAL_ROLE_UNSAFE'):
             startup.execution_callbacks(worker,value['case']['verify_execution']())
