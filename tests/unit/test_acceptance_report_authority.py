@@ -2,6 +2,7 @@
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import pytest
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -9,6 +10,30 @@ from hope.api import release_acceptance as acceptance
 from hope.api import deployment_rehearsal as rehearsal
 from hope.api import acceptance_evidence, rehearsal_evidence
 from test_m3_dashboard_readiness import verified_runtime
+
+
+class _EqualToEverything:
+    def __eq__(self, other):
+        return True
+
+    def __ne__(self, other):
+        return False
+
+
+class _CompatibleSpoof(str):
+    def __hash__(self):
+        return hash('COMPATIBLE')
+
+    def __eq__(self, other):
+        return other == 'COMPATIBLE'
+
+
+class _ObservationMap(dict):
+    pass
+
+
+class _ReleaseIdentity(str):
+    pass
 
 
 def test_perfect_caller_labels_do_not_supply_independent_acceptance():
@@ -21,6 +46,42 @@ def test_perfect_caller_labels_do_not_supply_independent_acceptance():
     assert result['state'] == 'BLOCKED'
     assert 'REVIEW_INDEPENDENT_ACCEPTANCE_AUTHORITY' in result['blockers']
     assert result['execution_authorized'] is False
+
+
+def test_polymorphic_release_identity_cannot_suppress_mismatch_blocker():
+    now = datetime.now(timezone.utc)
+    labels = dict(release_commit=_EqualToEverything(), generated_at=now.isoformat(),
+        process_identity='d'*64, database='COMPATIBLE', scheduler='CURRENT',
+        market_data='VERIFIED', reconciliation='CLEAR', risk='CLEAR', live_enabled=False)
+    result = acceptance.acceptance_observation(verified_runtime(), labels,
+        expected_sha='a'*40, now=now)
+    assert 'REVIEW_DEPLOYMENT_IDENTITY' in result['blockers']
+
+
+def test_polymorphic_status_label_cannot_impersonate_canonical_value():
+    now = datetime.now(timezone.utc)
+    labels = dict(release_commit='a'*40, generated_at=now.isoformat(),
+        process_identity='d'*64, database=_CompatibleSpoof('UNVERIFIED'), scheduler='CURRENT',
+        market_data='VERIFIED', reconciliation='CLEAR', risk='CLEAR', live_enabled=False)
+    result = acceptance.acceptance_observation(verified_runtime(), labels,
+        expected_sha='a'*40, now=now)
+    assert 'REVIEW_DATABASE' in result['blockers']
+
+
+def test_polymorphic_observation_container_is_not_canonical_evidence():
+    now = datetime.now(timezone.utc)
+    labels = _ObservationMap(release_commit='a'*40, generated_at=now.isoformat(),
+        process_identity='d'*64, database='COMPATIBLE', scheduler='CURRENT',
+        market_data='VERIFIED', reconciliation='CLEAR', risk='CLEAR', live_enabled=False)
+    result = acceptance.acceptance_observation(verified_runtime(), labels,
+        expected_sha='a'*40, now=now)
+    assert 'REVIEW_MISSING_EVIDENCE' in result['blockers']
+
+
+def test_polymorphic_expected_release_identity_is_rejected():
+    with pytest.raises(RuntimeError, match='RUNTIME_RELEASE_INVALID'):
+        acceptance.acceptance_observation(verified_runtime(), {},
+            expected_sha=_ReleaseIdentity('a'*40))
 
 
 def test_successful_local_rehearsal_cannot_issue_verified_acceptance(monkeypatch, tmp_path):
