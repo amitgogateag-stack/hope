@@ -246,7 +246,8 @@ def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
         release_commit=commit,runtime_mode="shared",manifest_sha256="b"*64,
         inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
     with DashboardHTTPServer(0,page,snapshot,operations,deployed_commit=commit,
-            activation_check=None if case=="runtime_unverified" else lambda:{"runtime_integrity":evidence}) as server:
+            activation_check=None if case=="runtime_unverified" else lambda:{"runtime_integrity":evidence},
+            snapshot_authenticated=True) as server:
         thread=Thread(target=server.serve_forever,daemon=True);thread.start()
         local=f"http://127.0.0.1:{server.server_port}"
         # Only the test adapter changes the port; production remains fixed loopback 8788.

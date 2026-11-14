@@ -8,11 +8,14 @@ from hope.api.snapshot_contract import recovery_state
 from hope.api.runtime_integrity import safe_evidence
 
 
-def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_paper_commit=None,runtime_evidence=None):
+def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_paper_commit=None,
+                        runtime_evidence=None,snapshot_authenticated=False):
     if expected_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
         raise ValueError("HOPE_DASHBOARD_EXPECTED_COMMIT_INVALID")
     if expected_paper_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_paper_commit):
         raise ValueError("HOPE_PAPER_EXPECTED_COMMIT_INVALID")
+    if type(snapshot_authenticated) is not bool:
+        raise ValueError("HOPE_SNAPSHOT_AUTHENTICATION_INVALID")
     now = datetime.now(UTC)
     result = dict(schema="hope.operational-readiness.v1",generated_at=now.isoformat(),server="RUNNING",
         paper_health="UNAVAILABLE",reason="HEALTH_MISSING",worker_report="UNKNOWN",snapshot="UNAVAILABLE",
@@ -30,19 +33,24 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         candidate = json.loads(raw) if result["snapshot"]=="CURRENT" else None
         snapshot_identity = (expected_commit is None or
             (candidate is not None and candidate.get("deployed_commit") == expected_commit))
-        if snapshot_identity:
+        if snapshot_identity and snapshot_authenticated:
             result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
         elif result["snapshot"] == "CURRENT":
             result["reason"] = "SNAPSHOT_IDENTITY_UNVERIFIED"
         # Historical/future snapshots cannot establish a current HALT, claim
         # count or activity observation. They also cannot authorize execution.
-        data = candidate if snapshot_identity else None
-        if data and data["paper"]["environment_state"]=="HALTED":
+        # Shape, time and release labels inside a same-UID-writable snapshot are
+        # diagnostics, not publisher authority. Restrictive HALT remains safe
+        # to surface; positive RUNNING and recovery claims require independent
+        # authentication of the snapshot bytes.
+        diagnostic = candidate if snapshot_identity else None
+        data = diagnostic if snapshot_authenticated else None
+        if diagnostic and diagnostic["paper"]["environment_state"]=="HALTED":
             result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
         activity = (data or {}).get("projections",{}).get("paper_activity",{})
         if activity.get("status")=="AVAILABLE":
             result["last_successful_paper_at"] = activity.get("last_completed_at")
-        if data:result["reconciliation"] = recovery_state(data["paper"])
+        if diagnostic:result["reconciliation"] = recovery_state(diagnostic["paper"])
     except (OSError,ValueError,TypeError,UnicodeError):
         pass
     try:
@@ -95,6 +103,8 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         result["reason"]="RELEASE_BUILD_UNVERIFIED"
     elif health.get("runtime_gate")!="VERIFIED":
         result["reason"]="PAPER_RUNTIME_UNVERIFIED"
+    elif not snapshot_authenticated:
+        result["reason"] = "SNAPSHOT_PUBLISHER_UNVERIFIED"
     else:
         result.update(paper_health="READY",reason="CURRENT_OBSERVATIONS_ONLY")
     return result

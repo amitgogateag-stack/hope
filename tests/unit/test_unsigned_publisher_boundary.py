@@ -49,3 +49,23 @@ def test_metadata_snapshot_and_runtime_cannot_promote_unsigned_current_to_ready(
     result=readiness.dashboard_readiness(Path('snapshot'),Path('health'),runtime_evidence=verified_runtime())
     assert result['paper_health']=='UNAVAILABLE' and result['reason']=='HEALTH_INVALID'
     assert result['execution_authorized'] is False
+
+
+def test_authenticated_heartbeat_cannot_promote_unauthenticated_snapshot(monkeypatch):
+    from datetime import datetime,timezone
+    from hope.api import dashboard_readiness as readiness
+    from test_dashboard_server import valid_snapshot
+    from test_m3_dashboard_readiness import verified_runtime
+    safe=dict(health(),runtime_gate="VERIFIED")
+    generated=datetime.now(timezone.utc)
+    snapshot=json.loads(valid_snapshot());snapshot['paper']['environment_state']='RUNNING'
+    monkeypatch.setattr(readiness,'_verified_operations',lambda *_:json.dumps(safe).encode())
+    monkeypatch.setattr(readiness,'_verified_snapshot',lambda *_:(json.dumps(snapshot).encode(),generated))
+    result=readiness.dashboard_readiness(
+        Path('snapshot'),Path('health'),runtime_evidence=verified_runtime(),
+    )
+    assert result['paper_health']=='UNAVAILABLE'
+    assert result['reason']=='SNAPSHOT_PUBLISHER_UNVERIFIED'
+    assert result['database']=='UNVERIFIED'
+    assert result['reconciliation']=='UNVERIFIED'
+    assert result['execution_authorized'] is False

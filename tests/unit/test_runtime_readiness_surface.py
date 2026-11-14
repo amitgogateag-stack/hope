@@ -45,7 +45,7 @@ def test_runtime_endpoint_is_bounded_and_mandatory_for_ready(setup,state):
     elif state=="private_payload":evidence["private_path"]="/secret/credential"
     opener=build_opener(ProxyHandler({}))
     with DashboardHTTPServer(0,page,layout.snapshot,layout.health,deployed_commit=commit,
-            activation_check=lambda:{"runtime_integrity":evidence}) as server:
+            activation_check=lambda:{"runtime_integrity":evidence},snapshot_authenticated=True) as server:
         thread=Thread(target=server.serve_forever,daemon=True);thread.start()
         base=f"http://127.0.0.1:{server.server_port}"
         try:
