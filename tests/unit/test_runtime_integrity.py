@@ -177,6 +177,49 @@ def test_safe_runtime_projection_rejects_untrusted_or_contradictory_evidence(cha
     with pytest.raises(RuntimeError,match="RUNTIME_"):m.safe_evidence(value)
 
 
+class _RuntimeLabelSpoof(str):
+    def __new__(cls, value, trusted):
+        instance = super().__new__(cls, value)
+        instance.trusted = trusted
+        return instance
+
+    def __hash__(self):
+        return hash(self.trusted)
+
+    def __eq__(self, other):
+        return other == self.trusted
+
+    def __ne__(self, other):
+        return not self == other
+
+
+class _RuntimeEvidenceMap(dict):
+    pass
+
+
+@pytest.mark.parametrize(("field","value"),[
+    ("state",_RuntimeLabelSpoof("FAKE","VERIFIED")),
+    ("code",_RuntimeLabelSpoof("private error","MANIFEST_AND_RUNTIME_MATCH")),
+    ("runtime_mode",_RuntimeLabelSpoof("automatic","shared")),
+])
+def test_safe_runtime_projection_rejects_polymorphic_trust_labels(field,value):
+    evidence=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        release_commit=SHA,runtime_mode="shared",manifest_sha256="a"*64,inventory_sha256="c"*64,
+        process_sha256=None,file_count=1,execution_authorized=False)
+    evidence[field]=value
+    with pytest.raises(RuntimeError,match="RUNTIME_EVIDENCE_INVALID"):
+        m.safe_evidence(evidence)
+
+
+def test_safe_runtime_projection_rejects_polymorphic_container():
+    evidence=_RuntimeEvidenceMap(schema="hope.runtime-integrity.v1",state="VERIFIED",
+        code="MANIFEST_AND_RUNTIME_MATCH",release_commit=SHA,runtime_mode="shared",
+        manifest_sha256="a"*64,inventory_sha256="c"*64,process_sha256=None,
+        file_count=1,execution_authorized=False)
+    with pytest.raises(RuntimeError,match="RUNTIME_EVIDENCE_INVALID"):
+        m.safe_evidence(evidence)
+
+
 def test_absent_and_legacy_evidence_are_bounded_and_never_verified():
     for value in (None,m.unverified(),m.unverified("ACTIVATION_BLOCKED",blocked=True)):
         result=m.safe_evidence(value)

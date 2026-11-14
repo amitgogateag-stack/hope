@@ -75,7 +75,8 @@ def test_rehearsal_endpoint_never_promotes_unauthenticated_local_result(tmp_path
     from test_m3_dashboard_readiness import verified_runtime
     (tmp_path/"rehearsal-result.json").write_text(json.dumps({
         "schema":"hope.deployment-rehearsal.v1","scope":"DISPOSABLE_LAB_ONLY",
-        "state":"VERIFIED","release_commit":"a"*40,
+        "state":"UNVERIFIED","lab_result":"COMPLETED","independent_acceptance":"UNVERIFIED",
+        "release_commit":"a"*40,"previous_commit":"b"*40,
         "generated_at":datetime.now(timezone.utc).isoformat(),
         "runtime_integrity":verified_runtime(),"execution_authorized":False,
         "host_changes":False,
@@ -84,6 +85,8 @@ def test_rehearsal_endpoint_never_promotes_unauthenticated_local_result(tmp_path
         status,_,body=request(server,"/rehearsal.json")
         result=json.loads(body)
         assert status==200 and result["state"]=="UNVERIFIED"
+        assert result["lab_result"] is None
+        assert result["independent_acceptance"]=="UNVERIFIED"
         assert result["execution_authorized"] is False
 
 

@@ -83,19 +83,24 @@ def test_tar_order_permissions_and_metadata_are_deterministic(tmp_path):
         for member in archive:assert member.uid==member.gid==0 and member.uname==member.gname=="" and member.mtime==1700000000
 
 
-@pytest.mark.parametrize("fault",[None,"expired","future","authority","secret","contradiction","malformed"])
+@pytest.mark.parametrize("fault",[None,"expired","future","authority","secret","missing_authority",
+    "legacy_verified","duplicate","extra","malformed"])
 def test_acceptance_dashboard_is_bounded_historical_lab_evidence(tmp_path,monkeypatch,fault):
     now=datetime.now(timezone.utc)
-    value=dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",state="VERIFIED",release_commit="a"*40,
-        generated_at=now.isoformat(),blockers=[],execution_authorized=False)
+    value=dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",state="BLOCKED",release_commit="a"*40,
+        generated_at=now.isoformat(),blockers=["REVIEW_INDEPENDENT_ACCEPTANCE_AUTHORITY"],execution_authorized=False)
     if fault in {"expired","future"}:value["generated_at"]=(now+timedelta(seconds=1 if fault=="future" else -301)).isoformat()
     elif fault=="authority":value["execution_authorized"]=True
     elif fault=="secret":value["blockers"]=["NEVER_ECHO_PRIVATE_PATH"]
-    elif fault=="contradiction":value["blockers"]=["REVIEW_DATABASE"]
+    elif fault=="missing_authority":value["blockers"]=["REVIEW_DATABASE"]
+    elif fault=="legacy_verified":value.update(state="VERIFIED",blockers=[])
+    elif fault=="duplicate":value["blockers"]*=2
+    elif fault=="extra":value["independent_acceptance"]="VERIFIED"
     path=tmp_path/"evidence";path.write_bytes(b"{" if fault=="malformed" else r._canonical(value))
     expected=hashlib.sha256(path.read_bytes()).hexdigest()
     result=projection.read_acceptance(path,expected_sha256=expected)
-    assert result["state"]==("VERIFIED" if fault is None else "STALE" if fault=="expired" else "UNVERIFIED")
+    assert result["state"]==("BLOCKED" if fault is None else "STALE" if fault=="expired" else "UNVERIFIED")
+    if fault in {None,"expired"}:assert result["blockers"]==["REVIEW_INDEPENDENT_ACCEPTANCE_AUTHORITY"]
     assert result["execution_authorized"] is False and "NEVER_ECHO" not in str(result)
 
 
