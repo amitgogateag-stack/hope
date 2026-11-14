@@ -33,6 +33,20 @@ def verified_runtime(commit="a"*40):
         inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
 
 
+class ForgedCommit(str):
+    def __eq__(self,other):return True
+    def __ne__(self,other):return False
+
+
+@pytest.mark.parametrize("field,error",[("expected_commit","HOPE_DASHBOARD_EXPECTED_COMMIT_INVALID"),
+    ("expected_paper_commit","HOPE_PAPER_EXPECTED_COMMIT_INVALID")])
+def test_readiness_rejects_polymorphic_commit_pins_before_io(tmp_path,field,error):
+    forged=ForgedCommit("0"*40)
+    assert "a"*40==forged and not ("a"*40!=forged)
+    with pytest.raises(ValueError,match=error):
+        dashboard_readiness(tmp_path/"missing-snapshot",tmp_path/"missing-health",**{field:forged})
+
+
 @pytest.mark.parametrize("case,expected,reason",[
     ("missing","UNAVAILABLE","HEALTH_MISSING"),("invalid","UNAVAILABLE","HEALTH_INVALID"),
     ("unreadable","UNAVAILABLE","HEALTH_UNREADABLE"),("stale","UNAVAILABLE","HEALTH_STALE"),

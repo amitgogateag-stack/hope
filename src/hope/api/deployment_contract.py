@@ -6,6 +6,7 @@ service activation. Missing independent approval is UNKNOWN, never readiness.
 from __future__ import annotations
 from datetime import datetime,timezone
 import ast
+import hmac
 from pathlib import Path
 import os
 import re
@@ -21,6 +22,7 @@ from hope.api.operations_deployment import _activation_guard
 
 ENV={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':'/nonexistent'}
 HASH=re.compile('[0-9a-f]{64}')
+FACTORY=re.compile(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*',re.ASCII)
 FORMAT='\n'.join('{{json .'+field+'}}' for field in (
     'Id','Image','State.Running','State.Pid','HostConfig.Privileged','HostConfig.ReadonlyRootfs','HostConfig.NetworkMode','Config.User'))
 
@@ -206,6 +208,9 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
     if staged:report['schema']='hope.staged-deployment-observation.v1'
     blocker='INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'
     try:
+        require(expected_receipt is None or (type(expected_receipt) is str and HASH.fullmatch(expected_receipt)))
+        require(expected_factory is None or (type(expected_factory) is str and len(expected_factory)<=200
+            and FACTORY.fullmatch(expected_factory)))
         with _activation_guard(root,shared=True):
             root_identity=r._trusted(root,directory=True)
             if staged:
@@ -215,7 +220,7 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
             sha=r._sha(sha);report['release_commit']=sha
             reference=root/'deployment-receipts'/f'{sha}.ref'
             pinned=r._read(reference,64).decode('ascii');require(HASH.fullmatch(pinned))
-            require(expected_receipt is None or pinned==expected_receipt)
+            require(expected_receipt is None or hmac.compare_digest(pinned,expected_receipt))
             reference_identity=r._trusted(reference)
             receipt_path=root/'deployment-receipts'/f'{pinned}.json'
             value,digest=signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')
@@ -241,7 +246,8 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
             report['provenance']='VERIFIED'
             blocker='APPROVED_REAL_DATA_PROVIDER_AND_ACCEPTANCE_REQUIRED'
             provider=provider_contract(root,sha,value['provider_sha256'],now)
-            require(expected_factory is None or expected_factory==provider['factory_module']+':'+provider['factory_name'])
+            require(expected_factory is None or hmac.compare_digest(expected_factory,
+                provider['factory_module']+':'+provider['factory_name']))
             accepted=data_acceptance(root,sha,provider,value['provider_sha256'],now);report['provider']='VERIFIED'
             blocker='VERIFIED_ROLLBACK_RECEIPT_AND_RUNTIME_REQUIRED'
             rollback_contract(root,sha,value['rollback_sha256'],now);report['rollback']='VERIFIED'

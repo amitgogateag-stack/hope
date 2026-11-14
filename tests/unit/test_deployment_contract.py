@@ -11,6 +11,20 @@ from test_release_builder import build_case,trusted_python
 SHA='a'*40
 
 
+class ForgedPin(str):
+    def __eq__(self,other):return True
+
+
+@pytest.mark.parametrize('field,value',[('expected_receipt','0'*64),('expected_factory','attacker:factory')])
+def test_polymorphic_deployment_pins_are_rejected_before_io(tmp_path,field,value):
+    forged=ForgedPin(value)
+    assert 'different-authority'==forged
+    result=d.inspect_deployment(tmp_path,SHA,**{field:forged})
+    assert result['state']=='BLOCKED'
+    assert result['blockers']==['INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED']
+    assert result['execution_authorized'] is False
+
+
 @pytest.fixture
 def contract(tmp_path,monkeypatch):
     from contextlib import nullcontext
@@ -36,7 +50,7 @@ def contract(tmp_path,monkeypatch):
     monkeypatch.setattr(d,'verify_image',Mock(side_effect=lambda *a,**k:deepcopy(image)))
     monkeypatch.setattr(d,'_key_digest',lambda path:str(path))
     monkeypatch.setattr(d,'authorities',Mock(return_value={'synthetic-authority'}))
-    provider=dict(dataset_sha256='7'*64,calendar_sha256='8'*64)
+    provider=dict(dataset_sha256='7'*64,calendar_sha256='8'*64,factory_module='fixture',factory_name='factory')
     monkeypatch.setattr(d,'provider_contract',Mock(return_value=provider))
     accepted=dict(expires_at=now+100)
     monkeypatch.setattr(d,'data_acceptance',Mock(return_value=accepted))
@@ -49,6 +63,13 @@ def contract(tmp_path,monkeypatch):
         process_probe=Mock(return_value='1'*64),runtime_probe=Mock(return_value=dict(manifest_sha256='c'*64)),
         host_readiness=Mock(return_value=dict(ready=True,units={'hope-paper.service':{'MainPID':'1234'}},runtime_integrity=dict(manifest_sha256='c'*64))))
     return root,receipt,pin,image,host,container,probes
+
+
+def test_exact_receipt_and_factory_pins_are_admitted(contract):
+    root,receipt,pin,image,host,container,probes=contract
+    result=d.inspect_deployment(root,SHA,expected_receipt=pin(),expected_factory='fixture:factory',**probes)
+    assert result['state']=='VERIFIED' and result['blockers']==[]
+    assert result['execution_authorized'] is False
 
 
 @pytest.mark.parametrize('fault',[None,'lab_image','unsigned_provider','stale_acceptance','rollback','host','boot','python','postgres','systemd',

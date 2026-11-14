@@ -50,8 +50,8 @@ prototypes do not execute those independent acceptance scenarios.
 ## Release and fallback sequence
 
 1. Preserve the validated PR101 integration and its R1/R2 ancestry. This bounded
-   report repair builds on its exact ae6081c base; it does not re-merge overlapping
-   PR98 or modify authoritative/frozen refs.
+   report repair builds on its exact validated head; it does not re-merge
+   overlapping PR98 or modify authoritative/frozen refs.
 2. Obtain human review of the combined diff and the authority/custody/session/
    publisher protocol above. Implementing-agent/static review is not approval.
 3. By the November 17 fallback, provision and independently authenticate the

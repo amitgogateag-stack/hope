@@ -1,5 +1,6 @@
 """Safe local observations; endpoint reachability never implies PAPER readiness."""
 from datetime import UTC,datetime
+import hmac
 import json
 import re
 
@@ -10,9 +11,11 @@ from hope.api.runtime_integrity import safe_evidence
 
 def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_paper_commit=None,
                         runtime_evidence=None,snapshot_authenticated=False):
-    if expected_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+    if expected_commit is not None and (type(expected_commit) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", expected_commit)):
         raise ValueError("HOPE_DASHBOARD_EXPECTED_COMMIT_INVALID")
-    if expected_paper_commit is not None and not re.fullmatch(r"[0-9a-f]{40}", expected_paper_commit):
+    if expected_paper_commit is not None and (type(expected_paper_commit) is not str
+            or not re.fullmatch(r"[0-9a-f]{40}", expected_paper_commit)):
         raise ValueError("HOPE_PAPER_EXPECTED_COMMIT_INVALID")
     if type(snapshot_authenticated) is not bool:
         raise ValueError("HOPE_SNAPSHOT_AUTHENTICATION_INVALID")
@@ -32,7 +35,7 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         result["snapshot"] = "CURRENT" if 0<=age<=3600 else "STALE" if age>3600 else "UNAVAILABLE"
         candidate = json.loads(raw) if result["snapshot"]=="CURRENT" else None
         snapshot_identity = (expected_commit is None or
-            (candidate is not None and candidate.get("deployed_commit") == expected_commit))
+            (candidate is not None and hmac.compare_digest(candidate.get("deployed_commit",""),expected_commit)))
         if snapshot_identity and snapshot_authenticated:
             result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
         elif result["snapshot"] == "CURRENT" and not snapshot_identity:
@@ -76,7 +79,7 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
         pass  # A current durable snapshot HALT survives missing/stale health.
     elif (now-generated).total_seconds()>300:
         result["reason"] = "HEALTH_STALE"
-    elif expected_paper_commit is not None and health["deployed_commit"] != expected_paper_commit:
+    elif expected_paper_commit is not None and not hmac.compare_digest(health["deployed_commit"] or "",expected_paper_commit):
         result["reason"] = "WORKER_IDENTITY_UNVERIFIED"
     elif health["state"]=="HALTED" or (data and data["paper"]["environment_state"]=="HALTED"):
         result.update(paper_health="HALTED",reason="DURABLE_HALT_OBSERVED")
@@ -95,7 +98,8 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
     elif result["reconciliation"] in {"CLAIMS_REQUIRE_REVIEW","RECOVERY_REQUIRED"}:
         result["reason"] = result["reconciliation"]
     elif (runtime["state"]!="VERIFIED"
-            or (expected_commit is not None and runtime["release_commit"]!=expected_commit)):
+            or (expected_commit is not None
+                and not hmac.compare_digest(runtime["release_commit"] or "",expected_commit))):
         result["reason"]="RUNTIME_"+(runtime["state"] if runtime["state"]!="VERIFIED" else "MISMATCH")
     elif runtime["provenance_state"]!="VERIFIED":
         result["reason"]="PACKAGE_PROVENANCE_UNVERIFIED"
