@@ -725,6 +725,11 @@ def _runtime_probe(root,sha,unit,*,timeout):
         return unverified("RUNTIME_EVIDENCE_UNVERIFIED",blocked=True)
 
 
+def _snapshot_authority_unavailable(*_args: object) -> bool:
+    """Production default until snapshot bytes have independent authority."""
+    return False
+
+
 def inspect_aws_readiness(
     expected_sha: str,
     *,
@@ -735,6 +740,7 @@ def inspect_aws_readiness(
     paper_status_probe: Callable[..., dict[str, object]] = _paper_status_probe,
     dashboard_release_probe: Callable[..., dict[str, object]] = _dashboard_release_probe,
     snapshot_probe: Callable[..., dict[str, object]] = _snapshot_probe,
+    snapshot_authority_probe: Callable[..., bool] = _snapshot_authority_unavailable,
     runtime_probe: Callable[..., dict[str, object]] = _runtime_probe,
     unit_file_probe: Callable[[Path, Path], bool] | None = None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None = None,
@@ -773,6 +779,7 @@ def inspect_aws_readiness(
                 paper_status_probe=paper_status_probe,
                 dashboard_release_probe=dashboard_release_probe,
                 snapshot_probe=snapshot_probe,
+                snapshot_authority_probe=snapshot_authority_probe,
                 runtime_probe=runtime_probe,
                 unit_file_probe=unit_file_probe,
                 dropin_file_probe=dropin_file_probe,
@@ -796,6 +803,7 @@ def _inspect_stable_readiness(
     paper_status_probe: Callable[..., dict[str, object]],
     dashboard_release_probe: Callable[..., dict[str, object]],
     snapshot_probe: Callable[..., dict[str, object]],
+    snapshot_authority_probe: Callable[..., bool],
     runtime_probe: Callable[..., dict[str, object]],
     unit_file_probe: Callable[[Path, Path], bool] | None,
     dropin_file_probe: Callable[[Path, str, str], bool] | None,
@@ -1060,6 +1068,17 @@ def _inspect_stable_readiness(
     except (ValueError,TypeError,UnicodeError) as exc:
         raise ReadinessError("AWS_SNAPSHOT_DOCUMENT_INVALID") from exc
     blockers.extend(snapshot_blockers)
+    # Timestamp and release agreement across two same-UID-writable loopback
+    # documents is not publisher authentication. Until an independent proof is
+    # available, retain the sanitized diagnostics but never claim AWS READY.
+    try:
+        snapshot_authenticated = snapshot_authority_probe(
+            snapshot, status, deployed_sha,
+        ) is True
+    except (OSError, ValueError, TypeError, RuntimeError):
+        snapshot_authenticated = False
+    if not snapshot_authenticated:
+        blockers.append("SNAPSHOT_PUBLISHER_UNVERIFIED")
     remaining=loopback_deadline-monotonic()
     if not math.isfinite(remaining) or remaining<=0:
         raise ReadinessError("AWS_RUNTIME_OBSERVATION_TIMEOUT")
@@ -1138,6 +1157,9 @@ def _inspect_stable_readiness(
         "paper_status": safe_paper_status,
         "operations_status": safe_status,
         "snapshot": safe_snapshot,
+        "snapshot_authentication": (
+            "VERIFIED" if snapshot_authenticated else "UNVERIFIED"
+        ),
         "runtime_integrity": runtime,
         "units": units,
     }

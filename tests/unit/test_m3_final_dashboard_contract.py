@@ -104,7 +104,7 @@ def test_audit_rejects_ready_without_a_current_successful_poll(tmp_path, change)
     snapshot, operations = tmp_path/"snapshot", tmp_path/"health"
     data=json.loads(valid_snapshot());data["paper"]["environment_state"]="RUNNING"
     snapshot.write_text(json.dumps(data));operations.write_text(json.dumps(health()))
-    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime())
+    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime(),snapshot_authenticated=True)
     assert result["paper_health"]=="READY"
     if change=="missing":result["last_successful_poll_at"]=None
     elif change=="old":result["last_successful_poll_at"]=(datetime.now(UTC)-timedelta(minutes=10)).isoformat()

@@ -52,7 +52,7 @@ def test_observations_distinguish_unavailable_causes_without_authorization(tmp_p
     if case!="missing":operations.write_text("broken{" if case=="invalid" else json.dumps(value))
     if case=="unreadable":
         monkeypatch.setattr("hope.api.dashboard_readiness._verified_operations",lambda *a:(_ for _ in ()).throw(PermissionError("private path secret")))
-    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime())
+    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime(),snapshot_authenticated=True)
     assert result["paper_health"]==expected and result["reason"]==reason
     assert result["execution_authorized"] is False and result["live_enabled"] is False
     assert "secret" not in json.dumps(result)
@@ -88,7 +88,8 @@ def test_managed_readiness_accepts_exact_snapshot_release(tmp_path):
     snapshot.write_text(json.dumps(data))
     operations.write_text(json.dumps(health()))
     assert dashboard_readiness(
-        snapshot, operations, expected_commit=expected,runtime_evidence=verified_runtime(expected)
+        snapshot, operations, expected_commit=expected,runtime_evidence=verified_runtime(expected),
+        snapshot_authenticated=True,
     )["paper_health"] == "READY"
 
 

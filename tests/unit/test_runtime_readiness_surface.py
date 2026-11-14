@@ -60,8 +60,10 @@ def test_runtime_endpoint_is_bounded_and_mandatory_for_ready(setup,state):
             else:
                 with opener.open(base+"/readiness.json",timeout=3) as response:ready=json.loads(response.read())
                 assert ready["runtime_integrity"]["state"]==state
-                assert ready["paper_health"]==("READY" if state=="VERIFIED" else "UNAVAILABLE")
-                if state!="VERIFIED":assert ready["reason"]=="RUNTIME_"+state
+                assert ready["paper_health"]=="UNAVAILABLE"
+                assert ready["reason"]==(
+                    "SNAPSHOT_PUBLISHER_UNVERIFIED" if state=="VERIFIED" else "RUNTIME_"+state
+                )
         finally:server.shutdown();thread.join(timeout=5)
 
 

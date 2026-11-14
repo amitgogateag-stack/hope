@@ -226,7 +226,7 @@ def test_real_http_redirect_cannot_escape_the_fixed_endpoint(monkeypatch):
     ("stale","UNAVAILABLE","HEALTH_STALE",200),
     ("stopped","UNAVAILABLE","WORKER_STOPPED",200),
     ("halted","HALTED","DURABLE_HALT_OBSERVED",200),
-    ("current","READY","CURRENT_OBSERVATIONS_ONLY",200),
+    ("current","UNAVAILABLE","SNAPSHOT_PUBLISHER_UNVERIFIED",200),
     ("runtime_unverified","UNAVAILABLE","RUNTIME_UNVERIFIED",200),
 ])
 def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(
