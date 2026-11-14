@@ -1,5 +1,6 @@
 """Read-only bounded schema evidence; an observed digest is not an approval."""
 import hashlib
+import hmac
 import json
 import re
 from sqlalchemy import text
@@ -49,7 +50,8 @@ def schema_observation(connection, expected_sha256=None):
         digest=hashlib.sha256(payload).hexdigest()
         report.update(sha256=digest,objects=len(rows))
         if expected_sha256 is not None:
-            if not isinstance(expected_sha256,str) or re.fullmatch('[0-9a-f]{64}',expected_sha256) is None:raise ValueError()
-            report.update(state='VERIFIED' if expected_sha256==digest else 'MISMATCH',code='SCHEMA_MATCH' if expected_sha256==digest else 'SCHEMA_MISMATCH')
+            if type(expected_sha256) is not str or re.fullmatch('[0-9a-f]{64}',expected_sha256) is None:raise ValueError()
+            matched=hmac.compare_digest(expected_sha256,digest)
+            report.update(state='VERIFIED' if matched else 'MISMATCH',code='SCHEMA_MATCH' if matched else 'SCHEMA_MISMATCH')
     except Exception:report.update(state='BLOCKED',code='SCHEMA_CATALOG_UNVERIFIED',sha256=None,objects=None)
     return report
