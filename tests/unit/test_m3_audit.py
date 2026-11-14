@@ -11,7 +11,9 @@ import pytest
 from hope.api import m3_audit as module
 from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.dashboard_server import DashboardHTTPServer
-from test_dashboard_m1_operations_surface import health
+# Explicit external-authentication MODEL for downstream state-machine tests.
+# Real unsigned CURRENT and same-UID replacement denial run in separate suites.
+from test_m3_dashboard_readiness import health, modeled_external_heartbeat_authority
 from test_dashboard_server import valid_snapshot
 
 
@@ -224,7 +226,7 @@ def test_real_http_redirect_cannot_escape_the_fixed_endpoint(monkeypatch):
     ("stale","UNAVAILABLE","HEALTH_STALE",200),
     ("stopped","UNAVAILABLE","WORKER_STOPPED",200),
     ("halted","HALTED","DURABLE_HALT_OBSERVED",200),
-    ("current","READY","CURRENT_OBSERVATIONS_ONLY",200),
+    ("current","UNAVAILABLE","SNAPSHOT_PUBLISHER_UNVERIFIED",200),
     ("runtime_unverified","UNAVAILABLE","RUNTIME_UNVERIFIED",200),
 ])
 def test_audit_consumes_actual_dashboard_http_without_conflating_liveness(

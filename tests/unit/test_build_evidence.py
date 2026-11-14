@@ -1,8 +1,10 @@
 from copy import deepcopy
 from datetime import datetime,timezone,timedelta
+import hashlib
 import io
 import json
 import tarfile
+from unittest.mock import Mock
 import pytest
 from hope.api import runtime_integrity as r,release_builder as b,acceptance_evidence as projection
 from test_package_provenance import signed_runtime,SHA
@@ -28,6 +30,50 @@ def test_runtime_requires_independent_build_approval_and_complete_sbom(signed_ru
     assert str(root) not in json.dumps(result)
 
 
+def test_signed_release_archive_supplies_preview_digest(signed_runtime):
+    root,_,mode,manifest,_=signed_runtime
+    result=r.attest_runtime(root,SHA,mode,release_source="docs/dashboard/preview.html")
+    assert result["release_source_sha256"]==hashlib.sha256(b"<h1>HOPE</h1>\n").hexdigest()
+
+
+@pytest.mark.parametrize('requested',[None,'docs/dashboard/preview.html'])
+@pytest.mark.parametrize('fault',['preview','other','missing','extra'])
+def test_valid_signatures_and_archive_hash_cannot_hide_contradictory_source_map(signed_runtime,requested,fault):
+    root,_,mode,manifest,_=signed_runtime
+    # Warm any implementation cache before a separately signed contradiction.
+    assert r.attest_runtime(root,SHA,mode)['state']=='VERIFIED'
+    folder=root/'release-builds';prefix=SHA+'-'+mode
+    archive=folder/(prefix+'.tar');approval_path=folder/(prefix+'.json')
+    approval=r.strict_json(approval_path.read_bytes())
+    from hope.api.release_image import _members
+    entries={name:(data,permissions) for name,(data,permissions,_) in _members(archive.read_bytes()).items()}
+    if fault=='preview': entries['release/docs/dashboard/preview.html']=(b'contradictory preview\n',0o644)
+    elif fault=='other': entries['release/README.md']=(b'contradictory unrequested source\n',0o644)
+    elif fault=='missing': del entries['release/README.md']
+    else: entries['release/unapproved.py']=(b'contradictory extra source\n',0o644)
+    b._tar(archive,entries,approval['epoch'])
+    # All individual signatures/digests remain valid; only the aggregate
+    # source map contradicts the independently signed source_sha256.
+    approval['hashes']['release.tar']=r._digest(archive.read_bytes())
+    approval_path.write_bytes(r._canonical(approval))
+    private=root.parent/'fixture-only.key';sign(approval_path,private)
+    manifest=dict(manifest,release_build_sha256=r._digest(approval_path.read_bytes()))
+    r.manifest_path(root,SHA,mode).write_bytes(r._canonical(manifest))
+    from hope.api.artifact_approval import verify_document
+    assert verify_document(approval_path,approval_path.with_suffix('.sig'),
+        root/'runtime-trust/releases-ed25519.pub',expected_digest=manifest['release_build_sha256'])==approval
+    assert r._digest(archive.read_bytes())==approval['hashes']['release.tar']
+    with pytest.raises(RuntimeError,match='RELEASE_BUILD_UNVERIFIED'):
+        r.attest_runtime(root,SHA,mode,release_source=requested)
+
+
+@pytest.mark.parametrize("source",["../preview.html","/preview.html","docs\\preview.html","missing.html"])
+def test_release_source_lookup_rejects_escape_and_missing_members(signed_runtime,source):
+    root,_,mode,_,_=signed_runtime
+    with pytest.raises(RuntimeError):
+        r.attest_runtime(root,SHA,mode,release_source=source)
+
+
 def test_tar_order_permissions_and_metadata_are_deterministic(tmp_path):
     files={"b.txt":(b"two",0o644),"a.txt":(b"one",0o755)}
     b._tar(tmp_path/"a.tar",files,1700000000);b._tar(tmp_path/"b.tar",dict(reversed(list(files.items()))),1700000000)
@@ -47,10 +93,31 @@ def test_acceptance_dashboard_is_bounded_historical_lab_evidence(tmp_path,monkey
     elif fault=="secret":value["blockers"]=["NEVER_ECHO_PRIVATE_PATH"]
     elif fault=="contradiction":value["blockers"]=["REVIEW_DATABASE"]
     path=tmp_path/"evidence";path.write_bytes(b"{" if fault=="malformed" else r._canonical(value))
-    monkeypatch.setattr(projection,"bounded_regular_read",lambda path,limit:path.read_bytes())
-    result=projection.read_acceptance(path)
+    expected=hashlib.sha256(path.read_bytes()).hexdigest()
+    result=projection.read_acceptance(path,expected_sha256=expected)
     assert result["state"]==("VERIFIED" if fault is None else "STALE" if fault=="expired" else "UNVERIFIED")
     assert result["execution_authorized"] is False and "NEVER_ECHO" not in str(result)
+
+
+def test_acceptance_requires_independently_supplied_digest(tmp_path,monkeypatch):
+    path=tmp_path/"acceptance-result.json"
+    path.write_bytes(r._canonical(dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",
+        state="VERIFIED",release_commit="a"*40,generated_at=datetime.now(timezone.utc).isoformat(),
+        blockers=[],execution_authorized=False)))
+    reader=Mock()
+    monkeypatch.setattr(projection,"authenticated_bounded_regular_read",reader)
+    result=projection.read_acceptance(path)
+    assert result["state"]=="UNVERIFIED" and result["execution_authorized"] is False
+    reader.assert_not_called()
+
+
+def test_acceptance_rejects_digest_mismatch(tmp_path):
+    path=tmp_path/"acceptance-result.json"
+    path.write_bytes(r._canonical(dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",
+        state="VERIFIED",release_commit="a"*40,generated_at=datetime.now(timezone.utc).isoformat(),
+        blockers=[],execution_authorized=False)))
+    result=projection.read_acceptance(path,expected_sha256="0"*64)
+    assert result["state"]=="UNVERIFIED" and result["execution_authorized"] is False
 
 
 def test_builder_cli_failure_is_sanitized(tmp_path,monkeypatch,capsys):

@@ -6,10 +6,25 @@ from urllib.error import HTTPError
 
 import pytest
 
-from test_dashboard_m1_operations_surface import health
+from test_dashboard_m1_operations_surface import health as unsigned_health
 from test_dashboard_server import valid_snapshot
 from hope.api.dashboard_readiness import dashboard_readiness
 from hope.api.dashboard_server import DashboardHTTPServer,_verified_operations
+
+
+def health():
+    return dict(unsigned_health(),schema_version=2,publisher_instance='c'*32,publisher_identity_sha256='d'*64)
+
+
+@pytest.fixture(autouse=True)
+def modeled_external_heartbeat_authority(monkeypatch):
+    """State-machine input MODEL only, not independent publisher acceptance.
+
+    Genuine unsigned leases/forgeries are denied by the separate native and
+    unsigned-boundary suites. Production has no affirmative attestor adapter.
+    """
+    monkeypatch.setattr('hope.infrastructure.paper_history.publisher_observation',
+        lambda *a,**k:dict(state='VERIFIED',heartbeat_authenticated=True))
 
 
 def verified_runtime(commit="a"*40):
@@ -37,7 +52,7 @@ def test_observations_distinguish_unavailable_causes_without_authorization(tmp_p
     if case!="missing":operations.write_text("broken{" if case=="invalid" else json.dumps(value))
     if case=="unreadable":
         monkeypatch.setattr("hope.api.dashboard_readiness._verified_operations",lambda *a:(_ for _ in ()).throw(PermissionError("private path secret")))
-    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime())
+    result=dashboard_readiness(snapshot,operations,runtime_evidence=verified_runtime(),snapshot_authenticated=True)
     assert result["paper_health"]==expected and result["reason"]==reason
     assert result["execution_authorized"] is False and result["live_enabled"] is False
     assert "secret" not in json.dumps(result)
@@ -73,7 +88,8 @@ def test_managed_readiness_accepts_exact_snapshot_release(tmp_path):
     snapshot.write_text(json.dumps(data))
     operations.write_text(json.dumps(health()))
     assert dashboard_readiness(
-        snapshot, operations, expected_commit=expected,runtime_evidence=verified_runtime(expected)
+        snapshot, operations, expected_commit=expected,runtime_evidence=verified_runtime(expected),
+        snapshot_authenticated=True,
     )["paper_health"] == "READY"
 
 

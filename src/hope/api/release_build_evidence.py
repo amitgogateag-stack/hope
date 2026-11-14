@@ -7,10 +7,23 @@ from hope.api import runtime_integrity as r
 from hope.api.snapshot_contract import strict_json
 from hope.api.artifact_approval import verify_document
 
-_CACHE={}
+def _verified_archive(payload,archive_sha256,source_sha256):
+    """Verify bounded bytes against digests from an ALREADY signed approval."""
+    r._require(r._digest(payload)==archive_sha256,"BUILD_ARCHIVE_MISMATCH")
+    from hope.api.release_image import _members
+    entries=_members(payload)
+    source={}
+    for name,(data,_,directory_entry) in entries.items():
+        prefix,separator,relative=name.partition('/')
+        r._require(separator and relative and prefix in {'release','runtime','evidence'}
+            and not directory_entry,"BUILD_ARCHIVE_MEMBER_INVALID")
+        if prefix=='release':
+            r._require('.git' not in relative.split('/'),"BUILD_ARCHIVE_MEMBER_INVALID")
+            source[relative]=r._digest(data)
+    r._require(source and r._digest(r._canonical(source))==source_sha256,"BUILD_SOURCE_MAP_MISMATCH")
+    return entries
 
-
-def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None):
+def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None):
     deadline=deadline or time.monotonic()+r.MAX_SECONDS
     root=Path(root);folder=root/"release-builds";key=root/"runtime-trust/releases-ed25519.pub"
     directory=r._trusted(folder,directory=True);path=folder/(sha+"-"+mode+".json")
@@ -47,20 +60,31 @@ def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadl
         and sorted(plan["artifacts"],key=lambda a:a["filename"])==sorted([
             {k:a[k] for k in ("filename","sha256","name","version")} for a in descriptor["artifacts"]],key=lambda a:a["filename"])
         and build_sbom(descriptor,approval["source_sha256"])==sbom,"BUILD_SBOM_MISMATCH")
-    archive=folder/(sha+"-"+mode+".tar");identity=r._trusted(archive);cache_key=(str(archive),identity,hashes["release.tar"])
-    if cache_key not in _CACHE:
-        r._require(r._fingerprint(archive,deadline)[0]==hashes["release.tar"],"BUILD_ARCHIVE_MISMATCH")
-        if len(_CACHE)>=8:_CACHE.clear()
-        _CACHE[cache_key]=True
+    archive=folder/(sha+"-"+mode+".tar");identity=r._trusted(archive)
+    # Authenticate the SAME bounded bytes that are parsed. A valid archive
+    # signature alone does not prove agreement with the approved source map.
+    payload=r._read(archive,128*1024*1024,deadline=deadline)
+    entries=_verified_archive(payload,hashes['release.tar'],approval['source_sha256'])
+    source_sha256=None
+    if source_path is not None:
+        r._require(isinstance(source_path,str) and source_path and not source_path.startswith("/")
+            and "\\" not in source_path and all(part not in {"", ".", ".."} for part in source_path.split("/")),
+            "BUILD_SOURCE_PATH_INVALID")
+        entry=entries.get("release/"+source_path)
+        r._require(entry is not None and entry[2] is False,"BUILD_SOURCE_MISSING")
+        source_sha256=r._digest(entry[0])
     r._require(r._trusted(archive)==identity and r._trusted(sbom_path)==sbom_identity
         and r._trusted(path)==before and r._trusted(folder,directory=True)==directory
         and r._trusted(inputs)==input_identity
         and verify_document(inputs,inputs.with_suffix(".sig"),builder_key,expected_digest=approval["inputs_sha256"],deadline=deadline)==plan
         and verify_document(path,path.with_suffix(".sig"),key,expected_digest=expected_digest,deadline=deadline)==approval,"BUILD_EVIDENCE_CHANGED")
-    return dict(state="VERIFIED",sha256=expected_digest,builder_id=approval["builder_id"],
+    result=dict(state="VERIFIED",sha256=expected_digest,builder_id=approval["builder_id"],
         identity_sha256=r._digest(r._canonical((directory,before,sbom_identity,identity,input_identity))))
+    if source_path is not None:result["source_sha256"]=source_sha256
+    return result
 
 
-def verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None):
-    try:return _verify_release_build(root,sha,mode,runtime_manifest=runtime_manifest,expected_digest=expected_digest,deadline=deadline)
+def verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None):
+    try:return _verify_release_build(root,sha,mode,runtime_manifest=runtime_manifest,
+        expected_digest=expected_digest,deadline=deadline,source_path=source_path)
     except Exception:raise RuntimeError("RELEASE_BUILD_UNVERIFIED") from None
