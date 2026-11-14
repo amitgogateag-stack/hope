@@ -167,7 +167,7 @@ def startup_observation(path,expected_release,*,now=None):
         handoff.require(stamp.tzinfo is not None and 0<=(instant-stamp).total_seconds())
         if (instant-stamp).total_seconds()>5:return dict(report,state='STALE',code='STARTUP_OBSERVATION_STALE')
         owner=publisher_observation(path,expected_instance=raw['publisher_instance'],expected_identity=raw['publisher_identity_sha256'])
-        handoff.require(owner['state']=='VERIFIED')
+        handoff.require(owner['state']=='VERIFIED' and owner.get('heartbeat_authenticated') is True)
         return dict(report,state=raw['state'],code='REPORTED_STARTUP_PHASE_ONLY',release_commit=expected_release,
             startup_authorization_sha256=raw['startup_authorization_sha256'],execution_authorization_sha256=raw['execution_authorization_sha256'])
     except Exception:return report

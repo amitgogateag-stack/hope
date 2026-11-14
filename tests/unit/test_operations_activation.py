@@ -19,6 +19,7 @@ def activation(tmp_path, monkeypatch):
     module.HEALTH = tmp_path / "health.json"
     module.SNAPSHOT = tmp_path / "snapshot.json"
     monkeypatch.setattr(module.os, "geteuid", lambda: 0, raising=False)
+    monkeypatch.setattr(module, "verify_readiness", lambda *_args, **_kwargs: valid_readiness())
     return module
 
 
@@ -40,6 +41,9 @@ def test_activation_preflight_and_failed_acceptance_leave_services_safe(activati
             module.HEALTH.write_text(json.dumps(valid_health(target)))
     monkeypatch.setattr(module, "systemctl", systemctl)
     monkeypatch.setattr(module, "accepted_dashboard", lambda started: failure is None)
+    if failure is None:
+        monkeypatch.setattr(module, "accepted_health_file", lambda path,target,started:
+            module.accepted_health(json.loads(path.read_text()),target,started))
     monkeypatch.setattr(module, "metadata", metadata.append)
     monkeypatch.setattr(module.time, "sleep", lambda *_: None)
     module.HEALTH.write_text(json.dumps({"deployed_commit": target, "state": "CURRENT" if failure is None else "UNAVAILABLE"}))
@@ -214,6 +218,11 @@ def valid_snapshot(timestamp=None):
     }
 
 
+def valid_readiness():
+    return dict(paper_health="READY",reason="CURRENT_OBSERVATIONS_ONLY",
+        database="OBSERVED_AT_SNAPSHOT",execution_authorized=False,paper_only=True,live_enabled=False)
+
+
 @pytest.mark.parametrize("change", [dict(state="STARTING"), dict(schema_compatibility="UNKNOWN"),
     dict(paper_only=False), dict(live_enabled=True), dict(last_success_at=None),
     dict(generated_at="bad"), dict(deployed_commit="2"*40)])
@@ -224,6 +233,21 @@ def test_activation_rejects_old_or_unverified_heartbeat(activation, change):
     assert activation.accepted_health(value, target, started)
     assert not activation.accepted_health({**value, **change}, target, started)
     assert not activation.accepted_health(value, target, started + timedelta(seconds=1))
+
+
+def test_unsigned_current_heartbeat_file_cannot_accept_activation(activation):
+    target="1"*40;started=datetime.now(UTC)
+    value={**valid_health(target),"schema_version":1,"error_code":None,
+        "cycles_succeeded":1,"cycles_failed":0,"jobs_executed":0,"jobs_skipped":0}
+    activation.HEALTH.write_text(json.dumps(value))
+    assert not activation.accepted_health_file(activation.HEALTH,target,started)
+
+
+def test_modeled_authenticated_heartbeat_still_obeys_acceptance_window(activation,monkeypatch):
+    target="1"*40;started=datetime.now(UTC);value=valid_health(target)
+    monkeypatch.setattr(activation,"_verified_operations",lambda *_args,**_kwargs:json.dumps(value).encode())
+    assert activation.accepted_health_file(activation.HEALTH,target,started)
+    assert not activation.accepted_health_file(activation.HEALTH,"2"*40,started)
 
 
 def test_dashboard_acceptance_requires_fresh_export_and_available_loopback_feed(activation, monkeypatch):
@@ -247,6 +271,18 @@ def test_dashboard_acceptance_requires_fresh_export_and_available_loopback_feed(
     old = started - timedelta(minutes=10)
     activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(old)))
     os.utime(activation.SNAPSHOT, (old.timestamp(), old.timestamp()))
+    assert not activation.accepted_dashboard(started)
+
+
+def test_dashboard_acceptance_rejects_unauthenticated_snapshot_readiness(activation,monkeypatch):
+    started=datetime.now(UTC)
+    activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
+    os.utime(activation.SNAPSHOT,(started.timestamp(),started.timestamp()))
+    monkeypatch.setattr(activation,"verify_dashboard",lambda *_args,**_kwargs:
+        dict(service="RUNNING",paper_feed="AVAILABLE"))
+    monkeypatch.setattr(activation,"verify_readiness",lambda *_args,**_kwargs:
+        dict(paper_health="UNAVAILABLE",reason="SNAPSHOT_PUBLISHER_UNVERIFIED",
+            database="UNVERIFIED",execution_authorized=False,paper_only=True,live_enabled=False))
     assert not activation.accepted_dashboard(started)
 
 
@@ -294,6 +330,7 @@ def test_probe_identity_failure_rolls_back_pointer_and_stops_services(activation
             activation.SNAPSHOT.write_text(json.dumps(valid_snapshot()))
     monkeypatch.setattr(activation,"systemctl",systemctl)
     monkeypatch.setattr(activation,"metadata",metadata.append)
+    monkeypatch.setattr(activation,"accepted_health_file",lambda *_args:True)
     monkeypatch.setattr(activation.time,"sleep",lambda *_:None)
     def mismatch(*a,**k):
         raise ValueError("HOPE_UPGRADE_ACTIVATION_PRESENTATION_MISMATCH")

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -34,7 +35,7 @@ def _require(condition,code):
 
 
 def _sha(value):
-    _require(isinstance(value,str) and re.fullmatch("[0-9a-f]{40}",value),"RELEASE_INVALID")
+    _require(type(value) is str and re.fullmatch("[0-9a-f]{40}",value),"RELEASE_INVALID")
     _require(value!="7e9d341742818a97accce3e2301b1c7f96596795","FROZEN_RELEASE_DENIED")
     return value
 
@@ -245,9 +246,11 @@ def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenanc
     return result
 
 
-def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS):
+def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS,release_source=None):
     """Verify an independently staged root-owned manifest; emit no paths/code."""
     _require(type(timeout) in {int,float} and 0<timeout<=MAX_SECONDS,"DEADLINE")
+    _require(expected_manifest is None or (type(expected_manifest) is str
+        and re.fullmatch("[0-9a-f]{64}",expected_manifest)),"MANIFEST_CHANGED")
     deadline=time.monotonic()+timeout
     root=Path(root);path=manifest_path(root,sha,mode)
     manifest_directory=_trusted(root/"runtime-manifests",directory=True)
@@ -258,7 +261,7 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
         or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})
         or (approved.get("schema")=="hope.runtime-manifest.v3" and set(approved)==fields|{"package_provenance_sha256","release_build_sha256"})),"MANIFEST_INVALID")
     digest=_digest(_canonical(approved))
-    _require(expected_manifest is None or digest==expected_manifest,"MANIFEST_CHANGED")
+    _require(expected_manifest is None or hmac.compare_digest(digest,expected_manifest),"MANIFEST_CHANGED")
     _require(approved.get("repository")=="amitgogateag-stack/hope"
         and approved.get("release_commit")==sha and approved.get("runtime_mode")==mode,"MANIFEST_IDENTITY_MISMATCH")
     # Cache only a previously hashed immutable inventory. Every call still scans
@@ -290,7 +293,7 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     if approved["schema"]=="hope.runtime-manifest.v3":
         from hope.api.release_build_evidence import verify_release_build
         build=verify_release_build(root,sha,mode,runtime_manifest=approved,
-            expected_digest=approved["release_build_sha256"],deadline=deadline)
+            expected_digest=approved["release_build_sha256"],deadline=deadline,source_path=release_source)
         _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
     _require(_read(path,MAX_MANIFEST_BYTES,deadline=deadline)==payload and _trusted(path)==manifest_identity
         and _trusted(root/"runtime-manifests",directory=True)==manifest_directory,"MANIFEST_CHANGED")
@@ -298,12 +301,17 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
         and _trusted(release/"constraints",directory=True)==constraints_directory
         and _trusted(release/"constraints/ci-test.txt")==constraints_identity,"RELEASE_CHANGED")
     _require(time.monotonic()<=deadline,"DEADLINE")
-    return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+    result=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
         release_commit=sha,runtime_mode=mode,manifest_sha256=digest,
         inventory_sha256=_digest(_canonical((inventory,manifest_identity,constraints_identity,provenance.get("identity_sha256"),build.get("identity_sha256")))),process_sha256=None,
         file_count=len(approved["files"]),execution_authorized=False,
         provenance_state=provenance["state"],provenance_sha256=provenance["sha256"],
         build_state=build["state"],build_sha256=build["sha256"],builder_id=build["builder_id"])
+    if release_source is not None:
+        _require(approved["schema"]=="hope.runtime-manifest.v3" and isinstance(build.get("source_sha256"),str),
+            "BUILD_SOURCE_UNVERIFIED")
+        result["release_source_sha256"]=build["source_sha256"]
+    return result
 
 
 def diagnostic(root,sha,mode,*,expected_manifest=None,release=None):

@@ -25,7 +25,7 @@ def test_sigkill_fences_boot_and_explicit_rollback_restores_original(tmp_path,mo
     def approved(root,sha,mode,**kwargs):
         return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
             release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
-            inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
+            inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64,release_source_sha256="d"*64)
     monkeypatch.setattr(module,"attest_runtime",approved)
     layout=module.Layout(root=tmp_path,units=tmp_path/"units")
     layout.units.mkdir()
@@ -43,7 +43,7 @@ m._interpreter_identity=lambda *a:None
 def approved(root,sha,mode,**kwargs):
     return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
         release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
-        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
+        inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64,release_source_sha256="d"*64)
 m.attest_runtime=approved
 root=Path(sys.argv[1]);phase=sys.argv[2]
 layout=m.Layout(root=root,units=root/'units')
@@ -91,7 +91,7 @@ m.OWNER=os.getuid();root=Path(sys.argv[1]);layout=m.Layout(root=root,units=root/
 m._interpreter_identity=lambda *a:None
 m.attest_runtime=lambda root,sha,mode,**kwargs:dict(schema="hope.runtime-integrity.v1",state="VERIFIED",
     code="MANIFEST_AND_RUNTIME_MATCH",release_commit=sha,runtime_mode=mode,manifest_sha256='b'*64,
-    inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
+    inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64,release_source_sha256="d"*64)
 with DashboardHTTPServer(0,root/'page',root/'snapshot',deployed_commit=sys.argv[2],
         activation_check=lambda:m.runtime_gate(layout,sys.argv[2])) as server:
     (root/'web-port').write_text(str(server.server_port))

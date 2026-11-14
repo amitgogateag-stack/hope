@@ -32,6 +32,22 @@ def test_catalog_is_bounded_readonly_and_never_self_approves(fault):
         assert schema_observation(connection,'invalid secret')['state']=='BLOCKED'
 
 
+def test_catalog_rejects_forged_string_digest_equality():
+    class ForgedDigest(str):
+        def __eq__(self,other):return True
+
+    settings=dict(server_version_num='170000',transaction_read_only='on',transaction_isolation='repeatable read',statement_timeout='5s',lock_timeout='1s')
+    rows=[('function','approved','definition')]
+    def execute(sql):
+        sql=str(sql)
+        return SimpleNamespace(scalar_one=lambda:settings[sql[5:]]) if sql.startswith('SHOW ') else rows
+    connection=SimpleNamespace(dialect=SimpleNamespace(name='postgresql'),execute=execute)
+    forged=ForgedDigest('0'*64)
+    assert forged==schema_observation(connection)['sha256']
+    assert schema_observation(connection,forged)==dict(schema='hope.schema-catalog.v1',state='BLOCKED',
+        code='SCHEMA_CATALOG_UNVERIFIED',sha256=None,objects=None,database_writes=False,execution_authorized=False)
+
+
 @pytest.mark.parametrize('code',['PAPER_SINGLE_CYCLE_GUARD_REQUIRED','PAPER_SINGLE_CYCLE_PLAN_MISMATCH'])
 def test_single_cycle_blocker_is_preserved_in_bounded_dashboard_diagnostics(code):
     from hope.infrastructure.paper_service import _failure_state

@@ -69,7 +69,8 @@ def staged_process_observation(root,container,receipt,provider,*,now=None):
     stamp=datetime.fromisoformat(raw['generated_at'])
     require(stamp.tzinfo is not None and 0<=(instant-stamp).total_seconds()<=5)
     observed=publisher_observation(path,expected_instance=raw['publisher_instance'],expected_identity=identity)
-    require(observed['state']=='VERIFIED' and observed['identity_sha256']==receipt['process_sha256']==identity)
+    require(observed['state']=='VERIFIED' and observed.get('heartbeat_authenticated') is True
+            and observed['identity_sha256']==receipt['process_sha256']==identity)
     with (process/'cmdline').open('rb') as stream:argv=stream.read(65537)
     sha=receipt['release_commit']
     expected=[str(PurePosixPath('/opt/hope-operations/release-venvs')/sha/'bin/python'),'-I','-B','-X',CACHE_PREFIX,
@@ -80,7 +81,8 @@ def staged_process_observation(root,container,receipt,provider,*,now=None):
     after=strict_json(bounded_regular_read(path,4096))
     require({key:value for key,value in after.items() if key!='generated_at'}==
             {key:value for key,value in raw.items() if key!='generated_at'})
-    require(publisher_observation(path,expected_instance=raw['publisher_instance'],expected_identity=identity)['state']=='VERIFIED'
+    closing=publisher_observation(path,expected_instance=raw['publisher_instance'],expected_identity=identity)
+    require(closing['state']=='VERIFIED' and closing.get('heartbeat_authenticated') is True
             and _process_identity(pid)==before)
     # Status publication atomically replaces its inode every heartbeat. Its
     # namespace binding is checked at each observation, but only directory and

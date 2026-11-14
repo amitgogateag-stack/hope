@@ -41,7 +41,7 @@ def require(condition):
 
 
 def is_hash(value):
-    return isinstance(value, str) and HASH.fullmatch(value) is not None
+    return type(value) is str and HASH.fullmatch(value) is not None
 
 
 def plan(release, receipt, factory):

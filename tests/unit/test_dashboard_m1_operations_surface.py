@@ -23,7 +23,7 @@ def health():
 
 def test_operations_projection_whitelists_fields_and_normalizes_unknown_error(tmp_path):
     path = tmp_path / "operations.json"
-    value = health()
+    value = {**health(), 'state':'UNAVAILABLE'}
     value.update(credentials="NEVER_EXPOSE", job_ids=["sensitive"], error_code="NEVER_EXPOSE")
     path.write_text(json.dumps(value))
     safe = json.loads(_verified_operations(path))
@@ -31,6 +31,7 @@ def test_operations_projection_whitelists_fields_and_normalizes_unknown_error(tm
     assert safe["error_code"] == "PAPER_SERVICE_CYCLE_FAILED"
     assert "NEVER_EXPOSE" not in json.dumps(safe) and "sensitive" not in json.dumps(safe)
     assert safe["jobs_executed"] == 0
+    assert safe['runtime_gate']=='UNVERIFIED'
 
 
 def test_operations_projection_rejects_heartbeat_from_other_expected_release(tmp_path):
@@ -100,11 +101,19 @@ def test_real_operations_endpoint_is_optional_sanitized_and_read_only(tmp_path):
             assert error.value.read() == b"Verified operations status unavailable"
             error.value.close()
             operations.write_text(json.dumps({**health(), "password": "NEVER_EXPOSE"}))
+            with pytest.raises(HTTPError) as unsigned:
+                opener.open(base + '/operations.json')
+            assert unsigned.value.code==503
+            unsigned.value.close()
+            # Negative diagnostics remain available; no unsigned CURRENT or
+            # VERIFIED runtime claim is promoted by the file itself.
+            operations.write_text(json.dumps({**health(), 'state':'UNAVAILABLE',"password":"NEVER_EXPOSE"}))
             with opener.open(base + "/operations.json") as response:
                 body = response.read()
                 assert response.status == 200 and b"NEVER_EXPOSE" not in body
                 assert response.headers["Cache-Control"].startswith("no-store")
                 assert json.loads(body)["live_enabled"] is False
+                assert json.loads(body)['runtime_gate']=='UNVERIFIED'
             # Corruption must not turn optional health into service liveness loss.
             operations.write_text("partial{")
             with opener.open(base + "/status.json") as response:
