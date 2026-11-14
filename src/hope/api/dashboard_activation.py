@@ -78,7 +78,7 @@ def _command_environment(value=None):
 
 
 def _sha(value):
-    _require(isinstance(value,str) and re.fullmatch("[0-9a-f]{40}",value),"SHA_INVALID")
+    _require(type(value) is str and re.fullmatch("[0-9a-f]{40}",value),"SHA_INVALID")
     _require(value!="7e9d341742818a97accce3e2301b1c7f96596795","FROZEN_RELEASE_DENIED")
     return value
 
