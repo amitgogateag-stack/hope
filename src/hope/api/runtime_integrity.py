@@ -332,35 +332,38 @@ def unverified(code="LEGACY_JOURNAL_UNBOUND",*,blocked=False):
 def safe_evidence(value):
     if value is None:return unverified()
     fields={"schema","state","code","release_commit","runtime_mode","manifest_sha256","inventory_sha256","process_sha256","file_count","execution_authorized"}
-    _require(isinstance(value,dict) and set(value) in (fields,fields|{"provenance_state","provenance_sha256"},
-        fields|{"provenance_state","provenance_sha256","build_state","build_sha256","builder_id"}) and value["schema"]=="hope.runtime-integrity.v1"
-        and value["state"] in {"VERIFIED","MISMATCH","UNVERIFIED","BLOCKED"}
-        and value["code"] in {"MANIFEST_AND_RUNTIME_MATCH","RUNTIME_EVIDENCE_UNVERIFIED",
+    _require(type(value) is dict and all(type(key) is str for key in value)
+        and set(value) in (fields,fields|{"provenance_state","provenance_sha256"},
+        fields|{"provenance_state","provenance_sha256","build_state","build_sha256","builder_id"})
+        and type(value["schema"]) is str and value["schema"]=="hope.runtime-integrity.v1"
+        and type(value["state"]) is str and value["state"] in {"VERIFIED","MISMATCH","UNVERIFIED","BLOCKED"}
+        and type(value["code"]) is str and value["code"] in {"MANIFEST_AND_RUNTIME_MATCH","RUNTIME_EVIDENCE_UNVERIFIED",
             "LEGACY_JOURNAL_UNBOUND","ACTIVATION_BLOCKED","RELEASE_OR_FENCE_UNVERIFIED"}
         and value["execution_authorized"] is False
         and type(value["file_count"]) is int and 0<=value["file_count"]<=MAX_FILES,"EVIDENCE_INVALID")
     if value["state"]=="VERIFIED":
         _sha(value["release_commit"])
-        _require(value["runtime_mode"] in {"shared","release"}
-            and isinstance(value["manifest_sha256"],str) and re.fullmatch("[0-9a-f]{64}",value["manifest_sha256"])
-            and isinstance(value["inventory_sha256"],str) and re.fullmatch("[0-9a-f]{64}",value["inventory_sha256"])
-            and (value["process_sha256"] is None or (isinstance(value["process_sha256"],str)
+        _require(type(value["runtime_mode"]) is str and value["runtime_mode"] in {"shared","release"}
+            and type(value["manifest_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",value["manifest_sha256"])
+            and type(value["inventory_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",value["inventory_sha256"])
+            and (value["process_sha256"] is None or (type(value["process_sha256"]) is str
                 and re.fullmatch("[0-9a-f]{64}",value["process_sha256"])))
             and value["code"]=="MANIFEST_AND_RUNTIME_MATCH" and value["file_count"]>0,"EVIDENCE_INVALID")
     else:
         _require(value["manifest_sha256"] is None and value["inventory_sha256"] is None
             and value["process_sha256"] is None and value["file_count"]==0,"EVIDENCE_INVALID")
-        _require(value["release_commit"] is None or (isinstance(value["release_commit"],str)
+        _require(value["release_commit"] is None or (type(value["release_commit"]) is str
             and re.fullmatch("[0-9a-f]{40}",value["release_commit"])),"EVIDENCE_INVALID")
-        _require(value["runtime_mode"] in {None,"shared","release"},"EVIDENCE_INVALID")
+        _require(value["runtime_mode"] is None or (type(value["runtime_mode"]) is str
+            and value["runtime_mode"] in {"shared","release"}),"EVIDENCE_INVALID")
     result=dict(value,provenance_state=value.get("provenance_state","UNVERIFIED"),provenance_sha256=value.get("provenance_sha256"))
     result.update(build_state=value.get("build_state","UNVERIFIED"),build_sha256=value.get("build_sha256"),builder_id=value.get("builder_id"))
-    _require((result["build_state"]=="UNVERIFIED" and result["build_sha256"] is None and result["builder_id"] is None)
+    _require(type(result["build_state"]) is str and ((result["build_state"]=="UNVERIFIED" and result["build_sha256"] is None and result["builder_id"] is None)
         or (result["state"]=="VERIFIED" and result["provenance_state"]=="VERIFIED" and result["build_state"]=="VERIFIED"
-            and all(isinstance(result[k],str) and re.fullmatch("[0-9a-f]{64}",result[k]) for k in ("build_sha256","builder_id"))),"BUILD_EVIDENCE_INVALID")
-    _require((result["provenance_state"]=="UNVERIFIED" and result["provenance_sha256"] is None)
+            and all(type(result[k]) is str and re.fullmatch("[0-9a-f]{64}",result[k]) for k in ("build_sha256","builder_id")))),"BUILD_EVIDENCE_INVALID")
+    _require(type(result["provenance_state"]) is str and ((result["provenance_state"]=="UNVERIFIED" and result["provenance_sha256"] is None)
         or (result["state"]=="VERIFIED" and result["provenance_state"]=="VERIFIED"
-            and isinstance(result["provenance_sha256"],str) and re.fullmatch("[0-9a-f]{64}",result["provenance_sha256"])),"PROVENANCE_EVIDENCE_INVALID")
+            and type(result["provenance_sha256"]) is str and re.fullmatch("[0-9a-f]{64}",result["provenance_sha256"]))),"PROVENANCE_EVIDENCE_INVALID")
     return result
 
 
