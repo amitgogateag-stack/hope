@@ -160,6 +160,30 @@ def test_installer_launch_isolated_exact_command_and_no_existing_units(tmp_path,
         p.chmod(0o600)  # Windows temporary-directory cleanup of read-only files.
 
 
+def test_installer_bytes_must_match_reviewed_archive(tmp_path, monkeypatch):
+    altered = tmp_path / 'manage.py'
+    altered.write_bytes((ROOT / 'deploy/staging/manage.py').read_bytes() + b'\n# altered operator tool\n')
+    spec = importlib.util.spec_from_file_location('altered_staging_manage', altered)
+    m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    raw, digest = archive(tmp_path)
+    source = tmp_path / 'release.zip'; source.write_bytes(raw)
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m.os, 'sysconf', lambda key: 1024**3 if key == 'SC_AVPHYS_PAGES' else 4096, raising=False)
+    monkeypatch.setattr(m, 'ancestors', lambda p: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'ROOT', tmp_path)
+    states = iter([dict(LoadState='not-found'), m.expected_identity(SHA)])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
+    calls = []
+    monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
+    gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
+    with pytest.raises(ValueError, match='STAGING_INSTALLER_MISMATCH'):
+        m.install(source, digest, SHA, gate)
+    assert calls == [] and not (tmp_path / 'releases').exists()
+
+
 @pytest.mark.parametrize('changed', list(load('manage').SANDBOX))
 def test_installer_stops_unit_when_effective_sandbox_is_weaker(tmp_path, monkeypatch, changed):
     m = load('manage'); calls = []

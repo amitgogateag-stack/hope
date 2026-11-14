@@ -99,6 +99,14 @@ def payload(archive, expected, commit):
     return files
 
 
+def operator_bytes():
+    path = Path(__file__).resolve(strict=True)
+    ancestors(path.parent)
+    trusted_path(path)
+    require(path.stat().st_size <= 262144, 'STAGING_INSTALLER_SIZE')
+    return path.read_bytes()
+
+
 def command(*args):
     return subprocess.run(args, check=True, capture_output=True, text=True, timeout=30, env=ENV).stdout
 
@@ -136,6 +144,7 @@ def install(archive, expected, commit, gate_path):
     trusted_path(archive)
     require(archive.stat().st_size <= 1048576, 'STAGING_ARCHIVE_SIZE')
     files = payload(archive.read_bytes(), expected, commit)
+    require(operator_bytes() == files['manage.py'], 'STAGING_INSTALLER_MISMATCH')
     require(shutil.disk_usage(ROOT).free >= 2 * 1024**3, 'STAGING_DISK_LOW')
     require(os.sysconf('SC_AVPHYS_PAGES') * os.sysconf('SC_PAGE_SIZE') >= 512 * 1024**2, 'STAGING_MEMORY_LOW')
     require(state().get('LoadState') == 'not-found', 'STAGING_UNIT_EXISTS')
