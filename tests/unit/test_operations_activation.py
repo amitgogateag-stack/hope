@@ -307,6 +307,7 @@ def test_activation_passes_exact_verified_export_to_strict_probe(activation,monk
     started = datetime.now(UTC)
     activation.SNAPSHOT.write_text(json.dumps(valid_snapshot(started)))
     # Filesystem mtime may lag wall-clock reads; explicitly model a new export.
+    os.utime(activation.SNAPSHOT, (started.timestamp(), started.timestamp()))
     captured={}
     def verify(base,**kwargs):
         captured.update(kwargs)
