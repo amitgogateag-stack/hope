@@ -25,6 +25,9 @@ FILES = {'server.py', 'index.html', 'manage.py', 'deploy.sh', 'rollback.sh'}
 ENV = {'PATH': '/usr/bin:/bin', 'HOME': '/nonexistent', 'LANG': 'C', 'LC_ALL': 'C'}
 GATES = {'restore_rehearsal', 'backup_integrity', 'capacity', 'service_baseline',
          'isolated_paths', 'nontrading_review', 'rollback_rehearsal'}
+SANDBOX = {'DynamicUser': 'yes', 'NoNewPrivileges': 'yes',
+           'ProtectSystem': 'strict', 'ProtectHome': 'yes',
+           'PrivateTmp': 'yes', 'PrivateDevices': 'yes'}
 
 
 def require(value, message):
@@ -100,7 +103,7 @@ def command(*args):
 
 def state():
     result = subprocess.run([SYSTEMCTL, 'show', UNIT,
-        '--property=LoadState,ActiveState,Transient,WorkingDirectory,Description'],
+        '--property=LoadState,ActiveState,Transient,WorkingDirectory,Description,' + ','.join(SANDBOX)],
         check=False, capture_output=True, text=True, timeout=30, env=ENV)
     values = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
     # systemctl can return nonzero for an explicitly reported nonexistent unit.
@@ -108,6 +111,18 @@ def state():
     require(result.returncode == 0 or (result.returncode == 1 and values.get('LoadState') == 'not-found'),
             'STAGING_UNIT_INSPECTION_FAILED')
     return values
+
+
+def expected_identity(commit):
+    release = ROOT / 'releases' / commit
+    return dict(SANDBOX, Transient='yes', WorkingDirectory=str(release),
+                Description='HOPE_NONTRADING_' + commit)
+
+
+def identity_matches(observed, commit):
+    expected = expected_identity(commit)
+    return all(type(observed.get(key)) is str and observed[key] == value
+               for key, value in expected.items())
 
 
 def install(archive, expected, commit, gate_path):
@@ -153,6 +168,16 @@ def install(archive, expected, commit, gate_path):
             '--property=WorkingDirectory=' + str(release),
             PYTHON, '-I', '-S', '-B', str(release / 'server.py'), '--commit', commit]
     command(*args)
+    observed = state()
+    if not identity_matches(observed, commit):
+        # The fixed name was absent immediately before launch, so a mismatch
+        # here is the unit just requested with an ineffective/altered boundary.
+        # Stop it before refusing the launch acknowledgement.
+        try:
+            command(SYSTEMCTL, 'stop', UNIT)
+        except Exception as error:
+            raise RuntimeError('STAGING_LAUNCH_IDENTITY_STOP_FAILED') from error
+        raise ValueError('STAGING_LAUNCH_IDENTITY')
     # This is a launch acknowledgement, never health/DB/independent acceptance.
     return {'state': 'START_REQUESTED', 'commit': commit, 'execution_authorized': False}
 
@@ -163,9 +188,7 @@ def rollback(commit):
     release = ROOT / 'releases' / commit
     ancestors(release)
     observed = state()
-    require(observed.get('Transient') == 'yes'
-            and observed.get('WorkingDirectory') == str(release)
-            and observed.get('Description') == 'HOPE_NONTRADING_' + commit, 'STAGING_ROLLBACK_IDENTITY')
+    require(identity_matches(observed, commit), 'STAGING_ROLLBACK_IDENTITY')
     command(SYSTEMCTL, 'stop', UNIT)
     after = state()
     require(after.get('ActiveState') in {'inactive', 'failed'} or after.get('LoadState') == 'not-found',

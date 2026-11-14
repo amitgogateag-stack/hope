@@ -130,6 +130,11 @@ variables are removed; the actual launch is fixed to the artifact server.
 Unsupported systemd properties must cause investigation, not weakening.
 START_REQUESTED is not health/acceptance. A crash/failed install retains files
 and requires manual investigation; do not delete evidence or rerun over a release.
+Before returning START_REQUESTED, the installer reads back the transient unit's
+commit-bound identity and effective DynamicUser, privilege, filesystem, home,
+temporary-directory and device restrictions. A weaker or mismatched unit is
+stopped and the launch is refused. This read-back does not prove kernel
+enforcement or constitute host/PAPER acceptance.
 
 ## Verification after an authorized installation
 
@@ -158,7 +163,8 @@ sudo /usr/bin/python3 -I -S -B /ABSOLUTE_REVIEWED_TOOLS/manage.py rollback --com
 ```
 
 Equivalent wrapper: `sh rollback.sh --commit ...`. Rollback requires the exact
-transient unit description and working directory and safe release parents.
+transient unit description, working directory, effective sandbox properties and
+safe release parents.
 It stops ONLY `hope-staging-preview.service`, confirms inactive/absent state,
 and retains the release and evidence. No recursive deletion, prior-release
 switch, production restart or DB restore occurs. No active preview means there

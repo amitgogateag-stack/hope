@@ -140,8 +140,10 @@ def test_installer_launch_isolated_exact_command_and_no_existing_units(tmp_path,
     monkeypatch.setattr(m, 'trusted_path', lambda p: None)
     gate_calls = []
     monkeypatch.setattr(m, 'gates', lambda *a: gate_calls.append(a))
-    monkeypatch.setattr(m, 'state', lambda: dict(LoadState='not-found'))
     monkeypatch.setattr(m, 'ROOT', tmp_path)
+    states = iter([dict(LoadState='not-found'),
+                   dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
     monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
     # The file must exist for the native canonical path check; gate semantics
     # have their own unmocked schema/digest tests above.
@@ -156,6 +158,31 @@ def test_installer_launch_isolated_exact_command_and_no_existing_units(tmp_path,
     assert not any('hope-paper.service' in v or '8787' in v or '8788' in v or 'EnvironmentFile' in v for v in argv)
     for p in (tmp_path / 'releases' / SHA).iterdir():
         p.chmod(0o600)  # Windows temporary-directory cleanup of read-only files.
+
+
+@pytest.mark.parametrize('changed', list(load('manage').SANDBOX))
+def test_installer_stops_unit_when_effective_sandbox_is_weaker(tmp_path, monkeypatch, changed):
+    m = load('manage'); calls = []
+    raw, digest = archive(tmp_path)
+    source = tmp_path / 'release.zip'; source.write_bytes(raw)
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m.os, 'sysconf', lambda key: 1024**3 if key == 'SC_AVPHYS_PAGES' else 4096, raising=False)
+    monkeypatch.setattr(m, 'ancestors', lambda p: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'ROOT', tmp_path)
+    observed = dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')
+    observed[changed] = 'wrong'
+    states = iter([dict(LoadState='not-found'), observed])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
+    monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
+    gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
+    with pytest.raises(ValueError, match='STAGING_LAUNCH_IDENTITY'):
+        m.install(source, digest, SHA, gate)
+    assert calls[-1] == (m.SYSTEMCTL, 'stop', m.UNIT)
+    for p in (tmp_path / 'releases' / SHA).iterdir():
+        p.chmod(0o600)
 
 
 @pytest.mark.parametrize('name', ['../server.py', '/etc/passwd', 'hope/api/paper_service.py',
@@ -263,13 +290,13 @@ def test_unit_absence_is_not_confused_with_inspection_failure(monkeypatch, code,
             m.state()
 
 
-@pytest.mark.parametrize('changed', ['Transient', 'WorkingDirectory', 'Description'])
+@pytest.mark.parametrize('changed', ['Transient', 'WorkingDirectory', 'Description', *load('manage').SANDBOX])
 def test_rollback_never_stops_unmatched_unit(tmp_path, monkeypatch, changed):
     m = load('manage'); calls = []
     monkeypatch.setattr(m.os, 'name', 'posix')
     monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
     monkeypatch.setattr(m, 'ancestors', lambda p: None)
-    expected = dict(Transient='yes', WorkingDirectory=str(m.ROOT / 'releases' / SHA), Description='HOPE_NONTRADING_' + SHA)
+    expected = m.expected_identity(SHA)
     expected[changed] = 'wrong'
     monkeypatch.setattr(m, 'state', lambda: expected)
     monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
@@ -283,7 +310,7 @@ def test_rollback_only_stops_preview_and_retains_release(tmp_path, monkeypatch):
     monkeypatch.setattr(m.os, 'name', 'posix')
     monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
     monkeypatch.setattr(m, 'ancestors', lambda p: None)
-    states = iter([dict(Transient='yes', WorkingDirectory=str(m.ROOT / 'releases' / SHA), Description='HOPE_NONTRADING_' + SHA),
+    states = iter([m.expected_identity(SHA),
                    dict(LoadState='not-found')])
     monkeypatch.setattr(m, 'state', lambda: next(states))
     monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
