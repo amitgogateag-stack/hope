@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -248,6 +249,8 @@ def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenanc
 def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS,release_source=None):
     """Verify an independently staged root-owned manifest; emit no paths/code."""
     _require(type(timeout) in {int,float} and 0<timeout<=MAX_SECONDS,"DEADLINE")
+    _require(expected_manifest is None or (type(expected_manifest) is str
+        and re.fullmatch("[0-9a-f]{64}",expected_manifest)),"MANIFEST_CHANGED")
     deadline=time.monotonic()+timeout
     root=Path(root);path=manifest_path(root,sha,mode)
     manifest_directory=_trusted(root/"runtime-manifests",directory=True)
@@ -258,7 +261,7 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
         or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})
         or (approved.get("schema")=="hope.runtime-manifest.v3" and set(approved)==fields|{"package_provenance_sha256","release_build_sha256"})),"MANIFEST_INVALID")
     digest=_digest(_canonical(approved))
-    _require(expected_manifest is None or digest==expected_manifest,"MANIFEST_CHANGED")
+    _require(expected_manifest is None or hmac.compare_digest(digest,expected_manifest),"MANIFEST_CHANGED")
     _require(approved.get("repository")=="amitgogateag-stack/hope"
         and approved.get("release_commit")==sha and approved.get("runtime_mode")==mode,"MANIFEST_IDENTITY_MISMATCH")
     # Cache only a previously hashed immutable inventory. Every call still scans
