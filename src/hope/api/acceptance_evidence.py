@@ -24,15 +24,16 @@ def read_acceptance(path, *, expected_sha256=None):
         if (not isinstance(value,dict) or value.get("schema")!="hope.operational-acceptance.v1"
                 or set(value)!={"schema","scope","state","release_commit","generated_at","blockers","execution_authorized"}
                 or value.get("scope")!="DISPOSABLE_LAB_ONLY" or value.get("execution_authorized") is not False
-                or value.get("state") not in {"VERIFIED","BLOCKED"}):return missing
+                or value.get("state")!="BLOCKED"):return missing
         blockers=value["blockers"]
         if (not isinstance(blockers,list) or len(blockers)>len(ACTIONS) or any(not isinstance(v,str) or v not in ACTIONS for v in blockers)
-                or (value["state"]=="VERIFIED")!= (not blockers)
+                or blockers!=sorted(set(blockers))
+                or "REVIEW_INDEPENDENT_ACCEPTANCE_AUTHORITY" not in blockers
                 or not isinstance(value["release_commit"],str) or not re.fullmatch("[0-9a-f]{40}",value["release_commit"])):return missing
         stamp=datetime.fromisoformat(value["generated_at"])
         if stamp.tzinfo is None:return missing
         age=(datetime.now(timezone.utc)-stamp).total_seconds()
         if age<0:return missing
-        return dict(missing,state="STALE" if age>300 else value["state"],release_commit=value["release_commit"],
-            generated_at=stamp.isoformat(),blockers=sorted(set(blockers)))
+        return dict(missing,state="STALE" if age>300 else "BLOCKED",release_commit=value["release_commit"],
+            generated_at=stamp.isoformat(),blockers=blockers)
     except (OSError,ValueError,TypeError,KeyError):return missing
