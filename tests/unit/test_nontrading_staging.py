@@ -185,6 +185,14 @@ def test_installer_stops_unit_when_effective_sandbox_is_weaker(tmp_path, monkeyp
         p.chmod(0o600)
 
 
+@pytest.mark.parametrize('missing', list(load('manage').SANDBOX))
+def test_unit_identity_requires_every_effective_sandbox_property(missing):
+    m = load('manage')
+    observed = m.expected_identity(SHA)
+    observed.pop(missing)
+    assert m.identity_matches(observed, SHA) is False
+
+
 @pytest.mark.parametrize('name', ['../server.py', '/etc/passwd', 'hope/api/paper_service.py',
     'broker.py', '.env', 'snapshot.json', 'sitecustomize.py', 'migrations/001.sql'])
 def test_extra_execution_inputs_cannot_enter_archive(tmp_path, name):

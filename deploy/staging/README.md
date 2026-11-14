@@ -132,14 +132,14 @@ START_REQUESTED is not health/acceptance. A crash/failed install retains files
 and requires manual investigation; do not delete evidence or rerun over a release.
 Before returning START_REQUESTED, the installer reads back the transient unit's
 commit-bound identity and effective DynamicUser, privilege, filesystem, home,
-temporary-directory and device restrictions. A weaker or mismatched unit is
-stopped and the launch is refused. This read-back does not prove kernel
-enforcement or constitute host/PAPER acceptance.
+temporary-directory, device and loopback-only network restrictions. A weaker or
+mismatched unit is stopped and the launch is refused. This read-back does not
+prove kernel enforcement or constitute host/PAPER acceptance.
 
 ## Verification after an authorized installation
 
 ```sh
-systemctl show hope-staging-preview.service --property=ActiveState,SubState,MainPID,Transient,DynamicUser,WorkingDirectory,ExecStart,NoNewPrivileges,ProtectSystem,EnvironmentFiles
+systemctl show hope-staging-preview.service --property=ActiveState,SubState,MainPID,Transient,DynamicUser,WorkingDirectory,ExecStart,NoNewPrivileges,ProtectSystem,RestrictAddressFamilies,IPAddressDeny,IPAddressAllow,EnvironmentFiles
 curl --noproxy '*' --fail --max-time 5 http://127.0.0.1:8790/status.json
 curl --noproxy '*' --fail --max-time 5 http://127.0.0.1:8790/
 systemctl is-active postgresql hope-dashboard-web hope-ops-dashboard-web

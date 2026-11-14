@@ -27,7 +27,9 @@ GATES = {'restore_rehearsal', 'backup_integrity', 'capacity', 'service_baseline'
          'isolated_paths', 'nontrading_review', 'rollback_rehearsal'}
 SANDBOX = {'DynamicUser': 'yes', 'NoNewPrivileges': 'yes',
            'ProtectSystem': 'strict', 'ProtectHome': 'yes',
-           'PrivateTmp': 'yes', 'PrivateDevices': 'yes'}
+           'PrivateTmp': 'yes', 'PrivateDevices': 'yes',
+           'RestrictAddressFamilies': 'AF_INET',
+           'IPAddressDeny': 'any', 'IPAddressAllow': 'localhost'}
 
 
 def require(value, message):
