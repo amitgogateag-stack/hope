@@ -158,7 +158,6 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
                  activation_check=None, activation_view=None,
-                 snapshot_authenticated: bool = False,
                  client_io_timeout_seconds: float = 5.0,
                  client_total_timeout_seconds: float = 15.0,
                  max_concurrent_clients: int = 32):
@@ -174,8 +173,6 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             raise ValueError("HOPE_DASHBOARD_CLIENT_TOTAL_TIMEOUT_INVALID")
         if type(max_concurrent_clients) is not int or not 1 <= max_concurrent_clients <= 256:
             raise ValueError("HOPE_DASHBOARD_CLIENT_LIMIT_INVALID")
-        if type(snapshot_authenticated) is not bool:
-            raise ValueError("HOPE_SNAPSHOT_AUTHENTICATION_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
         if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
@@ -184,7 +181,6 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
         self.activation_view=activation_view
-        self.snapshot_authenticated=snapshot_authenticated
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
@@ -448,7 +444,6 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 expected_commit=self.server.deployed_commit,
                 expected_paper_commit=self.server.paper_deployed_commit,
                 runtime_evidence=self.runtime_evidence,
-                snapshot_authenticated=self.server.snapshot_authenticated,
             )
             if self.path=="/paper-diagnostics.json":
                 from hope.api.paper_diagnostics import paper_diagnostics

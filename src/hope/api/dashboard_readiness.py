@@ -35,7 +35,7 @@ def dashboard_readiness(snapshot,operations,*,expected_commit=None,expected_pape
             (candidate is not None and candidate.get("deployed_commit") == expected_commit))
         if snapshot_identity and snapshot_authenticated:
             result["database"] = "OBSERVED_AT_SNAPSHOT" if result["snapshot"]=="CURRENT" else "UNVERIFIED"
-        elif result["snapshot"] == "CURRENT":
+        elif result["snapshot"] == "CURRENT" and not snapshot_identity:
             result["reason"] = "SNAPSHOT_IDENTITY_UNVERIFIED"
         # Historical/future snapshots cannot establish a current HALT, claim
         # count or activity observation. They also cannot authorize execution.
