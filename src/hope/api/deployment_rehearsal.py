@@ -66,7 +66,11 @@ def rehearse_upgrade(layout,host,*,target,shared,ci_run,ci_attempt,runtime="rele
     """A lab-only end-to-end attempt, using real journals/atomic pointers/leases."""
     activation.activate(layout,host,target=target,shared=shared,ci_run=ci_run,ci_attempt=ci_attempt,runtime=runtime)
     evidence=host.inspect(target)
-    result=dict(schema="hope.deployment-rehearsal.v1",scope="DISPOSABLE_LAB_ONLY",state="VERIFIED",
+    # Completing the local state machine does not authenticate database/health
+    # callbacks or establish independent acceptance. Keep that distinction in
+    # the durable report itself, not only in its dashboard consumer.
+    result=dict(schema="hope.deployment-rehearsal.v1",scope="DISPOSABLE_LAB_ONLY",state="UNVERIFIED",
+        lab_result="COMPLETED",independent_acceptance="UNVERIFIED",
         release_commit=target,previous_commit=shared,generated_at=datetime.now(UTC).isoformat(),
         runtime_integrity=safe_evidence(evidence),execution_authorized=False,host_changes=False)
     activation._save(layout.root/"rehearsal-result.json",result)
