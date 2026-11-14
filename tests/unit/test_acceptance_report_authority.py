@@ -71,4 +71,6 @@ def test_rehearsal_completion_remains_unverified_even_with_matching_bytes(monkey
     projected = rehearsal_evidence.read_rehearsal(tmp_path/'report', expected_sha256=sha256(payload).hexdigest())
     read.assert_called_once()
     assert projected['state'] == 'UNVERIFIED'
+    assert projected['lab_result'] == 'COMPLETED'
+    assert projected['independent_acceptance'] == 'UNVERIFIED'
     assert projected['execution_authorized'] is False
