@@ -30,6 +30,9 @@ def ingest_market_data_window(
     if not isinstance(dataset_version_id, UUID):
         raise TypeError("MARKET_DATA_PIPELINE_REQUIRES_DATASET_VERSION_ID")
 
+    # UUID's fields can be replaced through object.__setattr__; transport must
+    # not retain an alias to the destination identity used after its callback.
+    dataset_version_id = UUID(int=dataset_version_id.int)
     batch = fetch_and_normalize_bars(
         provider,
         request,

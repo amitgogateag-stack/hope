@@ -47,7 +47,8 @@ def rehearsal(signed_runtime,monkeypatch):
 def test_clean_first_dashboard_upgrade_rollback_and_repeated_recovery(rehearsal):
     layout,make_host=rehearsal;host=make_host()
     result=lab.rehearse_upgrade(layout,host,target=TARGET,shared=SHA,ci_run=123,ci_attempt=1)
-    assert result["state"]=="VERIFIED" and result["scope"]=="DISPOSABLE_LAB_ONLY" and result["execution_authorized"] is False
+    assert result["state"]=="UNVERIFIED" and result["scope"]=="DISPOSABLE_LAB_ONLY" and result["execution_authorized"] is False
+    assert result['lab_result']=='COMPLETED' and result['independent_acceptance']=='UNVERIFIED'
     assert activation._record(layout)["schema"]=="hope.dashboard-activation.v3"
     activation.rollback(layout,host,target=TARGET,shared=SHA)
     assert activation._record(layout) is None and activation._pointer(layout,"current")==SHA

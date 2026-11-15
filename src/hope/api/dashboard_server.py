@@ -17,7 +17,7 @@ from threading import BoundedSemaphore, Lock, Timer
 from hope.api.dashboard_projection import verified_projections
 from hope.api.snapshot_contract import verified_snapshot_payload
 from hope.api.runtime_integrity import safe_evidence,unverified
-from hope.infrastructure.durable_file import bounded_regular_read
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read,bounded_regular_read
 
 OPERATIONS_ERROR_CODES = {
     "PAPER_RUNTIME_UNVERIFIED",
@@ -26,6 +26,8 @@ OPERATIONS_ERROR_CODES = {
         None, "PAPER_ENVIRONMENT_HALTED", "PAPER_SERVICE_DATABASE_UNAVAILABLE",
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
         "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
+        "PAPER_SINGLE_CYCLE_GUARD_REQUIRED", "PAPER_SINGLE_CYCLE_PLAN_MISMATCH",
+        "PAPER_STARTUP_EXECUTION_GUARD_REQUIRED", "PAPER_STARTUP_NEW_CYCLE_REQUIRED",
         "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN",
         "PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE",
         "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "PAPER_SERVICE_CYCLE_FAILED",
@@ -87,11 +89,6 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
                 or not isinstance(data.get('publisher_identity_sha256'),str)
                 or not fullmatch('[0-9a-f]{64}',data['publisher_identity_sha256'])):
             raise ValueError('HOPE_OPERATIONS_PUBLISHER_INVALID')
-        if data['state']=='CURRENT':
-            from hope.infrastructure.paper_history import publisher_observation
-            if publisher_observation(path,expected_instance=data['publisher_instance'],
-                    expected_identity=data['publisher_identity_sha256'])['state']!='VERIFIED':
-                raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     fields = ("cycles_succeeded", "cycles_failed", "jobs_executed", "jobs_skipped")
     if not all(type(data.get(k)) is int and 0 <= data[k] <= 9007199254740991 for k in fields):
         raise ValueError("HOPE_OPERATIONS_STATUS_COUNTS_INVALID")
@@ -114,6 +111,16 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
         raise ValueError("HOPE_OPERATIONS_COMMIT_INVALID")
     if expected_commit is not None and commit != expected_commit:
         raise ValueError("HOPE_OPERATIONS_COMMIT_MISMATCH")
+    if data['state']=='CURRENT':
+        # Legacy status is not an authentication downgrade route. A real
+        # publisher lock also cannot attest same-UID-writable heartbeat bytes.
+        if data['schema_version']!=2:
+            raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
+        from hope.infrastructure.paper_history import publisher_observation
+        proof=publisher_observation(path,expected_instance=data['publisher_instance'],
+            expected_identity=data['publisher_identity_sha256'])
+        if proof['state']!='VERIFIED' or proof.get('heartbeat_authenticated') is not True:
+            raise ValueError('HOPE_OPERATIONS_PUBLISHER_UNVERIFIED')
     if compatibility not in {"UNKNOWN", "COMPATIBLE", "INCOMPATIBLE"}:
         raise ValueError("HOPE_OPERATIONS_SCHEMA_INVALID")
     # A closed vocabulary prevents a valid-looking file from leaking arbitrary
@@ -126,7 +133,8 @@ def _verified_operations(path: Path, *, expected_commit: str | None = None) -> b
         "state": data["state"], "last_success_at": success.isoformat() if success else None,
         "paper_only": True, "live_enabled": False, "error_code": error,
         "deployed_commit": commit, "schema_compatibility": compatibility,
-        "runtime_gate": "VERIFIED" if data.get("runtime_gate")=="VERIFIED" else "UNVERIFIED",
+        # Noncurrent unsigned diagnostics cannot authenticate a runtime claim.
+        "runtime_gate": "VERIFIED" if data['state']=='CURRENT' and data.get("runtime_gate")=="VERIFIED" else "UNVERIFIED",
         **{key: data[key] for key in fields},
     }
     if "last_failure_at" in data or "last_failure_code" in data:
@@ -150,6 +158,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
                  activation_check=None, activation_view=None,
+                 lab_verifier=None, lab_packet=None,
                  client_io_timeout_seconds: float = 5.0,
                  client_total_timeout_seconds: float = 15.0,
                  max_concurrent_clients: int = 32):
@@ -173,6 +182,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
         self.activation_view=activation_view
+        self.lab_verifier=lab_verifier
+        self.lab_packet=lab_packet
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
@@ -298,6 +309,10 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif self.server.activation_check is not None:
                 evidence=self.server.activation_check()
             self.runtime_evidence=safe_evidence(evidence.get("runtime_integrity") if isinstance(evidence,dict) else None)
+            self.preview_sha256=evidence.get("preview_sha256") if isinstance(evidence,dict) else None
+            if self.server.activation_view is not None and not (
+                    isinstance(self.preview_sha256,str) and fullmatch(r"[0-9a-f]{64}",self.preview_sha256)):
+                raise RuntimeError("PREVIEW_EVIDENCE_UNVERIFIED")
             if (self.runtime_evidence["state"]=="VERIFIED"
                     and self.runtime_evidence["release_commit"]!=self.server.deployed_commit):
                 raise RuntimeError("RUNTIME_RELEASE_MISMATCH")
@@ -316,9 +331,30 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/startup.json":
+            from hope.api.paper_startup import startup_observation
+            health=self.server.operations if self.server.operations is not None else self.server.snapshot.parent/'paper-health.json'
+            payload=json.dumps(startup_observation(Path(str(health)+'.startup.json'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/staging.json":
+            from hope.api.deployment_contract import inspect_staged_deployment
+            payload=json.dumps(inspect_staged_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/controller.json":
+            from hope.api.paper_controller import observation
+            payload=json.dumps(observation(Path('/var/lib/hope-controller'),Path('/opt/hope-operations')),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
         if self.path=="/deployment.json":
             from hope.api.deployment_contract import inspect_deployment
             payload=json.dumps(inspect_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/paper-lab.json":
+            from hope.security.lab_publisher import read_observation
+            payload=json.dumps(read_observation(self.server.lab_packet,self.server.lab_verifier),separators=(",",":")).encode()
             self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path=="/publisher.json":
@@ -353,7 +389,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path in {"/", "/index.html"}:
             try:
-                payload = bounded_regular_read(self.server.preview, 65536)
+                payload = (authenticated_bounded_regular_read(self.server.preview,65536,
+                    expected_sha256=self.preview_sha256) if self.server.activation_view is not None
+                    else bounded_regular_read(self.server.preview, 65536))
             except (OSError, ValueError):
                 self._respond(503, b"Dashboard unavailable")
                 return

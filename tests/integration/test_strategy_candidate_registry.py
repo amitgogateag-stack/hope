@@ -79,7 +79,13 @@ def test_strategy_candidate_registry_is_idempotent_and_append_only() -> None:
             assert len(history) == 2
             assert history[0].classification_sequence < history[1].classification_sequence
 
-            current = repository.current()
+            # The full CI suite can leave unrelated strategy candidates in
+            # the shared integration database. Assert only this test's identity,
+            # without weakening the current-classification correctness checks.
+            current = [
+                row for row in repository.current()
+                if row.strategy_version_id == strategy_version_id
+            ]
             assert len(current) == 1
             assert current[0].strategy_version_id == strategy_version_id
             assert current[0].family == "TEST_FAMILY"
