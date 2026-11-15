@@ -143,15 +143,19 @@ restrictions, empty capability set, loopback-only network policy and bounded
 resources are required properties. Interpreter/control/DB/factory environment
 variables are removed; the actual launch is fixed to the artifact server.
 Unsupported systemd properties must cause investigation, not weakening.
-START_REQUESTED is not health/acceptance. A crash/failed install retains files
-and requires manual investigation; do not delete evidence or rerun over a release.
-Before returning START_REQUESTED, the installer requires the transient unit to
-be loaded and active and reads back its commit-bound identity and effective
+PREVIEW_RESPONSIVE is not PAPER health, operational readiness, or independent
+acceptance. A crash/failed install retains files and requires manual
+investigation; do not delete evidence or rerun over a release. Before returning
+PREVIEW_RESPONSIVE, the installer requires the transient unit to be loaded and
+active, reads back its commit-bound identity and effective
 DynamicUser, privilege, filesystem, home, temporary-directory, device and
-loopback-only network restrictions. A failed, inactive, absent, weaker or
-mismatched unit is stopped, confirmed inactive or absent, and the launch is
-refused. This point-in-time read-back is not a liveness probe, does not prove
-kernel enforcement and does not constitute host/PAPER acceptance.
+loopback-only network restrictions, requires the exact fail-closed status JSON
+over loopback, and repeats the unit identity check. A failed, inactive, absent,
+weaker, malformed, capability-claiming or mismatched preview is stopped,
+confirmed inactive or absent, and refused. This point-in-time responsiveness
+proof does not prove continuing liveness, kernel enforcement or host/PAPER
+acceptance, and it is not an independent cryptographic binding between the
+loopback responder and systemd MainPID.
 
 ## Verification after an authorized installation
 
