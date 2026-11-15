@@ -19,6 +19,7 @@ from hope.api.diagnostic_io import bounded_capture
 from hope.api.release_image import verify_image,_key_digest,_policy
 from hope.api.snapshot_contract import strict_json
 from hope.api.operations_deployment import _activation_guard
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read
 
 ENV={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':'/nonexistent'}
 HASH=re.compile('[0-9a-f]{64}')
@@ -259,7 +260,9 @@ def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_facto
             report['host']='VERIFIED'
             blocker='RUNNING_CONTAINER_AND_KERNEL_IDENTITY_REQUIRED'
             observed=container_probe(value['engine'],value['container_id'])
-            manifest=strict_json(r._read(folder/'oci/blobs/sha256'/proof['image_sha256'],65536))
+            manifest=strict_json(authenticated_bounded_regular_read(
+                folder/'oci/blobs/sha256'/proof['image_sha256'],65536,
+                expected_sha256=proof['image_sha256']))
             require(observed['config_sha256']==manifest['config']['digest'][7:]
                 and process_probe(observed,value)==value['process_sha256'])
             report['container']='VERIFIED'

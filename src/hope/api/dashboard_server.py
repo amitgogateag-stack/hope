@@ -158,6 +158,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
                  activation_check=None, activation_view=None,
+                 lab_verifier=None, lab_packet=None,
                  client_io_timeout_seconds: float = 5.0,
                  client_total_timeout_seconds: float = 15.0,
                  max_concurrent_clients: int = 32):
@@ -181,6 +182,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.paper_deployed_commit=paper_deployed_commit
         self.activation_check=activation_check
         self.activation_view=activation_view
+        self.lab_verifier=lab_verifier
+        self.lab_packet=lab_packet
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
@@ -347,6 +350,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path=="/deployment.json":
             from hope.api.deployment_contract import inspect_deployment
             payload=json.dumps(inspect_deployment(Path('/opt/hope-operations'),self.server.deployed_commit),separators=(",",":")).encode()
+            self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path=="/paper-lab.json":
+            from hope.security.lab_publisher import read_observation
+            payload=json.dumps(read_observation(self.server.lab_packet,self.server.lab_verifier),separators=(",",":")).encode()
             self._respond(200,payload,"application/json; charset=utf-8")
             return
         if self.path=="/publisher.json":

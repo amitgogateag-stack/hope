@@ -123,12 +123,13 @@ def test_certified_research_to_paper_durable_outcome_and_restart(certified_case,
 @pytest.mark.parametrize("path", ["NO_TRADE", "FILLED"])
 @pytest.mark.parametrize("commit_before_poll", [False, True])
 @pytest.mark.parametrize("require_certified", [False, True])
-def test_strict_service_authenticates_commit_and_repairs_missing_receipt_without_replay(certified_case, path, commit_before_poll, require_certified):
+@pytest.mark.parametrize("market", [StrategyMarket.USA, StrategyMarket.INDIA])
+def test_strict_service_authenticates_commit_and_repairs_missing_receipt_without_replay(certified_case, market, path, commit_before_poll, require_certified):
     from hope.application.market_data.calendar import MarketSessionCalendar
     from hope.infrastructure.paper_service import PaperServicePlan, run_service_cycle
     from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding, OperationalPaperSchedule
     engine, make = certified_case
-    data, run, strategy, work, _ = make(emit=path == "FILLED")
+    data, run, strategy, work, _ = make(emit=path == "FILLED", market=market)
     # Match the scheduler-authenticated operational identity exactly.
     binding = OperationalPaperJobBinding(data["strategy_version_id"], data["market"], "service-certified", work)
     run = create_scheduled_job_run(binding.durable_job_key, data["as_of"])
@@ -204,7 +205,8 @@ def test_hash_matching_generic_research_payload_is_rejected_before_claim(certifi
     ("future_effective", "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT"),
     ("stale", "PAPER_MARKET_DATA_STALE"),
     ("missing_quote", "PAPER_CERTIFIED_EXECUTABLE_QUOTE_UNAVAILABLE")])
-def test_certified_paper_data_failure_rolls_back_authority_and_economic_effects(certified_case, failure, expected):
+@pytest.mark.parametrize("market", [StrategyMarket.USA, StrategyMarket.INDIA])
+def test_certified_paper_data_failure_rolls_back_authority_and_economic_effects(certified_case, market, failure, expected):
     from dataclasses import replace
     from hope.domain.market_data.models import MarketBar
     from hope.infrastructure.market_data.provider import MarketDataRequest
@@ -212,7 +214,7 @@ def test_certified_paper_data_failure_rolls_back_authority_and_economic_effects(
     from hope.infrastructure.repositories.market_data_manifest import SqlAlchemyMarketDataCoverageManifestRepository
     from hope.infrastructure.repositories.market_data_finalizer import SqlAlchemyMarketDataVersionFinalizer
     engine, make = certified_case
-    data, run, strategy, work, registry = make(emit=True)
+    data, run, strategy, work, registry = make(emit=True, market=market)
     paper_version = uuid4()
     event = data["as_of"] - timedelta(minutes=20 if failure == "stale" else 1)
     request = MarketDataRequest("TEST", ("ABC",), event, event + timedelta(minutes=1), timedelta(minutes=1))
@@ -238,11 +240,12 @@ def test_certified_paper_data_failure_rolls_back_authority_and_economic_effects(
 
 @pytest.mark.integration
 @pytest.mark.parametrize("path", ["NO_TRADE", "FILLED"])
-def test_backend_death_after_bridge_effects_before_job_commit_rolls_back_entire_attempt(certified_case, path):
+@pytest.mark.parametrize("market", [StrategyMarket.USA, StrategyMarket.INDIA])
+def test_backend_death_after_bridge_effects_before_job_commit_rolls_back_entire_attempt(certified_case, market, path):
     from sqlalchemy import event
     from sqlalchemy.exc import SQLAlchemyError
     engine, make = certified_case
-    data, run, strategy, work, registry = make(emit=path == "FILLED")
+    data, run, strategy, work, registry = make(emit=path == "FILLED", market=market)
     killed = []
     def kill_before_outcome(connection, cursor, statement, parameters, context, executemany):
         if "INSERT INTO paper_certified_outcomes" in statement and not killed:
@@ -270,10 +273,11 @@ def test_backend_death_after_bridge_effects_before_job_commit_rolls_back_entire_
 
 @pytest.mark.integration
 @pytest.mark.parametrize("path", ["NO_TRADE", "FILLED"])
-def test_backend_death_during_postcommit_authentication_preserves_accounting_for_retry(certified_case, path):
+@pytest.mark.parametrize("market", [StrategyMarket.USA, StrategyMarket.INDIA])
+def test_backend_death_during_postcommit_authentication_preserves_accounting_for_retry(certified_case, market, path):
     from hope.infrastructure.scheduling.paper_reconciliation import authenticate_successful_paper_run
     engine, make = certified_case
-    data, run, strategy, work, registry = make(emit=path == "FILLED")
+    data, run, strategy, work, registry = make(emit=path == "FILLED", market=market)
     assert run_paper_once(engine, run, registry, now=lambda: data["as_of"]+timedelta(minutes=1)) is PaperCycleOutcome.EXECUTED
     connection = engine.connect()
     transaction = connection.begin()
