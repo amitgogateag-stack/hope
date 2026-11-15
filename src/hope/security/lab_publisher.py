@@ -76,6 +76,15 @@ def validate_payload(value, issued):
         seen.add(identity)
         stamp = row['completed_at']
         require(stamp is None or (type(stamp) is str and len(stamp) <= 40), 'PAYLOAD_INVALID')
+        # A refusal that never ran must not manufacture a completed cycle, and
+        # an executed PASS/FAIL must retain when it actually completed.  Keep
+        # this inside the signed schema boundary so the dashboard cannot infer
+        # lifecycle progress from a semantically contradictory packet.
+        require((row['result'] == 'NOT_EXECUTED' and stamp is None
+                 and row['reason'] != 'NONE')
+                or (row['result'] in {'PASS', 'FAIL'} and stamp is not None
+                    and (row['result'] == 'PASS' or row['reason'] != 'NONE')),
+                'RESULT_COMPLETION_INVALID')
         if stamp is not None:
             try:
                 parsed = datetime.fromisoformat(stamp)
