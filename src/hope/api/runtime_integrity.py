@@ -16,6 +16,7 @@ from threading import Lock
 import time
 
 from hope.api.snapshot_contract import strict_json
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read
 
 OWNER=0
 SCHEMA="hope.runtime-manifest.v1"
@@ -252,7 +253,10 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     root=Path(root);path=manifest_path(root,sha,mode)
     manifest_directory=_trusted(root/"runtime-manifests",directory=True)
     manifest_identity=_trusted(path)
-    payload=_read(path,MAX_MANIFEST_BYTES,deadline=deadline);approved=strict_json(payload)
+    payload=(_read(path,MAX_MANIFEST_BYTES,deadline=deadline) if expected_manifest is None else
+        authenticated_bounded_regular_read(path,MAX_MANIFEST_BYTES,expected_sha256=expected_manifest))
+    _require(time.monotonic()<=deadline,"DEADLINE")
+    approved=strict_json(payload)
     fields={"schema","repository","release_commit","runtime_mode","constraints_sha256","interpreter","distributions","files","links"}
     _require(isinstance(approved,dict) and ((approved.get("schema")==SCHEMA and set(approved)==fields)
         or (approved.get("schema")=="hope.runtime-manifest.v2" and set(approved)==fields|{"package_provenance_sha256"})

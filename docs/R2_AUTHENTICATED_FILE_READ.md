@@ -12,16 +12,19 @@ The expected digest MUST originate from an authenticated immutable manifest,
 a separately trusted producer, or another reviewed trust root. Computing
 the expected digest from the same untrusted file at read time proves nothing.
 The existing two-argument `bounded_regular_read` API is unchanged for
-compatibility and explicitly remains metadata-only. **All twelve production
-call sites remain metadata-only** until each receives independently trusted
-digest provenance and deliberately migrates to the authenticated entry point.
+compatibility and explicitly remains metadata-only. Runtime attestation now
+uses the authenticated entry point when an activation journal, deployment
+receipt, or first-cycle authority supplies `expected_manifest`. Unpinned
+diagnostics and the other production call sites remain metadata-only until
+each receives independently trusted digest provenance.
 
 Tests cover exact digest, same-size altered contents with restored mtime,
-wrong digest, invalid digest, explicit downgrade refusal and backward
-compatibility. This patch does not yet fix mutable files when no trusted
-expected digest exists, nor does it supply deployment provenance.
+wrong digest, invalid digest, explicit downgrade refusal, backward
+compatibility, and rejection of a semantically equal manifest whose raw bytes
+do not match the independently pinned digest. This patch does not fix mutable
+files when no trusted expected digest exists, nor does it invent deployment
+provenance.
 
 No AWS changes, LIVE/PAPER activation, risk changes, production grants,
-or frozen-baseline modifications. R2 remains OPEN until real call sites
-receive independently trusted digests and adversarial concurrent mutation
-tests pass.
+or frozen-baseline modifications. R2 remains OPEN while other trust-boundary
+call sites lack independently trusted digests.

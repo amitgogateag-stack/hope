@@ -73,6 +73,14 @@ def test_manifest_in_inspected_environment_is_not_an_authority(runtime):
     assert m.diagnostic(root,SHA,mode)["state"]=="UNVERIFIED"
 
 
+def test_pinned_manifest_digest_rejects_semantically_equal_byte_reencoding(runtime):
+    root,env,mode,candidate,path,digest=runtime
+    path.write_text(json.dumps(candidate,indent=2,sort_keys=True))
+    assert m._digest(m._canonical(json.loads(path.read_bytes())))==digest
+    result=m.diagnostic(root,SHA,mode,expected_manifest=digest)
+    assert result["state"]=="MISMATCH" and result["execution_authorized"] is False
+
+
 @pytest.mark.parametrize("scope",["manifest","manifest_directory","environment","package","interpreter"])
 def test_writable_or_linked_runtime_storage_is_rejected(runtime,scope):
     root,env,mode,candidate,path,digest=runtime
