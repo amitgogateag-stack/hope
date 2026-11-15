@@ -21,7 +21,11 @@ def verify(root, commit):
     manifest_info = manifest_path.lstat()
     if not stat.S_ISREG(manifest_info.st_mode) or not 0 < manifest_info.st_size <= 262144:
         raise ValueError('STAGING_MANIFEST_INVALID')
-    manifest = json.loads(manifest_path.read_bytes())
+    manifest_bytes = manifest_path.read_bytes()
+    manifest = json.loads(manifest_bytes)
+    canonical_manifest = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+    if manifest_bytes != canonical_manifest:
+        raise ValueError('STAGING_MANIFEST_INVALID')
     if (set(manifest) != {'schema', 'commit', 'files', 'scope'}
             or manifest['schema'] != 'hope.nontrading-staging.v1'
             or manifest['commit'] != commit or manifest['scope'] != 'PREVIEW_ONLY_NO_DATABASE'

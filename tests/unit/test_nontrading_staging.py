@@ -35,7 +35,7 @@ def archive(tmp_path, *, change=None):
     content = {name: (ROOT / 'deploy/staging' / name).read_bytes() for name in FILES}
     manifest = dict(schema='hope.nontrading-staging.v1', commit=SHA, scope='PREVIEW_ONLY_NO_DATABASE',
                     files={k: hashlib.sha256(v).hexdigest() for k, v in content.items()})
-    content['MANIFEST.json'] = json.dumps(manifest).encode()
+    content['MANIFEST.json'] = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode() + b'\n'
     if change:
         change(content)
     out = io.BytesIO()
@@ -324,6 +324,32 @@ def test_artifact_faults_are_denied(tmp_path, fault):
     with pytest.raises(ValueError, match='STAGING_'):
         load('manage').payload(raw, '0' * 64 if fault == 'digest' else digest,
                                'b' * 40 if fault == 'commit' else SHA)
+
+
+def noncanonical_manifest(content, variant):
+    raw = content['MANIFEST.json']
+    if variant == 'whitespace':
+        content['MANIFEST.json'] = raw + b' '
+    else:
+        content['MANIFEST.json'] = raw[:-2] + b',"scope":"PREVIEW_ONLY_NO_DATABASE"}\n'
+
+
+@pytest.mark.parametrize('variant', ['whitespace', 'duplicate_scope'])
+def test_installer_rejects_noncanonical_manifest_bytes(tmp_path, variant):
+    raw, digest = archive(tmp_path, change=lambda content: noncanonical_manifest(content, variant))
+    with pytest.raises(ValueError, match='STAGING_MANIFEST_INVALID'):
+        load('manage').payload(raw, digest, SHA)
+
+
+@pytest.mark.parametrize('variant', ['whitespace', 'duplicate_scope'])
+def test_runtime_rejects_noncanonical_manifest_bytes(tmp_path, variant):
+    target = unpack(tmp_path)
+    manifest = target / 'MANIFEST.json'
+    content = {'MANIFEST.json': manifest.read_bytes()}
+    noncanonical_manifest(content, variant)
+    manifest.write_bytes(content['MANIFEST.json'])
+    with pytest.raises(ValueError, match='STAGING_MANIFEST_INVALID'):
+        load('server').verify(target, SHA)
 
 
 def test_duplicate_archive_entry_denied(tmp_path):

@@ -87,7 +87,10 @@ def payload(archive, expected, commit):
                 and all(i.file_size <= 262144 and stat.S_ISREG(i.external_attr >> 16) for i in entries),
                 'STAGING_ARCHIVE_MEMBERS')
         files = {i.filename: z.read(i) for i in entries}
-    manifest = json.loads(files.pop('MANIFEST.json'))
+    manifest_bytes = files.pop('MANIFEST.json')
+    manifest = json.loads(manifest_bytes)
+    canonical_manifest = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+    require(manifest_bytes == canonical_manifest, 'STAGING_MANIFEST_INVALID')
     require(type(manifest) is dict and set(manifest) == {'schema', 'commit', 'files', 'scope'}
             and manifest['schema'] == 'hope.nontrading-staging.v1' and manifest['commit'] == commit
             and manifest['scope'] == 'PREVIEW_ONLY_NO_DATABASE'
@@ -95,7 +98,7 @@ def payload(archive, expected, commit):
             'STAGING_MANIFEST_INVALID')
     require(all(hashlib.sha256(data).hexdigest() == manifest['files'][name]
                 for name, data in files.items()), 'STAGING_PAYLOAD_MISMATCH')
-    files['MANIFEST.json'] = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode() + b'\n'
+    files['MANIFEST.json'] = canonical_manifest
     return files
 
 
