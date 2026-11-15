@@ -28,6 +28,11 @@ def load(name):
     spec = importlib.util.spec_from_file_location('staging_' + name, ROOT / 'deploy/staging' / (name + '.py'))
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # Operator fixtures model the POSIX admission check via os.name. Keep the
+    # real native Path class instead of allowing that global flag to select an
+    # unsupported PosixPath on Windows. All actual file/digest checks remain.
+    if os.name == 'nt' and hasattr(module, 'Path'):
+        module.Path = type(ROOT)
     return module
 
 
@@ -87,7 +92,8 @@ def test_reproducible_builder_uses_committed_bytes_not_worktree(tmp_path):
     assert info['sha256'] == hashlib.sha256(first.read_bytes()).hexdigest()
     with pytest.raises(FileExistsError):
         build(repo, commit, first)
-    assert load('manage').payload(first.read_bytes(), info['sha256'], commit)['server.py'] == (ROOT / 'deploy/staging/server.py').read_bytes()
+    committed_server = subprocess.check_output(['git', '-C', str(repo), 'show', commit + ':deploy/staging/server.py'])
+    assert load('manage').payload(first.read_bytes(), info['sha256'], commit)['server.py'] == committed_server
 
 
 def test_builder_reports_digest_from_exclusive_output_descriptor(tmp_path, monkeypatch):
@@ -197,6 +203,8 @@ def test_installer_bytes_must_match_reviewed_archive(tmp_path, monkeypatch):
     altered.write_bytes((ROOT / 'deploy/staging/manage.py').read_bytes() + b'\n# altered operator tool\n')
     spec = importlib.util.spec_from_file_location('altered_staging_manage', altered)
     m = importlib.util.module_from_spec(spec); spec.loader.exec_module(m)
+    if os.name == 'nt':
+        m.Path = type(ROOT)
     raw, digest = archive(tmp_path)
     source = tmp_path / 'release.zip'; source.write_bytes(raw)
     monkeypatch.setattr(m.os, 'name', 'posix')
