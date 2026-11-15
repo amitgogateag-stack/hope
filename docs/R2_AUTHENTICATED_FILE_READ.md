@@ -15,15 +15,20 @@ The existing two-argument `bounded_regular_read` API is unchanged for
 compatibility and explicitly remains metadata-only. Runtime attestation now
 uses the authenticated entry point when an activation journal, deployment
 receipt, or first-cycle authority supplies `expected_manifest`. Unpinned
-diagnostics and the other production call sites remain metadata-only until
-each receives independently trusted digest provenance.
+diagnostics remain metadata-only. Guarded deployment inspection also
+reauthenticates the OCI manifest when it reopens the content-addressed blob
+after signed image verification, closing the verify/read substitution window.
+The other production call sites remain metadata-only until each receives
+independently trusted digest provenance.
 
 Tests cover exact digest, same-size altered contents with restored mtime,
 wrong digest, invalid digest, explicit downgrade refusal, backward
 compatibility, and rejection of a semantically equal manifest whose raw bytes
-do not match the independently pinned digest. This patch does not fix mutable
-files when no trusted expected digest exists, nor does it invent deployment
-provenance.
+do not match the independently pinned digest. Deployment tests additionally
+replace the OCI manifest after image verification while retaining the approved
+configuration identity; the guarded read must still fail closed. This patch
+does not fix mutable files when no trusted expected digest exists, nor does it
+invent deployment provenance.
 
 No AWS changes, LIVE/PAPER activation, risk changes, production grants,
 or frozen-baseline modifications. R2 remains OPEN while other trust-boundary
