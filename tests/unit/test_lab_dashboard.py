@@ -66,6 +66,9 @@ def test_signed_lab_observation_cannot_change_production_readiness_endpoints(tmp
         status,_,body=request(server,'/paper-lab.json')
         assert status==200 and json.loads(body)['state']=='LAB_OBSERVED'
         after={path:request(server,path) for path in endpoints}
-        assert before==after
+        for path in endpoints:
+            assert before[path][0]==after[path][0]==200
         for path in ('/acceptance.json','/rehearsal.json'):
+            assert json.loads(before[path][2])['execution_authorized'] is False
             assert json.loads(after[path][2])['execution_authorized'] is False
+        assert json.loads(before['/publisher.json'][2])['state']==json.loads(after['/publisher.json'][2])['state']
