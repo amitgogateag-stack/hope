@@ -6,6 +6,7 @@ import os
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 import re
+import stat
 import sys
 
 
@@ -16,7 +17,11 @@ PORT = 8790
 def verify(root, commit):
     if not re.fullmatch('[0-9a-f]{40}', commit):
         raise ValueError('STAGING_COMMIT_INVALID')
-    manifest = json.loads((root / 'MANIFEST.json').read_bytes())
+    manifest_path = root / 'MANIFEST.json'
+    manifest_info = manifest_path.lstat()
+    if not stat.S_ISREG(manifest_info.st_mode) or not 0 < manifest_info.st_size <= 262144:
+        raise ValueError('STAGING_MANIFEST_INVALID')
+    manifest = json.loads(manifest_path.read_bytes())
     if (set(manifest) != {'schema', 'commit', 'files', 'scope'}
             or manifest['schema'] != 'hope.nontrading-staging.v1'
             or manifest['commit'] != commit or manifest['scope'] != 'PREVIEW_ONLY_NO_DATABASE'

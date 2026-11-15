@@ -343,6 +343,26 @@ def test_unmanifested_runtime_input_denied(tmp_path):
         load('server').verify(target, SHA)
 
 
+def test_runtime_rejects_oversized_manifest_before_parsing(tmp_path):
+    target = unpack(tmp_path)
+    manifest = target / 'MANIFEST.json'
+    manifest.write_bytes(manifest.read_bytes() + b' ' * 262144)
+    with pytest.raises(ValueError, match='STAGING_MANIFEST_INVALID'):
+        load('server').verify(target, SHA)
+
+
+@pytest.mark.skipif(os.name == 'nt', reason='Manifest symlink boundary is exercised on Linux CI')
+def test_runtime_rejects_manifest_symlink(tmp_path):
+    target = unpack(tmp_path)
+    manifest = target / 'MANIFEST.json'
+    external = tmp_path / 'external-manifest.json'
+    external.write_bytes(manifest.read_bytes())
+    manifest.unlink()
+    manifest.symlink_to(external)
+    with pytest.raises(ValueError, match='STAGING_MANIFEST_INVALID'):
+        load('server').verify(target, SHA)
+
+
 @pytest.mark.parametrize('flag', ['--factory', '--database-url', '--live', '--paper', '--port', '--snapshot'])
 def test_runtime_has_no_execution_configuration(tmp_path, flag):
     target = unpack(tmp_path)

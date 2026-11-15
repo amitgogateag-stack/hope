@@ -16,6 +16,9 @@ file-server/upload/execution endpoint. POST is denied. Runtime JSON reports
 PAPER/LIVE/execution false, database NOT_CONNECTED, broker NOT_INCLUDED,
 independent acceptance UNVERIFIED and operational readiness BLOCKED. These
 fields describe this isolated preview, not the current host's trading state.
+The runtime refuses a missing, non-regular, symlinked, empty or oversized
+manifest before parsing it, then verifies the exact inventory and every payload
+digest before installing its audit restrictions or opening the listener.
 
 The kernel/interpreter/system administrator remain trusted. `-I -S -B` removes
 ambient Python imports/site customization/bytecode writes. A runtime audit hook
