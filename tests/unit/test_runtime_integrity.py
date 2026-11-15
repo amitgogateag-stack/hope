@@ -81,6 +81,12 @@ def test_pinned_manifest_digest_rejects_semantically_equal_byte_reencoding(runti
     assert result["state"]=="MISMATCH" and result["execution_authorized"] is False
 
 
+def test_pinned_manifest_digest_mismatch_preserves_runtime_failure_boundary(runtime):
+    root,env,mode,candidate,path,digest=runtime
+    with pytest.raises(RuntimeError,match="^RUNTIME_MANIFEST_CHANGED$"):
+        m.attest_runtime(root,SHA,mode,expected_manifest="0"*64)
+
+
 @pytest.mark.parametrize("scope",["manifest","manifest_directory","environment","package","interpreter"])
 def test_writable_or_linked_runtime_storage_is_rejected(runtime,scope):
     root,env,mode,candidate,path,digest=runtime
