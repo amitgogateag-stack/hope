@@ -165,6 +165,15 @@ def test_authenticated_manifest_digest_mismatch_is_sanitized(signed_runtime):
     assert m.attest_runtime(root,SHA,mode,expected_manifest=actual)["state"]=="VERIFIED"
 
 
+def test_authenticated_manifest_reader_unrelated_error_is_not_reclassified(signed_runtime,monkeypatch):
+    root,env,mode,candidate,path=signed_runtime
+    def fail_unrelated(*args,**kwargs):
+        raise ValueError("BOUNDED_READ_FILE_CHANGED")
+    monkeypatch.setattr(m,"authenticated_bounded_regular_read",fail_unrelated)
+    with pytest.raises(ValueError,match="^BOUNDED_READ_FILE_CHANGED$"):
+        m.attest_runtime(root,SHA,mode,expected_manifest=m._digest(m._canonical(candidate)))
+
+
 def test_rollback_runtime_must_match_its_journal_pinned_manifest(signed_runtime,monkeypatch):
     from hope.api import dashboard_activation as activation
     from unittest.mock import Mock
