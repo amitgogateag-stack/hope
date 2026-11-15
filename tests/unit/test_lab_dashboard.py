@@ -52,3 +52,23 @@ def test_lab_reader_never_discloses_input_errors(tmp_path,lab_file_reader,raw):
     _,verifier=context();packet=tmp_path/'lab.json';packet.write_bytes(raw)
     assert p.read_observation(packet,verifier)==p.unavailable()
     assert p.read_observation(tmp_path/'absent',verifier)==p.unavailable()
+
+
+def test_signed_lab_observation_cannot_change_production_readiness_endpoints(tmp_path,lab_file_reader):
+    key,verifier=context()
+    packet=tmp_path/'lab.json'
+    packet.write_bytes(signed(key,verifier))
+    with dashboard(tmp_path) as server:
+        endpoints=('/publisher.json','/acceptance.json','/rehearsal.json')
+        before={path:request(server,path) for path in endpoints}
+        server.lab_packet=packet
+        server.lab_verifier=verifier
+        status,_,body=request(server,'/paper-lab.json')
+        assert status==200 and json.loads(body)['state']=='LAB_OBSERVED'
+        after={path:request(server,path) for path in endpoints}
+        for path in endpoints:
+            assert before[path][0]==after[path][0]==200
+        for path in ('/acceptance.json','/rehearsal.json'):
+            assert json.loads(before[path][2])['execution_authorized'] is False
+            assert json.loads(after[path][2])['execution_authorized'] is False
+        assert json.loads(before['/publisher.json'][2])['state']==json.loads(after['/publisher.json'][2])['state']

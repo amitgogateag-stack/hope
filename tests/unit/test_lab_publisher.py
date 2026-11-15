@@ -139,6 +139,20 @@ def test_strict_packet_boundary(fault):
     with pytest.raises(p.LabEvidenceError):v.observe(raw)
 
 
+def test_invalid_base64_padding_fails_closed_without_consuming_watermark(tmp_path):
+    key, verifier = context()
+    valid = signed(key, verifier)
+    document = json.loads(valid)
+    document['signature'] = '!'  # binascii.Error from strict base64 decoder
+    malformed = p.canonical(document)
+    with pytest.raises(p.LabEvidenceError, match='PACKET_INVALID'):
+        verifier.observe(malformed)
+    path = tmp_path / 'lab.json'
+    path.write_bytes(malformed)
+    assert p.read_observation(path, verifier)['state'] == 'UNAVAILABLE'
+    assert verifier.observe(valid)['sequence'] == 1
+
+
 @pytest.mark.parametrize('fault', ['market','scenario','result','reason','digest','time','future','duplicate','major','extra'])
 def test_even_signed_payload_cannot_escape_bounded_lab_schema(fault):
     key,v=context();body=payload();row=body['cases'][0]

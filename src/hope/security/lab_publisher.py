@@ -9,6 +9,7 @@ Cryptography is loaded only when this optional laboratory API is invoked.
 from __future__ import annotations
 
 import base64
+import binascii
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -164,7 +165,7 @@ class LabPublisherVerifier:
                 reason='LAB_KEY_IS_NOT_PRODUCTION_ADMISSION')
         except LabEvidenceError:
             raise
-        except (ValueError, TypeError, KeyError, UnicodeError, OverflowError) as exc:
+        except (ValueError, TypeError, KeyError, UnicodeError, OverflowError, binascii.Error) as exc:
             raise LabEvidenceError('LAB_PUBLISHER_PACKET_INVALID') from exc
 
 
