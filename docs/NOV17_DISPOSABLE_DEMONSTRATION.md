@@ -71,6 +71,40 @@ the lab HTTP test; real Ed25519 signatures, database transactions, economics and
 HTTP calls are exercised. Linux CI uses actual no-follow descriptor reads. Native
 startup tests remain Linux-only; skips are reported, never hidden as passes.
 
+## Read-only disposable dashboard refresh
+
+The snapshot refresh entry point is `python -m hope.api.dashboard_snapshot_refresh`.
+It requires an exact expected database name and exact 40-character reviewed commit.
+It queries `current_database()` inside the same READ ONLY, REPEATABLE READ
+transaction before labeling a snapshot `DISPOSABLE_LAB`. The exported contract
+contains a hash of that identity, an explicit synthetic-data flag and immutable
+`execution_authorized=false` / `live_enabled=false` claims; the database name and
+connection URL are never published.
+
+The refresher first writes and validates a staged snapshot, then atomically replaces
+the last-good file. On database mismatch, missing PAPER state, connection failure or
+post-export contract failure, last-good bytes remain untouched and a separate atomic
+status records only a closed error code. `--interval-seconds` is bounded to 30–3600.
+The dashboard now refuses to serve snapshot data older than 15 minutes while its
+liveness endpoint remains HTTP 200 with `data_feed=STALE`.
+
+Example for a disposable database only (do not point this at `hope`):
+
+```bash
+HOPE_DATABASE_URL='postgresql+psycopg://.../isolated_lab' python -m hope.api.dashboard_snapshot_refresh \
+  --output /private/dashboard/snapshot.json \
+  --status /private/dashboard/snapshot-refresh.json \
+  --expected-database isolated_lab \
+  --deployed-commit 0000000000000000000000000000000000000000 \
+  --interval-seconds 60
+```
+
+Execution-ledger observations additionally split fills with a canonical `FILL`
+effect receipt from historical/untracked rows. A canonical fill lacking portfolio
+application is a stronger recovery-review signal; a fill lacking its effect receipt
+is reported separately and is never interpreted as trading activity or permission to
+replay. No identifiers, prices, quantities or P&L values are exposed.
+
 ## November 17 decision
 
 A safe isolated demonstration is achievable using this disposable test path and

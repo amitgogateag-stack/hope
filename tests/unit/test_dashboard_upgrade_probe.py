@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from hope.api.dashboard_server import DashboardHTTPServer
-from hope.api.dashboard_upgrade_probe import verify_dashboard, verify_readiness, verify_with_startup_retry
+from hope.api.dashboard_upgrade_probe import _validate_paper, verify_dashboard, verify_readiness, verify_with_startup_retry
 
 
 class Response(io.BytesIO):
@@ -117,6 +117,18 @@ def valid_paper():
             "job_runs": {"total": 2, "claimed": 0, "succeeded": 1, "failed": 1},
         },
     }
+
+
+def test_v2_disposable_lab_provenance_is_exact_and_non_authorizing():
+    value=valid_paper(); value.update(schema_version=2,provenance={
+        "data_classification":"DISPOSABLE_LAB","database_identity_sha256":"a"*64,
+        "synthetic_activity":True,"execution_authorized":False,"live_enabled":False})
+    _validate_paper(value)
+    for change in ({"execution_authorized":True},{"live_enabled":True},
+                   {"synthetic_activity":False},{"database_identity_sha256":"private"},
+                   {"database_name":"private"}):
+        invalid=json.loads(json.dumps(value)); invalid["provenance"].update(change)
+        with pytest.raises(ValueError,match="PROVENANCE_INVALID"):_validate_paper(invalid)
 
 
 def test_probe_accepts_missing_feeds_without_inventing_counts():

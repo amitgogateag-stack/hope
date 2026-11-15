@@ -17,7 +17,7 @@ def projection():
             {"strategy_version_id": "a" * 8 + "-" + "b" * 4 + "-" + "c" * 4 + "-" + "d" * 4 + "-" + "e" * 12,
              "family_code": "TIME_SERIES_TREND", "candidate_state": "OPERATIONAL_CANDIDATE", "markets": ["INDIA", "USA"]}]},
         "dataset_certification": {"status": "AVAILABLE", "version_total": 3, "sealed_versions": 2, "pit_certified_versions": 1, "manifest_backed_sealed_versions": 1},
-        "execution_ledger": {"status": "AVAILABLE", "fills": 2, "applied_fills": 1, "fill_applications": 1, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 1},
+        "execution_ledger": {"status": "AVAILABLE", "fills": 2, "applied_fills": 1, "fill_applications": 1, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 1, "effect_receipt_fills": 1, "fills_without_effect_receipt": 1, "effect_receipt_fills_without_application": 0},
         "blocked_runs": {"status": "AVAILABLE", "total": 1, "by_reason": {key: int(key == "OTHER") for key in BLOCKED_CODES}},
         "decision_activity": {"status": "AVAILABLE", "no_trade_records": 0, "claimed_no_trade": 0, "latest_decision_at": None},
         "certified_chain": {"status": "AVAILABLE", "authorization_receipts": 0, "latest_authorization_at": None, "operational_classifications": 1, "eligibility_policy": "UNKNOWN"},
@@ -43,6 +43,22 @@ def test_m2_source_sanitization_and_acceptance_keep_history_separate_from_eligib
         _validate_paper(data)
 
 
+def test_v1_last_good_hides_legacy_ledger_instead_of_inventing_effect_receipts(tmp_path):
+    value = projection()
+    for key in ("effect_receipt_fills", "fills_without_effect_receipt",
+                "effect_receipt_fills_without_application"):
+        value["execution_ledger"].pop(key)
+    data = {"schema_version":1, "source":"hope_postgresql",
+            "generated_at":datetime.now(timezone.utc).isoformat(),
+            "research":{"run_count":0}, "paper":{"environment_state":"RUNNING",
+            "job_runs":{"total":0,"claimed":0,"succeeded":0,"failed":0}},
+            "projections":value}
+    path=tmp_path/"snapshot.json"; path.write_text(json.dumps(data))
+    safe=json.loads(_verified_snapshot(path)[0])
+    assert safe["projections"]["execution_ledger"]=={"status":"UNAVAILABLE"}
+    assert safe["projections"]["certified_chain"]["status"]=="AVAILABLE"
+
+
 @pytest.mark.parametrize("section,change", [
     ("strategy_catalog", {"total": 21, "truncated": False}),
     ("strategy_catalog", {"rows": []}),
@@ -50,6 +66,8 @@ def test_m2_source_sanitization_and_acceptance_keep_history_separate_from_eligib
     ("dataset_certification", {"pit_certified_versions": 3}),
     ("execution_ledger", {"fills": 3}),
     ("execution_ledger", {"applications_without_pnl": 2}),
+    ("execution_ledger", {"fills_without_effect_receipt": 2}),
+    ("execution_ledger", {"effect_receipt_fills_without_application": 2}),
     ("blocked_runs", {"total": 2}),
     ("decision_activity", {"claimed_no_trade": 1}),
     ("decision_activity", {"latest_decision_at": "2026-01-01T00:00:00Z"}),

@@ -65,7 +65,8 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
     if not isinstance(payload, bytes) or len(payload)>32768:
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_SIZE_INVALID")
     data = strict_json(payload)
-    if not isinstance(data, dict) or type(data.get("schema_version")) is not int or data["schema_version"] != 1 or data.get("source") != "hope_postgresql":
+    if (not isinstance(data, dict) or type(data.get("schema_version")) is not int
+            or data["schema_version"] not in {1, 2} or data.get("source") != "hope_postgresql"):
         raise ValueError("HOPE_DASHBOARD_SNAPSHOT_INVALID")
     commit = data.get("deployed_commit")
     if commit is not None and (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None):
@@ -113,7 +114,7 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
     # arbitrary top-level or nested fields that could contain identifiers,
     # credentials, fills, positions, or other sensitive database material.
     safe = {
-        "schema_version": 1,
+        "schema_version": data["schema_version"],
         "source": "hope_postgresql",
         "generated_at": generated.isoformat(),
         "research": {"run_count": research["run_count"]},
@@ -125,11 +126,35 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
             },
         },
     }
+    if data["schema_version"] == 2:
+        provenance = data.get("provenance")
+        if (not isinstance(provenance, dict)
+                or set(provenance) != {"data_classification", "database_identity_sha256",
+                                      "synthetic_activity", "execution_authorized", "live_enabled"}
+                or provenance.get("data_classification") not in {"DISPOSABLE_LAB", "PRODUCTION_READ_ONLY"}
+                or not isinstance(provenance.get("database_identity_sha256"), str)
+                or fullmatch(r"[0-9a-f]{64}", provenance["database_identity_sha256"]) is None
+                or type(provenance.get("synthetic_activity")) is not bool
+                or provenance["synthetic_activity"] != (provenance["data_classification"] == "DISPOSABLE_LAB")
+                or provenance.get("execution_authorized") is not False
+                or provenance.get("live_enabled") is not False):
+            raise ValueError("HOPE_DASHBOARD_SNAPSHOT_PROVENANCE_INVALID")
+        safe["provenance"] = dict(provenance)
     if commit is not None:
         safe["deployed_commit"] = commit
     if recovery is not None:
         safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
     if "projections" in data:
-        safe["projections"] = verified_projections(data["projections"], generated)
+        projections = data["projections"]
+        # A pre-v2 last-good snapshot may not contain effect-receipt lineage.
+        # Preserve every independently verified section, but never infer those
+        # new counts from the older aggregate ledger.
+        ledger = projections.get("execution_ledger") if isinstance(projections, dict) else None
+        if (data["schema_version"] == 1 and isinstance(ledger, dict)
+                and ledger.get("status") == "AVAILABLE"
+                and "effect_receipt_fills" not in ledger):
+            projections = dict(projections)
+            projections["execution_ledger"] = {"status": "UNAVAILABLE"}
+        safe["projections"] = verified_projections(projections, generated)
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 

@@ -435,6 +435,42 @@ def test_server_marks_old_snapshot_stale(tmp_path):
         status, _, body = request(server, "/status.json")
         assert status == 200
         assert json.loads(body)["data_feed"] == "STALE"
+        status, _, body = request(server, "/snapshot.json")
+        assert status == 503 and body == b"Verified snapshot unavailable"
+
+
+def test_server_uses_one_fail_closed_snapshot_freshness_budget(tmp_path):
+    timestamp = (datetime.now(timezone.utc) - timedelta(seconds=16)).isoformat()
+    preview = tmp_path / "preview.html"; preview.write_text("HOPE")
+    snapshot = tmp_path / "snapshot.json"; snapshot.write_bytes(valid_snapshot(generated_at=timestamp))
+    with DashboardHTTPServer(0, preview, snapshot, max_snapshot_age_seconds=15) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            assert json.loads(request(server, "/status.json")[2])["data_feed"] == "STALE"
+            assert request(server, "/snapshot.json")[0] == 503
+        finally:
+            server.shutdown(); thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("value", [0, 86401, True, 1.5, "900"])
+def test_server_rejects_invalid_snapshot_freshness_budget(tmp_path, value):
+    with pytest.raises(ValueError, match="MAX_SNAPSHOT_AGE_INVALID"):
+        DashboardHTTPServer(0, tmp_path/"preview", tmp_path/"snapshot", max_snapshot_age_seconds=value)
+
+
+def test_server_sanitizes_explicit_disposable_lab_provenance(tmp_path):
+    data = json.loads(valid_snapshot())
+    data.update(schema_version=2, provenance={
+        "data_classification":"DISPOSABLE_LAB", "database_identity_sha256":"a"*64,
+        "synthetic_activity":True, "execution_authorized":False, "live_enabled":False,
+        "database_name":"NEVER_EXPOSE",
+    })
+    with dashboard(tmp_path, json.dumps(data).encode()) as server:
+        assert request(server, "/snapshot.json")[0] == 503
+    data["provenance"].pop("database_name")
+    with dashboard(tmp_path, json.dumps(data).encode()) as server:
+        status,_,body=request(server,"/snapshot.json")
+        assert status==200 and json.loads(body)["provenance"]["data_classification"]=="DISPOSABLE_LAB"
 
 
 def test_managed_server_refuses_snapshot_from_another_release(tmp_path):

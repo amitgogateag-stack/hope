@@ -96,12 +96,15 @@ def _validate_paper(value: dict) -> None:
                         and set(paper) in (paper_keys, paper_keys | {"recovery"}))
     outer = {"schema_version", "source", "generated_at", "research", "paper"}
     allowed_outer = (outer, outer | {"projections"}, outer | {"deployed_commit"},
-                     outer | {"projections", "deployed_commit"})
+                     outer | {"projections", "deployed_commit"},
+                     outer | {"provenance"}, outer | {"projections", "provenance"},
+                     outer | {"deployed_commit", "provenance"},
+                     outer | {"projections", "deployed_commit", "provenance"})
     commit = value.get("deployed_commit")
     if (set(value) not in allowed_outer
             or (commit is not None and (not isinstance(commit, str)
                 or re.fullmatch(r"[0-9a-f]{40}", commit) is None))
-            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or type(value["schema_version"]) is not int or value["schema_version"] not in {1,2}
             or value["source"] != "hope_postgresql"
             or not _timestamp(value["generated_at"])
             or not _exact_keys(value["research"], {"run_count"})
@@ -111,6 +114,19 @@ def _validate_paper(value: dict) -> None:
             or not _exact_keys(value["paper"]["job_runs"], fields)
             or not all(_count(value["paper"]["job_runs"][key]) for key in fields)):
         raise ValueError("HOPE_UPGRADE_PAPER_INVALID")
+    if value["schema_version"] == 2:
+        provenance=value.get("provenance")
+        fields={"data_classification","database_identity_sha256","synthetic_activity",
+                "execution_authorized","live_enabled"}
+        if (not _exact_keys(provenance,fields)
+                or provenance["data_classification"] not in {"DISPOSABLE_LAB","PRODUCTION_READ_ONLY"}
+                or not isinstance(provenance["database_identity_sha256"],str)
+                or re.fullmatch(r"[0-9a-f]{64}",provenance["database_identity_sha256"]) is None
+                or type(provenance["synthetic_activity"]) is not bool
+                or provenance["synthetic_activity"] != (provenance["data_classification"]=="DISPOSABLE_LAB")
+                or provenance["execution_authorized"] is not False
+                or provenance["live_enabled"] is not False):
+            raise ValueError("HOPE_UPGRADE_PAPER_PROVENANCE_INVALID")
     counts = value["paper"]["job_runs"]
     if counts["total"] != sum(counts[k] for k in ("claimed", "succeeded", "failed")):
         raise ValueError("HOPE_UPGRADE_PAPER_INCONSISTENT")

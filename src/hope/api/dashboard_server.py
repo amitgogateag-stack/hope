@@ -37,8 +37,18 @@ OPERATIONS_ERROR_CODES = {
 }
 
 
-def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tuple[bytes, datetime]:
-    return verified_snapshot_payload(bounded_regular_read(path,32768),expected_commit=expected_commit)
+def _verified_snapshot(path: Path, *, expected_commit: str | None = None,
+                       max_age_seconds: int | None = None) -> tuple[bytes, datetime]:
+    payload, generated = verified_snapshot_payload(
+        bounded_regular_read(path,32768), expected_commit=expected_commit,
+    )
+    if max_age_seconds is not None:
+        if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400:
+            raise ValueError("HOPE_DASHBOARD_MAX_SNAPSHOT_AGE_INVALID")
+        age = (datetime.now(timezone.utc) - generated).total_seconds()
+        if age < -300 or age > max_age_seconds:
+            raise ValueError("HOPE_DASHBOARD_SNAPSHOT_STALE")
+    return payload, generated
 
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
@@ -161,7 +171,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
                  lab_verifier=None, lab_packet=None,
                  client_io_timeout_seconds: float = 5.0,
                  client_total_timeout_seconds: float = 15.0,
-                 max_concurrent_clients: int = 32):
+                 max_concurrent_clients: int = 32,
+                 max_snapshot_age_seconds: int = 900):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         if (isinstance(client_io_timeout_seconds, bool)
@@ -174,6 +185,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             raise ValueError("HOPE_DASHBOARD_CLIENT_TOTAL_TIMEOUT_INVALID")
         if type(max_concurrent_clients) is not int or not 1 <= max_concurrent_clients <= 256:
             raise ValueError("HOPE_DASHBOARD_CLIENT_LIMIT_INVALID")
+        if type(max_snapshot_age_seconds) is not int or not 1 <= max_snapshot_age_seconds <= 86400:
+            raise ValueError("HOPE_DASHBOARD_MAX_SNAPSHOT_AGE_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
         if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
@@ -187,6 +200,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
+        self.max_snapshot_age_seconds=max_snapshot_age_seconds
         self._client_slots=BoundedSemaphore(max_concurrent_clients)
         self._transport_lock=Lock()
         self._active_clients=0
@@ -408,7 +422,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 )
                 generated_at = generated.isoformat()
                 state = (
-                    "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > 3600
+                    "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > self.server.max_snapshot_age_seconds
                     else "CURRENT"
                 )
             except (OSError, ValueError, TypeError, UnicodeError):
@@ -471,6 +485,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 payload, _ = _verified_snapshot(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
+                    max_age_seconds=self.server.max_snapshot_age_seconds,
                 )
             except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified snapshot unavailable")

@@ -97,10 +97,17 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["manifest_backed_sealed_versions"] > result["sealed_versions"]):
                 raise ValueError("HOPE_DASHBOARD_CERTIFICATION_COUNT_INCONSISTENT")
         elif section == "execution_ledger":
-            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts", "fills_without_application", "applications_without_pnl")
+            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts",
+                      "fills_without_application", "applications_without_pnl",
+                      "effect_receipt_fills", "fills_without_effect_receipt",
+                      "effect_receipt_fills_without_application")
             result.update({key: count(item.get(key)) for key in fields})
             if (result["fills"] != result["applied_fills"] + result["fills_without_application"]
-                    or result["applied_fills"] > result["fill_applications"] or result["applications_without_pnl"] > result["fill_applications"]):
+                    or result["fills"] != result["effect_receipt_fills"] + result["fills_without_effect_receipt"]
+                    or result["applied_fills"] > result["fill_applications"]
+                    or result["applications_without_pnl"] > result["fill_applications"]
+                    or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
+                    or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
         elif section == "blocked_runs":
             buckets = item.get("by_reason")

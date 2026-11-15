@@ -92,12 +92,14 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
         for query in (
             "CREATE TABLE orders(order_id uuid,environment text)",
             "CREATE TABLE fills(fill_id uuid,order_id uuid)",
+            "CREATE TABLE paper_effects(effect_type text,entity_id uuid)",
             "CREATE TABLE paper_portfolio_fill_applications(portfolio_id uuid,fill_id uuid)",
             "CREATE TABLE paper_portfolio_pnl_events(portfolio_id uuid,fill_id uuid)",
         ):
             connection.execute(text(query))
         connection.execute(text("INSERT INTO orders VALUES (:id,'PAPER')"), {"id": order})
         connection.execute(text("INSERT INTO fills VALUES (:id,:order)"), {"id": fill, "order": order})
+        connection.execute(text("INSERT INTO paper_effects VALUES ('FILL',:fill)"), {"fill": fill})
     def observe():
         with postgres_engine.connect() as connection:
             connection.execute(text(f'SET search_path TO "{schema}"'))
@@ -111,7 +113,7 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             return value
     try:
         initial = observe()
-        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0}
+        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "effect_receipt_fills_without_application": 1}
         with postgres_engine.begin() as connection:
             connection.execute(text(f'INSERT INTO "{schema}".paper_portfolio_fill_applications VALUES (:portfolio,:fill)'), {"portfolio": portfolio, "fill": fill})
         partial = observe()
