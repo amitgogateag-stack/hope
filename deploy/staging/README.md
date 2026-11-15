@@ -76,6 +76,9 @@ The executing `manage.py` must itself be root-owned under protected parents and
 byte-for-byte identical to the `manage.py` member in the externally checksum-pinned
 archive. This consistency check detects the wrong or accidentally altered operator
 tool; it does not replace external archive verification, review or trusted root.
+The archive itself must also be root-owned, non-writable and non-hardlinked under
+protected, non-symlinked parents so it cannot be replaced between validation and
+the bounded read.
 
 ## Conditional operator commands in the existing Session Manager terminal
 

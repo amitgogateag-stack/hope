@@ -152,6 +152,7 @@ def install(archive, expected, commit, gate_path):
     sha(commit, 40)
     ancestors(ROOT)
     gates(gate_path, commit)
+    ancestors(archive.parent)
     trusted_path(archive)
     require(archive.stat().st_size <= 1048576, 'STAGING_ARCHIVE_SIZE')
     files = payload(archive.read_bytes(), expected, commit)

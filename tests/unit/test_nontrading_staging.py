@@ -363,6 +363,25 @@ def test_missing_operator_gate_precedes_any_mutation(tmp_path, monkeypatch):
     assert not calls and list(tmp_path.iterdir()) == []
 
 
+def test_installer_refuses_archive_from_untrusted_parent_before_read(tmp_path, monkeypatch):
+    m = load('manage')
+    incoming = tmp_path / 'incoming'; incoming.mkdir(mode=0o777)
+    archive_path = incoming / 'release.zip'; archive_path.write_bytes(b'not-read')
+    staging = tmp_path / 'staging'; staging.mkdir()
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m, 'ROOT', staging)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    def check_ancestors(path):
+        if path == incoming:
+            raise ValueError('STAGING_PATH_UNTRUSTED')
+    monkeypatch.setattr(m, 'ancestors', check_ancestors)
+    monkeypatch.setattr(m, 'payload', lambda *a: pytest.fail('untrusted archive was read'))
+    with pytest.raises(ValueError, match='STAGING_PATH_UNTRUSTED'):
+        m.install(archive_path, 'a' * 64, SHA, tmp_path / 'gates.json')
+
+
 @pytest.mark.parametrize(('code', 'output', 'allowed'), [
     (0, 'LoadState=loaded\n', True), (1, 'LoadState=not-found\n', True),
     (1, '', False), (1, 'LoadState=loaded\n', False), (4, 'LoadState=not-found\n', False)])
