@@ -135,6 +135,12 @@ def identity_matches(observed, commit):
                for key, value in expected.items())
 
 
+def launch_matches(observed, commit):
+    return (identity_matches(observed, commit)
+            and observed.get('LoadState') == 'loaded'
+            and observed.get('ActiveState') == 'active')
+
+
 def stop_confirmed(observed):
     return (observed.get('ActiveState') in {'inactive', 'failed'}
             or observed.get('LoadState') == 'not-found')
@@ -185,7 +191,7 @@ def install(archive, expected, commit, gate_path):
             PYTHON, '-I', '-S', '-B', str(release / 'server.py'), '--commit', commit]
     command(*args)
     observed = state()
-    if not identity_matches(observed, commit):
+    if not launch_matches(observed, commit):
         # The fixed name was absent immediately before launch, so a mismatch
         # here is the unit just requested with an ineffective/altered boundary.
         # Stop it before refusing the launch acknowledgement.

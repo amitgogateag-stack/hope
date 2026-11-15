@@ -135,12 +135,13 @@ variables are removed; the actual launch is fixed to the artifact server.
 Unsupported systemd properties must cause investigation, not weakening.
 START_REQUESTED is not health/acceptance. A crash/failed install retains files
 and requires manual investigation; do not delete evidence or rerun over a release.
-Before returning START_REQUESTED, the installer reads back the transient unit's
-commit-bound identity and effective DynamicUser, privilege, filesystem, home,
-temporary-directory, device and loopback-only network restrictions. A weaker or
+Before returning START_REQUESTED, the installer requires the transient unit to
+be loaded and active and reads back its commit-bound identity and effective
+DynamicUser, privilege, filesystem, home, temporary-directory, device and
+loopback-only network restrictions. A failed, inactive, absent, weaker or
 mismatched unit is stopped, confirmed inactive or absent, and the launch is
-refused. This read-back does not prove kernel enforcement or constitute
-host/PAPER acceptance.
+refused. This point-in-time read-back is not a liveness probe, does not prove
+kernel enforcement and does not constitute host/PAPER acceptance.
 
 ## Verification after an authorized installation
 

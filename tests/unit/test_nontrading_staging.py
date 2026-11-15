@@ -235,6 +235,34 @@ def test_installer_mismatch_requires_confirmed_stop(tmp_path, monkeypatch):
         p.chmod(0o600)
 
 
+@pytest.mark.parametrize('observed', [
+    dict(LoadState='loaded', ActiveState='failed'),
+    dict(LoadState='not-found', ActiveState='inactive'),
+])
+def test_installer_refuses_launch_acknowledgement_without_active_loaded_unit(tmp_path, monkeypatch, observed):
+    m = load('manage'); calls = []
+    raw, digest = archive(tmp_path)
+    source = tmp_path / 'release.zip'; source.write_bytes(raw)
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m.os, 'sysconf', lambda key: 1024**3 if key == 'SC_AVPHYS_PAGES' else 4096, raising=False)
+    monkeypatch.setattr(m, 'ancestors', lambda p: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'ROOT', tmp_path)
+    states = iter([dict(LoadState='not-found'),
+                   dict(m.expected_identity(SHA), **observed),
+                   dict(LoadState='not-found')])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
+    monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
+    gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
+    with pytest.raises(ValueError, match='STAGING_LAUNCH_IDENTITY'):
+        m.install(source, digest, SHA, gate)
+    assert calls[-1] == (m.SYSTEMCTL, 'stop', m.UNIT)
+    for p in (tmp_path / 'releases' / SHA).iterdir():
+        p.chmod(0o600)
+
+
 @pytest.mark.parametrize('missing', list(load('manage').SANDBOX))
 def test_unit_identity_requires_every_effective_sandbox_property(missing):
     m = load('manage')
