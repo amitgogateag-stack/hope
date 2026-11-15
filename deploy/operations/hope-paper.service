@@ -16,7 +16,7 @@ EnvironmentFile=/etc/hope-paper.env
 EnvironmentFile=/opt/hope-operations/deployed.env
 UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT
 ExecStartPre=/usr/bin/python3 -I -B -S -X pycache_prefix=/nonexistent/hope-runtime-bootstrap /opt/hope-operations/current/deploy/operations/paper_release.py --preflight
-ExecStart=/usr/bin/python3 -I -B -S -X pycache_prefix=/nonexistent/hope-runtime-bootstrap /opt/hope-operations/current/deploy/operations/paper_release.py --factory ${HOPE_PAPER_FACTORY} --migrations-dir /opt/hope-operations/current/migrations --status-file /var/lib/hope-paper/health.json --poll-seconds 30
+ExecStart=/usr/bin/python3 -I -B -S -X pycache_prefix=/nonexistent/hope-runtime-bootstrap /opt/hope-operations/current/deploy/operations/paper_release.py --factory ${HOPE_PAPER_FACTORY} --migrations-dir /opt/hope-operations/current/migrations --status-file /var/lib/hope-paper/health.json --poll-seconds 30 --deployment-receipt ${HOPE_DEPLOYMENT_RECEIPT} --controller-directory /var/lib/hope-controller
 # Recover even when the worker handles an unexpected signal and exits cleanly.
 # An explicit systemctl stop suppresses restart at the manager boundary.
 Restart=always

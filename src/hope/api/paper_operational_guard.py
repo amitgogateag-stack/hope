@@ -11,12 +11,13 @@ from hope.api.runtime_identity import verify_interpreter
 
 
 @contextmanager
-def paper_operational_guard(release,*,root=Path("/opt/hope-operations"),deployment_receipt=None,factory_spec=None,host_probe=None):
+def paper_operational_guard(release,*,root=Path("/opt/hope-operations"),deployment_receipt=None,factory_spec=None,host_probe=None,controller_directory=None):
     release=Path(release);root=Path(root)
     entered=False
     try:
         sha=_sha(os.environ.get("HOPE_DEPLOYED_COMMIT"))
         _require(os.environ.get("HOPE_LIVE_ENABLED")=="false","LIVE_DISABLED_REQUIRED")
+        _require(controller_directory is None or deployment_receipt is not None,"CONTROLLER_RECEIPT_REQUIRED")
         _require(release==root/"releases"/sha and release.resolve(strict=True)==release,"PAPER_RELEASE_INVALID")
         mode="shared" if Path(sys.prefix)==root/"venv" else "release"
         python=environment_path(root,sha,mode)/"bin/python"
@@ -36,6 +37,12 @@ def paper_operational_guard(release,*,root=Path("/opt/hope-operations"),deployme
                     contract=inspect_deployment(root,sha,expected_receipt=deployment_receipt,expected_factory=factory_spec,
                         **({"host_probe":host_probe} if host_probe is not None else {}))
                     _require(contract['state']=='VERIFIED','DEPLOYMENT_CONTRACT_REQUIRED')
+                    if controller_directory is not None:
+                        from hope.api.paper_controller import observation,plan
+                        controller=observation(controller_directory,root,inspector=lambda *a,**k:contract,
+                            expected_plan=plan(sha,deployment_receipt,factory_spec))
+                        _require(controller['state']=='VERIFIED' and controller['release_commit']==sha
+                            and controller['receipt_sha256']==deployment_receipt,'CONTROLLER_VERIFICATION_REQUIRED')
                 return evidence,source
             original=observe()
             def check():

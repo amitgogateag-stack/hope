@@ -416,3 +416,130 @@ def test_strict_service_refuses_generic_callable_before_claim(certified_case, mi
         assert SqlAlchemyJobRunRepository(connection).get_record_for_run(run) is None
         assert connection.execute(text("SELECT count(*) FROM paper_effects WHERE job_run_id=:id"), {"id": run.job_run_id}).scalar_one() == 0
     assert strategy.calls == []
+
+
+def _constrained_service_plan(data,work):
+    from hope.application.market_data.calendar import MarketSessionCalendar
+    from hope.infrastructure.paper_service import PaperServicePlan
+    from hope.infrastructure.scheduling.paper import OperationalPaperJobBinding,OperationalPaperSchedule
+    binding=OperationalPaperJobBinding(data['strategy_version_id'],data['market'],'single-cycle',work)
+    run=create_scheduled_job_run(binding.durable_job_key,data['as_of'])
+    plan=PaperServicePlan((binding,),(OperationalPaperSchedule(data['strategy_version_id'],data['market'],'single-cycle',timedelta(0)),),
+        {data['market']:MarketSessionCalendar(((data['as_of'],data['as_of']+timedelta(hours=1)),))},
+        data['as_of'],data['as_of']+timedelta(hours=1),timedelta(minutes=2))
+    return run,plan
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('market',[StrategyMarket.USA,StrategyMarket.INDIA])
+@pytest.mark.parametrize('path',['NO_TRADE','FILLED','RISK_BLOCKED'])
+def test_exact_single_cycle_constraint_preserves_real_certified_outcomes_and_no_replay(certified_case,market,path):
+    from hope.infrastructure import paper_service as service
+    engine,make=certified_case;data,_,strategy,work,_=make(emit=path!='NO_TRADE',blocked=path=='RISK_BLOCKED',market=market)
+    run,plan=_constrained_service_plan(data,work);strategy.run=run;checks=[]
+    options=dict(migrations_dir=Path(__file__).parents[2]/'migrations',now=lambda:data['as_of']+timedelta(minutes=1),
+        require_certified=True,execution_check=lambda:checks.append(True),expected_cycle_key=service.logical_cycle_key(run))
+    # The callback is a synthetic guard, not genuine operational authority.
+    assert service.run_service_cycle(engine,lambda *_:plan,**options)==(1,0)
+    assert service.run_service_cycle(engine,lambda *_:plan,**options)==(0,1)
+    assert len(strategy.calls)==1 and len(checks)>=6
+    with engine.connect() as connection:
+        outcome=connection.execute(text('SELECT outcome FROM paper_certified_outcomes WHERE job_run_id=:id'),{'id':run.job_run_id}).scalar_one()
+        assert outcome==path
+        assert connection.execute(text("SELECT count(*) FROM audit_events WHERE event_type='PAPER_RUN_RECONCILED' AND entity_id=:id"),{'id':str(run.job_run_id)}).scalar_one()==1
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('fault',['wrong_key','extra_future_run','future','stale','no_calendar','guard_revoked'])
+def test_single_cycle_constraints_refuse_wrong_or_expanded_plan_before_any_claim(certified_case,fault):
+    from dataclasses import replace
+    from hope.application.market_data.calendar import MarketSessionCalendar
+    from hope.infrastructure import paper_service as service
+    engine,make=certified_case;data,_,strategy,work,_=make();run,plan=_constrained_service_plan(data,work);strategy.run=run
+    current=data['as_of']+timedelta(minutes=1);key=service.logical_cycle_key(run)
+    if fault=='wrong_key':key='0'*64
+    elif fault=='extra_future_run':
+        plan=replace(plan,end=data['as_of']+timedelta(hours=3),calendars={data['market']:MarketSessionCalendar(((data['as_of'],data['as_of']+timedelta(hours=1)),(data['as_of']+timedelta(hours=2),data['as_of']+timedelta(hours=3))))})
+    elif fault=='future':current=data['as_of']-timedelta(seconds=1)
+    elif fault=='stale':current=data['as_of']+timedelta(minutes=3)
+    elif fault=='no_calendar':plan=replace(plan,calendars={data['market']:MarketSessionCalendar(())})
+    calls=[]
+    def check():
+        calls.append(True)
+        if fault=='guard_revoked' and len(calls)==3:raise RuntimeError('synthetic authority revocation')
+    with pytest.raises(RuntimeError):
+        service.run_service_cycle(engine,lambda *_:plan,migrations_dir=Path(__file__).parents[2]/'migrations',now=lambda:current,
+            require_certified=True,execution_check=check,expected_cycle_key=key)
+    assert strategy.calls==[]
+    with engine.connect() as connection:
+        assert SqlAlchemyJobRunRepository(connection).get_record_for_run(run) is None
+        assert connection.execute(text('SELECT count(*) FROM paper_effects WHERE job_run_id=:id'),{'id':run.job_run_id}).scalar_one()==0
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('during',[False,True])
+def test_single_cycle_halt_before_or_at_dispatch_never_creates_financial_effects(certified_case,during):
+    from hope.infrastructure import paper_service as service
+    from hope.infrastructure.repositories.paper_control import SqlAlchemyPaperEnvironmentControlRepository
+    engine,make=certified_case;data,_,strategy,work,_=make();run,plan=_constrained_service_plan(data,work);strategy.run=run
+    calls=[];halted=[]
+    def halt():
+        with engine.begin() as connection:SqlAlchemyPaperEnvironmentControlRepository(connection).transition('RUNNING','HALTED','Synthetic constrained-cycle HALT',actor='test')
+        halted.append(True)
+    def check():
+        calls.append(True)
+        if during and len(calls)==3:halt()
+    if not during:halt()
+    try:
+        with pytest.raises(RuntimeError,match='HALTED'):
+            service.run_service_cycle(engine,lambda *_:plan,migrations_dir=Path(__file__).parents[2]/'migrations',now=lambda:data['as_of']+timedelta(minutes=1),
+                require_certified=True,execution_check=check,expected_cycle_key=service.logical_cycle_key(run))
+        assert strategy.calls==[]
+        with engine.connect() as connection:
+            assert connection.execute(text('SELECT count(*) FROM paper_effects WHERE job_run_id=:id'),{'id':run.job_run_id}).scalar_one()==0
+    finally:
+        if halted:
+            with engine.begin() as connection:SqlAlchemyPaperEnvironmentControlRepository(connection).transition('HALTED','RUNNING','Disposable fixture cleanup',actor='test')
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('interruption',['none','before_claim','after_claim','after_cycle'])
+def test_one_use_intent_dispatch_boundary_preserves_financial_proof_and_uncertain_recovery(certified_case,tmp_path,monkeypatch,interruption):
+    from first_cycle_fixture import signed_case,SHA,RECEIPT,FACTORY
+    from hope.api.paper_handoff import handoff_guard
+    from hope.infrastructure import paper_service as service
+    from hope.infrastructure.repositories.paper_handoff import database_identity,SqlAlchemyPaperHandoffRepository
+    engine,make=certified_case;data,_,strategy,work,_=make();run,plan=_constrained_service_plan(data,work);strategy.run=run
+    case=signed_case(tmp_path,monkeypatch)
+    audit_engine=create_engine(os.environ['HOPE_DATABASE_URL'],connect_args={'options':'-c statement_timeout=10000 -c lock_timeout=1000 -c idle_in_transaction_session_timeout=5000'})
+    with audit_engine.connect() as connection:identity=database_identity(connection)
+    case['token'].update(database_sha256=identity,first_cycle_key_sha256=service.logical_cycle_key(run),request_sha256=__import__('hashlib').sha256(uuid4().bytes).hexdigest())
+    authorization=case['pin']();request=case['token']['request_sha256']
+    def verifier(*args):
+        if interruption=='before_claim':raise RuntimeError('synthetic unavailable authority')
+        return case['verify']()
+    def attempt():
+        # Runtime/stage probes are explicit synthetic witnesses. This does not
+        # grant operating permission or bypass the production CLI runtime guard.
+        with handoff_guard(audit_engine,case['root'],SHA,request,RECEIPT,FACTORY,service.logical_cycle_key(run),verifier=verifier) as check:
+            if interruption=='after_claim':raise RuntimeError('synthetic death after committed claim')
+            assert service.run_service_cycle(engine,lambda *_:plan,migrations_dir=Path(__file__).parents[2]/'migrations',now=lambda:data['as_of']+timedelta(minutes=1),
+                require_certified=True,execution_check=check,expected_cycle_key=service.logical_cycle_key(run))==(1,0)
+            if interruption=='after_cycle':raise RuntimeError('synthetic death after financial commit')
+    try:
+        if interruption=='none':attempt()
+        else:
+            with pytest.raises(RuntimeError):attempt()
+        with audit_engine.connect() as connection:
+            observation=SqlAlchemyPaperHandoffRepository(connection).observation(authorization)
+            expected='ABSENT' if interruption=='before_claim' else 'ACKNOWLEDGED' if interruption=='none' else 'RECOVERY_REQUIRED'
+            assert observation['state']==expected and observation['execution_authorized'] is False
+        with engine.connect() as connection:
+            count=connection.execute(text('SELECT count(*) FROM paper_certified_outcomes WHERE job_run_id=:id'),{'id':run.job_run_id}).scalar_one()
+            assert count==(1 if interruption in {'none','after_cycle'} else 0)
+        if interruption!='before_claim':
+            with pytest.raises(IntegrityError):
+                with handoff_guard(audit_engine,case['root'],SHA,request,RECEIPT,FACTORY,service.logical_cycle_key(run),verifier=lambda *args:case['verify']()):
+                    pytest.fail('Consumed intent was replayed')
+        assert len(strategy.calls)==(1 if interruption in {'none','after_cycle'} else 0)
+    finally:audit_engine.dispose()
