@@ -6,6 +6,7 @@ authority. No gate template with fabricated passing values is supplied.
 import argparse
 from datetime import datetime, timezone
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -14,6 +15,7 @@ import re
 import shutil
 import stat
 import subprocess
+import time
 import zipfile
 
 ROOT = Path('/opt/hope-staging')
@@ -30,6 +32,9 @@ SANDBOX = {'DynamicUser': 'yes', 'NoNewPrivileges': 'yes',
            'PrivateTmp': 'yes', 'PrivateDevices': 'yes',
            'RestrictAddressFamilies': 'AF_INET',
            'IPAddressDeny': 'any', 'IPAddressAllow': 'localhost'}
+STATUS_FIELDS = {'schema', 'release_commit', 'scope', 'paper_enabled', 'live_enabled',
+                 'execution_authorized', 'database', 'broker',
+                 'independent_acceptance', 'operational_readiness'}
 
 
 def require(value, message):
@@ -149,6 +154,49 @@ def stop_confirmed(observed):
             or observed.get('LoadState') == 'not-found')
 
 
+def validate_preview_status(value, commit):
+    sha(commit, 40)
+    require(type(value) is dict and set(value) == STATUS_FIELDS
+            and value['schema'] == 'hope.nontrading-preview.v1'
+            and value['release_commit'] == commit
+            and value['scope'] == 'PREVIEW_ONLY_NO_DATABASE'
+            and type(value['paper_enabled']) is bool and value['paper_enabled'] is False
+            and type(value['live_enabled']) is bool and value['live_enabled'] is False
+            and type(value['execution_authorized']) is bool and value['execution_authorized'] is False
+            and value['database'] == 'NOT_CONNECTED'
+            and value['broker'] == 'NOT_INCLUDED'
+            and value['independent_acceptance'] == 'UNVERIFIED'
+            and value['operational_readiness'] == 'BLOCKED',
+            'STAGING_PREVIEW_STATUS_INVALID')
+    return value
+
+
+def preview_status(commit):
+    """Require one exact loopback response; never treat it as PAPER readiness."""
+    deadline = time.monotonic() + 5
+    while True:
+        connection = http.client.HTTPConnection('127.0.0.1', 8790, timeout=1)
+        try:
+            connection.request('GET', '/status.json', headers={'Host': '127.0.0.1:8790'})
+            response = connection.getresponse()
+            payload = response.read(4097)
+        except (OSError, http.client.HTTPException):
+            if time.monotonic() >= deadline:
+                raise ValueError('STAGING_PREVIEW_UNRESPONSIVE') from None
+            time.sleep(0.05)
+            continue
+        finally:
+            connection.close()
+        require(response.status == 200 and len(payload) <= 4096
+                and response.getheader('Content-Type') == 'application/json',
+                'STAGING_PREVIEW_RESPONSE_INVALID')
+        try:
+            value = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise ValueError('STAGING_PREVIEW_STATUS_INVALID') from None
+        return validate_preview_status(value, commit)
+
+
 def install(archive, expected, commit, gate_path):
     # All denied gates and artifact checks precede mkdir/systemd mutation.
     require(os.name == 'posix' and os.geteuid() == 0, 'STAGING_ROOT_OPERATOR_REQUIRED')
@@ -205,8 +253,21 @@ def install(archive, expected, commit, gate_path):
             raise RuntimeError('STAGING_LAUNCH_IDENTITY_STOP_FAILED') from error
         require(stop_confirmed(state()), 'STAGING_STOP_UNCONFIRMED')
         raise ValueError('STAGING_LAUNCH_IDENTITY')
-    # This is a launch acknowledgement, never health/DB/independent acceptance.
-    return {'state': 'START_REQUESTED', 'commit': commit, 'execution_authorized': False}
+    try:
+        status = preview_status(commit)
+        require(launch_matches(state(), commit), 'STAGING_LAUNCH_IDENTITY')
+    except Exception:
+        try:
+            command(SYSTEMCTL, 'stop', UNIT)
+        except Exception as error:
+            raise RuntimeError('STAGING_LAUNCH_IDENTITY_STOP_FAILED') from error
+        require(stop_confirmed(state()), 'STAGING_STOP_UNCONFIRMED')
+        raise
+    # This is bounded preview responsiveness, never PAPER/DB/independent acceptance.
+    canonical = json.dumps(status, sort_keys=True, separators=(',', ':')).encode()
+    return {'state': 'PREVIEW_RESPONSIVE', 'commit': commit,
+            'status_sha256': hashlib.sha256(canonical).hexdigest(),
+            'execution_authorized': False}
 
 
 def rollback(commit):
