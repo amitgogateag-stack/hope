@@ -38,15 +38,19 @@ def build(repo, commit, destination):
         scope='PREVIEW_ONLY_NO_DATABASE',
         files={k: hashlib.sha256(v).hexdigest() for k, v in sorted(files.items())})
     files['MANIFEST.json'] = json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode() + b'\n'
-    with destination.open('xb') as output:
+    with destination.open('x+b') as output:
         with zipfile.ZipFile(output, 'w', compression=zipfile.ZIP_STORED) as z:
             for name, data in sorted(files.items()):
                 info = zipfile.ZipInfo(name, date_time=(2026, 1, 1, 0, 0, 0))
                 info.create_system = 3
                 info.external_attr = 0o100444 << 16
                 z.writestr(info, data)
-    return {'commit': commit, 'sha256': hashlib.sha256(destination.read_bytes()).hexdigest(),
-            'bytes': destination.stat().st_size, 'execution_authorized': False}
+        output.flush()
+        os.fsync(output.fileno())
+        output.seek(0)
+        archive = output.read()
+    return {'commit': commit, 'sha256': hashlib.sha256(archive).hexdigest(),
+            'bytes': len(archive), 'execution_authorized': False}
 
 
 def main(argv=None):

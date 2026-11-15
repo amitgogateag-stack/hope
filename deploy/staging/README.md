@@ -34,7 +34,9 @@ python -m hope.api.staging_release --repo VERIFIED_CHECKOUT --commit EXACT_40_HE
 
 The builder reads only committed blobs, not dirty checkout bytes, uses a scrubbed
 Git environment/no replacement objects/hooks, fixed ZIP timestamps/order/modes,
-stored compression, exclusive output creation and a SHA256 file manifest.
+stored compression, exclusive output creation and a SHA256 file manifest. The
+reported archive size and digest are read from that same exclusive descriptor
+after flushing and syncing, not from a replaceable output pathname.
 Rebuilding the same commit produces identical bytes. Hashes are integrity
 checks, not cryptographic independent signing authority. Review/pin the external
 archive checksum before running anything from it.

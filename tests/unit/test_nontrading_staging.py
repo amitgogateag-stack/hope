@@ -90,6 +90,38 @@ def test_reproducible_builder_uses_committed_bytes_not_worktree(tmp_path):
     assert load('manage').payload(first.read_bytes(), info['sha256'], commit)['server.py'] == (ROOT / 'deploy/staging/server.py').read_bytes()
 
 
+def test_builder_reports_digest_from_exclusive_output_descriptor(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'; repo.mkdir()
+    def git(*args):
+        return subprocess.run(['git', '-C', str(repo), *args], check=True, capture_output=True).stdout.decode().strip()
+    git('init', '-q')
+    git('config', 'user.email', 'test@example.invalid')
+    git('config', 'user.name', 'Disposable test')
+    for name in FILES:
+        p = repo / 'deploy/staging' / name; p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes((ROOT / 'deploy/staging' / name).read_bytes())
+    git('add', '.')
+    git('commit', '-qm', 'disposable')
+    commit = git('rev-parse', 'HEAD')
+    destination = tmp_path / 'release.zip'
+    original_read, original_stat = Path.read_bytes, Path.stat
+    def no_reopen_read(path):
+        if path == destination:
+            pytest.fail('builder reopened completed archive by pathname')
+        return original_read(path)
+    def no_reopen_stat(path, *args, **kwargs):
+        if path == destination:
+            pytest.fail('builder restatted completed archive by pathname')
+        return original_stat(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_bytes', no_reopen_read)
+    monkeypatch.setattr(Path, 'stat', no_reopen_stat)
+    info = build(repo, commit, destination)
+    with destination.open('rb') as stream:
+        artifact = stream.read()
+    assert info['sha256'] == hashlib.sha256(artifact).hexdigest()
+    assert info['bytes'] == len(artifact)
+
+
 @pytest.mark.parametrize('commit', ['HEAD', 'a'*39, 'A'*40, '../release', '--help'])
 def test_builder_requires_exact_immutable_commit(tmp_path, commit):
     with pytest.raises(ValueError, match='STAGING_COMMIT_INVALID'):
