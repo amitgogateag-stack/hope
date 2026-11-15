@@ -198,11 +198,37 @@ def test_installer_stops_unit_when_effective_sandbox_is_weaker(tmp_path, monkeyp
     monkeypatch.setattr(m, 'ROOT', tmp_path)
     observed = dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')
     observed[changed] = 'wrong'
-    states = iter([dict(LoadState='not-found'), observed])
+    states = iter([dict(LoadState='not-found'), observed,
+                   dict(LoadState='not-found')])
     monkeypatch.setattr(m, 'state', lambda: next(states))
     monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
     gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
     with pytest.raises(ValueError, match='STAGING_LAUNCH_IDENTITY'):
+        m.install(source, digest, SHA, gate)
+    assert calls[-1] == (m.SYSTEMCTL, 'stop', m.UNIT)
+    for p in (tmp_path / 'releases' / SHA).iterdir():
+        p.chmod(0o600)
+
+
+def test_installer_mismatch_requires_confirmed_stop(tmp_path, monkeypatch):
+    m = load('manage'); calls = []
+    raw, digest = archive(tmp_path)
+    source = tmp_path / 'release.zip'; source.write_bytes(raw)
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m.os, 'sysconf', lambda key: 1024**3 if key == 'SC_AVPHYS_PAGES' else 4096, raising=False)
+    monkeypatch.setattr(m, 'ancestors', lambda p: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'ROOT', tmp_path)
+    mismatch = dict(m.expected_identity(SHA), ActiveState='active')
+    mismatch['DynamicUser'] = 'no'
+    states = iter([dict(LoadState='not-found'), mismatch,
+                   dict(mismatch, ActiveState='active')])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
+    monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
+    gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
+    with pytest.raises(ValueError, match='STAGING_STOP_UNCONFIRMED'):
         m.install(source, digest, SHA, gate)
     assert calls[-1] == (m.SYSTEMCTL, 'stop', m.UNIT)
     for p in (tmp_path / 'releases' / SHA).iterdir():

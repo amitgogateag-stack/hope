@@ -135,6 +135,11 @@ def identity_matches(observed, commit):
                for key, value in expected.items())
 
 
+def stop_confirmed(observed):
+    return (observed.get('ActiveState') in {'inactive', 'failed'}
+            or observed.get('LoadState') == 'not-found')
+
+
 def install(archive, expected, commit, gate_path):
     # All denied gates and artifact checks precede mkdir/systemd mutation.
     require(os.name == 'posix' and os.geteuid() == 0, 'STAGING_ROOT_OPERATOR_REQUIRED')
@@ -188,6 +193,7 @@ def install(archive, expected, commit, gate_path):
             command(SYSTEMCTL, 'stop', UNIT)
         except Exception as error:
             raise RuntimeError('STAGING_LAUNCH_IDENTITY_STOP_FAILED') from error
+        require(stop_confirmed(state()), 'STAGING_STOP_UNCONFIRMED')
         raise ValueError('STAGING_LAUNCH_IDENTITY')
     # This is a launch acknowledgement, never health/DB/independent acceptance.
     return {'state': 'START_REQUESTED', 'commit': commit, 'execution_authorized': False}
@@ -201,9 +207,7 @@ def rollback(commit):
     observed = state()
     require(identity_matches(observed, commit), 'STAGING_ROLLBACK_IDENTITY')
     command(SYSTEMCTL, 'stop', UNIT)
-    after = state()
-    require(after.get('ActiveState') in {'inactive', 'failed'} or after.get('LoadState') == 'not-found',
-            'STAGING_STOP_UNCONFIRMED')
+    require(stop_confirmed(state()), 'STAGING_STOP_UNCONFIRMED')
     return {'state': 'STOPPED', 'commit': commit, 'release_retained': True, 'execution_authorized': False}
 
 

@@ -138,8 +138,9 @@ and requires manual investigation; do not delete evidence or rerun over a releas
 Before returning START_REQUESTED, the installer reads back the transient unit's
 commit-bound identity and effective DynamicUser, privilege, filesystem, home,
 temporary-directory, device and loopback-only network restrictions. A weaker or
-mismatched unit is stopped and the launch is refused. This read-back does not
-prove kernel enforcement or constitute host/PAPER acceptance.
+mismatched unit is stopped, confirmed inactive or absent, and the launch is
+refused. This read-back does not prove kernel enforcement or constitute
+host/PAPER acceptance.
 
 ## Verification after an authorized installation
 
