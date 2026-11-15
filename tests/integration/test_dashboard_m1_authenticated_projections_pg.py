@@ -109,37 +109,28 @@ def test_full_migrated_projection_distinguishes_verified_zero_and_recorded_metad
 
 @pytest.mark.integration
 def test_missing_optional_select_permission_is_unavailable_without_poisoning_other_sections(postgres_engine, migrated_dashboard_schema):
+    from dashboard_reader_fixture import restricted_dashboard_reader
+    from sqlalchemy.exc import DBAPIError
     schema = migrated_dashboard_schema
-    role = "dashboard_reader_" + uuid4().hex
-    tables = ("research_runs", "job_runs", "paper_environment_control_events", "paper_effects", "audit_events",
-              "strategy_versions", "experiments", "research_decisions", "paper_no_trade_decisions", "market_bars")
-    with postgres_engine.begin() as connection:
-        connection.execute(text(f'CREATE ROLE "{role}" NOLOGIN'))
-        connection.execute(text(f'GRANT USAGE ON SCHEMA "{schema}" TO "{role}"'))
-        names = ",".join(f'"{schema}"."{name}"' for name in tables)
-        connection.execute(text(f'GRANT SELECT ON TABLE {names} TO "{role}"'))
-    try:
-        with postgres_engine.connect() as connection:
-            try:
-                connection.execute(text(f'SET search_path TO "{schema}", public'))
-                connection.execute(text(f'SET ROLE "{role}"'))
-                connection.commit()
-                snapshot = build_dashboard_snapshot(connection)
-                assert snapshot["projections"]["datasets"] == {"status": "UNAVAILABLE"}
-                assert snapshot["projections"]["strategies"] == {"status": "AVAILABLE", "versions": 0}
-                assert snapshot["projections"]["decisions"]["total"] == 0
-                assert snapshot["projections"]["strategy_catalog"] == {"status": "UNAVAILABLE"}
-                assert snapshot["projections"]["certified_chain"] == {"status": "UNAVAILABLE"}
-                assert connection.execute(text("SHOW transaction_read_only")).scalar_one() == "on"
-            finally:
-                connection.rollback()
-                connection.execute(text("RESET ROLE"))
-                connection.execute(text("RESET search_path"))
-                connection.commit()
-    finally:
-        with postgres_engine.begin() as connection:
-            connection.execute(text(f'DROP OWNED BY "{role}"'))
-            connection.execute(text(f'DROP ROLE "{role}"'))
+    with restricted_dashboard_reader(postgres_engine, schema) as connection:
+        actor = connection.execute(text('SELECT current_user,session_user')).one()
+        assert actor[0] == actor[1]
+        connection.rollback()
+        # Prove a genuine backend permission denial, not an empty/missing table
+        # or a mocked projection error. The real reader has a separate LOGIN.
+        with pytest.raises(DBAPIError) as denied:
+            with connection.begin_nested():
+                connection.execute(text(f'SELECT count(*) FROM "{schema}".datasets'))
+        assert denied.value.orig.sqlstate == '42501'
+        connection.rollback()
+        snapshot = build_dashboard_snapshot(connection)
+        assert snapshot["projections"]["datasets"] == {"status": "UNAVAILABLE"}
+        assert snapshot["projections"]["strategies"] == {"status": "AVAILABLE", "versions": 0}
+        assert snapshot["projections"]["decisions"]["total"] == 0
+        assert snapshot["projections"]["strategy_catalog"] == {"status": "UNAVAILABLE"}
+        assert snapshot["projections"]["certified_chain"] == {"status": "UNAVAILABLE"}
+        assert connection.execute(text("SHOW transaction_read_only")).scalar_one() == "on"
+
 
 
 @pytest.mark.integration
