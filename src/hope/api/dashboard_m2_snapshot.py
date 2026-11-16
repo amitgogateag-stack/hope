@@ -31,7 +31,12 @@ def readers(connection, generated):
             "WITH paper_fills AS (SELECT f.fill_id FROM fills f JOIN orders o USING(order_id) WHERE o.environment='PAPER'),"
             "applications AS (SELECT a.* FROM paper_portfolio_fill_applications a JOIN paper_fills f USING(fill_id)),"
             "effect_receipts AS (SELECT DISTINCT f.fill_id FROM paper_fills f JOIN paper_effects e "
-            "ON e.effect_type='FILL' AND e.entity_id=f.fill_id) "
+            "ON e.effect_type='FILL' AND e.entity_id=f.fill_id JOIN job_runs j "
+            "ON j.job_run_id=e.job_run_id WHERE left(j.job_key,6)='paper:'),"
+            "unattributed_effect_receipts AS (SELECT DISTINCT f.fill_id FROM paper_fills f "
+            "JOIN paper_effects e ON e.effect_type='FILL' AND e.entity_id=f.fill_id "
+            "LEFT JOIN job_runs j ON j.job_run_id=e.job_run_id "
+            "WHERE left(j.job_key,6) IS DISTINCT FROM 'paper:') "
             "SELECT (SELECT count(*) FROM paper_fills),"
             "(SELECT count(*) FROM paper_fills f WHERE EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=f.fill_id)),"
             "(SELECT count(*) FROM applications),"
@@ -41,6 +46,7 @@ def readers(connection, generated):
             "WHERE p.fill_id=a.fill_id AND p.portfolio_id=a.portfolio_id)),"
             "(SELECT count(*) FROM effect_receipts),"
             "(SELECT count(*) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM effect_receipts e WHERE e.fill_id=f.fill_id)),"
+            "(SELECT count(*) FROM unattributed_effect_receipts),"
             "(SELECT count(*) FROM effect_receipts e WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
             "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id) "
             "WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=p.fill_id "
@@ -49,6 +55,7 @@ def readers(connection, generated):
         return dict(zip(("fills", "applied_fills", "fill_applications", "accounting_receipts",
                          "fills_without_application", "applications_without_pnl",
                          "effect_receipt_fills", "fills_without_effect_receipt",
+                         "unattributed_effect_receipt_fills",
                          "effect_receipt_fills_without_application",
                          "accounting_receipts_without_application"), values))
     def blocked_runs():

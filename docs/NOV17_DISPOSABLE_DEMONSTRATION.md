@@ -118,11 +118,13 @@ HOPE_DATABASE_URL='postgresql+psycopg://.../isolated_lab' python -m hope.api.das
   --interval-seconds 60
 ```
 
-Execution-ledger observations additionally split fills with a canonical `FILL`
-effect receipt from historical/untracked rows. A canonical fill lacking portfolio
-application is a stronger recovery-review signal; a fill lacking its effect receipt
-is reported separately and is never interpreted as trading activity or permission to
-replay. No identifiers, prices, quantities or P&L values are exposed.
+Execution-ledger observations additionally split fills with a `FILL` effect receipt
+attributed to a `paper:` job from historical/untracked rows. A matching effect tied
+to a missing or non-PAPER job is explicitly `UNATTRIBUTED_EFFECT_RECEIPTS`, never
+treated as canonical lineage. An attributed fill lacking portfolio application is a
+stronger recovery-review signal; a fill lacking its attributed receipt is reported
+separately and is never interpreted as trading activity or permission to replay. No
+identifiers, prices, quantities or P&L values are exposed.
 
 ## November 17 decision
 

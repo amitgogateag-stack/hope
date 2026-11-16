@@ -152,6 +152,7 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
         ledger = projections.get("execution_ledger") if isinstance(projections, dict) else None
         required_ledger_lineage = {
             "effect_receipt_fills", "fills_without_effect_receipt",
+            "unattributed_effect_receipt_fills",
             "effect_receipt_fills_without_application",
             "accounting_receipts_without_application",
         }

@@ -85,21 +85,25 @@ def test_partial_or_corrupt_authorization_receipts_are_unavailable(postgres_engi
 
 @pytest.mark.integration
 def test_execution_observations_report_missing_applications_and_accounting_without_valuation(postgres_engine):
-    schema, order, fill, portfolio = "dashboard_ledger_" + uuid4().hex, uuid4(), uuid4(), uuid4()
+    schema, order, fill, portfolio, job = (
+        "dashboard_ledger_" + uuid4().hex, uuid4(), uuid4(), uuid4(), uuid4()
+    )
     with postgres_engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
         for query in (
             "CREATE TABLE orders(order_id uuid,environment text)",
             "CREATE TABLE fills(fill_id uuid,order_id uuid)",
-            "CREATE TABLE paper_effects(effect_type text,entity_id uuid)",
+            "CREATE TABLE job_runs(job_run_id uuid,job_key text)",
+            "CREATE TABLE paper_effects(effect_type text,entity_id uuid,job_run_id uuid)",
             "CREATE TABLE paper_portfolio_fill_applications(portfolio_id uuid,fill_id uuid)",
             "CREATE TABLE paper_portfolio_pnl_events(portfolio_id uuid,fill_id uuid)",
         ):
             connection.execute(text(query))
         connection.execute(text("INSERT INTO orders VALUES (:id,'PAPER')"), {"id": order})
         connection.execute(text("INSERT INTO fills VALUES (:id,:order)"), {"id": fill, "order": order})
-        connection.execute(text("INSERT INTO paper_effects VALUES ('FILL',:fill)"), {"fill": fill})
+        connection.execute(text("INSERT INTO job_runs VALUES (:job,'paper:USA:synthetic')"), {"job": job})
+        connection.execute(text("INSERT INTO paper_effects VALUES ('FILL',:fill,:job)"), {"fill": fill, "job": job})
     def observe():
         with postgres_engine.connect() as connection:
             connection.execute(text(f'SET search_path TO "{schema}"'))
@@ -113,7 +117,17 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             return value
     try:
         initial = observe()
-        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "effect_receipt_fills_without_application": 1, "accounting_receipts_without_application": 0}
+        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "unattributed_effect_receipt_fills": 0, "effect_receipt_fills_without_application": 1, "accounting_receipts_without_application": 0}
+        # An effect row outside the PAPER scheduler namespace cannot make the
+        # fill look canonically tracked, even though its entity ID matches.
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET job_key='research:synthetic'"))
+        unattributed = observe()
+        assert unattributed["effect_receipt_fills"] == 0
+        assert unattributed["fills_without_effect_receipt"] == 1
+        assert unattributed["unattributed_effect_receipt_fills"] == 1
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET job_key='paper:USA:synthetic'"))
         # A P&L row cannot make an unapplied fill look reconciled.  Surface the
         # orphan as aggregate evidence without exposing portfolio or fill IDs.
         with postgres_engine.begin() as connection:
