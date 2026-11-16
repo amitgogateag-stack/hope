@@ -9,6 +9,7 @@ import json
 import os
 import re
 import tempfile
+from hashlib import sha256
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -93,7 +94,8 @@ def _optional_projections(connection: Connection, generated: datetime) -> dict:
 
 def build_dashboard_snapshot(
     connection: Connection, *, statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
-    deployed_commit: str | None = None,
+    deployed_commit: str | None = None, data_classification: str | None = None,
+    expected_database: str | None = None,
 ) -> dict[str, object]:
     """Read a transactionally consistent snapshot; fail closed on missing state."""
     # The first SQL statement establishes a read-only repeatable-read snapshot.
@@ -102,6 +104,13 @@ def build_dashboard_snapshot(
     if deployed_commit is not None and (not isinstance(deployed_commit, str)
             or not re.fullmatch(r"[0-9a-f]{40}", deployed_commit)):
         raise ValueError("HOPE_DASHBOARD_DEPLOYED_COMMIT_INVALID")
+    if (data_classification is None) != (expected_database is None):
+        raise ValueError("HOPE_DASHBOARD_PROVENANCE_INCOMPLETE")
+    if data_classification not in {None, "DISPOSABLE_LAB", "PRODUCTION_READ_ONLY"}:
+        raise ValueError("HOPE_DASHBOARD_DATA_CLASSIFICATION_INVALID")
+    if expected_database is not None and (not isinstance(expected_database, str)
+            or not re.fullmatch(r"[A-Za-z0-9_]{1,63}", expected_database)):
+        raise ValueError("HOPE_DASHBOARD_EXPECTED_DATABASE_INVALID")
     connection.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"))
     # Transaction-local limits protect the exporter from DDL locks and expensive
     # reads without modifying the authenticated role or leaking settings into a
@@ -111,6 +120,18 @@ def build_dashboard_snapshot(
     timestamp = connection.execute(text("SELECT CURRENT_TIMESTAMP")).scalar_one()
     if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_DATABASE_TIME_INVALID")
+    provenance = None
+    if expected_database is not None:
+        actual_database = connection.execute(text("SELECT current_database()")).scalar_one()
+        if actual_database != expected_database:
+            raise RuntimeError("HOPE_DASHBOARD_DATABASE_IDENTITY_MISMATCH")
+        provenance = {
+            "data_classification": data_classification,
+            "database_identity_sha256": sha256(actual_database.encode("utf-8")).hexdigest(),
+            "synthetic_activity": data_classification == "DISPOSABLE_LAB",
+            "execution_authorized": False,
+            "live_enabled": False,
+        }
     state = connection.execute(
         text("SELECT state FROM paper_environment_control_events "
              "ORDER BY control_sequence DESC LIMIT 1")
@@ -143,8 +164,8 @@ def build_dashboard_snapshot(
     claimed = jobs.get("CLAIMED", 0)
     if claims_with_effects > claimed or stale_claims > claimed or receipts > jobs.get("SUCCEEDED", 0):
         raise ValueError("HOPE_DASHBOARD_RECOVERY_COUNTS_INCONSISTENT")
-    return {
-        "schema_version": 1,
+    snapshot = {
+        "schema_version": 2 if provenance is not None else 1,
         "source": "hope_postgresql",
         "deployed_commit": deployed_commit,
         "generated_at": timestamp.astimezone(timezone.utc).isoformat(),
@@ -166,12 +187,16 @@ def build_dashboard_snapshot(
             },
         },
     }
+    if provenance is not None:
+        snapshot["provenance"] = provenance
+    return snapshot
 
 
 def export_dashboard_snapshot(
     output: Path, database_url: str, *, connect_timeout_seconds: int = 10,
     statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
-    deployed_commit: str | None = None,
+    deployed_commit: str | None = None, data_classification: str | None = None,
+    expected_database: str | None = None,
 ) -> Path:
     """Atomically publish only a complete snapshot; never publish partial reads."""
     if not database_url:
@@ -184,7 +209,8 @@ def export_dashboard_snapshot(
         with engine.connect() as connection:
             snapshot = build_dashboard_snapshot(
                 connection, statement_timeout_ms=statement_timeout_ms, lock_timeout_ms=lock_timeout_ms,
-                deployed_commit=deployed_commit,
+                deployed_commit=deployed_commit, data_classification=data_classification,
+                expected_database=expected_database,
             )
             connection.rollback()
     finally:
@@ -212,8 +238,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Export local read-only HOPE dashboard metrics")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--deployed-commit")
+    parser.add_argument("--data-classification", choices=("DISPOSABLE_LAB", "PRODUCTION_READ_ONLY"))
+    parser.add_argument("--expected-database")
     args = parser.parse_args()
     export_dashboard_snapshot(
         args.output, os.environ.get("HOPE_DATABASE_URL", ""),
-        deployed_commit=args.deployed_commit,
+        deployed_commit=args.deployed_commit, data_classification=args.data_classification,
+        expected_database=args.expected_database,
     )

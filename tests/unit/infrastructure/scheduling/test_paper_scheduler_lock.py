@@ -65,3 +65,30 @@ def test_scheduler_transaction_lock_fails_closed_when_unavailable() -> None:
     assert entered is False
     assert engine.exited is True
     assert len(engine.connection.executions) == 1
+
+
+class _BrokenCleanupEngine(_Engine):
+    def __init__(self):
+        super().__init__(True);self.invalidations=[]
+        self.connection.invalidate=lambda error:self.invalidations.append(error)
+
+    @contextmanager
+    def connect(self):
+        try:yield self.connection
+        finally:
+            self.exited=True
+            raise RuntimeError('SYNTHETIC_EXPIRED_SCHEDULER_CONNECTION')
+
+
+def test_scheduler_cleanup_failure_cannot_replace_primary_financial_failure():
+    engine=_BrokenCleanupEngine();primary=ValueError('SYNTHETIC_FINANCIAL_COMMIT_FAILURE')
+    with pytest.raises(ValueError) as observed:
+        with _operational_paper_scheduler_lock(engine):raise primary
+    assert observed.value is primary and engine.invalidations==[primary] and engine.exited
+
+
+def test_scheduler_cleanup_failure_without_primary_error_still_fails_closed():
+    engine=_BrokenCleanupEngine()
+    with pytest.raises(RuntimeError,match='SYNTHETIC_EXPIRED_SCHEDULER_CONNECTION'):
+        with _operational_paper_scheduler_lock(engine):pass
+    assert engine.invalidations==[] and engine.exited

@@ -154,6 +154,7 @@ def inspect_aws_readiness(*args, **kwargs):
     kwargs.setdefault("paper_status_probe", _paper_status())
     kwargs.setdefault("unit_file_probe", lambda _installed, _reviewed: True)
     kwargs.setdefault("snapshot_probe", _snapshot())
+    kwargs.setdefault("snapshot_authority_probe", lambda *_args: True)
     kwargs.setdefault("runtime_probe", _runtime())
     return aws_readiness.inspect_aws_readiness(*args, **kwargs)
 
@@ -1228,6 +1229,7 @@ def test_default_unit_matcher_uses_system_and_release_trust_anchors(
         status_probe=_status(), dashboard_release_probe=_dashboard_release(),
         paper_status_probe=_paper_status(),
         snapshot_probe=_snapshot(),
+        snapshot_authority_probe=lambda *_args: True,
         runtime_probe=_runtime(),
         release_probe=_release_ok,
     )

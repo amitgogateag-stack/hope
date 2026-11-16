@@ -29,16 +29,28 @@ def readers(connection, generated):
     def execution_ledger():
         values = connection.execute(text(
             "WITH paper_fills AS (SELECT f.fill_id FROM fills f JOIN orders o USING(order_id) WHERE o.environment='PAPER'),"
-            "applications AS (SELECT a.* FROM paper_portfolio_fill_applications a JOIN paper_fills f USING(fill_id)) "
+            "applications AS (SELECT a.* FROM paper_portfolio_fill_applications a JOIN paper_fills f USING(fill_id)),"
+            "effect_receipts AS (SELECT DISTINCT f.fill_id FROM paper_fills f JOIN paper_effects e "
+            "ON e.effect_type='FILL' AND e.entity_id=f.fill_id) "
             "SELECT (SELECT count(*) FROM paper_fills),"
             "(SELECT count(*) FROM paper_fills f WHERE EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=f.fill_id)),"
             "(SELECT count(*) FROM applications),"
             "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id)),"
             "(SELECT count(*) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=f.fill_id)),"
             "(SELECT count(*) FROM applications a WHERE NOT EXISTS(SELECT 1 FROM paper_portfolio_pnl_events p "
-            "WHERE p.fill_id=a.fill_id AND p.portfolio_id=a.portfolio_id))"
+            "WHERE p.fill_id=a.fill_id AND p.portfolio_id=a.portfolio_id)),"
+            "(SELECT count(*) FROM effect_receipts),"
+            "(SELECT count(*) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM effect_receipts e WHERE e.fill_id=f.fill_id)),"
+            "(SELECT count(*) FROM effect_receipts e WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
+            "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id) "
+            "WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=p.fill_id "
+            "AND a.portfolio_id=p.portfolio_id))"
         )).one()
-        return dict(zip(("fills", "applied_fills", "fill_applications", "accounting_receipts", "fills_without_application", "applications_without_pnl"), values))
+        return dict(zip(("fills", "applied_fills", "fill_applications", "accounting_receipts",
+                         "fills_without_application", "applications_without_pnl",
+                         "effect_receipt_fills", "fills_without_effect_receipt",
+                         "effect_receipt_fills_without_application",
+                         "accounting_receipts_without_application"), values))
     def blocked_runs():
         allowed = ",".join(f"'{code}'" for code in BLOCKED_CODES if code != "OTHER")
         rows = dict(connection.execute(text(
