@@ -93,6 +93,10 @@ timestamps, closed error code and non-authorizing LAB scope. A failed refresh is
 shown separately while the last-good snapshot remains intact; a successful attempt
 older than the snapshot freshness budget is labeled `STALE`. Unknown fields,
 commit mismatches, symlinks and free-text errors fail closed with HTTP 503.
+`CURRENT` refresh evidence is additionally bound to the exact timestamp of the
+sanitized snapshot being served. The atomic publication interval between a new
+snapshot and its matching receipt is therefore temporarily `UNAVAILABLE`, never a
+false assertion that an older receipt authenticated newer bytes.
 
 Example for a disposable database only (do not point this at `hope`):
 

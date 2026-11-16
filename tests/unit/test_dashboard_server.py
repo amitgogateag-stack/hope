@@ -432,8 +432,10 @@ def test_server_reports_liveness_separately_from_missing_data(tmp_path):
 
 
 def test_server_reports_verified_refresh_success_without_database_details(tmp_path):
-    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(refresh_status()))
-    with dashboard(tmp_path) as server:
+    stamp=datetime.now(timezone.utc).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=stamp,snapshot_generated_at=stamp)))
+    with dashboard(tmp_path,valid_snapshot(generated_at=stamp)) as server:
         status, headers, body = request(server, "/refresh-status.json")
         result = json.loads(body)
         assert status == 200 and headers["Cache-Control"].startswith("no-store")
@@ -480,11 +482,24 @@ def test_server_marks_old_successful_refresh_attempt_stale(tmp_path):
     (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
         refresh_status(generated_at=old, snapshot_generated_at=old)))
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
-    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",max_snapshot_age_seconds=15) as server:
+    snapshot=tmp_path/"snapshot.json";snapshot.write_bytes(valid_snapshot(generated_at=old))
+    with DashboardHTTPServer(0,preview,snapshot,max_snapshot_age_seconds=15) as server:
         thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
         try:
             assert json.loads(request(server,"/refresh-status.json")[2])["state"]=="STALE"
         finally:server.shutdown();thread.join(timeout=5)
+
+
+def test_server_rejects_current_refresh_receipt_for_different_snapshot(tmp_path):
+    snapshot_stamp=datetime.now(timezone.utc).isoformat()
+    receipt_stamp=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=snapshot_stamp,snapshot_generated_at=receipt_stamp)))
+    with dashboard(tmp_path,valid_snapshot(generated_at=snapshot_stamp)) as server:
+        assert request(server,"/refresh-status.json")[0]==503
+        health=json.loads(request(server,"/status.json")[2])
+        assert health["data_feed"]=="CURRENT"
+        assert health["refresh_state"]=="UNAVAILABLE"
 
 
 def test_server_rejects_refresh_status_from_another_deployed_commit(tmp_path):

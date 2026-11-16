@@ -90,7 +90,9 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
 
 
 def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
-                             max_age_seconds: int = 900) -> bytes:
+                             max_age_seconds: int = 900,
+                             expected_snapshot_generated: datetime | None = None,
+                             require_snapshot_match: bool = False) -> bytes:
     """Sanitize the refresher's last attempt without exposing database details."""
     data = json.loads(bounded_regular_read(path, 2048))
     fields = {
@@ -105,6 +107,10 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
             or data.get("live_enabled") is not False
             or data.get("execution_authorized") is not False
             or data.get("state") not in {"CURRENT", "FAILED"}
+            or type(require_snapshot_match) is not bool
+            or (expected_snapshot_generated is not None
+                and (not isinstance(expected_snapshot_generated, datetime)
+                     or expected_snapshot_generated.tzinfo is None))
             or type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400):
         raise ValueError("HOPE_DASHBOARD_REFRESH_STATUS_INVALID")
     commit = data.get("deployed_commit")
@@ -126,6 +132,10 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
         snapshot_generated = timestamp(snapshot_generated)
         if error is not None:
             raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
+        if (require_snapshot_match and expected_snapshot_generated is None
+                or expected_snapshot_generated is not None
+                and snapshot_generated != expected_snapshot_generated.astimezone(timezone.utc)):
+            raise ValueError("HOPE_DASHBOARD_REFRESH_SNAPSHOT_MISMATCH")
         if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
             state = "STALE"
     elif snapshot_generated is not None or error not in REFRESH_ERROR_CODES:
@@ -475,11 +485,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Do not reveal database errors, credentials, host paths or SQL.
             state = "UNAVAILABLE"
             generated_at = None
+            snapshot_generated = None
             try:
                 _, generated = _verified_snapshot(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
                 )
                 generated_at = generated.isoformat()
+                snapshot_generated = generated
                 state = (
                     "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > self.server.max_snapshot_age_seconds
                     else "CURRENT"
@@ -491,6 +503,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 refresh = json.loads(_verified_refresh_status(
                     self.server.refresh_status, expected_commit=self.server.deployed_commit,
                     max_age_seconds=self.server.max_snapshot_age_seconds,
+                    expected_snapshot_generated=snapshot_generated,
+                    require_snapshot_match=True,
                 ))
                 refresh_state, refresh_error = refresh["state"], refresh["error_code"]
             except (OSError, ValueError, TypeError, UnicodeError):
@@ -513,9 +527,17 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path == "/refresh-status.json":
             try:
+                try:
+                    _, snapshot_generated = _verified_snapshot(
+                        self.server.snapshot, expected_commit=self.server.deployed_commit,
+                    )
+                except (OSError, ValueError, TypeError, UnicodeError):
+                    snapshot_generated = None
                 payload = _verified_refresh_status(
                     self.server.refresh_status, expected_commit=self.server.deployed_commit,
                     max_age_seconds=self.server.max_snapshot_age_seconds,
+                    expected_snapshot_generated=snapshot_generated,
+                    require_snapshot_match=True,
                 )
             except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified refresh status unavailable")
