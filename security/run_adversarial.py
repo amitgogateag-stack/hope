@@ -111,7 +111,11 @@ def run() -> int:
                     assert connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0] == 0
             result = subprocess.run([sys.executable, "-m", "hope.security.admission_verifier"], input=b'{"verified":true}', capture_output=True, timeout=10, check=False)
             evidence = json.loads(result.stdout)
-            assert result.returncode == 78 and evidence["decision"] == "DENY" and evidence["approval_issued"] is False
+            assert result.returncode == 78 and result.stderr == b"" and evidence == {
+                "protocol": "hope-independent-admission-v1", "decision": "DENY",
+                "reason": "TRUSTED_KERNEL_TO_DATABASE_SESSION_BINDING_UNAVAILABLE",
+                "approval_issued": False,
+            }
             report["experiments"].append({"name": "missing_trusted_attestor_denied", "status": "PASS"})
             # Completeness is asserted independently of the attack loop, so
             # silently omitted/mislabeled probes cannot be reported as 12 PASS.

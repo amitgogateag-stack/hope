@@ -31,7 +31,11 @@ Linux CI can test denial, but has no configured production session attestor eith
 returns DENY and exit 78, and never connects to a database. There is no configurable
 allow switch, worker-selected provider, synthetic identity fallback, approval INSERT,
 or production credential. Its protocol identifier is versioned; no challenge-response
-protocol is falsely advertised as implemented. Invalid/oversized inputs also deny.
+protocol is falsely advertised as implemented. Invalid, oversized, duplicate-key and
+non-UTF-8 inputs return the same exact versioned denial envelope with
+`INVALID_REQUEST`; well-formed objects return only the exact missing-capability reason.
+The standalone security runner independently asserts the complete canonical envelope,
+empty stderr and unavailable exit status, rather than accepting a generic DENY label.
 The unit suite launches the executable as a subprocess in addition to direct checks.
 Separate runtime OS identity and authenticated IPC are deployment prerequisites,
 NOT implemented by launching a subprocess in CI.
