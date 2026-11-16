@@ -125,9 +125,11 @@ Execution-ledger observations additionally split fills with a `FILL` effect rece
 attributed to a `paper:` job from historical/untracked rows. A matching effect tied
 to a missing or non-PAPER job is explicitly `UNATTRIBUTED_EFFECT_RECEIPTS`, never
 treated as canonical lineage. An attributed fill lacking portfolio application is a
-stronger recovery-review signal; a fill lacking its attributed receipt is reported
-separately and is never interpreted as trading activity or permission to replay. No
-identifiers, prices, quantities or P&L values are exposed.
+stronger recovery-review signal. Those receipts are split by their owning PAPER
+job's `CLAIMED`, `SUCCEEDED`, or `FAILED` state so in-flight evidence cannot be
+confused with terminal unapplied evidence. A fill lacking its attributed receipt is
+reported separately and is never interpreted as trading activity or permission to
+replay. No identifiers, prices, quantities or P&L values are exposed.
 
 ## November 17 decision
 

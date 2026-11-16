@@ -102,6 +102,12 @@ def verified_projections(value: object, generated: datetime) -> dict:
                       "effect_receipt_fills", "fills_without_effect_receipt",
                       "unattributed_effect_receipt_fills",
                       "effect_receipt_fills_without_application",
+                      "claimed_effect_receipt_fills",
+                      "succeeded_effect_receipt_fills",
+                      "failed_effect_receipt_fills",
+                      "claimed_effect_receipt_fills_without_application",
+                      "succeeded_effect_receipt_fills_without_application",
+                      "failed_effect_receipt_fills_without_application",
                       "accounting_receipts_without_application")
             result.update({key: count(item.get(key)) for key in fields})
             if (result["fills"] != result["applied_fills"] + result["fills_without_application"]
@@ -111,6 +117,17 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["unattributed_effect_receipt_fills"] > result["fills_without_effect_receipt"]
                     or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
                     or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]
+                    or result["effect_receipt_fills"] != (
+                        result["claimed_effect_receipt_fills"]
+                        + result["succeeded_effect_receipt_fills"]
+                        + result["failed_effect_receipt_fills"])
+                    or result["effect_receipt_fills_without_application"] != (
+                        result["claimed_effect_receipt_fills_without_application"]
+                        + result["succeeded_effect_receipt_fills_without_application"]
+                        + result["failed_effect_receipt_fills_without_application"])
+                    or result["claimed_effect_receipt_fills_without_application"] > result["claimed_effect_receipt_fills"]
+                    or result["succeeded_effect_receipt_fills_without_application"] > result["succeeded_effect_receipt_fills"]
+                    or result["failed_effect_receipt_fills_without_application"] > result["failed_effect_receipt_fills"]
                     or result["accounting_receipts_without_application"] > result["accounting_receipts"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
             if result["accounting_receipts_without_application"]:
@@ -119,8 +136,12 @@ def verified_projections(value: object, generated: datetime) -> dict:
                 result["reconciliation_state"] = "UNATTRIBUTED_EFFECT_RECEIPTS"
             elif result["fills_without_effect_receipt"]:
                 result["reconciliation_state"] = "MISSING_EFFECT_RECEIPTS"
-            elif result["effect_receipt_fills_without_application"]:
-                result["reconciliation_state"] = "EFFECT_RECEIPTS_NOT_APPLIED"
+            elif result["failed_effect_receipt_fills_without_application"]:
+                result["reconciliation_state"] = "FAILED_EFFECT_RECEIPTS_NOT_APPLIED"
+            elif result["succeeded_effect_receipt_fills_without_application"]:
+                result["reconciliation_state"] = "SUCCEEDED_EFFECT_RECEIPTS_NOT_APPLIED"
+            elif result["claimed_effect_receipt_fills_without_application"]:
+                result["reconciliation_state"] = "CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED"
             elif result["applications_without_pnl"]:
                 result["reconciliation_state"] = "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"
             elif result["fills"] == 0:
