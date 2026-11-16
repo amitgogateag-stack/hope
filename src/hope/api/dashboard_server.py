@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+import hashlib
 import json
 from re import fullmatch
 from datetime import datetime, timezone
@@ -35,10 +36,35 @@ OPERATIONS_ERROR_CODES = {
         "PAPER_STRATEGY_AUTHORIZATION_INELIGIBLE", "PAPER_STRATEGY_AUTHORIZATION_RESEARCH_INVALID",
         "PAPER_CERTIFIED_INPUT_UNAVAILABLE",
 }
+REFRESH_ERROR_CODES = {
+    "DATABASE_IDENTITY_MISMATCH", "PAPER_STATE_UNVERIFIED",
+    "SNAPSHOT_REFRESH_FAILED",
+}
 
 
-def _verified_snapshot(path: Path, *, expected_commit: str | None = None) -> tuple[bytes, datetime]:
-    return verified_snapshot_payload(bounded_regular_read(path,32768),expected_commit=expected_commit)
+def _verified_snapshot(path: Path, *, expected_commit: str | None = None,
+                       max_age_seconds: int | None = None) -> tuple[bytes, datetime]:
+    payload, generated, _ = _verified_snapshot_observation(
+        path, expected_commit=expected_commit, max_age_seconds=max_age_seconds,
+    )
+    return payload, generated
+
+
+def _verified_snapshot_observation(
+    path: Path, *, expected_commit: str | None = None,
+    max_age_seconds: int | None = None,
+) -> tuple[bytes, datetime, str]:
+    raw = bounded_regular_read(path, 32768)
+    payload, generated = verified_snapshot_payload(
+        raw, expected_commit=expected_commit,
+    )
+    if max_age_seconds is not None:
+        if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400:
+            raise ValueError("HOPE_DASHBOARD_MAX_SNAPSHOT_AGE_INVALID")
+        age = (datetime.now(timezone.utc) - generated).total_seconds()
+        if age < -300 or age > max_age_seconds:
+            raise ValueError("HOPE_DASHBOARD_SNAPSHOT_STALE")
+    return payload, generated, hashlib.sha256(raw).hexdigest()
 
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
@@ -73,6 +99,87 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
         "research": {k: counts[k] for k in fields}, "paper": None,
     }
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
+
+
+def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
+                             max_age_seconds: int = 900,
+                             expected_snapshot_generated: datetime | None = None,
+                             expected_snapshot_sha256: str | None = None,
+                             require_snapshot_match: bool = False) -> bytes:
+    """Sanitize the refresher's last attempt without exposing database details."""
+    data = json.loads(bounded_regular_read(path, 2048))
+    fields = {
+        "schema", "scope", "generated_at", "deployed_commit", "paper_only",
+        "live_enabled", "execution_authorized", "state",
+        "snapshot_generated_at", "snapshot_sha256", "error_code",
+    }
+    if (not isinstance(data, dict) or set(data) != fields
+            or data.get("schema") != "hope.dashboard-refresh.v2"
+            or data.get("scope") != "DISPOSABLE_LAB_ONLY"
+            or data.get("paper_only") is not True
+            or data.get("live_enabled") is not False
+            or data.get("execution_authorized") is not False
+            or data.get("state") not in {"CURRENT", "FAILED"}
+            or type(require_snapshot_match) is not bool
+            or (expected_snapshot_generated is not None
+                and (not isinstance(expected_snapshot_generated, datetime)
+                     or expected_snapshot_generated.tzinfo is None))
+            or (expected_snapshot_sha256 is not None
+                and (not isinstance(expected_snapshot_sha256, str)
+                     or fullmatch(r"[0-9a-f]{64}", expected_snapshot_sha256) is None))
+            or type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400):
+        raise ValueError("HOPE_DASHBOARD_REFRESH_STATUS_INVALID")
+    commit = data.get("deployed_commit")
+    if (not isinstance(commit, str) or fullmatch(r"[0-9a-f]{40}", commit) is None
+            or expected_commit is not None and commit != expected_commit):
+        raise ValueError("HOPE_DASHBOARD_REFRESH_COMMIT_INVALID")
+    def timestamp(raw: object) -> datetime:
+        if not isinstance(raw, str):
+            raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
+        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        if parsed.tzinfo is None or (parsed - datetime.now(timezone.utc)).total_seconds() > 300:
+            raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
+        return parsed.astimezone(timezone.utc)
+    generated = timestamp(data.get("generated_at"))
+    state = data["state"]
+    snapshot_generated = data.get("snapshot_generated_at")
+    snapshot_sha256 = data.get("snapshot_sha256")
+    error = data.get("error_code")
+    if state == "CURRENT":
+        snapshot_generated = timestamp(snapshot_generated)
+        if (error is not None or not isinstance(snapshot_sha256, str)
+                or fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is None):
+            raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
+        missing_expected = (
+            expected_snapshot_generated is None or expected_snapshot_sha256 is None
+        )
+        timestamp_mismatch = (
+            expected_snapshot_generated is not None
+            and snapshot_generated
+            != expected_snapshot_generated.astimezone(timezone.utc)
+        )
+        digest_mismatch = (
+            expected_snapshot_sha256 is not None
+            and snapshot_sha256 != expected_snapshot_sha256
+        )
+        if (require_snapshot_match and missing_expected
+                or timestamp_mismatch or digest_mismatch):
+            raise ValueError("HOPE_DASHBOARD_REFRESH_SNAPSHOT_MISMATCH")
+        if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
+            state = "STALE"
+    elif (snapshot_generated is not None or snapshot_sha256 is not None
+            or error not in REFRESH_ERROR_CODES):
+        raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
+    safe = {
+        "schema": "hope.dashboard-refresh-observation.v2",
+        "scope": "DISPOSABLE_LAB_ONLY", "state": state,
+        "generated_at": generated.isoformat(), "deployed_commit": commit,
+        "snapshot_generated_at": snapshot_generated.isoformat() if isinstance(snapshot_generated, datetime) else None,
+        "snapshot_sha256": snapshot_sha256,
+        "error_code": error, "paper_only": True, "live_enabled": False,
+        "execution_authorized": False,
+    }
+    return json.dumps(safe, separators=(",", ":")).encode("utf-8")
 
 
 def _verified_operations(path: Path, *, expected_commit: str | None = None) -> bytes:
@@ -157,11 +264,13 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
+                 refresh_status: Path | None = None,
                  activation_check=None, activation_view=None,
                  lab_verifier=None, lab_packet=None,
                  client_io_timeout_seconds: float = 5.0,
                  client_total_timeout_seconds: float = 15.0,
-                 max_concurrent_clients: int = 32):
+                 max_concurrent_clients: int = 32,
+                 max_snapshot_age_seconds: int = 900):
         if not 0 <= port <= 65535:
             raise ValueError("HOPE_DASHBOARD_PORT_INVALID")
         if (isinstance(client_io_timeout_seconds, bool)
@@ -174,6 +283,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
             raise ValueError("HOPE_DASHBOARD_CLIENT_TOTAL_TIMEOUT_INVALID")
         if type(max_concurrent_clients) is not int or not 1 <= max_concurrent_clients <= 256:
             raise ValueError("HOPE_DASHBOARD_CLIENT_LIMIT_INVALID")
+        if type(max_snapshot_age_seconds) is not int or not 1 <= max_snapshot_age_seconds <= 86400:
+            raise ValueError("HOPE_DASHBOARD_MAX_SNAPSHOT_AGE_INVALID")
         if deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",deployed_commit):
             raise ValueError("HOPE_DASHBOARD_COMMIT_INVALID")
         if paper_deployed_commit is not None and not fullmatch(r"[0-9a-f]{40}",paper_deployed_commit):
@@ -187,6 +298,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self.client_io_timeout_seconds=float(client_io_timeout_seconds)
         self.client_total_timeout_seconds=float(client_total_timeout_seconds)
         self.max_concurrent_clients=max_concurrent_clients
+        self.max_snapshot_age_seconds=max_snapshot_age_seconds
         self._client_slots=BoundedSemaphore(max_concurrent_clients)
         self._transport_lock=Lock()
         self._active_clients=0
@@ -194,6 +306,8 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self._expired_clients_total=0
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
+        self.refresh_status = (Path(refresh_status) if refresh_status is not None
+                               else self.snapshot.parent / "snapshot-refresh.json")
         self.legacy = self.snapshot.parent / 'legacy-research.json'
         self.operations = Path(operations) if operations is not None else self.snapshot.parent / 'operations.json'
         super().__init__(("127.0.0.1", port), DashboardHandler)
@@ -402,15 +516,29 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Do not reveal database errors, credentials, host paths or SQL.
             state = "UNAVAILABLE"
             generated_at = None
+            snapshot_generated = snapshot_sha256 = None
             try:
-                _, generated = _verified_snapshot(
+                _, generated, snapshot_sha256 = _verified_snapshot_observation(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
                 )
                 generated_at = generated.isoformat()
+                snapshot_generated = generated
                 state = (
-                    "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > 3600
+                    "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > self.server.max_snapshot_age_seconds
                     else "CURRENT"
                 )
+            except (OSError, ValueError, TypeError, UnicodeError):
+                pass
+            refresh_state, refresh_error = "UNAVAILABLE", None
+            try:
+                refresh = json.loads(_verified_refresh_status(
+                    self.server.refresh_status, expected_commit=self.server.deployed_commit,
+                    max_age_seconds=self.server.max_snapshot_age_seconds,
+                    expected_snapshot_generated=snapshot_generated,
+                    expected_snapshot_sha256=snapshot_sha256,
+                    require_snapshot_match=True,
+                ))
+                refresh_state, refresh_error = refresh["state"], refresh["error_code"]
             except (OSError, ValueError, TypeError, UnicodeError):
                 pass
             payload = json.dumps({
@@ -418,6 +546,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "service": "RUNNING",
                 "data_feed": state,
                 "snapshot_generated_at": generated_at,
+                "refresh_state": refresh_state,
+                "refresh_error_code": refresh_error,
             }, separators=(",", ":")).encode("utf-8")
             self._respond(200, payload, "application/json; charset=utf-8")
             return
@@ -426,6 +556,26 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "schema_version":1,**self.server.transport_status(),
             },separators=(",", ":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
+            return
+        if self.path == "/refresh-status.json":
+            try:
+                try:
+                    _, snapshot_generated, snapshot_sha256 = _verified_snapshot_observation(
+                        self.server.snapshot, expected_commit=self.server.deployed_commit,
+                    )
+                except (OSError, ValueError, TypeError, UnicodeError):
+                    snapshot_generated = snapshot_sha256 = None
+                payload = _verified_refresh_status(
+                    self.server.refresh_status, expected_commit=self.server.deployed_commit,
+                    max_age_seconds=self.server.max_snapshot_age_seconds,
+                    expected_snapshot_generated=snapshot_generated,
+                    expected_snapshot_sha256=snapshot_sha256,
+                    require_snapshot_match=True,
+                )
+            except (OSError, ValueError, TypeError, UnicodeError):
+                self._respond(503, b"Verified refresh status unavailable")
+                return
+            self._respond(200, payload, "application/json; charset=utf-8")
             return
         if self.path == "/legacy-research.json":
             try:
@@ -471,6 +621,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             try:
                 payload, _ = _verified_snapshot(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
+                    max_age_seconds=self.server.max_snapshot_age_seconds,
                 )
             except (OSError, ValueError, TypeError, UnicodeError):
                 self._respond(503, b"Verified snapshot unavailable")
@@ -502,6 +653,7 @@ def main() -> None:
     parser.add_argument("--preview", type=Path, required=True)
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--operations-status-file", type=Path)
+    parser.add_argument("--refresh-status-file", type=Path)
     parser.add_argument("--deployed-commit")
     parser.add_argument("--activation-gate",action="store_true")
     args = parser.parse_args()
@@ -516,6 +668,7 @@ def main() -> None:
     with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file,
                              deployed_commit=args.deployed_commit,
                              paper_deployed_commit=paper_deployed_commit,
+                             refresh_status=args.refresh_status_file,
                              activation_view=view) as server:
         server.serve_forever(poll_interval=0.5)
 

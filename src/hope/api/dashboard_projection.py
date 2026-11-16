@@ -97,11 +97,35 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["manifest_backed_sealed_versions"] > result["sealed_versions"]):
                 raise ValueError("HOPE_DASHBOARD_CERTIFICATION_COUNT_INCONSISTENT")
         elif section == "execution_ledger":
-            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts", "fills_without_application", "applications_without_pnl")
+            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts",
+                      "fills_without_application", "applications_without_pnl",
+                      "effect_receipt_fills", "fills_without_effect_receipt",
+                      "effect_receipt_fills_without_application",
+                      "accounting_receipts_without_application")
             result.update({key: count(item.get(key)) for key in fields})
             if (result["fills"] != result["applied_fills"] + result["fills_without_application"]
-                    or result["applied_fills"] > result["fill_applications"] or result["applications_without_pnl"] > result["fill_applications"]):
+                    or result["fills"] != result["effect_receipt_fills"] + result["fills_without_effect_receipt"]
+                    or result["applied_fills"] > result["fill_applications"]
+                    or result["applications_without_pnl"] > result["fill_applications"]
+                    or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
+                    or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]
+                    or result["accounting_receipts_without_application"] > result["accounting_receipts"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
+            if result["accounting_receipts_without_application"]:
+                result["reconciliation_state"] = "ORPHAN_ACCOUNTING_RECEIPTS"
+            elif result["fills_without_effect_receipt"]:
+                result["reconciliation_state"] = "MISSING_EFFECT_RECEIPTS"
+            elif result["effect_receipt_fills_without_application"]:
+                result["reconciliation_state"] = "EFFECT_RECEIPTS_NOT_APPLIED"
+            elif result["applications_without_pnl"]:
+                result["reconciliation_state"] = "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"
+            elif result["fills"] == 0:
+                result["reconciliation_state"] = "NO_FILLS"
+            else:
+                result["reconciliation_state"] = "OBSERVED_COMPLETE"
+            supplied_state = item.get("reconciliation_state")
+            if supplied_state is not None and supplied_state != result["reconciliation_state"]:
+                raise ValueError("HOPE_DASHBOARD_LEDGER_STATE_INCONSISTENT")
         elif section == "blocked_runs":
             buckets = item.get("by_reason")
             if not isinstance(buckets, dict):

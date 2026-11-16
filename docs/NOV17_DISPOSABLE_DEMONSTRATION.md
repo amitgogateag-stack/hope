@@ -71,6 +71,59 @@ the lab HTTP test; real Ed25519 signatures, database transactions, economics and
 HTTP calls are exercised. Linux CI uses actual no-follow descriptor reads. Native
 startup tests remain Linux-only; skips are reported, never hidden as passes.
 
+## Read-only disposable dashboard refresh
+
+The snapshot refresh entry point is `python -m hope.api.dashboard_snapshot_refresh`.
+Each output has a persistent private `.refresh.lock` inode. The refresher takes
+a non-blocking exclusive kernel lock across export, verification, snapshot
+replacement, and receipt replacement. A concurrent or unsafe-lock-path attempt
+exits non-zero without exporting or changing either last-good artifact; process
+death releases the lock without a stale-PID recovery path.
+The v2 CURRENT receipt also carries the SHA-256 of the exact backing snapshot
+bytes. The server requires both that digest and `generated_at` to match its
+single bounded read; a substituted same-timestamp snapshot makes refresh health
+UNAVAILABLE even when the snapshot remains independently safe to display.
+It requires an exact expected database name and exact 40-character reviewed commit.
+It queries `current_database()` inside the same READ ONLY, REPEATABLE READ
+transaction before labeling a snapshot `DISPOSABLE_LAB`. The exported contract
+contains a hash of that identity, an explicit synthetic-data flag and immutable
+`execution_authorized=false` / `live_enabled=false` claims; the database name and
+connection URL are never published.
+
+The refresher first writes and validates a staged snapshot, then atomically replaces
+the last-good file. On database mismatch, missing PAPER state, connection failure or
+post-export contract failure, last-good bytes remain untouched and a separate atomic
+status records only a closed error code. `--interval-seconds` is bounded to 30–3600.
+The dashboard now refuses to serve snapshot data older than 15 minutes while its
+liveness endpoint remains HTTP 200 with `data_feed=STALE`.
+When the server is given the same status path with `--refresh-status-file`, the
+read-only `/refresh-status.json` endpoint exposes only the verified commit,
+timestamps, closed error code and non-authorizing LAB scope. A failed refresh is
+shown separately while the last-good snapshot remains intact; a successful attempt
+older than the snapshot freshness budget is labeled `STALE`. Unknown fields,
+commit mismatches, symlinks and free-text errors fail closed with HTTP 503.
+`CURRENT` refresh evidence is additionally bound to the exact timestamp of the
+sanitized snapshot being served. The atomic publication interval between a new
+snapshot and its matching receipt is therefore temporarily `UNAVAILABLE`, never a
+false assertion that an older receipt authenticated newer bytes.
+
+Example for a disposable database only (do not point this at `hope`):
+
+```bash
+HOPE_DATABASE_URL='postgresql+psycopg://.../isolated_lab' python -m hope.api.dashboard_snapshot_refresh \
+  --output /private/dashboard/snapshot.json \
+  --status /private/dashboard/snapshot-refresh.json \
+  --expected-database isolated_lab \
+  --deployed-commit 0000000000000000000000000000000000000000 \
+  --interval-seconds 60
+```
+
+Execution-ledger observations additionally split fills with a canonical `FILL`
+effect receipt from historical/untracked rows. A canonical fill lacking portfolio
+application is a stronger recovery-review signal; a fill lacking its effect receipt
+is reported separately and is never interpreted as trading activity or permission to
+replay. No identifiers, prices, quantities or P&L values are exposed.
+
 ## November 17 decision
 
 A safe isolated demonstration is achievable using this disposable test path and
