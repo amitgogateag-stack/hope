@@ -81,11 +81,12 @@ const validateM2 = (name,item,generated) => {
   if(item.sealed_versions>item.version_total || item.pit_certified_versions>item.sealed_versions || item.manifest_backed_sealed_versions>item.sealed_versions) throw Error('Invalid certification counts');
  } else if(name==='execution_ledger') {
   const r=s=>item[s+'_effect_receipt_fills'],u=s=>item[s+'_effect_receipt_fills_without_application'];
-  check('fills','applied_fills','fill_applications','accounting_receipts','fills_without_application','applications_without_pnl','effect_receipt_fills','fills_without_effect_receipt','unattributed_effect_receipt_fills','effect_receipt_fills_without_application','accounting_receipts_without_application',...jobStates.flatMap(s=>[s+'_effect_receipt_fills',s+'_effect_receipt_fills_without_application']));
-  if(item.fills!==item.applied_fills+item.fills_without_application || item.fills!==item.effect_receipt_fills+item.fills_without_effect_receipt || item.applied_fills>item.fill_applications || item.applications_without_pnl>item.fill_applications || item.unattributed_effect_receipt_fills>item.fills_without_effect_receipt || item.effect_receipt_fills_without_application>Math.min(item.fills_without_application,item.effect_receipt_fills) || item.effect_receipt_fills!==jobStates.reduce((n,s)=>n+r(s),0) || item.effect_receipt_fills_without_application!==jobStates.reduce((n,s)=>n+u(s),0) || jobStates.some(s=>u(s)>r(s)) || item.accounting_receipts_without_application>item.accounting_receipts) throw Error('Invalid ledger counts');
+  const markets=['INDIA','USA','OTHER'],sum=x=>x&&markets.every(k=>integer(x[k]))?markets.reduce((n,k)=>n+x[k],0):-1;
+  check('fills','applied_fills','fill_applications','accounting_receipts','fills_without_application','applications_without_pnl','effect_receipt_fills','fills_without_effect_receipt','unattributed_effect_receipt_fills','effect_receipt_fills_without_application','accounting_receipts_without_application','effect_receipt_market_mismatch_fills',...jobStates.flatMap(s=>[s+'_effect_receipt_fills',s+'_effect_receipt_fills_without_application']));
+  if(item.fills!==item.applied_fills+item.fills_without_application || item.fills!==item.effect_receipt_fills+item.fills_without_effect_receipt || item.applied_fills>item.fill_applications || item.applications_without_pnl>item.fill_applications || item.unattributed_effect_receipt_fills>item.fills_without_effect_receipt || item.effect_receipt_fills_without_application>Math.min(item.fills_without_application,item.effect_receipt_fills) || item.effect_receipt_fills!==jobStates.reduce((n,s)=>n+r(s),0) || item.effect_receipt_fills_without_application!==jobStates.reduce((n,s)=>n+u(s),0) || jobStates.some(s=>u(s)>r(s)) || item.accounting_receipts_without_application>item.accounting_receipts || item.effect_receipt_market_mismatch_fills>item.effect_receipt_fills || sum(item.fills_by_market)!==item.fills || sum(item.unapplied_fills_by_market)!==item.fills_without_application) throw Error('Invalid ledger');
   const pending=jobStates.toReversed().find(s=>u(s));
-  const state=item.accounting_receipts_without_application?'ORPHAN_ACCOUNTING_RECEIPTS':item.unattributed_effect_receipt_fills?'UNATTRIBUTED_EFFECT_RECEIPTS':item.fills_without_effect_receipt?'MISSING_EFFECT_RECEIPTS':pending?pending.toUpperCase()+'_EFFECT_RECEIPTS_NOT_APPLIED':item.applications_without_pnl?'APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS':item.fills===0?'NO_FILLS':'OBSERVED_COMPLETE';
-  if(item.reconciliation_state!==state) throw Error('Invalid ledger state');
+  const state=item.accounting_receipts_without_application?'ORPHAN_ACCOUNTING_RECEIPTS':item.effect_receipt_market_mismatch_fills?'EFFECT_RECEIPT_MARKET_MISMATCH':item.fills_by_market.OTHER?'FILL_MARKET_UNRESOLVED':item.unattributed_effect_receipt_fills?'UNATTRIBUTED_EFFECT_RECEIPTS':item.fills_without_effect_receipt?'MISSING_EFFECT_RECEIPTS':pending?pending.toUpperCase()+'_EFFECT_RECEIPTS_NOT_APPLIED':item.applications_without_pnl?'APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS':item.fills===0?'NO_FILLS':'OBSERVED_COMPLETE';
+  if(item.reconciliation_state!==state) throw Error('Bad ledger');
  } else if(name==='blocked_runs') {
   check('total');if(!item.by_reason || !m2Blocked.every(k=>integer(item.by_reason[k])) || m2Blocked.reduce((n,k)=>n+item.by_reason[k],0)!==item.total) throw Error('Invalid blocked counts');
  } else if(name==='decision_activity') {
@@ -108,7 +109,7 @@ const renderM2=(projections,stale)=>{
  const receipts=(d,x='')=>jobStates.map(s=>s.toUpperCase()+' '+d[s+'_effect_receipt_fills'+x]).join('/');
  show('strategy_catalog',d=>'Showing '+d.rows.length+' of '+d.total+(d.truncated?' (bounded)':'')+'\n'+d.rows.map(r=>r.strategy_version_id+' · '+r.family_code+' · '+r.candidate_state+' · '+(r.markets.join('/')||'market UNKNOWN')).join('\n'));
  show('dataset_certification',d=>d.version_total+' versions · '+d.sealed_versions+' sealed · '+d.pit_certified_versions+' sealed PIT metadata · '+d.manifest_backed_sealed_versions+' sealed manifest-backed');
- show('execution_ledger',d=>d.reconciliation_state+' · '+d.fills+' fills · receipts '+receipts(d)+' · missing '+d.fills_without_effect_receipt+' ('+d.unattributed_effect_receipt_fills+' outside PAPER) · applied '+d.applied_fills+' · unapplied receipts '+receipts(d,'_without_application')+' · orphan accounting '+d.accounting_receipts_without_application+' · applications without P&L '+d.applications_without_pnl);
+ show('execution_ledger',d=>d.reconciliation_state+' · I/U/O '+Object.values(d.fills_by_market).join('/')+' · unapplied '+Object.values(d.unapplied_fills_by_market).join('/')+' · mismatch '+d.effect_receipt_market_mismatch_fills+' · receipts '+receipts(d)+' / unapplied '+receipts(d,'_without_application')+' · missing '+d.fills_without_effect_receipt+' · '+d.unattributed_effect_receipt_fills+' outside PAPER · applied '+d.applied_fills+' · orphan '+d.accounting_receipts_without_application+' · no-P&L '+d.applications_without_pnl);
  show('blocked_runs',d=>d.total+' failed PAPER jobs · '+m2Blocked.map(k=>k+': '+d.by_reason[k]).join(' · '));
  show('decision_activity',d=>d.no_trade_records+' recorded NO_TRADE · '+d.claimed_no_trade+' owned by CLAIMED jobs · latest '+(d.latest_decision_at||'none recorded'));
  show('certified_outcomes',d=>d.total+' historical outcome records · '+['NO_TRADE','RISK_BLOCKED','FILLED'].map(k=>k+': '+d.by_outcome[k]).join(' · ')+' · '+d.claimed_records+' owned by CLAIMED jobs · latest decision '+(d.latest_decision_at||'none recorded')+' · risk blocks '+(m2RiskReasons.filter(k=>d.risk_blocked_reasons[k]>0).map(k=>k+': '+d.risk_blocked_reasons[k]).join(' / ')||'none recorded'));
@@ -309,7 +310,6 @@ const applyOperations = data => {
  if (operationsCache && time < operationsCache.time) return;
  operationsCache = {data,time}; renderOperations();
 };
-// Freshness ages even for offline files or when a network request never finishes.
 const readinessReasons = ['HEALTH_FROM_FUTURE','POLL_NOT_CURRENT','WORKER_STATUS_INCONSISTENT','HEALTH_MISSING','HEALTH_UNREADABLE','HEALTH_INVALID','HEALTH_STALE','DURABLE_HALT_OBSERVED','WORKER_STARTING','WORKER_UNAVAILABLE','WORKER_STOPPED','SNAPSHOT_NOT_CURRENT','WORKER_IDENTITY_UNVERIFIED','CLAIMS_REQUIRE_REVIEW','RECOVERY_REQUIRED','RUNTIME_UNVERIFIED','RUNTIME_MISMATCH','RUNTIME_BLOCKED','PACKAGE_PROVENANCE_UNVERIFIED','PAPER_RUNTIME_UNVERIFIED','RELEASE_BUILD_UNVERIFIED','CURRENT_OBSERVATIONS_ONLY'];
 const clearReadiness = () => {readinessCache=null;tag('release-build','UNVERIFIED','off');tag('package-provenance','UNVERIFIED','off');tag('runtime-integrity','UNVERIFIED','off');tag('readiness-state','UNAVAILABLE','off');metric('readiness-note','Observations unavailable; no execution authorization.');};
 const renderReadiness = () => {
@@ -386,7 +386,6 @@ const requestJSON = (path, limit) => {
  pendingRequests.set(path,request);
  return request;
 };
-// Serialize each endpoint's entire read/apply cycle, not just its HTTP promise.
 const activeRefreshes = new Set();
 const refreshFeed = async (path,limit,apply,clear) => {
  if (activeRefreshes.has(path)) return;

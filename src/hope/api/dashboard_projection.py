@@ -108,8 +108,16 @@ def verified_projections(value: object, generated: datetime) -> dict:
                       "claimed_effect_receipt_fills_without_application",
                       "succeeded_effect_receipt_fills_without_application",
                       "failed_effect_receipt_fills_without_application",
-                      "accounting_receipts_without_application")
+                      "accounting_receipts_without_application", "effect_receipt_market_mismatch_fills")
             result.update({key: count(item.get(key)) for key in fields})
+            for field, total in (("fills_by_market", result["fills"]),
+                                 ("unapplied_fills_by_market", result["fills_without_application"])):
+                buckets = item.get(field)
+                if not isinstance(buckets, dict) or set(buckets) != {"INDIA", "USA", "OTHER"}:
+                    raise ValueError("HOPE_DASHBOARD_LEDGER_MARKETS_INVALID")
+                result[field] = {market: count(buckets[market]) for market in ("INDIA", "USA", "OTHER")}
+                if sum(result[field].values()) != total:
+                    raise ValueError("HOPE_DASHBOARD_LEDGER_MARKETS_INCONSISTENT")
             if (result["fills"] != result["applied_fills"] + result["fills_without_application"]
                     or result["fills"] != result["effect_receipt_fills"] + result["fills_without_effect_receipt"]
                     or result["applied_fills"] > result["fill_applications"]
@@ -128,10 +136,15 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["claimed_effect_receipt_fills_without_application"] > result["claimed_effect_receipt_fills"]
                     or result["succeeded_effect_receipt_fills_without_application"] > result["succeeded_effect_receipt_fills"]
                     or result["failed_effect_receipt_fills_without_application"] > result["failed_effect_receipt_fills"]
+                    or result["effect_receipt_market_mismatch_fills"] > result["effect_receipt_fills"]
                     or result["accounting_receipts_without_application"] > result["accounting_receipts"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
             if result["accounting_receipts_without_application"]:
                 result["reconciliation_state"] = "ORPHAN_ACCOUNTING_RECEIPTS"
+            elif result["effect_receipt_market_mismatch_fills"]:
+                result["reconciliation_state"] = "EFFECT_RECEIPT_MARKET_MISMATCH"
+            elif result["fills_by_market"]["OTHER"]:
+                result["reconciliation_state"] = "FILL_MARKET_UNRESOLVED"
             elif result["unattributed_effect_receipt_fills"]:
                 result["reconciliation_state"] = "UNATTRIBUTED_EFFECT_RECEIPTS"
             elif result["fills_without_effect_receipt"]:
