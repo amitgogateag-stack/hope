@@ -280,7 +280,7 @@ def test_m2_html_budget_is_independent_of_json_snapshot_budget(tmp_path, size, e
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Native inode types require POSIX")
-@pytest.mark.parametrize("surface", ["preview", "snapshot", "legacy", "operations"])
+@pytest.mark.parametrize("surface", ["preview", "snapshot", "legacy", "operations", "refresh"])
 def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
     with dashboard(tmp_path, valid_snapshot()) as server:
         paths = {
@@ -288,6 +288,7 @@ def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
             "snapshot": (server.snapshot, "/snapshot.json"),
             "legacy": (server.legacy, "/legacy-research.json"),
             "operations": (server.operations, "/operations.json"),
+            "refresh": (server.refresh_status, "/refresh-status.json"),
         }
         path, endpoint = paths[surface]
         target = tmp_path / f"{surface}.target"
@@ -295,6 +296,8 @@ def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
             target.write_text("<h1>substitute</h1>")
         elif surface == "snapshot":
             target.write_bytes(valid_snapshot())
+        elif surface == "refresh":
+            target.write_text(json.dumps(refresh_status()))
         else:
             target.write_text("{}")
         path.unlink(missing_ok=True)
@@ -334,6 +337,20 @@ def valid_snapshot(*, generated_at=None):
             "job_runs": {"total": 2, "claimed": 0, "succeeded": 1, "failed": 1},
         },
     }).encode("utf-8")
+
+
+def refresh_status(*, state="CURRENT", generated_at=None, commit="a"*40,
+                   snapshot_generated_at=None, error_code=None):
+    generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+    if state == "CURRENT" and snapshot_generated_at is None:
+        snapshot_generated_at = generated_at
+    return {
+        "schema":"hope.dashboard-refresh.v1", "scope":"DISPOSABLE_LAB_ONLY",
+        "generated_at":generated_at, "deployed_commit":commit,
+        "paper_only":True, "live_enabled":False, "execution_authorized":False,
+        "state":state, "snapshot_generated_at":snapshot_generated_at,
+        "error_code":error_code,
+    }
 
 
 def recovery_snapshot(**updates):
@@ -410,7 +427,76 @@ def test_server_reports_liveness_separately_from_missing_data(tmp_path):
         assert json.loads(body) == {
             "schema_version": 1, "service": "RUNNING",
             "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+            "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
         }
+
+
+def test_server_reports_verified_refresh_success_without_database_details(tmp_path):
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(refresh_status()))
+    with dashboard(tmp_path) as server:
+        status, headers, body = request(server, "/refresh-status.json")
+        result = json.loads(body)
+        assert status == 200 and headers["Cache-Control"].startswith("no-store")
+        assert result["schema"] == "hope.dashboard-refresh-observation.v1"
+        assert result["state"] == "CURRENT" and result["error_code"] is None
+        assert result["execution_authorized"] is False and result["live_enabled"] is False
+        assert set(result) == {"schema","scope","generated_at","deployed_commit",
+                               "snapshot_generated_at","error_code","paper_only",
+                               "live_enabled","execution_authorized","state"}
+        assert json.loads(request(server,"/status.json")[2])["refresh_state"]=="CURRENT"
+
+
+def test_server_reports_closed_refresh_failure_while_last_good_is_preserved(tmp_path):
+    value = refresh_status(state="FAILED", snapshot_generated_at=None,
+                           error_code="DATABASE_IDENTITY_MISMATCH")
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path, valid_snapshot()) as server:
+        status, _, body = request(server, "/refresh-status.json")
+        result = json.loads(body)
+        assert status == 200 and result["state"] == "FAILED"
+        assert result["snapshot_generated_at"] is None
+        assert request(server, "/snapshot.json")[0] == 200
+        health=json.loads(request(server,"/status.json")[2])
+        assert health["refresh_state"]=="FAILED"
+        assert health["refresh_error_code"]=="DATABASE_IDENTITY_MISMATCH"
+
+
+@pytest.mark.parametrize("change", [
+    {"error_code":"password=secret"}, {"execution_authorized":True},
+    {"scope":"PRODUCTION"}, {"private_database":"hope"},
+])
+def test_server_rejects_unbounded_or_authorizing_refresh_status(tmp_path, change):
+    value = refresh_status(state="FAILED", snapshot_generated_at=None,
+                           error_code="SNAPSHOT_REFRESH_FAILED")
+    value.update(change)
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path) as server:
+        status, _, body = request(server, "/refresh-status.json")
+        assert status == 503 and body == b"Verified refresh status unavailable"
+
+
+def test_server_marks_old_successful_refresh_attempt_stale(tmp_path):
+    old = (datetime.now(timezone.utc)-timedelta(seconds=16)).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=old, snapshot_generated_at=old)))
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",max_snapshot_age_seconds=15) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            assert json.loads(request(server,"/refresh-status.json")[2])["state"]=="STALE"
+        finally:server.shutdown();thread.join(timeout=5)
+
+
+def test_server_rejects_refresh_status_from_another_deployed_commit(tmp_path):
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(commit="b"*40)))
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+                             deployed_commit="a"*40) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            assert request(server,"/refresh-status.json")[0]==503
+        finally:server.shutdown();thread.join(timeout=5)
 
 
 def test_server_reports_aggregate_transport_status_separately(tmp_path):
@@ -431,7 +517,8 @@ def test_server_reports_current_snapshot_and_never_exposes_db_details(tmp_path):
         assert state["service"] == "RUNNING"
         assert state["data_feed"] == "CURRENT"
         assert state["snapshot_generated_at"]
-        assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at"}
+        assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at",
+                              "refresh_state", "refresh_error_code"}
 
 
 def test_server_marks_old_snapshot_stale(tmp_path):
@@ -494,6 +581,7 @@ def test_managed_server_refuses_snapshot_from_another_release(tmp_path):
             assert json.loads(body) == {
                 "schema_version": 1, "service": "RUNNING",
                 "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+                "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
             }
 
 

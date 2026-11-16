@@ -87,6 +87,12 @@ post-export contract failure, last-good bytes remain untouched and a separate at
 status records only a closed error code. `--interval-seconds` is bounded to 30–3600.
 The dashboard now refuses to serve snapshot data older than 15 minutes while its
 liveness endpoint remains HTTP 200 with `data_feed=STALE`.
+When the server is given the same status path with `--refresh-status-file`, the
+read-only `/refresh-status.json` endpoint exposes only the verified commit,
+timestamps, closed error code and non-authorizing LAB scope. A failed refresh is
+shown separately while the last-good snapshot remains intact; a successful attempt
+older than the snapshot freshness budget is labeled `STALE`. Unknown fields,
+commit mismatches, symlinks and free-text errors fail closed with HTTP 503.
 
 Example for a disposable database only (do not point this at `hope`):
 

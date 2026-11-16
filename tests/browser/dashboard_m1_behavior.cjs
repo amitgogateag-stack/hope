@@ -133,12 +133,13 @@ async function main() {
   assert.equal(b.element('research-runs').textContent,'0');
  }
  {
-  const b=browser(); b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE)});
+  const b=browser(); b.api.applySnapshot(sample(),'automatic refresh');b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'CURRENT',refresh_error_code:null});
   assert.equal(b.element('web-service').textContent,'RUNNING');
   b.advance(90001);
   assert.equal(b.element('web-service').textContent,'UNKNOWN');
   assert.equal(b.element('feed-health').textContent,'UNKNOWN');
-  assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null}));
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'FAILED',refresh_error_code:'DATABASE_IDENTITY_MISMATCH'});assert.match(b.element('snapshot-status').textContent,/DATABASE_IDENTITY_MISMATCH.*retaining/);
+  assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null,refresh_state:'FAILED',refresh_error_code:'password=secret'}));
  }
  {
   const b=browser();

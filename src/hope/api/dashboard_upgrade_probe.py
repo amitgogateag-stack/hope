@@ -174,10 +174,15 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None,
     if status_code != 200:
         raise ValueError("HOPE_UPGRADE_HEALTH_HTTP_INVALID")
     status = _json(body)
-    if (not _exact_keys(status, {"schema_version", "service", "data_feed", "snapshot_generated_at"})
+    if (not _exact_keys(status, {"schema_version", "service", "data_feed", "snapshot_generated_at",
+                                 "refresh_state", "refresh_error_code"})
             or type(status["schema_version"]) is not int or status["schema_version"] != 1
             or status["service"] != "RUNNING"
             or status["data_feed"] not in ("CURRENT", "STALE", "UNAVAILABLE")
+            or status["refresh_state"] not in ("CURRENT", "FAILED", "STALE", "UNAVAILABLE")
+            or ((status["refresh_state"] == "FAILED") !=
+                (status["refresh_error_code"] in {"DATABASE_IDENTITY_MISMATCH",
+                 "PAPER_STATE_UNVERIFIED", "SNAPSHOT_REFRESH_FAILED"}))
             or (status["data_feed"] == "UNAVAILABLE" and status["snapshot_generated_at"] is not None)
             or (status["data_feed"] != "UNAVAILABLE" and not _timestamp(status["snapshot_generated_at"]))):
         raise ValueError("HOPE_UPGRADE_HEALTH_INVALID")

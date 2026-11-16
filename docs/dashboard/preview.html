@@ -177,7 +177,7 @@ const renderSnapshot = () => {
   for (const [id,key] of recoveryMetrics) metric(id,data.paper.recovery[key].toLocaleString());
   el('recovery-status').textContent = (stale ? 'STALE · ' : 'Verified · ') + data.generated_at + ' · observation only; no recovery actions';
  }
- el('snapshot-status').textContent = (stale ? 'STALE · ' : '') + (snapshotCache.failure ? 'Refresh unavailable · retaining last verified snapshot · ' : 'Loaded · ') + data.generated_at + ' · ' + source + ' · PAPER claimed ' + counts.claimed + ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
+ el('snapshot-status').textContent = (stale ? 'STALE · ' : '') + (snapshotCache.failure ? 'Refresh '+(snapshotCache.error||'unavailable')+' · retaining last verified snapshot · ' : 'Loaded · ') + data.generated_at + ' · ' + source + ' · PAPER claimed ' + counts.claimed + ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
  el('snapshot-status').style.color = stale || snapshotCache.failure ? '#e8c07c' : '#84dfbb';
 };
 const retainSnapshotAfterFailure = () => {
@@ -238,8 +238,11 @@ const renderHealth = () => {
 };
 const applyHealth = data => {
  if (data?.schema_version !== 1 || data.service !== 'RUNNING' || !['CURRENT','STALE','UNAVAILABLE'].includes(data.data_feed) ||
-     (data.data_feed === 'UNAVAILABLE' && data.snapshot_generated_at !== null)) throw Error('Invalid service status');
+     !['CURRENT','FAILED','STALE','UNAVAILABLE'].includes(data.refresh_state) ||
+     (data.data_feed === 'UNAVAILABLE' && data.snapshot_generated_at !== null) ||
+     (data.refresh_state==='FAILED')!==['DATABASE_IDENTITY_MISMATCH','PAPER_STATE_UNVERIFIED','SNAPSHOT_REFRESH_FAILED'].includes(data.refresh_error_code)) throw Error('Invalid service status');
  const time = data.data_feed === 'UNAVAILABLE' ? null : stamp(data.snapshot_generated_at);
+ if(snapshotCache){snapshotCache.failure=data.refresh_state!=='CURRENT';snapshotCache.error=data.refresh_error_code||data.refresh_state;renderSnapshot();}
  healthCache = {data,time,received:Date.now()}; renderHealth();
 };
 const clearTransport = () => {

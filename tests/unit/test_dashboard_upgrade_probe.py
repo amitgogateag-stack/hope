@@ -42,7 +42,8 @@ def fixture_responses():
     return {
         "/status.json": (200, json.dumps({
             "schema_version": 1, "service": "RUNNING", "data_feed": "UNAVAILABLE",
-            "snapshot_generated_at": None,
+            "snapshot_generated_at": None, "refresh_state":"UNAVAILABLE",
+            "refresh_error_code":None,
         }).encode()),
         "/": (200, b'<div id="legacy-experiments" id="legacy-strategies" id="legacy-datasets">HOPE dashboard v0.5</div>'),
         "/legacy-research.json": (503, b"Verified legacy research inventory unavailable"),
