@@ -146,13 +146,17 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
         safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
     if "projections" in data:
         projections = data["projections"]
-        # A pre-v2 last-good snapshot may not contain effect-receipt lineage.
+        # A prior last-good snapshot may not contain the current receipt lineage.
         # Preserve every independently verified section, but never infer those
         # new counts from the older aggregate ledger.
         ledger = projections.get("execution_ledger") if isinstance(projections, dict) else None
-        if (data["schema_version"] == 1 and isinstance(ledger, dict)
-                and ledger.get("status") == "AVAILABLE"
-                and "effect_receipt_fills" not in ledger):
+        required_ledger_lineage = {
+            "effect_receipt_fills", "fills_without_effect_receipt",
+            "effect_receipt_fills_without_application",
+            "accounting_receipts_without_application",
+        }
+        if (isinstance(ledger, dict) and ledger.get("status") == "AVAILABLE"
+                and not required_ledger_lineage.issubset(ledger)):
             projections = dict(projections)
             projections["execution_ledger"] = {"status": "UNAVAILABLE"}
         safe["projections"] = verified_projections(projections, generated)

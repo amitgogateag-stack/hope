@@ -41,12 +41,16 @@ def readers(connection, generated):
             "WHERE p.fill_id=a.fill_id AND p.portfolio_id=a.portfolio_id)),"
             "(SELECT count(*) FROM effect_receipts),"
             "(SELECT count(*) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM effect_receipts e WHERE e.fill_id=f.fill_id)),"
-            "(SELECT count(*) FROM effect_receipts e WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id))"
+            "(SELECT count(*) FROM effect_receipts e WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
+            "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id) "
+            "WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=p.fill_id "
+            "AND a.portfolio_id=p.portfolio_id))"
         )).one()
         return dict(zip(("fills", "applied_fills", "fill_applications", "accounting_receipts",
                          "fills_without_application", "applications_without_pnl",
                          "effect_receipt_fills", "fills_without_effect_receipt",
-                         "effect_receipt_fills_without_application"), values))
+                         "effect_receipt_fills_without_application",
+                         "accounting_receipts_without_application"), values))
     def blocked_runs():
         allowed = ",".join(f"'{code}'" for code in BLOCKED_CODES if code != "OTHER")
         rows = dict(connection.execute(text(

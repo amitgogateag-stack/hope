@@ -224,5 +224,7 @@ def test_m2_dashboard_observes_real_certified_bridge_outcomes(postgres_engine, m
         assert observed["execution_ledger"]["fills"] == int(path == "FILLED")
         assert observed["execution_ledger"]["accounting_receipts"] == int(path == "FILLED")
         assert observed["execution_ledger"]["applications_without_pnl"] == 0
+        assert observed["execution_ledger"]["accounting_receipts_without_application"] == 0
+        assert observed["execution_ledger"]["reconciliation_state"] == ("OBSERVED_COMPLETE" if path == "FILLED" else "NO_FILLS")
     finally:
         engine.dispose()

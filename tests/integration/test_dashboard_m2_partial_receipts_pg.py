@@ -113,7 +113,16 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             return value
     try:
         initial = observe()
-        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "effect_receipt_fills_without_application": 1}
+        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "effect_receipt_fills_without_application": 1, "accounting_receipts_without_application": 0}
+        # A P&L row cannot make an unapplied fill look reconciled.  Surface the
+        # orphan as aggregate evidence without exposing portfolio or fill IDs.
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f'INSERT INTO "{schema}".paper_portfolio_pnl_events VALUES (:portfolio,:fill)'), {"portfolio": portfolio, "fill": fill})
+        orphan = observe()
+        assert orphan["accounting_receipts"] == 1
+        assert orphan["accounting_receipts_without_application"] == 1
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f'DELETE FROM "{schema}".paper_portfolio_pnl_events'))
         with postgres_engine.begin() as connection:
             connection.execute(text(f'INSERT INTO "{schema}".paper_portfolio_fill_applications VALUES (:portfolio,:fill)'), {"portfolio": portfolio, "fill": fill})
         partial = observe()
@@ -122,6 +131,7 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             connection.execute(text(f'INSERT INTO "{schema}".paper_portfolio_pnl_events VALUES (:portfolio,:fill)'), {"portfolio": portfolio, "fill": fill})
         complete = observe()
         assert complete["applications_without_pnl"] == 0 and complete["accounting_receipts"] == 1
+        assert complete["accounting_receipts_without_application"] == 0
         assert "portfolio_id" not in complete and "pnl_amount" not in complete
     finally:
         with postgres_engine.begin() as connection:
