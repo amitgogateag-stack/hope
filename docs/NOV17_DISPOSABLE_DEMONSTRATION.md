@@ -79,6 +79,10 @@ a non-blocking exclusive kernel lock across export, verification, snapshot
 replacement, and receipt replacement. A concurrent or unsafe-lock-path attempt
 exits non-zero without exporting or changing either last-good artifact; process
 death releases the lock without a stale-PID recovery path.
+The v2 CURRENT receipt also carries the SHA-256 of the exact backing snapshot
+bytes. The server requires both that digest and `generated_at` to match its
+single bounded read; a substituted same-timestamp snapshot makes refresh health
+UNAVAILABLE even when the snapshot remains independently safe to display.
 It requires an exact expected database name and exact 40-character reviewed commit.
 It queries `current_database()` inside the same READ ONLY, REPEATABLE READ
 transaction before labeling a snapshot `DISPOSABLE_LAB`. The exported contract

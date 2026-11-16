@@ -8,6 +8,7 @@ closed-vocabulary aggregate status.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -136,7 +137,7 @@ def refresh_once(
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
     base = {
-        "schema": "hope.dashboard-refresh.v1", "scope": "DISPOSABLE_LAB_ONLY",
+        "schema": "hope.dashboard-refresh.v2", "scope": "DISPOSABLE_LAB_ONLY",
         "generated_at": observed_at.astimezone(timezone.utc).isoformat(),
         "deployed_commit": deployed_commit, "paper_only": True,
         "live_enabled": False, "execution_authorized": False,
@@ -162,8 +163,9 @@ def refresh_once(
                 staged, database_url, deployed_commit=deployed_commit,
                 data_classification="DISPOSABLE_LAB", expected_database=expected_database,
             )
+            staged_payload = staged.read_bytes()
             safe, generated = verified_snapshot_payload(
-                staged.read_bytes(), expected_commit=deployed_commit, now=observed_at,
+                staged_payload, expected_commit=deployed_commit, now=observed_at,
             )
             snapshot = json.loads(safe)
             if snapshot.get("provenance", {}).get("data_classification") != "DISPOSABLE_LAB":
@@ -172,12 +174,13 @@ def refresh_once(
             staged.unlink(missing_ok=True)
             _publish_status(status, {
                 **base, "state": "FAILED", "snapshot_generated_at": None,
-                "error_code": _failure_code(error),
+                "snapshot_sha256": None, "error_code": _failure_code(error),
             })
             return False
         durable_replace(staged, output)
         _publish_status(status, {
             **base, "state": "CURRENT", "snapshot_generated_at": generated.isoformat(),
+            "snapshot_sha256": hashlib.sha256(staged_payload).hexdigest(),
             "error_code": None,
         })
         return True

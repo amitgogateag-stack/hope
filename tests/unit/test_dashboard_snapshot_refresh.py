@@ -1,5 +1,6 @@
 """The LAB refresher preserves last-good bytes and never claims authority."""
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import sys
@@ -39,6 +40,7 @@ def test_success_requires_exact_lab_provenance_and_publishes_non_authorizing_sta
     result=json.loads(status.read_text())
     assert result["state"]=="CURRENT" and result["error_code"] is None
     assert result["snapshot_generated_at"]==NOW.isoformat()
+    assert result["snapshot_sha256"]==hashlib.sha256(snapshot()).hexdigest()
     assert result["scope"]=="DISPOSABLE_LAB_ONLY"
     assert result["execution_authorized"] is False and result["live_enabled"] is False
     assert "private-url" not in status.read_text() and "lab_db" not in status.read_text()
@@ -56,6 +58,7 @@ def test_failure_preserves_last_good_and_emits_only_closed_error(tmp_path, monke
     result=json.loads(status.read_text())
     assert result["state"]=="FAILED" and result["error_code"]=="SNAPSHOT_REFRESH_FAILED"
     assert result["snapshot_generated_at"] is None
+    assert result["snapshot_sha256"] is None
     assert "secret" not in status.read_text() and "private" not in status.read_text()
 
 

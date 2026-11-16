@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import ExitStack
+import hashlib
 import json
 from re import fullmatch
 from datetime import datetime, timezone
@@ -43,8 +44,19 @@ REFRESH_ERROR_CODES = {
 
 def _verified_snapshot(path: Path, *, expected_commit: str | None = None,
                        max_age_seconds: int | None = None) -> tuple[bytes, datetime]:
+    payload, generated, _ = _verified_snapshot_observation(
+        path, expected_commit=expected_commit, max_age_seconds=max_age_seconds,
+    )
+    return payload, generated
+
+
+def _verified_snapshot_observation(
+    path: Path, *, expected_commit: str | None = None,
+    max_age_seconds: int | None = None,
+) -> tuple[bytes, datetime, str]:
+    raw = bounded_regular_read(path, 32768)
     payload, generated = verified_snapshot_payload(
-        bounded_regular_read(path,32768), expected_commit=expected_commit,
+        raw, expected_commit=expected_commit,
     )
     if max_age_seconds is not None:
         if type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400:
@@ -52,7 +64,7 @@ def _verified_snapshot(path: Path, *, expected_commit: str | None = None,
         age = (datetime.now(timezone.utc) - generated).total_seconds()
         if age < -300 or age > max_age_seconds:
             raise ValueError("HOPE_DASHBOARD_SNAPSHOT_STALE")
-    return payload, generated
+    return payload, generated, hashlib.sha256(raw).hexdigest()
 
 
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
@@ -92,16 +104,17 @@ def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
 def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
                              max_age_seconds: int = 900,
                              expected_snapshot_generated: datetime | None = None,
+                             expected_snapshot_sha256: str | None = None,
                              require_snapshot_match: bool = False) -> bytes:
     """Sanitize the refresher's last attempt without exposing database details."""
     data = json.loads(bounded_regular_read(path, 2048))
     fields = {
         "schema", "scope", "generated_at", "deployed_commit", "paper_only",
         "live_enabled", "execution_authorized", "state",
-        "snapshot_generated_at", "error_code",
+        "snapshot_generated_at", "snapshot_sha256", "error_code",
     }
     if (not isinstance(data, dict) or set(data) != fields
-            or data.get("schema") != "hope.dashboard-refresh.v1"
+            or data.get("schema") != "hope.dashboard-refresh.v2"
             or data.get("scope") != "DISPOSABLE_LAB_ONLY"
             or data.get("paper_only") is not True
             or data.get("live_enabled") is not False
@@ -111,6 +124,9 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
             or (expected_snapshot_generated is not None
                 and (not isinstance(expected_snapshot_generated, datetime)
                      or expected_snapshot_generated.tzinfo is None))
+            or (expected_snapshot_sha256 is not None
+                and (not isinstance(expected_snapshot_sha256, str)
+                     or fullmatch(r"[0-9a-f]{64}", expected_snapshot_sha256) is None))
             or type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400):
         raise ValueError("HOPE_DASHBOARD_REFRESH_STATUS_INVALID")
     commit = data.get("deployed_commit")
@@ -127,24 +143,39 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
     generated = timestamp(data.get("generated_at"))
     state = data["state"]
     snapshot_generated = data.get("snapshot_generated_at")
+    snapshot_sha256 = data.get("snapshot_sha256")
     error = data.get("error_code")
     if state == "CURRENT":
         snapshot_generated = timestamp(snapshot_generated)
-        if error is not None:
+        if (error is not None or not isinstance(snapshot_sha256, str)
+                or fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is None):
             raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
-        if (require_snapshot_match and expected_snapshot_generated is None
-                or expected_snapshot_generated is not None
-                and snapshot_generated != expected_snapshot_generated.astimezone(timezone.utc)):
+        missing_expected = (
+            expected_snapshot_generated is None or expected_snapshot_sha256 is None
+        )
+        timestamp_mismatch = (
+            expected_snapshot_generated is not None
+            and snapshot_generated
+            != expected_snapshot_generated.astimezone(timezone.utc)
+        )
+        digest_mismatch = (
+            expected_snapshot_sha256 is not None
+            and snapshot_sha256 != expected_snapshot_sha256
+        )
+        if (require_snapshot_match and missing_expected
+                or timestamp_mismatch or digest_mismatch):
             raise ValueError("HOPE_DASHBOARD_REFRESH_SNAPSHOT_MISMATCH")
         if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
             state = "STALE"
-    elif snapshot_generated is not None or error not in REFRESH_ERROR_CODES:
+    elif (snapshot_generated is not None or snapshot_sha256 is not None
+            or error not in REFRESH_ERROR_CODES):
         raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
     safe = {
-        "schema": "hope.dashboard-refresh-observation.v1",
+        "schema": "hope.dashboard-refresh-observation.v2",
         "scope": "DISPOSABLE_LAB_ONLY", "state": state,
         "generated_at": generated.isoformat(), "deployed_commit": commit,
         "snapshot_generated_at": snapshot_generated.isoformat() if isinstance(snapshot_generated, datetime) else None,
+        "snapshot_sha256": snapshot_sha256,
         "error_code": error, "paper_only": True, "live_enabled": False,
         "execution_authorized": False,
     }
@@ -485,9 +516,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Do not reveal database errors, credentials, host paths or SQL.
             state = "UNAVAILABLE"
             generated_at = None
-            snapshot_generated = None
+            snapshot_generated = snapshot_sha256 = None
             try:
-                _, generated = _verified_snapshot(
+                _, generated, snapshot_sha256 = _verified_snapshot_observation(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
                 )
                 generated_at = generated.isoformat()
@@ -504,6 +535,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     self.server.refresh_status, expected_commit=self.server.deployed_commit,
                     max_age_seconds=self.server.max_snapshot_age_seconds,
                     expected_snapshot_generated=snapshot_generated,
+                    expected_snapshot_sha256=snapshot_sha256,
                     require_snapshot_match=True,
                 ))
                 refresh_state, refresh_error = refresh["state"], refresh["error_code"]
@@ -528,15 +560,16 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == "/refresh-status.json":
             try:
                 try:
-                    _, snapshot_generated = _verified_snapshot(
+                    _, snapshot_generated, snapshot_sha256 = _verified_snapshot_observation(
                         self.server.snapshot, expected_commit=self.server.deployed_commit,
                     )
                 except (OSError, ValueError, TypeError, UnicodeError):
-                    snapshot_generated = None
+                    snapshot_generated = snapshot_sha256 = None
                 payload = _verified_refresh_status(
                     self.server.refresh_status, expected_commit=self.server.deployed_commit,
                     max_age_seconds=self.server.max_snapshot_age_seconds,
                     expected_snapshot_generated=snapshot_generated,
+                    expected_snapshot_sha256=snapshot_sha256,
                     require_snapshot_match=True,
                 )
             except (OSError, ValueError, TypeError, UnicodeError):
