@@ -1,6 +1,7 @@
 """Fixed aggregate-only optional dashboard projection contract."""
 from datetime import datetime, timezone
 from uuid import UUID
+from typing import Any
 
 EXPERIMENT_STATES = ("CREATED", "RUNNING", "COMPLETED", "FAILED", "INVALIDATED", "OTHER")
 VERDICTS = ("SUPPORTED", "WEAK_EVIDENCE", "INCONCLUSIVE", "REJECTED", "INVALIDATED", "REQUIRES_MORE_DATA")
@@ -13,14 +14,14 @@ CANDIDATE_STATES = ("RESEARCH", "BACKUP_CANDIDATE", "OPERATIONAL_CANDIDATE", "UN
 BLOCKED_CODES = ("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE", "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "OTHER")
 
 
-def verified_projections(value: object, generated: datetime) -> dict:
+def verified_projections(value: object, generated: datetime) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         raise ValueError("HOPE_DASHBOARD_PROJECTIONS_INVALID")
-    def count(number):
+    def count(number: object) -> int:
         if type(number) is not int or not 0 <= number <= 9007199254740991:
             raise ValueError("HOPE_DASHBOARD_PROJECTION_COUNT_INVALID")
         return number
-    def timestamp(raw):
+    def timestamp(raw: object) -> str | None:
         if raw is None:
             return None
         if not isinstance(raw, str):
@@ -29,7 +30,7 @@ def verified_projections(value: object, generated: datetime) -> dict:
         if parsed.tzinfo is None or parsed > generated:
             raise ValueError("HOPE_DASHBOARD_PROJECTION_TIME_INVALID")
         return parsed.astimezone(timezone.utc).isoformat()
-    safe = {}
+    safe: dict[str, dict[str, Any]] = {}
     for section in SECTIONS + tuple(key for key in M2_SECTIONS if key in value):
         item = value.get(section, {"status": "UNAVAILABLE"})
         if not isinstance(item, dict) or item.get("status") not in {"AVAILABLE", "UNAVAILABLE"}:
@@ -37,7 +38,9 @@ def verified_projections(value: object, generated: datetime) -> dict:
         if item["status"] == "UNAVAILABLE":
             safe[section] = {"status": "UNAVAILABLE"}
             continue
-        result = {"status": "AVAILABLE"}
+        # Optional JSON sections contain counts, timestamps, rows and flags.
+        # Their strict runtime contracts below remain the authority for values.
+        result: dict[str, Any] = {"status": "AVAILABLE"}
         if section == "datasets":
             result.update(registered=count(item.get("registered")), pit_certified=count(item.get("pit_certified")))
             if result["pit_certified"] > result["registered"]:
@@ -45,7 +48,7 @@ def verified_projections(value: object, generated: datetime) -> dict:
         elif section == "strategies":
             result["versions"] = count(item.get("versions"))
         elif section in {"experiments", "decisions"}:
-            fields = EXPERIMENT_STATES if section == "experiments" else VERDICTS
+            fields: tuple[str, ...] = EXPERIMENT_STATES if section == "experiments" else VERDICTS
             name = "by_status" if section == "experiments" else "by_verdict"
             buckets = item.get(name)
             if not isinstance(buckets, dict):

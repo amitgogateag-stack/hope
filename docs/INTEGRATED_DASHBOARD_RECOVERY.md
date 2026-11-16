@@ -92,3 +92,14 @@ conflicting configurations are errors before export. Existing valid configuratio
 and non-authorizing last-good display are retained. Full native source and PR CI
 must pass at the final candidate SHA; independent security stays red until genuine
 positive production proof exists. Never count an infrastructure refusal as a pass.
+
+## Targeted static type qualification
+
+Targeted pinned mypy1.19.1 review found14 pre-existing heterogeneous-dictionary/
+fixed-tuple inference diagnostics on parent107 and17 on the initial candidate
+(three new arithmetic expressions inherited that incorrect str inference).
+Explicit count/timestamp types, the heterogeneous JSON result dictionary and
+variable-length string tuple annotations resolve all17 without type ignores,
+runtime validation changes or strategy/risk changes. Both changed modules pass
+--check-untyped-defs; an early pinned CI gate now maintains that qualification.
+This targets the refresher and projection modules, not whole-program typing.
