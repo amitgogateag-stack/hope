@@ -366,7 +366,7 @@ const applyDeployment=d=>{if(d?.schema!=='hope.deployment-observation.v1'||Objec
 const clearPublisher=()=>{publisherCache=null;tag('publisher-state','UNKNOWN','off');metric('publisher-note','Kernel lease ownership is unobserved.');};
 const renderPublisher=()=>{if(!publisherCache)return;const d=publisherCache;const stale=Date.now()-stamp(d.generated_at)>60000;tag('publisher-state',stale?'UNKNOWN':d.state,'off');metric('publisher-note',stale?'Lease observation expired.':('Observed owner identity · '+(d.identity_sha256||'unavailable')+' · Does not certify financial recovery.'));};
 const applyPublisher=d=>{if(d?.schema!=='hope.paper-publisher-observation.v1'||Object.keys(d).length!==5||d.execution_authorized!==false||!['UNKNOWN','BLOCKED','VERIFIED'].includes(d.state)||stamp(d.generated_at)>Date.now()||(d.state==='VERIFIED'?!/^[0-9a-f]{64}$/.test(d.identity_sha256):d.identity_sha256!==null))throw Error('Invalid publisher observation');publisherCache=d;renderPublisher();};
-const ageViews = () => { renderDeployment(); renderPublisher(); renderImage(); renderHistory(); renderAcceptance(); renderRehearsal(); renderSnapshot(); renderLegacy(); renderHealth(); renderOperations(); renderReadiness(); };
+const ageViews = () => { renderLab(); renderDeployment(); renderPublisher(); renderImage(); renderHistory(); renderAcceptance(); renderRehearsal(); renderSnapshot(); renderLegacy(); renderHealth(); renderOperations(); renderReadiness(); };
 setInterval(ageViews,1000);
 const pendingRequests = new Map();
 const requestJSON = (path, limit) => {
@@ -414,13 +414,15 @@ el('snapshot-file').addEventListener('change',async()=>{
   if (epoch === snapshotEpoch) applySnapshot(data,'local file');
  } catch (_) { if (epoch === snapshotEpoch) clearSnapshot('Snapshot rejected'); }
 });
-const clearLab=()=>{el('paper-lab-status').textContent='UNAVAILABLE · production admission BLOCKED';};
+let labCache=null;
+const clearLab=()=>{labCache=null;el('paper-lab-status').textContent='UNAVAILABLE · production admission BLOCKED';};
+const renderLab=()=>{if(!labCache)return;if(Date.now()>=labCache.expires_at*1000){clearLab();return;}el('paper-lab-status').textContent='LAB_OBSERVED · production admission BLOCKED\nLast lab completion: '+(labCache.last_lab_cycle_at||'none')+'\n'+labCache.cases.map(x=>[x.market,x.scenario,x.result,x.reason,x.evidence_sha256].join(' · ')).join('\n');};
 const labValues=['INDIA,USA','NO_TRADE,FILLED,RISK_BLOCKED,PARTIAL_FILL,REJECTED,RESTART,DUPLICATE_CALLBACK,STALE_DATA,MISSING_DATA,FAILED_RECONCILIATION,UNKNOWN_COMMIT,DATABASE_INTERRUPTION,BULLISH_MECHANICS,BEARISH_MECHANICS','PASS,FAIL,NOT_EXECUTED','NONE,NO_SIGNAL,MAX_POSITION_NOTIONAL_EXCEEDED,STALE_DATA,NO_QUOTE,RECONCILIATION_FAILED,COMMIT_UNKNOWN,BACKEND_LOST,DUPLICATE_DENIED,PARTIAL_COMPLETE,EXPECTED_REJECTION'].map(x=>x.split(','));
 const applyLab=d=>{
- const rows=d?.cases,seen=new Set(),completed=[];let bad=d?.schema!=='hope.paper-lab-observation.v1'||d.scope!=='DISPOSABLE_LAB_ONLY'||d.state!=='LAB_OBSERVED'||d.signature!=='VALID_FOR_CONFIGURED_LAB_KEY'||d.production_admission!=='BLOCKED'||d.execution_authorized!==false||!integer(d.generated_at)||!Array.isArray(rows)||!rows.length||rows.length>64;
+ const rows=d?.cases,seen=new Set(),completed=[];let bad=d?.schema!=='hope.paper-lab-observation.v1'||d.scope!=='DISPOSABLE_LAB_ONLY'||d.state!=='LAB_OBSERVED'||d.signature!=='VALID_FOR_CONFIGURED_LAB_KEY'||d.production_admission!=='BLOCKED'||d.execution_authorized!==false||!integer(d.generated_at)||!integer(d.expires_at)||d.generated_at>=d.expires_at||d.expires_at*1000<=Date.now()||!Array.isArray(rows)||!rows.length||rows.length>64;
  if(!bad)for(const x of rows){const id=x?.market+'/'+x?.scenario,a=x?.completed_at;bad=labValues.some((v,i)=>!v.includes([x?.market,x?.scenario,x?.result,x?.reason][i]))||!/^[0-9a-f]{64}$/.test(x?.evidence_sha256)||seen.has(id)||!((x.result==='NOT_EXECUTED'&&a===null&&x.reason!=='NONE')||(x.result!=='NOT_EXECUTED'&&typeof a==='string'&&(x.result==='PASS'||x.reason!=='NONE')));if(!bad&&a!==null)try{bad=stamp(a)>d.generated_at*1000;completed.push(a);}catch(_){bad=true;}seen.add(id);}
  if(bad||(completed.sort((a,b)=>stamp(a)-stamp(b)).at(-1)||null)!==d.last_lab_cycle_at){clearLab();return;}
- el('paper-lab-status').textContent='LAB_OBSERVED · production admission BLOCKED\nLast lab completion: '+(d.last_lab_cycle_at||'none')+'\n'+rows.map(x=>[x.market,x.scenario,x.result,x.reason,x.evidence_sha256].join(' · ')).join('\n');
+ labCache=d;renderLab();
 };
 if (location.protocol === 'http:' && ['127.0.0.1','localhost'].includes(location.hostname)) {
  const refresh = async() => {await refreshFeed('/snapshot.json',32768,data=>applySnapshot(data,'automatic refresh'),retainSnapshotAfterFailure);await refreshHealth();};
