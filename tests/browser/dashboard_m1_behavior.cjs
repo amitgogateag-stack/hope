@@ -26,7 +26,7 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,clearHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
@@ -72,6 +72,7 @@ async function main() {
   assert.match(b.element('recovery-status').textContent,/STALE/);
   const fresh=sample();fresh.generated_at=iso(BASE+3600001);
   b.api.applySnapshot(fresh,'automatic refresh');
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:fresh.generated_at,refresh_state:'CURRENT',refresh_error_code:null});
   assert.doesNotMatch(b.element('snapshot-status').textContent,/retaining|STALE/);
   b.api.clearSnapshot('Unavailable');b.api.retainSnapshotAfterFailure();
   assert.equal(b.element('paper-jobs').textContent,'Not connected');
@@ -145,6 +146,18 @@ async function main() {
   assert.equal(b.element('feed-health').textContent,'UNKNOWN');
   b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'FAILED',refresh_error_code:'DATABASE_IDENTITY_MISMATCH'});assert.match(b.element('snapshot-status').textContent,/DATABASE_IDENTITY_MISMATCH.*retaining/);
   assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null,refresh_state:'FAILED',refresh_error_code:'password=secret'}));
+ }
+ // Server status can only qualify the exact automatic snapshot it observed;
+ // it cannot contaminate a selected local file or cross a refresh generation.
+ {
+  const b=browser(),current=sample(),other=sample();other.generated_at=iso(BASE-1000);
+  b.api.applySnapshot(current,'automatic refresh');
+  b.context.fetchImpl=async()=>response({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:other.generated_at,refresh_state:'CURRENT',refresh_error_code:null});
+  await b.api.refreshFeed('/status.json',4096,b.api.applyHealth,b.api.clearHealth);
+  assert.match(b.element('snapshot-status').textContent,/Refresh UNAVAILABLE.*retaining/);
+  b.api.applySnapshot(current,'local file');
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:other.generated_at,refresh_state:'FAILED',refresh_error_code:'SNAPSHOT_REFRESH_FAILED'});
+  assert.doesNotMatch(b.element('snapshot-status').textContent,/Refresh|retaining/);
  }
  {
   const b=browser();
