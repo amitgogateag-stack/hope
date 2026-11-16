@@ -96,7 +96,7 @@ def refresh_once(
     return True
 
 
-def main() -> None:
+def main() -> int:
     parser = argparse.ArgumentParser(description="Refresh an isolated HOPE LAB dashboard snapshot")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--status", type=Path, required=True)
@@ -108,14 +108,16 @@ def main() -> None:
         parser.error("--interval-seconds must be between 30 and 3600")
     database_url = os.environ.get("HOPE_DATABASE_URL", "")
     while True:
-        refresh_once(
+        refreshed = refresh_once(
             args.output, args.status, database_url,
             expected_database=args.expected_database, deployed_commit=args.deployed_commit,
         )
         if args.interval_seconds is None:
-            return
+            # One-shot callers (cron, systemd, CI) must be able to distinguish a
+            # verified atomic publication from a preserved last-good snapshot.
+            return 0 if refreshed else 1
         time.sleep(args.interval_seconds)
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -386,9 +386,14 @@ def test_server_rejects_recovery_field_with_wrong_shape(tmp_path, invalid):
     (b'{"schema_version":1,"source":"unknown"}', 503),
     (b"x" * 32769, 503),
     (b'{"schema_version":1,"source":"hope_postgresql"}', 503),
-    (valid_snapshot(), 200),
+    (None, 200),
 ], ids=["malformed", "wrong-source", "oversized", "incomplete", "valid"])
 def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
+    # A module-level valid_snapshot() is evaluated during collection.  The full
+    # PostgreSQL matrix intentionally runs for longer than the freshness budget,
+    # so create the positive fixture immediately before the request instead.
+    if snapshot is None:
+        snapshot = valid_snapshot()
     with dashboard(tmp_path, snapshot) as server:
         status, headers, body = request(server, "/snapshot.json")
         assert status == expected

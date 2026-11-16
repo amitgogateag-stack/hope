@@ -1,6 +1,7 @@
 """The LAB refresher preserves last-good bytes and never claims authority."""
 from datetime import datetime, timezone
 import json
+import sys
 
 from hope.api import dashboard_snapshot_refresh as module
 
@@ -73,3 +74,34 @@ def test_post_export_contract_failure_cannot_replace_status_with_current(tmp_pat
                                    deployed_commit=COMMIT, observed_at=NOW)
     assert output.read_bytes()==b"previous verified snapshot"
     assert json.loads(status.read_text())["state"]=="FAILED"
+
+
+def test_one_shot_cli_returns_failure_when_no_verified_snapshot_was_published(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    monkeypatch.setenv("HOPE_DATABASE_URL", "secret-url")
+    monkeypatch.setattr(module, "refresh_once", lambda *args, **kwargs: False)
+    monkeypatch.setattr(sys, "argv", [
+        "hope-dashboard-snapshot-refresh", "--output", str(output),
+        "--status", str(status), "--expected-database", "lab_db",
+        "--deployed-commit", COMMIT,
+    ])
+    assert module.main() == 1
+
+
+def test_one_shot_cli_returns_success_only_after_verified_publication(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    monkeypatch.setenv("HOPE_DATABASE_URL", "secret-url")
+    observed = {}
+    def refresh(*args, **kwargs):
+        observed.update(args=args, kwargs=kwargs)
+        return True
+    monkeypatch.setattr(module, "refresh_once", refresh)
+    monkeypatch.setattr(sys, "argv", [
+        "hope-dashboard-snapshot-refresh", "--output", str(output),
+        "--status", str(status), "--expected-database", "lab_db",
+        "--deployed-commit", COMMIT,
+    ])
+    assert module.main() == 0
+    assert observed == {"args": (output, status, "secret-url"), "kwargs": {
+        "expected_database": "lab_db", "deployed_commit": COMMIT,
+    }}
