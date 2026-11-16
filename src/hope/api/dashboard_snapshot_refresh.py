@@ -19,7 +19,7 @@ from pathlib import Path
 
 from hope.api.dashboard_snapshot import export_dashboard_snapshot
 from hope.api.snapshot_contract import verified_snapshot_payload
-from hope.infrastructure.durable_file import durable_replace
+from hope.infrastructure.durable_file import bounded_regular_read, durable_replace
 
 
 class _RefreshLockUnavailable(Exception):
@@ -29,6 +29,32 @@ class _RefreshLockUnavailable(Exception):
 def _refresh_lock_path(output: Path) -> Path:
     output = Path(output)
     return output.with_name(f".{output.name}.refresh.lock")
+
+
+def _validate_publication_paths(output: Path, status: Path) -> None:
+    """Keep snapshot, receipt and persistent lock as three private artifacts.
+
+    A receipt replacing the held lock creates a split-lock race; a receipt
+    replacing the snapshot destroys the last-good publication. These are
+    configuration errors, refused before database access. This is not a
+    defense against a hostile process with the publisher's own UID.
+    """
+    output, status = Path(os.path.abspath(output)), Path(os.path.abspath(status))
+    lock = _refresh_lock_path(output)
+    if output.parent != status.parent or len({output, status, lock}) != 3:
+        raise ValueError("HOPE_DASHBOARD_REFRESH_PATHS_INVALID")
+    identities = set()
+    for path in (output, status):
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            continue
+        identity = info.st_dev, info.st_ino
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_mode & 0o022 or info.st_uid != os.geteuid()
+                or identity in identities):
+            raise ValueError("HOPE_DASHBOARD_REFRESH_PATHS_INVALID")
+        identities.add(identity)
 
 
 def _acquire_refresh_lock(output: Path) -> tuple[int, int]:
@@ -133,7 +159,7 @@ def refresh_once(
     deployed_commit: str, observed_at: datetime | None = None,
 ) -> bool:
     """Refresh one exact disposable database, preserving last-good on failure."""
-    observed_at = observed_at or _utc_now()
+    observed_at = _utc_now() if observed_at is None else observed_at
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
     base = {
@@ -142,7 +168,8 @@ def refresh_once(
         "deployed_commit": deployed_commit, "paper_only": True,
         "live_enabled": False, "execution_authorized": False,
     }
-    output = Path(output)
+    output, status = Path(output), Path(status)
+    _validate_publication_paths(output, status)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         refresh_lock = _acquire_refresh_lock(output)
@@ -152,6 +179,7 @@ def refresh_once(
         return False
     staged: Path | None = None
     try:
+        _validate_publication_paths(output, status)
         descriptor, staged_name = tempfile.mkstemp(
             prefix=".hope-dashboard-refresh-snapshot-", suffix=".json", dir=output.parent,
         )
@@ -163,7 +191,7 @@ def refresh_once(
                 staged, database_url, deployed_commit=deployed_commit,
                 data_classification="DISPOSABLE_LAB", expected_database=expected_database,
             )
-            staged_payload = staged.read_bytes()
+            staged_payload = bounded_regular_read(staged, 32768)
             safe, generated = verified_snapshot_payload(
                 staged_payload, expected_commit=deployed_commit, now=observed_at,
             )
@@ -177,6 +205,7 @@ def refresh_once(
                 "snapshot_sha256": None, "error_code": _failure_code(error),
             })
             return False
+        _validate_publication_paths(output, status)
         durable_replace(staged, output)
         _publish_status(status, {
             **base, "state": "CURRENT", "snapshot_generated_at": generated.isoformat(),

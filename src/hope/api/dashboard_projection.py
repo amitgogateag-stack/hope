@@ -109,7 +109,14 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["applications_without_pnl"] > result["fill_applications"]
                     or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
                     or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]
-                    or result["accounting_receipts_without_application"] > result["accounting_receipts"]):
+                    or result["accounting_receipts_without_application"] > result["accounting_receipts"]
+                    # Canonical fills minus their applied subset must all be
+                    # represented by the canonical-unapplied intersection.
+                    or result["effect_receipt_fills"] - result["effect_receipt_fills_without_application"] > result["applied_fills"]
+                    # Unique (portfolio, fill) receipts form a one-to-one match
+                    # with applications having accounting, not just <= counts.
+                    or result["accounting_receipts"] - result["accounting_receipts_without_application"]
+                    != result["fill_applications"] - result["applications_without_pnl"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
             if result["accounting_receipts_without_application"]:
                 result["reconciliation_state"] = "ORPHAN_ACCOUNTING_RECEIPTS"

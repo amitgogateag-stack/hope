@@ -116,7 +116,7 @@ def test_original_projection_vocabulary_remains_compatible():
       "effect_receipt_fills_without_application":1}, "EFFECT_RECEIPTS_NOT_APPLIED"),
     ({"applied_fills":2,"fill_applications":2,"fills_without_application":0,
       "fills_without_effect_receipt":0,"effect_receipt_fills":2,
-      "effect_receipt_fills_without_application":0}, "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"),
+      "effect_receipt_fills_without_application":0,"applications_without_pnl":2}, "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"),
     ({"applied_fills":2,"fill_applications":2,"fills_without_application":0,
       "fills_without_effect_receipt":0,"effect_receipt_fills":2,
       "effect_receipt_fills_without_application":0,"applications_without_pnl":0,

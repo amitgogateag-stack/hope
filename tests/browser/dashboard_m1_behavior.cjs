@@ -90,7 +90,14 @@ async function main() {
   assert.match(b.element('m2-execution-ledger').textContent,/EFFECT_RECEIPTS_NOT_APPLIED.*1 fills without application/);
   data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
   assert.throws(()=>b.api.applySnapshot(data,'local file'));
+  data.projections.execution_ledger.effect_receipt_fills_without_application=0;
+  data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
+  assert.throws(()=>b.api.applySnapshot(data,'impossible canonical subset'));
+  data.projections.execution_ledger.effect_receipt_fills_without_application=1;
   data.projections.execution_ledger.reconciliation_state='EFFECT_RECEIPTS_NOT_APPLIED';
+  data.projections.execution_ledger.accounting_receipts=1;
+  assert.throws(()=>b.api.applySnapshot(data,'impossible accounting bijection'));
+  data.projections.execution_ledger.accounting_receipts=0;
   assert.match(b.element('m2-blocked-runs').textContent,/PAPER_MARKET_DATA_STALE: 1/);
   assert.match(b.element('m2-certified-chain').textContent,/1 historical receipts.*0 OPERATIONAL classifications.*eligibility UNKNOWN/);
   assert.match(b.element('m2-certified-outcomes').textContent,/NO_TRADE: 1/);

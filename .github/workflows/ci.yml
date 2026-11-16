@@ -49,6 +49,8 @@ jobs:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
         run: pytest -q tests/integration/test_startup_financial_boundary.py tests/integration/test_m3_controlled_acceptance.py
+      - name: Dashboard publication crash and ledger invariants
+        run: pytest -q tests/unit/test_dashboard_refresh_recovery.py tests/unit/test_dashboard_ledger_consistency.py tests/unit/test_dashboard_snapshot_refresh.py
       - name: Restricted dashboard LOGIN and database-owner acceptance
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope

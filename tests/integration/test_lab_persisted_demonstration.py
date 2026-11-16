@@ -32,6 +32,20 @@ from test_certified_paper_bridge import certified_case
 @pytest.mark.parametrize('outcome',['NO_TRADE','FILLED','RISK_BLOCKED'])
 def test_committed_certified_lifecycle_is_visible_only_as_lab_evidence(certified_case,tmp_path,monkeypatch,market,outcome):
     engine,make=certified_case
+    from hope.api.dashboard_m2_snapshot import readers
+    from hope.api.dashboard_projection import SECTIONS, verified_projections
+    def read_ledger():
+        with engine.connect() as connection:
+            connection.execute(text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY'))
+            generated = connection.execute(text('SELECT CURRENT_TIMESTAMP')).scalar_one()
+            raw = readers(connection, generated)['execution_ledger']()
+            value = {name: {'status': 'UNAVAILABLE'} for name in SECTIONS}
+            value['execution_ledger'] = {'status': 'AVAILABLE', **raw}
+            result = verified_projections(value, generated)['execution_ledger']
+            assert connection.execute(text('SHOW transaction_read_only')).scalar_one() == 'on'
+            connection.rollback()
+            return result
+    before_ledger = read_ledger()
     data,run,strategy,work,registry=make(market=market,emit=outcome!='NO_TRADE',blocked=outcome=='RISK_BLOCKED')
     clock=lambda:data['as_of']+timedelta(minutes=1)
     assert run_paper_once(engine,run,registry,now=clock) is PaperCycleOutcome.EXECUTED
@@ -52,6 +66,17 @@ def test_committed_certified_lifecycle_is_visible_only_as_lab_evidence(certified
         major=int(connection.execute(text('SHOW server_version_num')).scalar_one())//10000
     assert job.status=='SUCCEEDED' and job.completed_at is not None
     assert actual.outcome==outcome and receipts==1
+    # The shared disposable database can contain earlier partial fixtures.
+    # Trace this committed case by exact aggregate deltas, never declare that
+    # unrelated historical backlog was reconciled or reset it for the test.
+    after_ledger = read_ledger()
+    for field in ('fills', 'applied_fills', 'fill_applications', 'accounting_receipts',
+                  'effect_receipt_fills'):
+        assert after_ledger[field] - before_ledger[field] == int(outcome == 'FILLED')
+    for field in ('fills_without_application', 'applications_without_pnl',
+                  'fills_without_effect_receipt', 'effect_receipt_fills_without_application',
+                  'accounting_receipts_without_application'):
+        assert after_ledger[field] == before_ledger[field]
     assert len(effects)==(5 if outcome=='FILLED' else 1)
     assert actual.reason_code=={'NO_TRADE':'NO_SIGNAL','FILLED':'PORTFOLIO_RISK_APPROVED','RISK_BLOCKED':'MAX_POSITION_NOTIONAL_EXCEEDED'}[outcome]
     evidence=dict(job_run_id=str(run.job_run_id),status=job.status,completed_at=job.completed_at.isoformat(),
