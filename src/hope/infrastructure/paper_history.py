@@ -163,9 +163,15 @@ def history_observation(path,*,now=None):
 
 
 def publisher_observation(status_path,*,expected_instance=None,expected_identity=None):
-    """Correlate a held kernel lock, process incarnation and persisted heartbeat."""
+    """Observe lease metadata; never authenticate same-UID-writable content.
+
+    No independent publisher attestor is configured. A held flock and copied
+    incarnation fields cannot make unsigned heartbeat bytes authentic.
+    """
     absent=dict(schema='hope.paper-publisher-observation.v1',state='UNKNOWN',identity_sha256=None,
-        generated_at=datetime.now(timezone.utc).isoformat(),execution_authorized=False)
+        generated_at=datetime.now(timezone.utc).isoformat(),execution_authorized=False,
+        heartbeat_authenticated=False,lock_state='UNKNOWN',
+        reason='INDEPENDENT_PUBLISHER_AUTHORITY_UNAVAILABLE')
     descriptor=None
     try:
         import fcntl
@@ -188,7 +194,7 @@ def publisher_observation(status_path,*,expected_instance=None,expected_identity
                 or health.get('publisher_identity_sha256')!=header['identity_sha256']):return dict(absent,state='BLOCKED')
         after=path.lstat()
         if (after.st_dev,after.st_ino,after.st_mtime_ns,after.st_ctime_ns)!=(info.st_dev,info.st_ino,info.st_mtime_ns,info.st_ctime_ns):return absent
-        return dict(absent,state='VERIFIED',identity_sha256=header['identity_sha256'])
+        return dict(absent,state='UNVERIFIED',lock_state='HELD',identity_sha256=header['identity_sha256'])
     except (OSError,ValueError,RuntimeError,TypeError,KeyError,ImportError):return absent
     finally:
         if descriptor is not None:os.close(descriptor)

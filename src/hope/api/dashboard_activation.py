@@ -78,7 +78,7 @@ def _command_environment(value=None):
 
 
 def _sha(value):
-    _require(isinstance(value,str) and re.fullmatch("[0-9a-f]{40}",value),"SHA_INVALID")
+    _require(type(value) is str and re.fullmatch("[0-9a-f]{40}",value),"SHA_INVALID")
     _require(value!="7e9d341742818a97accce3e2301b1c7f96596795","FROZEN_RELEASE_DENIED")
     return value
 
@@ -316,11 +316,18 @@ def runtime_gate(layout,target):
     _interpreter_identity(_python(layout,target))
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
     evidence=unverified()
+    preview_sha256=None
     if record["schema"]=="hope.dashboard-activation.v3":
         digest=record["previous_runtime_manifest"] if record["phase"]=="ROLLING_BACK" else record["runtime_manifest"]
-        evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest)
+        evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest,
+            release_source="docs/dashboard/preview.html")
+        preview_sha256=evidence.get("release_source_sha256")
+        _require(type(preview_sha256) is str and re.fullmatch('[0-9a-f]{64}',preview_sha256) is not None,
+            "BUILD_SOURCE_UNVERIFIED")
+        evidence.pop("release_source_sha256")
     return {"status":"GATE_PASSED","dashboard_commit":target,
-        "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence)}
+        "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence),
+        "preview_sha256":preview_sha256}
 
 
 @contextmanager

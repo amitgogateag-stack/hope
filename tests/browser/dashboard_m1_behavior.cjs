@@ -26,7 +26,7 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,clearHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
@@ -72,6 +72,7 @@ async function main() {
   assert.match(b.element('recovery-status').textContent,/STALE/);
   const fresh=sample();fresh.generated_at=iso(BASE+3600001);
   b.api.applySnapshot(fresh,'automatic refresh');
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:fresh.generated_at,refresh_state:'CURRENT',refresh_error_code:null});
   assert.doesNotMatch(b.element('snapshot-status').textContent,/retaining|STALE/);
   b.api.clearSnapshot('Unavailable');b.api.retainSnapshotAfterFailure();
   assert.equal(b.element('paper-jobs').textContent,'Not connected');
@@ -80,14 +81,28 @@ async function main() {
   const b=browser(), data=sample();
   data.projections={strategy_catalog:{status:'AVAILABLE',total:1,truncated:false,rows:[{strategy_version_id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',family_code:'TIME_SERIES_TREND',candidate_state:'RESEARCH',markets:['USA']}]},
    dataset_certification:{status:'AVAILABLE',version_total:2,sealed_versions:1,pit_certified_versions:1,manifest_backed_sealed_versions:1},
-   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0},
+   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0,effect_receipt_fills:1,fills_without_effect_receipt:0,unattributed_effect_receipt_fills:0,effect_receipt_fills_without_application:1,claimed_effect_receipt_fills:1,succeeded_effect_receipt_fills:0,failed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:1,succeeded_effect_receipt_fills_without_application:0,failed_effect_receipt_fills_without_application:0,accounting_receipts_without_application:0,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'},
    blocked_runs:{status:'AVAILABLE',total:1,by_reason:{PAPER_JOB_INCOMPLETE_PRIOR_CLAIM:0,PAPER_MARKET_DATA_STALE:1,PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT:0,OTHER:0}},
    decision_activity:{status:'AVAILABLE',no_trade_records:0,claimed_no_trade:0,latest_decision_at:null},
    certified_chain:{status:'AVAILABLE',authorization_receipts:1,operational_classifications:0,latest_authorization_at:iso(BASE-1000),eligibility_policy:'UNKNOWN'},
    certified_outcomes:{status:'AVAILABLE',total:1,claimed_records:0,latest_decision_at:iso(BASE-1000),by_outcome:{NO_TRADE:1,RISK_BLOCKED:0,FILLED:0},risk_blocked_reasons:{MAX_DAILY_LOSS_REACHED:0,MAX_DRAWDOWN_REACHED:0,MAX_POSITION_NOTIONAL_EXCEEDED:0,MAX_STRATEGY_EXPOSURE_EXCEEDED:0,CONCENTRATION_CONTEXT_REQUIRED:0,MAX_CONCENTRATION_EXPOSURE_EXCEEDED:0,MAX_GROSS_EXPOSURE_EXCEEDED:0,MAX_OPEN_POSITIONS_EXCEEDED:0,INTELLIGENCE_ENTRY_REVIEW_REQUIRED:0,OTHER:0}}};
   b.api.applySnapshot(data,'local file');
   assert.match(b.element('m2-strategy-catalog').textContent,/TIME_SERIES_TREND.*RESEARCH/);
-  assert.match(b.element('m2-execution-ledger').textContent,/1 fills without application/);
+  assert.match(b.element('m2-execution-ledger').textContent,/CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED.*CLAIMED 1/);
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:0,claimed_effect_receipt_fills_without_application:0,reconciliation_state:'OBSERVED_COMPLETE'});
+  assert.throws(()=>b.api.applySnapshot(data,'impossible canonical subset'));
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:1,claimed_effect_receipt_fills_without_application:1,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'});
+  data.projections.execution_ledger.accounting_receipts=1;
+  assert.throws(()=>b.api.applySnapshot(data,'impossible accounting bijection'));
+  data.projections.execution_ledger.accounting_receipts=0;
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills:0,fills_without_effect_receipt:1,unattributed_effect_receipt_fills:1,effect_receipt_fills_without_application:0,claimed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:0});
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
+  data.projections.execution_ledger.reconciliation_state='UNATTRIBUTED_EFFECT_RECEIPTS';
+  b.api.applySnapshot(data,'local file');
+  assert.match(b.element('m2-execution-ledger').textContent,/UNATTRIBUTED_EFFECT_RECEIPTS.*1 outside PAPER/);
+  data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
+  data.projections.execution_ledger.reconciliation_state='UNATTRIBUTED_EFFECT_RECEIPTS';
   assert.match(b.element('m2-blocked-runs').textContent,/PAPER_MARKET_DATA_STALE: 1/);
   assert.match(b.element('m2-certified-chain').textContent,/1 historical receipts.*0 OPERATIONAL classifications.*eligibility UNKNOWN/);
   assert.match(b.element('m2-certified-outcomes').textContent,/NO_TRADE: 1/);
@@ -130,12 +145,37 @@ async function main() {
   assert.equal(b.element('research-runs').textContent,'0');
  }
  {
-  const b=browser(); b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE)});
+  const b=browser(); b.api.applySnapshot(sample(),'automatic refresh');b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'CURRENT',refresh_error_code:null});
   assert.equal(b.element('web-service').textContent,'RUNNING');
   b.advance(90001);
   assert.equal(b.element('web-service').textContent,'UNKNOWN');
   assert.equal(b.element('feed-health').textContent,'UNKNOWN');
-  assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null}));
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'FAILED',refresh_error_code:'DATABASE_IDENTITY_MISMATCH'});assert.match(b.element('snapshot-status').textContent,/DATABASE_IDENTITY_MISMATCH.*retaining/);
+  assert.throws(()=>b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:null,refresh_state:'FAILED',refresh_error_code:'password=secret'}));
+ }
+ // An unavailable feed must retain the last snapshot even if a refresh receipt
+ // independently says CURRENT; that receipt cannot supply missing observations.
+ {
+  const b=browser();b.api.applySnapshot(sample(),'automatic refresh');
+  b.api.clearHealth();
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'UNAVAILABLE',snapshot_generated_at:null,refresh_state:'CURRENT',refresh_error_code:null});
+  assert.match(b.element('snapshot-status').textContent,/Refresh UNAVAILABLE.*retaining/);
+  assert.equal(b.element('research-runs').textContent,'0');
+  assert.equal(b.element('feed-health').textContent,'UNAVAILABLE');
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'CURRENT',refresh_error_code:null});
+  assert.doesNotMatch(b.element('snapshot-status').textContent,/Refresh|retaining/);
+ }
+ // Server status can only qualify the exact automatic snapshot it observed;
+ // it cannot contaminate a selected local file or cross a refresh generation.
+ {
+  const b=browser(),current=sample(),other=sample();other.generated_at=iso(BASE-1000);
+  b.api.applySnapshot(current,'automatic refresh');
+  b.context.fetchImpl=async()=>response({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:other.generated_at,refresh_state:'CURRENT',refresh_error_code:null});
+  await b.api.refreshFeed('/status.json',4096,b.api.applyHealth,b.api.clearHealth);
+  assert.match(b.element('snapshot-status').textContent,/Refresh UNAVAILABLE.*retaining/);
+  b.api.applySnapshot(current,'local file');
+  b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:other.generated_at,refresh_state:'FAILED',refresh_error_code:'SNAPSHOT_REFRESH_FAILED'});
+  assert.doesNotMatch(b.element('snapshot-status').textContent,/Refresh|retaining/);
  }
  {
   const b=browser();
