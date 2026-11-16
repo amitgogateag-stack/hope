@@ -1,6 +1,7 @@
 """Fixed aggregate-only optional dashboard projection contract."""
 from datetime import datetime, timezone
 from uuid import UUID
+from typing import Any
 
 EXPERIMENT_STATES = ("CREATED", "RUNNING", "COMPLETED", "FAILED", "INVALIDATED", "OTHER")
 VERDICTS = ("SUPPORTED", "WEAK_EVIDENCE", "INCONCLUSIVE", "REJECTED", "INVALIDATED", "REQUIRES_MORE_DATA")
@@ -13,14 +14,14 @@ CANDIDATE_STATES = ("RESEARCH", "BACKUP_CANDIDATE", "OPERATIONAL_CANDIDATE", "UN
 BLOCKED_CODES = ("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE", "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "OTHER")
 
 
-def verified_projections(value: object, generated: datetime) -> dict:
+def verified_projections(value: object, generated: datetime) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         raise ValueError("HOPE_DASHBOARD_PROJECTIONS_INVALID")
-    def count(number):
+    def count(number: object) -> int:
         if type(number) is not int or not 0 <= number <= 9007199254740991:
             raise ValueError("HOPE_DASHBOARD_PROJECTION_COUNT_INVALID")
         return number
-    def timestamp(raw):
+    def timestamp(raw: object) -> str | None:
         if raw is None:
             return None
         if not isinstance(raw, str):
@@ -29,7 +30,7 @@ def verified_projections(value: object, generated: datetime) -> dict:
         if parsed.tzinfo is None or parsed > generated:
             raise ValueError("HOPE_DASHBOARD_PROJECTION_TIME_INVALID")
         return parsed.astimezone(timezone.utc).isoformat()
-    safe = {}
+    safe: dict[str, dict[str, Any]] = {}
     for section in SECTIONS + tuple(key for key in M2_SECTIONS if key in value):
         item = value.get(section, {"status": "UNAVAILABLE"})
         if not isinstance(item, dict) or item.get("status") not in {"AVAILABLE", "UNAVAILABLE"}:
@@ -37,7 +38,9 @@ def verified_projections(value: object, generated: datetime) -> dict:
         if item["status"] == "UNAVAILABLE":
             safe[section] = {"status": "UNAVAILABLE"}
             continue
-        result = {"status": "AVAILABLE"}
+        # Optional JSON sections contain counts, timestamps, rows and flags.
+        # Their strict runtime contracts below remain the authority for values.
+        result: dict[str, Any] = {"status": "AVAILABLE"}
         if section == "datasets":
             result.update(registered=count(item.get("registered")), pit_certified=count(item.get("pit_certified")))
             if result["pit_certified"] > result["registered"]:
@@ -45,7 +48,7 @@ def verified_projections(value: object, generated: datetime) -> dict:
         elif section == "strategies":
             result["versions"] = count(item.get("versions"))
         elif section in {"experiments", "decisions"}:
-            fields = EXPERIMENT_STATES if section == "experiments" else VERDICTS
+            fields: tuple[str, ...] = EXPERIMENT_STATES if section == "experiments" else VERDICTS
             name = "by_status" if section == "experiments" else "by_verdict"
             buckets = item.get(name)
             if not isinstance(buckets, dict):
@@ -97,11 +100,46 @@ def verified_projections(value: object, generated: datetime) -> dict:
                     or result["manifest_backed_sealed_versions"] > result["sealed_versions"]):
                 raise ValueError("HOPE_DASHBOARD_CERTIFICATION_COUNT_INCONSISTENT")
         elif section == "execution_ledger":
-            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts", "fills_without_application", "applications_without_pnl")
+            fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts",
+                      "fills_without_application", "applications_without_pnl",
+                      "effect_receipt_fills", "fills_without_effect_receipt",
+                      "unattributed_effect_receipt_fills",
+                      "effect_receipt_fills_without_application",
+                      "accounting_receipts_without_application")
             result.update({key: count(item.get(key)) for key in fields})
             if (result["fills"] != result["applied_fills"] + result["fills_without_application"]
-                    or result["applied_fills"] > result["fill_applications"] or result["applications_without_pnl"] > result["fill_applications"]):
+                    or result["fills"] != result["effect_receipt_fills"] + result["fills_without_effect_receipt"]
+                    or result["applied_fills"] > result["fill_applications"]
+                    or result["applications_without_pnl"] > result["fill_applications"]
+                    or result["unattributed_effect_receipt_fills"] > result["fills_without_effect_receipt"]
+                    or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
+                    or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]
+                    or result["accounting_receipts_without_application"] > result["accounting_receipts"]
+                    # Canonical fills minus their applied subset must all be
+                    # represented by the canonical-unapplied intersection.
+                    or result["effect_receipt_fills"] - result["effect_receipt_fills_without_application"] > result["applied_fills"]
+                    # Unique (portfolio, fill) receipts form a one-to-one match
+                    # with applications having accounting, not just <= counts.
+                    or result["accounting_receipts"] - result["accounting_receipts_without_application"]
+                    != result["fill_applications"] - result["applications_without_pnl"]):
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
+            if result["accounting_receipts_without_application"]:
+                result["reconciliation_state"] = "ORPHAN_ACCOUNTING_RECEIPTS"
+            elif result["unattributed_effect_receipt_fills"]:
+                result["reconciliation_state"] = "UNATTRIBUTED_EFFECT_RECEIPTS"
+            elif result["fills_without_effect_receipt"]:
+                result["reconciliation_state"] = "MISSING_EFFECT_RECEIPTS"
+            elif result["effect_receipt_fills_without_application"]:
+                result["reconciliation_state"] = "EFFECT_RECEIPTS_NOT_APPLIED"
+            elif result["applications_without_pnl"]:
+                result["reconciliation_state"] = "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"
+            elif result["fills"] == 0:
+                result["reconciliation_state"] = "NO_FILLS"
+            else:
+                result["reconciliation_state"] = "OBSERVED_COMPLETE"
+            supplied_state = item.get("reconciliation_state")
+            if supplied_state is not None and supplied_state != result["reconciliation_state"]:
+                raise ValueError("HOPE_DASHBOARD_LEDGER_STATE_INCONSISTENT")
         elif section == "blocked_runs":
             buckets = item.get("by_reason")
             if not isinstance(buckets, dict):

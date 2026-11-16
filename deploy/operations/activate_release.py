@@ -11,8 +11,8 @@ import subprocess
 import time
 
 from hope.api.operations_deployment import inspect_release, switch_release
-from hope.api.dashboard_server import _verified_snapshot
-from hope.api.dashboard_upgrade_probe import verify_dashboard
+from hope.api.dashboard_server import _verified_operations, _verified_snapshot
+from hope.api.dashboard_upgrade_probe import verify_dashboard, verify_readiness
 
 ROOT = Path("/opt/hope-operations")
 HEALTH = Path("/var/lib/hope-paper/health.json")
@@ -165,6 +165,15 @@ def accepted_health(value, target, started):
         return False
 
 
+def accepted_health_file(path, target, started):
+    """Require authenticated publisher evidence before accepting CURRENT."""
+    try:
+        value = json.loads(_verified_operations(path, expected_commit=target))
+        return accepted_health(value, target, started)
+    except (OSError, TypeError, ValueError):
+        return False
+
+
 def accepted_dashboard(started):
     """Require a post-switch export and its private loopback presentation."""
     try:
@@ -175,8 +184,15 @@ def accepted_dashboard(started):
             return False
         result = verify_dashboard("http://127.0.0.1:8788", activation_started=started,
                                   activation_snapshot=payload)
+        readiness = verify_readiness("http://127.0.0.1:8788")
         return (result.get("service") == "RUNNING"
-                and result.get("paper_feed") == "AVAILABLE")
+                and result.get("paper_feed") == "AVAILABLE"
+                and readiness.get("paper_health") == "READY"
+                and readiness.get("reason") == "CURRENT_OBSERVATIONS_ONLY"
+                and readiness.get("database") == "OBSERVED_AT_SNAPSHOT"
+                and readiness.get("execution_authorized") is False
+                and readiness.get("paper_only") is True
+                and readiness.get("live_enabled") is False)
     except (OSError, TypeError, ValueError):
         return False
 
@@ -204,8 +220,7 @@ def main():
             for _ in range(60):
                 systemctl("is-active", "--quiet", *UNITS)
                 try:
-                    value = json.loads(HEALTH.read_text())
-                    if accepted_health(value, args.target, started) and accepted_dashboard(started):
+                    if accepted_health_file(HEALTH, args.target, started) and accepted_dashboard(started):
                         return
                 except (OSError, ValueError):
                     pass

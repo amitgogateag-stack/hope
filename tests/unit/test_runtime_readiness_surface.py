@@ -11,7 +11,9 @@ from hope.api import dashboard_activation as activation
 from hope.api.dashboard_server import DashboardHTTPServer
 from hope.api.runtime_integrity import unverified
 from test_dashboard_server import valid_snapshot
-from test_dashboard_m1_operations_surface import health
+# Explicit external-authentication MODEL for downstream state-machine tests.
+# Real unsigned CURRENT and same-UID replacement denial run in separate suites.
+from test_m3_dashboard_readiness import health, modeled_external_heartbeat_authority
 from test_dashboard_only_activation import setup
 from test_activation_guard import guard_platform
 from test_aws_snapshot_attestation import host
@@ -58,8 +60,10 @@ def test_runtime_endpoint_is_bounded_and_mandatory_for_ready(setup,state):
             else:
                 with opener.open(base+"/readiness.json",timeout=3) as response:ready=json.loads(response.read())
                 assert ready["runtime_integrity"]["state"]==state
-                assert ready["paper_health"]==("READY" if state=="VERIFIED" else "UNAVAILABLE")
-                if state!="VERIFIED":assert ready["reason"]=="RUNTIME_"+state
+                assert ready["paper_health"]=="UNAVAILABLE"
+                assert ready["reason"]==(
+                    "SNAPSHOT_PUBLISHER_UNVERIFIED" if state=="VERIFIED" else "RUNTIME_"+state
+                )
         finally:server.shutdown();thread.join(timeout=5)
 
 

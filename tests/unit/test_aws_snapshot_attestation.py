@@ -32,6 +32,7 @@ def host(monkeypatch):
             systemd_probe=kwargs.pop("systemd_probe",_units()),status_probe=kwargs.pop("status_probe",_status()),
             paper_status_probe=_paper_status(),dashboard_release_probe=_dashboard_release(),
             runtime_probe=kwargs.pop("runtime_probe",_runtime()),
+            snapshot_authority_probe=kwargs.pop("snapshot_authority_probe",lambda *_args: True),
             release_probe=lambda *a:{"status":"COMPATIBLE_CODE"},unit_file_probe=lambda *a:True,**kwargs)
     return snapshot,inspect
 
@@ -68,6 +69,16 @@ def test_zero_jobs_and_no_trade_are_valid_observations_not_failure(host):
     assert report["ready"] is True
     assert report["snapshot"]["job_runs"]["total"]==0
     assert "NEVER_REPORT" not in json.dumps(report)
+
+
+def test_same_uid_snapshot_cannot_claim_ready_without_independent_authority(host):
+    snapshot,inspect=host
+    snapshot["paper"]["environment_state"]="RUNNING"
+    report=inspect(snapshot_authority_probe=lambda *_args:False)
+    assert report["ready"] is False
+    assert "SNAPSHOT_PUBLISHER_UNVERIFIED" in report["blockers"]
+    assert report["snapshot_authentication"]=="UNVERIFIED"
+    assert report["snapshot"]["environment_state"]=="RUNNING"
 
 
 @pytest.mark.parametrize("change",["schema","source","counts","boolean","oversize","malformed"])
