@@ -43,7 +43,8 @@ def test_gate_forwards_the_durable_manifest_digest_and_closes_on_mismatch(setup,
     layout,host=setup;switch(layout,host,mode="release")
     check=Mock(side_effect=RuntimeError("RUNTIME_MANIFEST_CHANGED"));monkeypatch.setattr(m,"attest_runtime",check)
     with pytest.raises(RuntimeError,match="RUNTIME_MANIFEST_CHANGED"):m.runtime_gate(layout,NEW)
-    check.assert_called_once_with(layout.root,NEW,"release",expected_manifest="b"*64)
+    check.assert_called_once_with(layout.root,NEW,"release",expected_manifest="b"*64,
+        release_source="docs/dashboard/preview.html")
 
 
 @pytest.mark.parametrize("legacy",["hope.dashboard-activation.v1","hope.dashboard-activation.v2"])

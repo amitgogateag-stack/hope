@@ -13,6 +13,7 @@ from hope.api import runtime_integrity as r,package_provenance as p,operations_d
 from hope.api.runtime_identity import verify_listener
 
 MARKER=b"hope.operational-acceptance.v1\n"
+INDEPENDENT_AUTHORITY_REQUIRED="REVIEW_INDEPENDENT_ACCEPTANCE_AUTHORITY"
 
 
 def process_observation(pid,python,arguments):
@@ -70,24 +71,34 @@ def stage_lab_release(archive,root,source,sha,*,expected_digest):
 
 
 def acceptance_observation(runtime,observations,*,expected_sha,now=None):
-    """A process starting or a successful test alone can never satisfy this."""
-    now=now or datetime.now(timezone.utc);runtime=r.safe_evidence(runtime)
-    blockers=[]
+    """Collect lab diagnostics, never issue independent acceptance authority.
+
+    Runtime summaries and caller-supplied observation labels are not signed
+    acceptance evidence. No independent authority adapter is provisioned.
+    """
+    expected_sha=r._sha(expected_sha)
+    now=datetime.now(timezone.utc) if now is None else now
+    r._require(type(now) is datetime and now.tzinfo is not None and now.utcoffset() is not None,
+        "ACCEPTANCE_TIME_INVALID")
+    runtime=r.safe_evidence(runtime)
+    blockers=[INDEPENDENT_AUTHORITY_REQUIRED]
     if (runtime["state"]!="VERIFIED" or runtime["provenance_state"]!="VERIFIED"
             or runtime["build_state"]!="VERIFIED" or runtime["release_commit"]!=expected_sha):blockers.append("REVIEW_RELEASE_BUILD_AND_RUNTIME")
     required={"release_commit","generated_at","process_identity","database","scheduler","market_data","reconciliation","risk","live_enabled"}
-    if not isinstance(observations,dict) or set(observations)!=required:blockers.append("REVIEW_MISSING_EVIDENCE")
+    if (type(observations) is not dict or set(observations)!=required
+            or any(type(key) is not str for key in observations)):blockers.append("REVIEW_MISSING_EVIDENCE")
     else:
         try:
+            if type(observations["generated_at"]) is not str:raise TypeError
             stamp=datetime.fromisoformat(observations["generated_at"])
             if stamp.tzinfo is None or not 0<=(now-stamp).total_seconds()<=300:blockers.append("REFRESH_EXPIRED_EVIDENCE")
         except (ValueError,TypeError):blockers.append("REFRESH_EXPIRED_EVIDENCE")
-        if observations["release_commit"]!=expected_sha:blockers.append("REVIEW_DEPLOYMENT_IDENTITY")
-        if not isinstance(observations["process_identity"],str) or not re.fullmatch("[0-9a-f]{64}",observations["process_identity"]):blockers.append("REVIEW_PROCESS_IDENTITY")
+        if type(observations["release_commit"]) is not str or observations["release_commit"]!=expected_sha:blockers.append("REVIEW_DEPLOYMENT_IDENTITY")
+        if type(observations["process_identity"]) is not str or not re.fullmatch("[0-9a-f]{64}",observations["process_identity"]):blockers.append("REVIEW_PROCESS_IDENTITY")
         for key,allowed,action in (("database",{"COMPATIBLE"},"REVIEW_DATABASE"),("scheduler",{"CURRENT"},"REVIEW_SCHEDULER"),
             ("market_data",{"VERIFIED","CLOSED"},"REFRESH_VERIFIED_MARKET_INPUTS"),("reconciliation",{"CLEAR"},"RECONCILE_DURABLE_CLAIMS"),
             ("risk",{"CLEAR"},"REVIEW_DURABLE_HALT")):
-            if not isinstance(observations[key],str) or observations[key] not in allowed:blockers.append(action)
+            if type(observations[key]) is not str or observations[key] not in allowed:blockers.append(action)
         if observations["live_enabled"] is not False:blockers.append("LIVE_MUST_REMAIN_DISABLED")
-    return dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",state="BLOCKED" if blockers else "VERIFIED",
+    return dict(schema="hope.operational-acceptance.v1",scope="DISPOSABLE_LAB_ONLY",state="BLOCKED",
         release_commit=expected_sha,generated_at=now.isoformat(),blockers=sorted(set(blockers)),execution_authorized=False)

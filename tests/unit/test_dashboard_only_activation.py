@@ -51,9 +51,11 @@ def setup(tmp_path_factory,monkeypatch,guard_platform):
     # Orchestration fixtures model approved runtime evidence; separate integrity
     # tests exercise real files, hashes, permissions and independent manifests.
     def attested(root,sha,mode,**kwargs):
-        return dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
+        result=dict(schema="hope.runtime-integrity.v1",state="VERIFIED",code="MANIFEST_AND_RUNTIME_MATCH",
             release_commit=sha,runtime_mode=mode,manifest_sha256=("a" if sha==OLD else "b")*64,
             inventory_sha256="c"*64,process_sha256=None,file_count=1,execution_authorized=False,provenance_state="VERIFIED",provenance_sha256="e"*64,build_state="VERIFIED",build_sha256="f"*64,builder_id="c"*64)
+        if kwargs.get("release_source") is not None:result["release_source_sha256"]="d"*64
+        return result
     monkeypatch.setattr(module,"attest_runtime",attested)
     if os.name=="nt":
         # Windows cannot grant POSIX symlinks/fsync/ownership. Model pointer
@@ -316,3 +318,18 @@ def test_owner_unknown_is_not_treated_as_dead(monkeypatch):
     with pytest.raises(PermissionError):module._owner_alive(record)
     monkeypatch.setattr(operations,"_process_identity",Mock(side_effect=FileNotFoundError()))
     assert not module._owner_alive(record)
+
+
+@pytest.mark.parametrize('digest',[None,True,'invalid','F'*64])
+def test_manifest_bound_gate_refuses_missing_or_invalid_preview_provenance(setup,monkeypatch,digest):
+    layout,host=setup;host.runtime_manifests={OLD:'a'*64,NEW:'b'*64}
+    module.activate(layout,host,target=NEW,shared=OLD,ci_run=123,ci_attempt=1)
+    original=module.attest_runtime
+    def incomplete(*args,**kwargs):
+        result=original(*args,**kwargs)
+        if digest is None: result.pop('release_source_sha256',None)
+        else: result['release_source_sha256']=digest
+        return result
+    monkeypatch.setattr(module,'attest_runtime',incomplete)
+    with pytest.raises(RuntimeError,match='BUILD_SOURCE_UNVERIFIED'):
+        module.runtime_gate(layout,NEW)
