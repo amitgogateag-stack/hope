@@ -67,6 +67,18 @@ def _verified_snapshot_observation(
     return payload, generated, hashlib.sha256(raw).hexdigest()
 
 
+def _snapshot_receipt_provenance(payload: bytes) -> tuple[str | None, str | None, bool | None]:
+    """Extract only verified provenance fields used to bind a refresh receipt."""
+    provenance = json.loads(payload).get("provenance")
+    if not isinstance(provenance, dict):
+        return None, None, None
+    return (
+        provenance.get("data_classification"),
+        provenance.get("database_identity_sha256"),
+        provenance.get("synthetic_activity"),
+    )
+
+
 def _verified_legacy_inventory(path: Path) -> tuple[bytes, datetime]:
     """Return only a sanitized legacy registration inventory, never PAPER data."""
     raw = bounded_regular_read(path, 8192)
@@ -105,6 +117,9 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
                              max_age_seconds: int = 900,
                              expected_snapshot_generated: datetime | None = None,
                              expected_snapshot_sha256: str | None = None,
+                             expected_snapshot_data_classification: str | None = None,
+                             expected_snapshot_database_identity_sha256: str | None = None,
+                             expected_snapshot_synthetic_activity: bool | None = None,
                              require_snapshot_match: bool = False) -> bytes:
     """Sanitize the refresher's last attempt without exposing database details."""
     data = json.loads(bounded_regular_read(path, 2048))
@@ -112,9 +127,11 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
         "schema", "scope", "generated_at", "deployed_commit", "paper_only",
         "live_enabled", "execution_authorized", "state",
         "snapshot_generated_at", "snapshot_sha256", "error_code",
+        "snapshot_data_classification", "snapshot_database_identity_sha256",
+        "snapshot_synthetic_activity",
     }
     if (not isinstance(data, dict) or set(data) != fields
-            or data.get("schema") != "hope.dashboard-refresh.v2"
+            or data.get("schema") != "hope.dashboard-refresh.v3"
             or data.get("scope") != "DISPOSABLE_LAB_ONLY"
             or data.get("paper_only") is not True
             or data.get("live_enabled") is not False
@@ -127,6 +144,15 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
             or (expected_snapshot_sha256 is not None
                 and (not isinstance(expected_snapshot_sha256, str)
                      or fullmatch(r"[0-9a-f]{64}", expected_snapshot_sha256) is None))
+            or (expected_snapshot_data_classification is not None
+                and expected_snapshot_data_classification not in {
+                    "DISPOSABLE_LAB", "PRODUCTION_READ_ONLY",
+                })
+            or (expected_snapshot_database_identity_sha256 is not None
+                and (not isinstance(expected_snapshot_database_identity_sha256, str)
+                     or fullmatch(r"[0-9a-f]{64}", expected_snapshot_database_identity_sha256) is None))
+            or (expected_snapshot_synthetic_activity is not None
+                and type(expected_snapshot_synthetic_activity) is not bool)
             or type(max_age_seconds) is not int or not 1 <= max_age_seconds <= 86400):
         raise ValueError("HOPE_DASHBOARD_REFRESH_STATUS_INVALID")
     commit = data.get("deployed_commit")
@@ -144,14 +170,24 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
     state = data["state"]
     snapshot_generated = data.get("snapshot_generated_at")
     snapshot_sha256 = data.get("snapshot_sha256")
+    snapshot_classification = data.get("snapshot_data_classification")
+    snapshot_database_identity = data.get("snapshot_database_identity_sha256")
+    snapshot_synthetic = data.get("snapshot_synthetic_activity")
     error = data.get("error_code")
     if state == "CURRENT":
         snapshot_generated = timestamp(snapshot_generated)
         if (error is not None or not isinstance(snapshot_sha256, str)
-                or fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is None):
+                or fullmatch(r"[0-9a-f]{64}", snapshot_sha256) is None
+                or snapshot_classification != "DISPOSABLE_LAB"
+                or not isinstance(snapshot_database_identity, str)
+                or fullmatch(r"[0-9a-f]{64}", snapshot_database_identity) is None
+                or snapshot_synthetic is not True):
             raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
         missing_expected = (
             expected_snapshot_generated is None or expected_snapshot_sha256 is None
+            or expected_snapshot_data_classification is None
+            or expected_snapshot_database_identity_sha256 is None
+            or expected_snapshot_synthetic_activity is None
         )
         timestamp_mismatch = (
             expected_snapshot_generated is not None
@@ -162,20 +198,34 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
             expected_snapshot_sha256 is not None
             and snapshot_sha256 != expected_snapshot_sha256
         )
+        provenance_mismatch = (
+            expected_snapshot_data_classification is not None
+            and snapshot_classification != expected_snapshot_data_classification
+            or expected_snapshot_database_identity_sha256 is not None
+            and snapshot_database_identity != expected_snapshot_database_identity_sha256
+            or expected_snapshot_synthetic_activity is not None
+            and snapshot_synthetic is not expected_snapshot_synthetic_activity
+        )
         if (require_snapshot_match and missing_expected
-                or timestamp_mismatch or digest_mismatch):
+                or timestamp_mismatch or digest_mismatch or provenance_mismatch):
             raise ValueError("HOPE_DASHBOARD_REFRESH_SNAPSHOT_MISMATCH")
         if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
             state = "STALE"
     elif (snapshot_generated is not None or snapshot_sha256 is not None
+            or snapshot_classification is not None
+            or snapshot_database_identity is not None
+            or snapshot_synthetic is not None
             or error not in REFRESH_ERROR_CODES):
         raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
     safe = {
-        "schema": "hope.dashboard-refresh-observation.v2",
+        "schema": "hope.dashboard-refresh-observation.v3",
         "scope": "DISPOSABLE_LAB_ONLY", "state": state,
         "generated_at": generated.isoformat(), "deployed_commit": commit,
         "snapshot_generated_at": snapshot_generated.isoformat() if isinstance(snapshot_generated, datetime) else None,
         "snapshot_sha256": snapshot_sha256,
+        "snapshot_data_classification": snapshot_classification,
+        "snapshot_database_identity_sha256": snapshot_database_identity,
+        "snapshot_synthetic_activity": snapshot_synthetic,
         "error_code": error, "paper_only": True, "live_enabled": False,
         "execution_authorized": False,
     }
@@ -517,10 +567,13 @@ class DashboardHandler(BaseHTTPRequestHandler):
             state = "UNAVAILABLE"
             generated_at = None
             snapshot_generated = snapshot_sha256 = None
+            snapshot_classification = snapshot_database_identity = snapshot_synthetic = None
             try:
-                _, generated, snapshot_sha256 = _verified_snapshot_observation(
+                snapshot_payload, generated, snapshot_sha256 = _verified_snapshot_observation(
                     self.server.snapshot, expected_commit=self.server.deployed_commit,
                 )
+                (snapshot_classification, snapshot_database_identity,
+                 snapshot_synthetic) = _snapshot_receipt_provenance(snapshot_payload)
                 generated_at = generated.isoformat()
                 snapshot_generated = generated
                 state = (
@@ -536,6 +589,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     max_age_seconds=self.server.max_snapshot_age_seconds,
                     expected_snapshot_generated=snapshot_generated,
                     expected_snapshot_sha256=snapshot_sha256,
+                    expected_snapshot_data_classification=snapshot_classification,
+                    expected_snapshot_database_identity_sha256=snapshot_database_identity,
+                    expected_snapshot_synthetic_activity=snapshot_synthetic,
                     require_snapshot_match=True,
                 ))
                 refresh_state, refresh_error = refresh["state"], refresh["error_code"]
@@ -560,16 +616,22 @@ class DashboardHandler(BaseHTTPRequestHandler):
         if self.path == "/refresh-status.json":
             try:
                 try:
-                    _, snapshot_generated, snapshot_sha256 = _verified_snapshot_observation(
+                    snapshot_payload, snapshot_generated, snapshot_sha256 = _verified_snapshot_observation(
                         self.server.snapshot, expected_commit=self.server.deployed_commit,
                     )
+                    (snapshot_classification, snapshot_database_identity,
+                     snapshot_synthetic) = _snapshot_receipt_provenance(snapshot_payload)
                 except (OSError, ValueError, TypeError, UnicodeError):
                     snapshot_generated = snapshot_sha256 = None
+                    snapshot_classification = snapshot_database_identity = snapshot_synthetic = None
                 payload = _verified_refresh_status(
                     self.server.refresh_status, expected_commit=self.server.deployed_commit,
                     max_age_seconds=self.server.max_snapshot_age_seconds,
                     expected_snapshot_generated=snapshot_generated,
                     expected_snapshot_sha256=snapshot_sha256,
+                    expected_snapshot_data_classification=snapshot_classification,
+                    expected_snapshot_database_identity_sha256=snapshot_database_identity,
+                    expected_snapshot_synthetic_activity=snapshot_synthetic,
                     require_snapshot_match=True,
                 )
             except (OSError, ValueError, TypeError, UnicodeError):

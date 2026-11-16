@@ -163,7 +163,7 @@ def refresh_once(
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
     base = {
-        "schema": "hope.dashboard-refresh.v2", "scope": "DISPOSABLE_LAB_ONLY",
+        "schema": "hope.dashboard-refresh.v3", "scope": "DISPOSABLE_LAB_ONLY",
         "generated_at": observed_at.astimezone(timezone.utc).isoformat(),
         "deployed_commit": deployed_commit, "paper_only": True,
         "live_enabled": False, "execution_authorized": False,
@@ -196,13 +196,17 @@ def refresh_once(
                 staged_payload, expected_commit=deployed_commit, now=observed_at,
             )
             snapshot = json.loads(safe)
-            if snapshot.get("provenance", {}).get("data_classification") != "DISPOSABLE_LAB":
+            provenance = snapshot.get("provenance", {})
+            if provenance.get("data_classification") != "DISPOSABLE_LAB":
                 raise ValueError("HOPE_DASHBOARD_REFRESH_PROVENANCE_INVALID")
         except Exception as error:
             staged.unlink(missing_ok=True)
             _publish_status(status, {
                 **base, "state": "FAILED", "snapshot_generated_at": None,
                 "snapshot_sha256": None, "error_code": _failure_code(error),
+                "snapshot_data_classification": None,
+                "snapshot_database_identity_sha256": None,
+                "snapshot_synthetic_activity": None,
             })
             return False
         _validate_publication_paths(output, status)
@@ -210,6 +214,9 @@ def refresh_once(
         _publish_status(status, {
             **base, "state": "CURRENT", "snapshot_generated_at": generated.isoformat(),
             "snapshot_sha256": hashlib.sha256(staged_payload).hexdigest(),
+            "snapshot_data_classification": provenance["data_classification"],
+            "snapshot_database_identity_sha256": provenance["database_identity_sha256"],
+            "snapshot_synthetic_activity": provenance["synthetic_activity"],
             "error_code": None,
         })
         return True

@@ -80,31 +80,27 @@ async function main() {
   const b=browser(), data=sample();
   data.projections={strategy_catalog:{status:'AVAILABLE',total:1,truncated:false,rows:[{strategy_version_id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',family_code:'TIME_SERIES_TREND',candidate_state:'RESEARCH',markets:['USA']}]},
    dataset_certification:{status:'AVAILABLE',version_total:2,sealed_versions:1,pit_certified_versions:1,manifest_backed_sealed_versions:1},
-   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0,effect_receipt_fills:1,fills_without_effect_receipt:0,unattributed_effect_receipt_fills:0,effect_receipt_fills_without_application:1,accounting_receipts_without_application:0,reconciliation_state:'EFFECT_RECEIPTS_NOT_APPLIED'},
+   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0,effect_receipt_fills:1,fills_without_effect_receipt:0,unattributed_effect_receipt_fills:0,effect_receipt_fills_without_application:1,claimed_effect_receipt_fills:1,succeeded_effect_receipt_fills:0,failed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:1,succeeded_effect_receipt_fills_without_application:0,failed_effect_receipt_fills_without_application:0,accounting_receipts_without_application:0,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'},
    blocked_runs:{status:'AVAILABLE',total:1,by_reason:{PAPER_JOB_INCOMPLETE_PRIOR_CLAIM:0,PAPER_MARKET_DATA_STALE:1,PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT:0,OTHER:0}},
    decision_activity:{status:'AVAILABLE',no_trade_records:0,claimed_no_trade:0,latest_decision_at:null},
    certified_chain:{status:'AVAILABLE',authorization_receipts:1,operational_classifications:0,latest_authorization_at:iso(BASE-1000),eligibility_policy:'UNKNOWN'},
    certified_outcomes:{status:'AVAILABLE',total:1,claimed_records:0,latest_decision_at:iso(BASE-1000),by_outcome:{NO_TRADE:1,RISK_BLOCKED:0,FILLED:0},risk_blocked_reasons:{MAX_DAILY_LOSS_REACHED:0,MAX_DRAWDOWN_REACHED:0,MAX_POSITION_NOTIONAL_EXCEEDED:0,MAX_STRATEGY_EXPOSURE_EXCEEDED:0,CONCENTRATION_CONTEXT_REQUIRED:0,MAX_CONCENTRATION_EXPOSURE_EXCEEDED:0,MAX_GROSS_EXPOSURE_EXCEEDED:0,MAX_OPEN_POSITIONS_EXCEEDED:0,INTELLIGENCE_ENTRY_REVIEW_REQUIRED:0,OTHER:0}}};
   b.api.applySnapshot(data,'local file');
   assert.match(b.element('m2-strategy-catalog').textContent,/TIME_SERIES_TREND.*RESEARCH/);
-  assert.match(b.element('m2-execution-ledger').textContent,/EFFECT_RECEIPTS_NOT_APPLIED.*1 fills without application/);
-  data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
-  assert.throws(()=>b.api.applySnapshot(data,'local file'));
-  data.projections.execution_ledger.effect_receipt_fills_without_application=0;
-  data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
+  assert.match(b.element('m2-execution-ledger').textContent,/CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED.*CLAIMED 1/);
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:0,claimed_effect_receipt_fills_without_application:0,reconciliation_state:'OBSERVED_COMPLETE'});
   assert.throws(()=>b.api.applySnapshot(data,'impossible canonical subset'));
-  data.projections.execution_ledger.effect_receipt_fills_without_application=1;
-  data.projections.execution_ledger.reconciliation_state='EFFECT_RECEIPTS_NOT_APPLIED';
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:1,claimed_effect_receipt_fills_without_application:1,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'});
   data.projections.execution_ledger.accounting_receipts=1;
   assert.throws(()=>b.api.applySnapshot(data,'impossible accounting bijection'));
   data.projections.execution_ledger.accounting_receipts=0;
-  Object.assign(data.projections.execution_ledger,{effect_receipt_fills:0,fills_without_effect_receipt:1,unattributed_effect_receipt_fills:1,effect_receipt_fills_without_application:0});
-  assert.throws(()=>b.api.applySnapshot(data,'wrong attribution state'));
+  Object.assign(data.projections.execution_ledger,{effect_receipt_fills:0,fills_without_effect_receipt:1,unattributed_effect_receipt_fills:1,effect_receipt_fills_without_application:0,claimed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:0});
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
   data.projections.execution_ledger.reconciliation_state='UNATTRIBUTED_EFFECT_RECEIPTS';
   b.api.applySnapshot(data,'local file');
-  assert.match(b.element('m2-execution-ledger').textContent,/UNATTRIBUTED_EFFECT_RECEIPTS.*1 linked outside paper jobs/);
+  assert.match(b.element('m2-execution-ledger').textContent,/UNATTRIBUTED_EFFECT_RECEIPTS.*1 outside PAPER/);
   data.projections.execution_ledger.reconciliation_state='OBSERVED_COMPLETE';
-  assert.throws(()=>b.api.applySnapshot(data,'wrong attribution state'));
+  assert.throws(()=>b.api.applySnapshot(data,'local file'));
   data.projections.execution_ledger.reconciliation_state='UNATTRIBUTED_EFFECT_RECEIPTS';
   assert.match(b.element('m2-blocked-runs').textContent,/PAPER_MARKET_DATA_STALE: 1/);
   assert.match(b.element('m2-certified-chain').textContent,/1 historical receipts.*0 OPERATIONAL classifications.*eligibility UNKNOWN/);

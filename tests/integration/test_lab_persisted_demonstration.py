@@ -71,11 +71,13 @@ def test_committed_certified_lifecycle_is_visible_only_as_lab_evidence(certified
     # unrelated historical backlog was reconciled or reset it for the test.
     after_ledger = read_ledger()
     for field in ('fills', 'applied_fills', 'fill_applications', 'accounting_receipts',
-                  'effect_receipt_fills'):
+                  'effect_receipt_fills', 'succeeded_effect_receipt_fills'):
         assert after_ledger[field] - before_ledger[field] == int(outcome == 'FILLED')
     for field in ('fills_without_application', 'applications_without_pnl',
                   'fills_without_effect_receipt', 'unattributed_effect_receipt_fills', 'effect_receipt_fills_without_application',
-                  'accounting_receipts_without_application'):
+                  'accounting_receipts_without_application', 'claimed_effect_receipt_fills', 'failed_effect_receipt_fills',
+                  'claimed_effect_receipt_fills_without_application', 'succeeded_effect_receipt_fills_without_application',
+                  'failed_effect_receipt_fills_without_application'):
         assert after_ledger[field] == before_ledger[field]
     assert len(effects)==(5 if outcome=='FILLED' else 1)
     assert actual.reason_code=={'NO_TRADE':'NO_SIGNAL','FILLED':'PORTFOLIO_RISK_APPROVED','RISK_BLOCKED':'MAX_POSITION_NOTIONAL_EXCEEDED'}[outcome]

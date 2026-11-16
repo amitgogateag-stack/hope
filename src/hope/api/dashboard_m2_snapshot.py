@@ -30,9 +30,10 @@ def readers(connection, generated):
         values = connection.execute(text(
             "WITH paper_fills AS (SELECT f.fill_id FROM fills f JOIN orders o USING(order_id) WHERE o.environment='PAPER'),"
             "applications AS (SELECT a.* FROM paper_portfolio_fill_applications a JOIN paper_fills f USING(fill_id)),"
-            "effect_receipts AS (SELECT DISTINCT f.fill_id FROM paper_fills f JOIN paper_effects e "
+            "effect_receipt_lineage AS (SELECT DISTINCT f.fill_id,j.status FROM paper_fills f JOIN paper_effects e "
             "ON e.effect_type='FILL' AND e.entity_id=f.fill_id JOIN job_runs j "
             "ON j.job_run_id=e.job_run_id WHERE left(j.job_key,6)='paper:'),"
+            "effect_receipts AS (SELECT DISTINCT fill_id FROM effect_receipt_lineage),"
             "unattributed_effect_receipts AS (SELECT DISTINCT f.fill_id FROM paper_fills f "
             "JOIN paper_effects e ON e.effect_type='FILL' AND e.entity_id=f.fill_id "
             "LEFT JOIN job_runs j ON j.job_run_id=e.job_run_id "
@@ -48,6 +49,15 @@ def readers(connection, generated):
             "(SELECT count(*) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM effect_receipts e WHERE e.fill_id=f.fill_id)),"
             "(SELECT count(*) FROM unattributed_effect_receipts),"
             "(SELECT count(*) FROM effect_receipts e WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
+            "(SELECT count(*) FROM effect_receipt_lineage WHERE status='CLAIMED'),"
+            "(SELECT count(*) FROM effect_receipt_lineage WHERE status='SUCCEEDED'),"
+            "(SELECT count(*) FROM effect_receipt_lineage WHERE status='FAILED'),"
+            "(SELECT count(*) FROM effect_receipt_lineage e WHERE status='CLAIMED' "
+            "AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
+            "(SELECT count(*) FROM effect_receipt_lineage e WHERE status='SUCCEEDED' "
+            "AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
+            "(SELECT count(*) FROM effect_receipt_lineage e WHERE status='FAILED' "
+            "AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
             "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id) "
             "WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=p.fill_id "
             "AND a.portfolio_id=p.portfolio_id))"
@@ -57,6 +67,12 @@ def readers(connection, generated):
                          "effect_receipt_fills", "fills_without_effect_receipt",
                          "unattributed_effect_receipt_fills",
                          "effect_receipt_fills_without_application",
+                         "claimed_effect_receipt_fills",
+                         "succeeded_effect_receipt_fills",
+                         "failed_effect_receipt_fills",
+                         "claimed_effect_receipt_fills_without_application",
+                         "succeeded_effect_receipt_fills_without_application",
+                         "failed_effect_receipt_fills_without_application",
                          "accounting_receipts_without_application"), values))
     def blocked_runs():
         allowed = ",".join(f"'{code}'" for code in BLOCKED_CODES if code != "OTHER")

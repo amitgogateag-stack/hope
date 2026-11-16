@@ -79,10 +79,13 @@ a non-blocking exclusive kernel lock across export, verification, snapshot
 replacement, and receipt replacement. A concurrent or unsafe-lock-path attempt
 exits non-zero without exporting or changing either last-good artifact; process
 death releases the lock without a stale-PID recovery path.
-The v2 CURRENT receipt also carries the SHA-256 of the exact backing snapshot
-bytes. The server requires both that digest and `generated_at` to match its
-single bounded read; a substituted same-timestamp snapshot makes refresh health
-UNAVAILABLE even when the snapshot remains independently safe to display.
+The v3 CURRENT receipt carries the SHA-256 of the exact backing snapshot bytes and
+copies its verified classification, hashed database identity and synthetic-data
+claim. The server requires the digest, `generated_at` and all three provenance
+fields to match its single bounded read. A substituted same-timestamp snapshot,
+legacy-schema downgrade, production classification, or forged database identity
+makes refresh health UNAVAILABLE even when the snapshot remains independently safe
+to display. FAILED receipts must leave every snapshot binding null.
 It requires an exact expected database name and exact 40-character reviewed commit.
 It queries `current_database()` inside the same READ ONLY, REPEATABLE READ
 transaction before labeling a snapshot `DISPOSABLE_LAB`. The exported contract
@@ -122,9 +125,11 @@ Execution-ledger observations additionally split fills with a `FILL` effect rece
 attributed to a `paper:` job from historical/untracked rows. A matching effect tied
 to a missing or non-PAPER job is explicitly `UNATTRIBUTED_EFFECT_RECEIPTS`, never
 treated as canonical lineage. An attributed fill lacking portfolio application is a
-stronger recovery-review signal; a fill lacking its attributed receipt is reported
-separately and is never interpreted as trading activity or permission to replay. No
-identifiers, prices, quantities or P&L values are exposed.
+stronger recovery-review signal. Those receipts are split by their owning PAPER
+job's `CLAIMED`, `SUCCEEDED`, or `FAILED` state so in-flight evidence cannot be
+confused with terminal unapplied evidence. A fill lacking its attributed receipt is
+reported separately and is never interpreted as trading activity or permission to
+replay. No identifiers, prices, quantities or P&L values are exposed.
 
 ## November 17 decision
 

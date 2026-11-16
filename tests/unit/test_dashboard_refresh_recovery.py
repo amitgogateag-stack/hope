@@ -131,10 +131,16 @@ def test_actual_publisher_death_preserves_coherence_and_restart(tmp_path, monkey
             with pytest.raises(ValueError, match="REFRESH_SNAPSHOT_MISMATCH"):
                 _verified_refresh_status(status, expected_commit=COMMIT,
                     expected_snapshot_generated=now, expected_snapshot_sha256=digest,
+                    expected_snapshot_data_classification='DISPOSABLE_LAB',
+                    expected_snapshot_database_identity_sha256='b'*64,
+                    expected_snapshot_synthetic_activity=True,
                     require_snapshot_match=True)
         else:
             assert json.loads(_verified_refresh_status(status, expected_commit=COMMIT,
                 expected_snapshot_generated=now, expected_snapshot_sha256=digest,
+                    expected_snapshot_data_classification='DISPOSABLE_LAB',
+                    expected_snapshot_database_identity_sha256='b'*64,
+                    expected_snapshot_synthetic_activity=True,
                 require_snapshot_match=True))["state"] == "CURRENT"
         # A new process can acquire the persistent inode after actual death.
         monkeypatch.setattr(refresh, "export_dashboard_snapshot",

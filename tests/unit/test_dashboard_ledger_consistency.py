@@ -14,6 +14,13 @@ def observed(**changes):
         fills_without_effect_receipt=0, effect_receipt_fills_without_application=0,
         accounting_receipts_without_application=0, unattributed_effect_receipt_fills=0)
     value["execution_ledger"].update(changes)
+    # This corruption fixture explicitly models SUCCEEDED receipt owners.
+    ledger = value["execution_ledger"]
+    for state in ('claimed', 'succeeded', 'failed'):
+        ledger[state+'_effect_receipt_fills'] = 0
+        ledger[state+'_effect_receipt_fills_without_application'] = 0
+    ledger['succeeded_effect_receipt_fills'] = ledger['effect_receipt_fills']
+    ledger['succeeded_effect_receipt_fills_without_application'] = ledger['effect_receipt_fills_without_application']
     return value
 
 
@@ -36,7 +43,7 @@ def test_impossible_receipt_intersections_are_refused(changes):
     ({}, "OBSERVED_COMPLETE"),
     (dict(applied_fills=0, fill_applications=0, accounting_receipts=0,
           fills_without_application=2, effect_receipt_fills_without_application=2),
-     "EFFECT_RECEIPTS_NOT_APPLIED"),
+     "SUCCEEDED_EFFECT_RECEIPTS_NOT_APPLIED"),
     (dict(accounting_receipts=1, applications_without_pnl=1),
      "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS"),
     (dict(accounting_receipts=3, accounting_receipts_without_application=1),

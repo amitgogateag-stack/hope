@@ -154,6 +154,12 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
             "effect_receipt_fills", "fills_without_effect_receipt",
             "unattributed_effect_receipt_fills",
             "effect_receipt_fills_without_application",
+            "claimed_effect_receipt_fills",
+            "succeeded_effect_receipt_fills",
+            "failed_effect_receipt_fills",
+            "claimed_effect_receipt_fills_without_application",
+            "succeeded_effect_receipt_fills_without_application",
+            "failed_effect_receipt_fills_without_application",
             "accounting_receipts_without_application",
         }
         if (isinstance(ledger, dict) and ledger.get("status") == "AVAILABLE"

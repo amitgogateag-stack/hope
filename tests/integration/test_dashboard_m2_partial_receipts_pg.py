@@ -94,7 +94,7 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
         for query in (
             "CREATE TABLE orders(order_id uuid,environment text)",
             "CREATE TABLE fills(fill_id uuid,order_id uuid)",
-            "CREATE TABLE job_runs(job_run_id uuid,job_key text)",
+            "CREATE TABLE job_runs(job_run_id uuid,job_key text,status text)",
             "CREATE TABLE paper_effects(effect_type text,entity_id uuid,job_run_id uuid)",
             "CREATE TABLE paper_portfolio_fill_applications(portfolio_id uuid,fill_id uuid)",
             "CREATE TABLE paper_portfolio_pnl_events(portfolio_id uuid,fill_id uuid)",
@@ -102,7 +102,7 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             connection.execute(text(query))
         connection.execute(text("INSERT INTO orders VALUES (:id,'PAPER')"), {"id": order})
         connection.execute(text("INSERT INTO fills VALUES (:id,:order)"), {"id": fill, "order": order})
-        connection.execute(text("INSERT INTO job_runs VALUES (:job,'paper:USA:synthetic')"), {"job": job})
+        connection.execute(text("INSERT INTO job_runs VALUES (:job,'paper:USA:synthetic','CLAIMED')"), {"job": job})
         connection.execute(text("INSERT INTO paper_effects VALUES ('FILL',:fill,:job)"), {"fill": fill, "job": job})
     def observe():
         with postgres_engine.connect() as connection:
@@ -117,7 +117,20 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             return value
     try:
         initial = observe()
-        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "unattributed_effect_receipt_fills": 0, "effect_receipt_fills_without_application": 1, "accounting_receipts_without_application": 0}
+        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "unattributed_effect_receipt_fills": 0, "effect_receipt_fills_without_application": 1, "claimed_effect_receipt_fills": 1, "succeeded_effect_receipt_fills": 0, "failed_effect_receipt_fills": 0, "claimed_effect_receipt_fills_without_application": 1, "succeeded_effect_receipt_fills_without_application": 0, "failed_effect_receipt_fills_without_application": 0, "accounting_receipts_without_application": 0}
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET status='SUCCEEDED'"))
+        succeeded = observe()
+        assert succeeded["succeeded_effect_receipt_fills"] == 1
+        assert succeeded["succeeded_effect_receipt_fills_without_application"] == 1
+        assert succeeded["claimed_effect_receipt_fills"] == 0
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET status='FAILED'"))
+        failed = observe()
+        assert failed["failed_effect_receipt_fills"] == 1
+        assert failed["failed_effect_receipt_fills_without_application"] == 1
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET status='CLAIMED'"))
         # An effect row outside the PAPER scheduler namespace cannot make the
         # fill look canonically tracked, even though its entity ID matches.
         with postgres_engine.begin() as connection:
