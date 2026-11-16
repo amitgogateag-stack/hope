@@ -376,9 +376,9 @@ const request=Promise.race([work,deadline]).finally(()=>{clearTimeout(timer);pen
 pendingRequests.set(path,request);
 return request;
 };
-const activeRefreshes=new Set();
+const activeRefreshes = new Set();
 const refreshFeed=async (path,limit,apply,clear) => {
-if(activeRefreshes.has(path)) return;
+if (activeRefreshes.has(path)) return;
 activeRefreshes.add(path);
 const epoch=snapshotEpoch;
 try {
