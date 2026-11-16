@@ -1,7 +1,10 @@
 """The LAB refresher preserves last-good bytes and never claims authority."""
 from datetime import datetime, timezone
 import json
+import os
 import sys
+
+import pytest
 
 from hope.api import dashboard_snapshot_refresh as module
 
@@ -74,6 +77,83 @@ def test_post_export_contract_failure_cannot_replace_status_with_current(tmp_pat
                                    deployed_commit=COMMIT, observed_at=NOW)
     assert output.read_bytes()==b"previous verified snapshot"
     assert json.loads(status.read_text())["state"]=="FAILED"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux flock publisher boundary")
+def test_concurrent_refresher_cannot_export_or_overwrite_active_receipt(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    status.write_text('{"state":"ACTIVE_PUBLISHER"}\n')
+    held = module._acquire_refresh_lock(output)
+    called = False
+    def export(*args, **kwargs):
+        nonlocal called
+        called = True
+    monkeypatch.setattr(module, "export_dashboard_snapshot", export)
+    try:
+        assert not module.refresh_once(
+            output, status, "url", expected_database="lab_db",
+            deployed_commit=COMMIT, observed_at=NOW,
+        )
+    finally:
+        module._release_refresh_lock(held)
+    assert called is False
+    assert status.read_text() == '{"state":"ACTIVE_PUBLISHER"}\n'
+    assert not output.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux no-follow publisher boundary")
+def test_symlink_refresh_lock_fails_closed_without_touching_snapshot_or_receipt(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    output.write_bytes(b"last-good")
+    status.write_bytes(b"last-receipt")
+    victim = tmp_path/"victim"
+    victim.write_bytes(b"do-not-open")
+    module._refresh_lock_path(output).symlink_to(victim)
+    monkeypatch.setattr(
+        module, "export_dashboard_snapshot",
+        lambda *args, **kwargs: pytest.fail("unsafe lock must stop before export"),
+    )
+    assert not module.refresh_once(
+        output, status, "url", expected_database="lab_db",
+        deployed_commit=COMMIT, observed_at=NOW,
+    )
+    assert output.read_bytes() == b"last-good"
+    assert status.read_bytes() == b"last-receipt"
+    assert victim.read_bytes() == b"do-not-open"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux private lock metadata")
+def test_refresh_lock_is_persistent_private_regular_file(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    monkeypatch.setattr(
+        module, "export_dashboard_snapshot",
+        lambda path, *args, **kwargs: path.write_bytes(snapshot()),
+    )
+    assert module.refresh_once(
+        output, status, "url", expected_database="lab_db",
+        deployed_commit=COMMIT, observed_at=NOW,
+    )
+    lock = module._refresh_lock_path(output)
+    assert lock.is_file() and not lock.is_symlink()
+    assert lock.stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.skipif(os.name != "posix", reason="Linux flock publisher boundary")
+def test_staging_failure_releases_lock_for_next_refresh(tmp_path, monkeypatch):
+    output, status = tmp_path/"snapshot", tmp_path/"status"
+    real_mkstemp = module.tempfile.mkstemp
+    monkeypatch.setattr(
+        module.tempfile, "mkstemp",
+        lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk unavailable")),
+    )
+    with pytest.raises(OSError, match="disk unavailable"):
+        module.refresh_once(
+            output, status, "url", expected_database="lab_db",
+            deployed_commit=COMMIT, observed_at=NOW,
+        )
+    monkeypatch.setattr(module.tempfile, "mkstemp", real_mkstemp)
+    held = module._acquire_refresh_lock(output)
+    module._release_refresh_lock(held)
 
 
 def test_one_shot_cli_returns_failure_when_no_verified_snapshot_was_published(tmp_path, monkeypatch):

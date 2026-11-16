@@ -74,6 +74,11 @@ startup tests remain Linux-only; skips are reported, never hidden as passes.
 ## Read-only disposable dashboard refresh
 
 The snapshot refresh entry point is `python -m hope.api.dashboard_snapshot_refresh`.
+Each output has a persistent private `.refresh.lock` inode. The refresher takes
+a non-blocking exclusive kernel lock across export, verification, snapshot
+replacement, and receipt replacement. A concurrent or unsafe-lock-path attempt
+exits non-zero without exporting or changing either last-good artifact; process
+death releases the lock without a stale-PID recovery path.
 It requires an exact expected database name and exact 40-character reviewed commit.
 It queries `current_database()` inside the same READ ONLY, REPEATABLE READ
 transaction before labeling a snapshot `DISPOSABLE_LAB`. The exported contract
