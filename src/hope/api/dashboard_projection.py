@@ -103,6 +103,7 @@ def verified_projections(value: object, generated: datetime) -> dict[str, dict[s
             fields = ("fills", "applied_fills", "fill_applications", "accounting_receipts",
                       "fills_without_application", "applications_without_pnl",
                       "effect_receipt_fills", "fills_without_effect_receipt",
+                      "unattributed_effect_receipt_fills",
                       "effect_receipt_fills_without_application",
                       "accounting_receipts_without_application")
             result.update({key: count(item.get(key)) for key in fields})
@@ -110,6 +111,7 @@ def verified_projections(value: object, generated: datetime) -> dict[str, dict[s
                     or result["fills"] != result["effect_receipt_fills"] + result["fills_without_effect_receipt"]
                     or result["applied_fills"] > result["fill_applications"]
                     or result["applications_without_pnl"] > result["fill_applications"]
+                    or result["unattributed_effect_receipt_fills"] > result["fills_without_effect_receipt"]
                     or result["effect_receipt_fills_without_application"] > result["fills_without_application"]
                     or result["effect_receipt_fills_without_application"] > result["effect_receipt_fills"]
                     or result["accounting_receipts_without_application"] > result["accounting_receipts"]
@@ -123,6 +125,8 @@ def verified_projections(value: object, generated: datetime) -> dict[str, dict[s
                 raise ValueError("HOPE_DASHBOARD_LEDGER_COUNT_INCONSISTENT")
             if result["accounting_receipts_without_application"]:
                 result["reconciliation_state"] = "ORPHAN_ACCOUNTING_RECEIPTS"
+            elif result["unattributed_effect_receipt_fills"]:
+                result["reconciliation_state"] = "UNATTRIBUTED_EFFECT_RECEIPTS"
             elif result["fills_without_effect_receipt"]:
                 result["reconciliation_state"] = "MISSING_EFFECT_RECEIPTS"
             elif result["effect_receipt_fills_without_application"]:

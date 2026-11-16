@@ -74,7 +74,7 @@ def test_committed_certified_lifecycle_is_visible_only_as_lab_evidence(certified
                   'effect_receipt_fills'):
         assert after_ledger[field] - before_ledger[field] == int(outcome == 'FILLED')
     for field in ('fills_without_application', 'applications_without_pnl',
-                  'fills_without_effect_receipt', 'effect_receipt_fills_without_application',
+                  'fills_without_effect_receipt', 'unattributed_effect_receipt_fills', 'effect_receipt_fills_without_application',
                   'accounting_receipts_without_application'):
         assert after_ledger[field] == before_ledger[field]
     assert len(effects)==(5 if outcome=='FILLED' else 1)

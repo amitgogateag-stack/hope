@@ -12,7 +12,7 @@ def observed(**changes):
         fill_applications=2, accounting_receipts=2, fills_without_application=0,
         applications_without_pnl=0, effect_receipt_fills=2,
         fills_without_effect_receipt=0, effect_receipt_fills_without_application=0,
-        accounting_receipts_without_application=0)
+        accounting_receipts_without_application=0, unattributed_effect_receipt_fills=0)
     value["execution_ledger"].update(changes)
     return value
 
