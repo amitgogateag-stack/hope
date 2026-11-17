@@ -79,6 +79,10 @@ def test_committed_certified_lifecycle_is_visible_only_as_lab_evidence(certified
                   'claimed_effect_receipt_fills_without_application', 'succeeded_effect_receipt_fills_without_application',
                   'failed_effect_receipt_fills_without_application'):
         assert after_ledger[field] == before_ledger[field]
+    for bucket in ('INDIA', 'USA', 'OTHER'):
+        assert after_ledger['fills_by_market'][bucket] - before_ledger['fills_by_market'][bucket] == int(outcome == 'FILLED' and bucket == market.value)
+    assert after_ledger['unapplied_fills_by_market'] == before_ledger['unapplied_fills_by_market']
+    assert after_ledger['effect_receipt_market_mismatch_fills'] == before_ledger['effect_receipt_market_mismatch_fills']
     assert len(effects)==(5 if outcome=='FILLED' else 1)
     assert actual.reason_code=={'NO_TRADE':'NO_SIGNAL','FILLED':'PORTFOLIO_RISK_APPROVED','RISK_BLOCKED':'MAX_POSITION_NOTIONAL_EXCEEDED'}[outcome]
     evidence=dict(job_run_id=str(run.job_run_id),status=job.status,completed_at=job.completed_at.isoformat(),

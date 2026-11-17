@@ -79,6 +79,10 @@ a non-blocking exclusive kernel lock across export, verification, snapshot
 replacement, and receipt replacement. A concurrent or unsafe-lock-path attempt
 exits non-zero without exporting or changing either last-good artifact; process
 death releases the lock without a stale-PID recovery path.
+The snapshot and receipt must have distinct, non-hardlinked names in the same
+private directory, and neither may alias the persistent lock. This keeps both
+publications under one lock domain and prevents a successful refresh from
+overwriting its own snapshot or replacing the inode used for serialization.
 The v3 CURRENT receipt carries the SHA-256 of the exact backing snapshot bytes and
 copies its verified classification, hashed database identity and synthetic-data
 claim. The server requires the digest, `generated_at` and all three provenance

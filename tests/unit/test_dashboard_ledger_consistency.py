@@ -21,6 +21,9 @@ def observed(**changes):
         ledger[state+'_effect_receipt_fills_without_application'] = 0
     ledger['succeeded_effect_receipt_fills'] = ledger['effect_receipt_fills']
     ledger['succeeded_effect_receipt_fills_without_application'] = ledger['effect_receipt_fills_without_application']
+    ledger.setdefault('fills_by_market', {'INDIA': 0, 'USA': ledger['fills'], 'OTHER': 0})
+    ledger.setdefault('unapplied_fills_by_market', {'INDIA': 0, 'USA': ledger['fills_without_application'], 'OTHER': 0})
+    ledger.setdefault('effect_receipt_market_mismatch_fills', 0)
     return value
 
 

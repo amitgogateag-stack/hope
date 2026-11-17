@@ -85,14 +85,15 @@ def test_partial_or_corrupt_authorization_receipts_are_unavailable(postgres_engi
 
 @pytest.mark.integration
 def test_execution_observations_report_missing_applications_and_accounting_without_valuation(postgres_engine):
-    schema, order, fill, portfolio, job = (
-        "dashboard_ledger_" + uuid4().hex, uuid4(), uuid4(), uuid4(), uuid4()
+    schema, instrument, order, fill, portfolio, job = (
+        "dashboard_ledger_" + uuid4().hex, uuid4(), uuid4(), uuid4(), uuid4(), uuid4()
     )
     with postgres_engine.begin() as connection:
         connection.execute(text(f'CREATE SCHEMA "{schema}"'))
         connection.execute(text(f'SET LOCAL search_path TO "{schema}"'))
         for query in (
-            "CREATE TABLE orders(order_id uuid,environment text)",
+            "CREATE TABLE instruments(instrument_id uuid,exchange text)",
+            "CREATE TABLE orders(order_id uuid,instrument_id uuid,environment text)",
             "CREATE TABLE fills(fill_id uuid,order_id uuid)",
             "CREATE TABLE job_runs(job_run_id uuid,job_key text,status text)",
             "CREATE TABLE paper_effects(effect_type text,entity_id uuid,job_run_id uuid)",
@@ -100,7 +101,8 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             "CREATE TABLE paper_portfolio_pnl_events(portfolio_id uuid,fill_id uuid)",
         ):
             connection.execute(text(query))
-        connection.execute(text("INSERT INTO orders VALUES (:id,'PAPER')"), {"id": order})
+        connection.execute(text("INSERT INTO instruments VALUES (:id,'NASDAQ')"), {"id": instrument})
+        connection.execute(text("INSERT INTO orders VALUES (:id,:instrument,'PAPER')"), {"id": order, "instrument": instrument})
         connection.execute(text("INSERT INTO fills VALUES (:id,:order)"), {"id": fill, "order": order})
         connection.execute(text("INSERT INTO job_runs VALUES (:job,'paper:USA:synthetic','CLAIMED')"), {"job": job})
         connection.execute(text("INSERT INTO paper_effects VALUES ('FILL',:fill,:job)"), {"fill": fill, "job": job})
@@ -117,7 +119,19 @@ def test_execution_observations_report_missing_applications_and_accounting_witho
             return value
     try:
         initial = observe()
-        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "unattributed_effect_receipt_fills": 0, "effect_receipt_fills_without_application": 1, "claimed_effect_receipt_fills": 1, "succeeded_effect_receipt_fills": 0, "failed_effect_receipt_fills": 0, "claimed_effect_receipt_fills_without_application": 1, "succeeded_effect_receipt_fills_without_application": 0, "failed_effect_receipt_fills_without_application": 0, "accounting_receipts_without_application": 0}
+        assert initial == {"fills": 1, "applied_fills": 0, "fill_applications": 0, "accounting_receipts": 0, "fills_without_application": 1, "applications_without_pnl": 0, "effect_receipt_fills": 1, "fills_without_effect_receipt": 0, "unattributed_effect_receipt_fills": 0, "effect_receipt_fills_without_application": 1, "claimed_effect_receipt_fills": 1, "succeeded_effect_receipt_fills": 0, "failed_effect_receipt_fills": 0, "claimed_effect_receipt_fills_without_application": 1, "succeeded_effect_receipt_fills_without_application": 0, "failed_effect_receipt_fills_without_application": 0, "accounting_receipts_without_application": 0, "fills_by_market": {"INDIA": 0, "USA": 1, "OTHER": 0}, "unapplied_fills_by_market": {"INDIA": 0, "USA": 1, "OTHER": 0}, "effect_receipt_market_mismatch_fills": 0}
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET job_key='paper:INDIA:synthetic'"))
+        assert observe()["effect_receipt_market_mismatch_fills"] == 1
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".job_runs SET job_key='paper:USA:synthetic'"))
+            connection.execute(text(f"UPDATE \"{schema}\".instruments SET exchange='UNKNOWN'"))
+        unknown = observe()
+        assert unknown["fills_by_market"] == {"INDIA": 0, "USA": 0, "OTHER": 1}
+        assert unknown["unapplied_fills_by_market"] == {"INDIA": 0, "USA": 0, "OTHER": 1}
+        assert unknown["effect_receipt_market_mismatch_fills"] == 1
+        with postgres_engine.begin() as connection:
+            connection.execute(text(f"UPDATE \"{schema}\".instruments SET exchange='NASDAQ'"))
         with postgres_engine.begin() as connection:
             connection.execute(text(f"UPDATE \"{schema}\".job_runs SET status='SUCCEEDED'"))
         succeeded = observe()

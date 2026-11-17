@@ -161,6 +161,8 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
             "succeeded_effect_receipt_fills_without_application",
             "failed_effect_receipt_fills_without_application",
             "accounting_receipts_without_application",
+            "fills_by_market", "unapplied_fills_by_market",
+            "effect_receipt_market_mismatch_fills",
         }
         if (isinstance(ledger, dict) and ledger.get("status") == "AVAILABLE"
                 and not required_ledger_lineage.issubset(ledger)):

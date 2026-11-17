@@ -9,6 +9,7 @@ const iso = n => new Date(n).toISOString();
 const sample = () => ({schema_version:1,source:'hope_postgresql',generated_at:iso(BASE),research:{run_count:0},paper:{environment_state:'HALTED',job_runs:{total:3,claimed:1,succeeded:1,failed:1},recovery:{claimed_with_effects:1,claimed_without_effects:0,claims_older_than_one_hour:1,reconciliation_receipts:1}}});
 const ops = () => ({schema_version:1,generated_at:iso(BASE),state:'CURRENT',last_success_at:iso(BASE),cycles_succeeded:1,cycles_failed:0,jobs_executed:0,jobs_skipped:0,paper_only:true,live_enabled:false,deployed_commit:'a'.repeat(40),schema_compatibility:'COMPATIBLE'});
 const runtime = () => ({schema:'hope.runtime-integrity.v1',state:'VERIFIED',code:'MANIFEST_AND_RUNTIME_MATCH',release_commit:'a'.repeat(40),runtime_mode:'shared',manifest_sha256:'b'.repeat(64),inventory_sha256:'c'.repeat(64),process_sha256:null,file_count:1,execution_authorized:false,provenance_state:'VERIFIED',provenance_sha256:'e'.repeat(64),build_state:'VERIFIED',build_sha256:'f'.repeat(64),builder_id:'c'.repeat(64)});
+const lab = () => ({schema:'hope.paper-lab-observation.v1',scope:'DISPOSABLE_LAB_ONLY',state:'LAB_OBSERVED',signature:'VALID_FOR_CONFIGURED_LAB_KEY',release_commit:'a'.repeat(40),sequence:1,generated_at:Math.floor(BASE/1000),expires_at:Math.floor(BASE/1000)+10,postgres_major:16,cases:[{market:'INDIA',scenario:'NO_TRADE',result:'PASS',reason:'NO_SIGNAL',evidence_sha256:'d'.repeat(64),completed_at:iso(BASE-2000)},{market:'USA',scenario:'FILLED',result:'PASS',reason:'NONE',evidence_sha256:'e'.repeat(64),completed_at:iso(BASE-1000)}],last_lab_cycle_at:iso(BASE-1000),production_admission:'BLOCKED',execution_authorized:false,reason:'LAB_KEY_IS_NOT_PRODUCTION_ADMISSION'});
 const response = value => ({ok:true,headers:{get:()=>null},text:async()=>JSON.stringify(value)});
 const flush = () => new Promise(resolve=>setImmediate(resolve));
 function browser() {
@@ -26,12 +27,32 @@ function browser() {
   fetch:(...args)=>{calls.push(args);return context.fetchImpl(...args);},
   fetchImpl:()=>Promise.reject(Error('unconfigured')),
  });
- vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,clearHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,ageViews,requestJSON,refreshFeed};`,context);
+ vm.runInContext(script+`;globalThis.api={applyDeployment,clearDeployment,applyPublisher,clearPublisher,applyImage,clearImage,applyHistory,clearHistory,applySnapshot,clearSnapshot,retainSnapshotAfterFailure,applyLegacy,applyHealth,clearHealth,applyTransport,clearTransport,applyOperations,applyReadiness,clearReadiness,applyRehearsal,clearRehearsal,applyAcceptance,clearAcceptance,applyLab,clearLab,ageViews,requestJSON,refreshFeed};`,context);
  return {context,api:context.api,calls,element:document.getElementById,
   advance(ms){now+=ms;for(const [id,timer] of [...timers]) if(timer.time<=now){timers.delete(id);timer.fn();}context.api.ageViews();},
  };
 }
 async function main() {
+ {const b=browser(),d=lab();b.api.applyLab(d);assert.match(b.element('paper-lab-status').textContent,/LAB_OBSERVED.*INDIA.*NO_TRADE.*USA.*FILLED/s);
+  const bad=[{...d,scope:'PRODUCTION_PAPER'},{...d,execution_authorized:true},
+   {...d,cases:[{...d.cases[0],market:'EU'}]},{...d,cases:[{...d.cases[0],scenario:'PRIVATE'}]},
+   {...d,cases:[{...d.cases[0],evidence_sha256:'bad'}]},{...d,cases:[d.cases[0],d.cases[0]]},
+   {...d,cases:[{...d.cases[0],reason:'PRIVATE'}]},{...d,cases:[{...d.cases[0],completed_at:iso(BASE+1000)}],last_lab_cycle_at:iso(BASE+1000)},
+   {...d,cases:[{...d.cases[0],result:'NOT_EXECUTED'}]},{...d,last_lab_cycle_at:null}];
+  for(const value of bad){b.api.applyLab(value);assert.equal(b.element('paper-lab-status').textContent,'UNAVAILABLE · production admission BLOCKED');}
+  // A valid later row must never erase an earlier row's validation failure.
+  for(const change of [{market:'EU'},{scenario:'PRIVATE'},{result:'PRIVATE'},
+    {reason:'PRIVATE'},{evidence_sha256:'bad'},{completed_at:null},{completed_at:iso(BASE+1000)}]){
+   const value=lab();value.cases[0]={...value.cases[0],...change};
+   b.api.applyLab(value);
+   assert.equal(b.element('paper-lab-status').textContent,'UNAVAILABLE · production admission BLOCKED');
+  }
+  const future=lab();future.generated_at+=20;future.expires_at+=20;
+  future.cases=future.cases.map(x=>({...x,completed_at:iso(BASE+1000)}));future.last_lab_cycle_at=iso(BASE+1000);
+  b.api.applyLab(future);
+  assert.equal(b.element('paper-lab-status').textContent,'UNAVAILABLE · production admission BLOCKED');
+  b.api.applyLab(d);b.advance(10000);assert.equal(b.element('paper-lab-status').textContent,'UNAVAILABLE · production admission BLOCKED');
+ }
  {const b=browser();const d={schema:'hope.deployment-observation.v1',container_id:'d'.repeat(64),process_sha256:'e'.repeat(64),runtime_manifest_sha256:'f'.repeat(64),state:'VERIFIED',release_commit:'a'.repeat(40),image_sha256:'b'.repeat(64),receipt_sha256:'c'.repeat(64),host:'VERIFIED',container:'VERIFIED',provenance:'VERIFIED',provider:'VERIFIED',rollback:'VERIFIED',expires_at:Math.floor(BASE/1000)+60,blockers:[],execution_authorized:false};b.api.applyDeployment(d);assert.notEqual(b.element('readiness-state').textContent,'READY');assert.throws(()=>b.api.applyDeployment({...d,provider:'UNKNOWN'}));b.advance(60001);assert.equal(b.element('deployment-state').textContent,'BLOCKED');b.api.clearDeployment();}
  {const b=browser();const d={schema:'hope.paper-publisher-observation.v1',state:'VERIFIED',identity_sha256:'a'.repeat(64),generated_at:iso(BASE),execution_authorized:false};b.api.applyPublisher(d);assert.equal(b.element('publisher-state').textContent,'VERIFIED');assert.throws(()=>b.api.applyPublisher({...d,execution_authorized:true}));b.advance(60001);assert.equal(b.element('publisher-state').textContent,'UNKNOWN');b.api.clearPublisher();}
 
@@ -81,7 +102,7 @@ async function main() {
   const b=browser(), data=sample();
   data.projections={strategy_catalog:{status:'AVAILABLE',total:1,truncated:false,rows:[{strategy_version_id:'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',family_code:'TIME_SERIES_TREND',candidate_state:'RESEARCH',markets:['USA']}]},
    dataset_certification:{status:'AVAILABLE',version_total:2,sealed_versions:1,pit_certified_versions:1,manifest_backed_sealed_versions:1},
-   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0,effect_receipt_fills:1,fills_without_effect_receipt:0,unattributed_effect_receipt_fills:0,effect_receipt_fills_without_application:1,claimed_effect_receipt_fills:1,succeeded_effect_receipt_fills:0,failed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:1,succeeded_effect_receipt_fills_without_application:0,failed_effect_receipt_fills_without_application:0,accounting_receipts_without_application:0,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'},
+   execution_ledger:{status:'AVAILABLE',fills:1,applied_fills:0,fill_applications:0,accounting_receipts:0,fills_without_application:1,applications_without_pnl:0,effect_receipt_fills:1,fills_without_effect_receipt:0,unattributed_effect_receipt_fills:0,effect_receipt_fills_without_application:1,claimed_effect_receipt_fills:1,succeeded_effect_receipt_fills:0,failed_effect_receipt_fills:0,claimed_effect_receipt_fills_without_application:1,succeeded_effect_receipt_fills_without_application:0,failed_effect_receipt_fills_without_application:0,accounting_receipts_without_application:0,fills_by_market:{INDIA:0,USA:1,OTHER:0},unapplied_fills_by_market:{INDIA:0,USA:1,OTHER:0},effect_receipt_market_mismatch_fills:0,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'},
    blocked_runs:{status:'AVAILABLE',total:1,by_reason:{PAPER_JOB_INCOMPLETE_PRIOR_CLAIM:0,PAPER_MARKET_DATA_STALE:1,PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT:0,OTHER:0}},
    decision_activity:{status:'AVAILABLE',no_trade_records:0,claimed_no_trade:0,latest_decision_at:null},
    certified_chain:{status:'AVAILABLE',authorization_receipts:1,operational_classifications:0,latest_authorization_at:iso(BASE-1000),eligibility_policy:'UNKNOWN'},
@@ -89,6 +110,22 @@ async function main() {
   b.api.applySnapshot(data,'local file');
   assert.match(b.element('m2-strategy-catalog').textContent,/TIME_SERIES_TREND.*RESEARCH/);
   assert.match(b.element('m2-execution-ledger').textContent,/CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED.*CLAIMED 1/);
+  const reordered=JSON.parse(JSON.stringify(data));
+  reordered.projections.execution_ledger.fills_by_market={USA:1,OTHER:0,INDIA:0};
+  reordered.projections.execution_ledger.unapplied_fills_by_market={OTHER:0,USA:1,INDIA:0};
+  b.api.applySnapshot(reordered,'reordered market keys');
+  assert.match(b.element('m2-execution-ledger').textContent,/I\/U\/O 0\/1\/0.*unapplied 0\/1\/0/);
+  const retained=b.element('m2-execution-ledger').textContent;
+  for(const a of ['INDIA','USA','OTHER'])for(const z of ['INDIA','USA','OTHER'])if(a!==z){
+   const bad=JSON.parse(JSON.stringify(data)),l=bad.projections.execution_ledger;
+   l.fills_by_market={INDIA:0,USA:0,OTHER:0};l.fills_by_market[a]=1;
+   l.unapplied_fills_by_market={INDIA:0,USA:0,OTHER:0};l.unapplied_fills_by_market[z]=1;
+   l.reconciliation_state=a==='OTHER'?'FILL_MARKET_UNRESOLVED':'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED';
+   assert.throws(()=>b.api.applySnapshot(bad,'impossible per-market subset'));
+   assert.equal(b.element('m2-execution-ledger').textContent,retained);
+  }
+  b.api.applySnapshot(data,'local file');
+
   Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:0,claimed_effect_receipt_fills_without_application:0,reconciliation_state:'OBSERVED_COMPLETE'});
   assert.throws(()=>b.api.applySnapshot(data,'impossible canonical subset'));
   Object.assign(data.projections.execution_ledger,{effect_receipt_fills_without_application:1,claimed_effect_receipt_fills_without_application:1,reconciliation_state:'CLAIMED_EFFECT_RECEIPTS_NOT_APPLIED'});

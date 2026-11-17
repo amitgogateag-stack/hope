@@ -28,9 +28,11 @@ def readers(connection, generated):
         return dict(version_total=total, sealed_versions=sealed, pit_certified_versions=certified, manifest_backed_sealed_versions=manifested)
     def execution_ledger():
         values = connection.execute(text(
-            "WITH paper_fills AS (SELECT f.fill_id FROM fills f JOIN orders o USING(order_id) WHERE o.environment='PAPER'),"
+            "WITH paper_fills AS (SELECT f.fill_id,CASE WHEN i.exchange IN ('NSE','BSE') THEN 'INDIA' "
+            "WHEN i.exchange IN ('NYSE','NASDAQ','AMEX','ARCA') THEN 'USA' ELSE 'OTHER' END market "
+            "FROM fills f JOIN orders o USING(order_id) LEFT JOIN instruments i USING(instrument_id) WHERE o.environment='PAPER'),"
             "applications AS (SELECT a.* FROM paper_portfolio_fill_applications a JOIN paper_fills f USING(fill_id)),"
-            "effect_receipt_lineage AS (SELECT DISTINCT f.fill_id,j.status FROM paper_fills f JOIN paper_effects e "
+            "effect_receipt_lineage AS (SELECT DISTINCT f.fill_id,f.market,j.status,split_part(j.job_key,':',2) receipt_market FROM paper_fills f JOIN paper_effects e "
             "ON e.effect_type='FILL' AND e.entity_id=f.fill_id JOIN job_runs j "
             "ON j.job_run_id=e.job_run_id WHERE left(j.job_key,6)='paper:'),"
             "effect_receipts AS (SELECT DISTINCT fill_id FROM effect_receipt_lineage),"
@@ -60,7 +62,10 @@ def readers(connection, generated):
             "AND NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=e.fill_id)),"
             "(SELECT count(*) FROM paper_portfolio_pnl_events p JOIN paper_fills f USING(fill_id) "
             "WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=p.fill_id "
-            "AND a.portfolio_id=p.portfolio_id))"
+            "AND a.portfolio_id=p.portfolio_id)),"
+            "(SELECT jsonb_build_object('INDIA',count(*) FILTER(WHERE market='INDIA'),'USA',count(*) FILTER(WHERE market='USA'),'OTHER',count(*) FILTER(WHERE market='OTHER')) FROM paper_fills),"
+            "(SELECT jsonb_build_object('INDIA',count(*) FILTER(WHERE market='INDIA'),'USA',count(*) FILTER(WHERE market='USA'),'OTHER',count(*) FILTER(WHERE market='OTHER')) FROM paper_fills f WHERE NOT EXISTS(SELECT 1 FROM applications a WHERE a.fill_id=f.fill_id)),"
+            "(SELECT count(*) FROM effect_receipt_lineage WHERE market<>receipt_market)"
         )).one()
         return dict(zip(("fills", "applied_fills", "fill_applications", "accounting_receipts",
                          "fills_without_application", "applications_without_pnl",
@@ -73,7 +78,8 @@ def readers(connection, generated):
                          "claimed_effect_receipt_fills_without_application",
                          "succeeded_effect_receipt_fills_without_application",
                          "failed_effect_receipt_fills_without_application",
-                         "accounting_receipts_without_application"), values))
+                         "accounting_receipts_without_application", "fills_by_market",
+                         "unapplied_fills_by_market", "effect_receipt_market_mismatch_fills"), values))
     def blocked_runs():
         allowed = ",".join(f"'{code}'" for code in BLOCKED_CODES if code != "OTHER")
         rows = dict(connection.execute(text(
