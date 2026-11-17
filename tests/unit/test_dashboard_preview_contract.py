@@ -66,6 +66,11 @@ def test_preview_imports_local_aggregate_snapshot_without_network_calls():
     assert "STALE" in html
     assert "fetch(" in html
     assert "setInterval(refresh, 60000)" in html
+    assert 'id="snapshot-classification"' in html
+    assert 'id="snapshot-authority"' in html
+    assert "DISPOSABLE_LAB" in html
+    assert "execution_authorized!==false" in html
+    assert "live_enabled!==false" in html
 
 
 def test_preview_displays_independent_server_and_database_health():

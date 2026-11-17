@@ -6,6 +6,7 @@ service activation. Missing independent approval is UNKNOWN, never readiness.
 from __future__ import annotations
 from datetime import datetime,timezone
 import ast
+import hmac
 from pathlib import Path
 import os
 import re
@@ -18,9 +19,11 @@ from hope.api.diagnostic_io import bounded_capture
 from hope.api.release_image import verify_image,_key_digest,_policy
 from hope.api.snapshot_contract import strict_json
 from hope.api.operations_deployment import _activation_guard
+from hope.infrastructure.durable_file import authenticated_bounded_regular_read
 
 ENV={'PATH':'/usr/bin:/bin','LANG':'C','LC_ALL':'C','HOME':'/nonexistent'}
 HASH=re.compile('[0-9a-f]{64}')
+FACTORY=re.compile(r'[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*:[A-Za-z_]\w*',re.ASCII)
 FORMAT='\n'.join('{{json .'+field+'}}' for field in (
     'Id','Image','State.Running','State.Pid','HostConfig.Privileged','HostConfig.ReadonlyRootfs','HostConfig.NetworkMode','Config.User'))
 
@@ -184,20 +187,41 @@ def rollback_contract(root,sha,digest,now):
 
 def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factory=None,host_probe=host_observation,container_probe=container_observation,
         process_probe=process_observation,runtime_probe=runtime_observation,host_readiness=None):
+    return _inspect_deployment(root,sha,now=now,expected_receipt=expected_receipt,expected_factory=expected_factory,
+        host_probe=host_probe,container_probe=container_probe,process_probe=process_probe,runtime_probe=runtime_probe,host_readiness=host_readiness)
+
+
+def inspect_staged_deployment(root,sha,*,now=None,expected_receipt=None,expected_factory=None,host_probe=host_observation,
+        container_probe=container_observation,process_probe=process_observation,runtime_probe=runtime_observation):
+    """Authenticate a non-executing bootstrap; never satisfy running admission."""
+    return _inspect_deployment(root,sha,now=now,expected_receipt=expected_receipt,expected_factory=expected_factory,
+        host_probe=host_probe,container_probe=container_probe,process_probe=process_probe,runtime_probe=runtime_probe,staged=True)
+
+
+def _inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factory=None,host_probe=host_observation,
+        container_probe=container_observation,process_probe=process_observation,runtime_probe=runtime_observation,host_readiness=None,staged=False):
     """Reconcile signed approvals with fresh local observations; never activate."""
     root=Path(root);live_clock=now is None;now=int(time.time()) if live_clock else now
     report=dict(schema='hope.deployment-observation.v1',state='UNKNOWN',release_commit=None,image_sha256=None,
         container_id=None,process_sha256=None,runtime_manifest_sha256=None,
         receipt_sha256=None,host='UNKNOWN',container='UNKNOWN',provenance='UNKNOWN',provider='UNKNOWN',rollback='UNKNOWN',
         expires_at=None,blockers=['INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'],execution_authorized=False)
+    if staged:report['schema']='hope.staged-deployment-observation.v1'
     blocker='INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED'
     try:
+        require(expected_receipt is None or (type(expected_receipt) is str and HASH.fullmatch(expected_receipt)))
+        require(expected_factory is None or (type(expected_factory) is str and len(expected_factory)<=200
+            and FACTORY.fullmatch(expected_factory)))
         with _activation_guard(root,shared=True):
             root_identity=r._trusted(root,directory=True)
+            if staged:
+                from hope.api.paper_stage import activation_snapshot
+                blocker='ACTIVATION_RECOVERY_REQUIRED'
+                activation=activation_snapshot(root)
             sha=r._sha(sha);report['release_commit']=sha
             reference=root/'deployment-receipts'/f'{sha}.ref'
             pinned=r._read(reference,64).decode('ascii');require(HASH.fullmatch(pinned))
-            require(expected_receipt is None or pinned==expected_receipt)
+            require(expected_receipt is None or hmac.compare_digest(pinned,expected_receipt))
             reference_identity=r._trusted(reference)
             receipt_path=root/'deployment-receipts'/f'{pinned}.json'
             value,digest=signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')
@@ -223,7 +247,8 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
             report['provenance']='VERIFIED'
             blocker='APPROVED_REAL_DATA_PROVIDER_AND_ACCEPTANCE_REQUIRED'
             provider=provider_contract(root,sha,value['provider_sha256'],now)
-            require(expected_factory is None or expected_factory==provider['factory_module']+':'+provider['factory_name'])
+            require(expected_factory is None or hmac.compare_digest(expected_factory,
+                provider['factory_module']+':'+provider['factory_name']))
             accepted=data_acceptance(root,sha,provider,value['provider_sha256'],now);report['provider']='VERIFIED'
             blocker='VERIFIED_ROLLBACK_RECEIPT_AND_RUNTIME_REQUIRED'
             rollback_contract(root,sha,value['rollback_sha256'],now);report['rollback']='VERIFIED'
@@ -235,7 +260,9 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
             report['host']='VERIFIED'
             blocker='RUNNING_CONTAINER_AND_KERNEL_IDENTITY_REQUIRED'
             observed=container_probe(value['engine'],value['container_id'])
-            manifest=strict_json(r._read(folder/'oci/blobs/sha256'/proof['image_sha256'],65536))
+            manifest=strict_json(authenticated_bounded_regular_read(
+                folder/'oci/blobs/sha256'/proof['image_sha256'],65536,
+                expected_sha256=proof['image_sha256']))
             require(observed['config_sha256']==manifest['config']['digest'][7:]
                 and process_probe(observed,value)==value['process_sha256'])
             report['container']='VERIFIED'
@@ -243,13 +270,18 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
             blocker='SIGNED_IMAGE_TO_RUNNING_RUNTIME_BINDING_REQUIRED'
             runtime=runtime_probe(root,sha,observed,value)
             require(runtime['manifest_sha256']==value['runtime_manifest_sha256'])
-            if host_readiness is None:
+            if staged:
+                from hope.api.paper_stage import staged_process_observation
+                blocker='NON_EXECUTING_STAGE_PROCESS_REQUIRED'
+                stage=staged_process_observation(root,observed,value,provider)
+            elif host_readiness is None:
                 from hope.api.aws_readiness import inspect_aws_readiness
                 host_readiness=inspect_aws_readiness
-            blocker='HOST_RUNTIME_AND_PAPER_READINESS_REQUIRED'
-            current=host_readiness(sha,root=root)
-            require(current['ready'] is True and type(current['units']['hope-paper.service']['MainPID']) in {str,int}
-                and int(current['units']['hope-paper.service']['MainPID'])==observed['pid'])
+            if not staged:
+                blocker='HOST_RUNTIME_AND_PAPER_READINESS_REQUIRED'
+                current=host_readiness(sha,root=root)
+                require(current['ready'] is True and type(current['units']['hope-paper.service']['MainPID']) in {str,int}
+                    and int(current['units']['hope-paper.service']['MainPID'])==observed['pid'])
             report['runtime_manifest_sha256']=value['runtime_manifest_sha256']
             # Close on all identities: a current process must still match the same
             # independently approved receipt after slow host/readiness observations.
@@ -265,8 +297,17 @@ def inspect_deployment(root,sha,*,now=None,expected_receipt=None,expected_factor
                 and r._trusted(reference)==reference_identity and r._read(reference,64).decode('ascii')==pinned and signed(receipt_path,root/'runtime-trust/deployments-ed25519.pub')[1]==digest)
             provider_contract(root,sha,value['provider_sha256'],closing);data_acceptance(root,sha,provider,value['provider_sha256'],closing)
             rollback_contract(root,sha,value['rollback_sha256'],closing)
+            stage_expiry=value['expires_at']
+            if staged:
+                require(activation_snapshot(root)==activation)
+                closing_stage=staged_process_observation(root,observed,value,provider)
+                require(closing_stage['binding']==stage['binding'] and closing<closing_stage['expires_at'])
+                stage_expiry=closing_stage['expires_at']
             require(r._trusted(root,directory=True)==root_identity)
-            report.update(state='VERIFIED',expires_at=min(value['expires_at'],proof['expires_at'],accepted['expires_at']))
+            expires=min(value['expires_at'],proof['expires_at'],accepted['expires_at'],stage_expiry)
+            finished=int(time.time()) if live_clock else now
+            require(now<=finished<expires)
+            report.update(state='STAGED' if staged else 'VERIFIED',expires_at=expires)
     except FileNotFoundError:
         report['blockers']=[blocker]
     except Exception:
