@@ -49,6 +49,11 @@ jobs:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
         run: pytest -q tests/integration/test_startup_financial_boundary.py tests/integration/test_m3_controlled_acceptance.py
+      - name: Restricted dashboard LOGIN and database-owner acceptance
+        env:
+          HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
+          HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
+        run: pytest -q tests/integration/test_dashboard_reader_boundary.py tests/integration/test_dashboard_m1_authenticated_projections_pg.py
       - name: Validate operations deployment shell syntax
         run: |
           for script in deploy/operations/*.sh; do
