@@ -25,6 +25,18 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(os.environ.get("SECURITY_EVIDENCE_DIR", "security-evidence"))
 
 
+def verify_unavailable_response(result: subprocess.CompletedProcess[bytes]) -> None:
+    # Kept independent of the executable's serializer and response helpers.
+    expected = {
+        "protocol": "hope-independent-admission-v1", "decision": "DENY",
+        "reason": "TRUSTED_KERNEL_TO_DATABASE_SESSION_BINDING_UNAVAILABLE",
+        "approval_issued": False,
+    }
+    wire = (json.dumps(expected, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    if result.returncode != 78 or result.stderr != b"" or result.stdout != wire:
+        raise ValueError("independent denial response mismatch")
+
+
 def run() -> int:
     OUT.mkdir(exist_ok=True, parents=True)
     requirements = json.loads((ROOT / "security/requirements.json").read_text())
@@ -110,8 +122,7 @@ def run() -> int:
                 for table in ("paper_portfolios", "paper_admission_approvals", "paper_admission_principals"):
                     assert connection.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table))).fetchone()[0] == 0
             result = subprocess.run([sys.executable, "-m", "hope.security.admission_verifier"], input=b'{"verified":true}', capture_output=True, timeout=10, check=False)
-            evidence = json.loads(result.stdout)
-            assert result.returncode == 78 and evidence["decision"] == "DENY" and evidence["approval_issued"] is False
+            verify_unavailable_response(result)
             report["experiments"].append({"name": "missing_trusted_attestor_denied", "status": "PASS"})
             # Completeness is asserted independently of the attack loop, so
             # silently omitted/mislabeled probes cannot be reported as 12 PASS.

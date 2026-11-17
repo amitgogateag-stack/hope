@@ -22,8 +22,8 @@ separate PostgreSQL session; pg_stat_activity PID and client addresses alone are
 such a binding. Existing self-observation routines cannot establish it from a separate
 process. Accepting signed worker claims would conceal this gap. Neither a trusted
 session-terminating proxy nor a reviewed server-side attestation extension is present.
-The current Windows workspace has no discovered Docker or PostgreSQL executable.
-Linux CI can test denial, but has no configured production session attestor either.
+Disposable Docker/PostgreSQL test runtimes are available in this workspace and CI.
+They supply synthetic denial evidence, not a configured production session attestor.
 
 ## Implemented executable boundary
 
@@ -31,7 +31,11 @@ Linux CI can test denial, but has no configured production session attestor eith
 returns DENY and exit 78, and never connects to a database. There is no configurable
 allow switch, worker-selected provider, synthetic identity fallback, approval INSERT,
 or production credential. Its protocol identifier is versioned; no challenge-response
-protocol is falsely advertised as implemented. Invalid/oversized inputs also deny.
+protocol is falsely advertised as implemented. Invalid, oversized, duplicate-key and
+non-UTF-8 inputs return the same exact versioned denial envelope with
+`INVALID_REQUEST`. Requests are strictly UTF-8, at most16384bytes and64container levels (including the root object); non-finite JSON constants and decoder resource refusals also return `INVALID_REQUEST`. Accepted objects return only the exact missing-capability reason. Responses are exact compact sorted UTF-8 bytes plus one LF on every platform; no CRLF translation or stderr is permitted.
+The standalone security runner independently asserts the complete canonical envelope,
+empty stderr, exact canonical response bytes and unavailable exit status, rather than accepting a generic DENY label. This validates refusal evidence; it is not cryptographic publisher authentication or independent positive admission.
 The unit suite launches the executable as a subprocess in addition to direct checks.
 Separate runtime OS identity and authenticated IPC are deployment prerequisites,
 NOT implemented by launching a subprocess in CI.
@@ -145,3 +149,7 @@ Changed source inventory:
 
 Next action: commission and review the trusted kernel/controller-to-PostgreSQL-session
 attestation interface before implementing any approval issuer or granting it privileges.
+
+## Selective integration provenance
+
+This refusal-only batch selects the four-file denial-envelope patch from b34b6b46750058727416e06e467c151b5ab30798 onto the preserved PR112 integration at3b47fe02e00c9a3c93434b4d1babadbc501484bc, then strengthens parser and wire boundaries with regression-first tests. It does not integrate the separate LAB-display or market-provenance commits preceding b34. Those remain separately reviewable work; no full-branch integration, human approval or production capability is claimed. No threshold/assertion or financial gate is weakened.
