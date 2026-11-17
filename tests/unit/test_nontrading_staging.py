@@ -179,15 +179,21 @@ def test_installer_launch_isolated_exact_command_and_no_existing_units(tmp_path,
     gate_calls = []
     monkeypatch.setattr(m, 'gates', lambda *a: gate_calls.append(a))
     monkeypatch.setattr(m, 'ROOT', tmp_path)
-    states = iter([dict(LoadState='not-found'),
-                   dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')])
+    active = dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')
+    states = iter([dict(LoadState='not-found'), active, active])
     monkeypatch.setattr(m, 'state', lambda: next(states))
+    status = dict(schema='hope.nontrading-preview.v1', release_commit=SHA,
+        scope='PREVIEW_ONLY_NO_DATABASE', paper_enabled=False, live_enabled=False,
+        execution_authorized=False, database='NOT_CONNECTED', broker='NOT_INCLUDED',
+        independent_acceptance='UNVERIFIED', operational_readiness='BLOCKED')
+    monkeypatch.setattr(m, 'preview_status', lambda commit: m.validate_preview_status(status, commit))
     monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
     # The file must exist for the native canonical path check; gate semantics
     # have their own unmocked schema/digest tests above.
     gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
     result = m.install(source, digest, SHA, gate)
-    assert result['state'] == 'START_REQUESTED' and result['execution_authorized'] is False
+    assert result['state'] == 'PREVIEW_RESPONSIVE' and result['execution_authorized'] is False
+    assert result['status_sha256'] == hashlib.sha256(json.dumps(status, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     assert len(gate_calls) == 2 and len(calls) == 1
     argv = calls[0]
     assert argv[-7:] == (m.PYTHON, '-I', '-S', '-B', str(tmp_path / 'releases' / SHA / 'server.py'), '--commit', SHA)
@@ -196,6 +202,51 @@ def test_installer_launch_isolated_exact_command_and_no_existing_units(tmp_path,
     assert not any('hope-paper.service' in v or '8787' in v or '8788' in v or 'EnvironmentFile' in v for v in argv)
     for p in (tmp_path / 'releases' / SHA).iterdir():
         p.chmod(0o600)  # Windows temporary-directory cleanup of read-only files.
+
+
+@pytest.mark.parametrize('fault', ['extra', 'commit', 'paper', 'live', 'authorized', 'database', 'broker', 'acceptance', 'readiness', 'bool_integer'])
+def test_preview_status_cannot_claim_trading_readiness_or_wrong_identity(fault):
+    m = load('manage')
+    value = dict(schema='hope.nontrading-preview.v1', release_commit=SHA,
+        scope='PREVIEW_ONLY_NO_DATABASE', paper_enabled=False, live_enabled=False,
+        execution_authorized=False, database='NOT_CONNECTED', broker='NOT_INCLUDED',
+        independent_acceptance='UNVERIFIED', operational_readiness='BLOCKED')
+    if fault == 'extra': value['paper_cycle'] = 'COMPLETED'
+    elif fault == 'commit': value['release_commit'] = 'b' * 40
+    elif fault == 'paper': value['paper_enabled'] = True
+    elif fault == 'live': value['live_enabled'] = True
+    elif fault == 'authorized': value['execution_authorized'] = True
+    elif fault == 'database': value['database'] = 'CONNECTED'
+    elif fault == 'broker': value['broker'] = 'SIMULATED'
+    elif fault == 'acceptance': value['independent_acceptance'] = 'VERIFIED'
+    elif fault == 'readiness': value['operational_readiness'] = 'READY'
+    else: value['paper_enabled'] = 0
+    with pytest.raises(ValueError, match='STAGING_PREVIEW_STATUS_INVALID'):
+        m.validate_preview_status(value, SHA)
+
+
+def test_failed_preview_probe_stops_unit_and_confirms_stop(tmp_path, monkeypatch):
+    m = load('manage'); calls = []
+    raw, digest = archive(tmp_path)
+    source = tmp_path / 'release.zip'; source.write_bytes(raw)
+    monkeypatch.setattr(m.os, 'name', 'posix')
+    monkeypatch.setattr(m.os, 'geteuid', lambda: 0, raising=False)
+    monkeypatch.setattr(m.os, 'sysconf', lambda key: 1024**3 if key == 'SC_AVPHYS_PAGES' else 4096, raising=False)
+    monkeypatch.setattr(m, 'ancestors', lambda p: None)
+    monkeypatch.setattr(m, 'trusted_path', lambda p: None)
+    monkeypatch.setattr(m, 'gates', lambda *a: None)
+    monkeypatch.setattr(m, 'ROOT', tmp_path)
+    active = dict(m.expected_identity(SHA), LoadState='loaded', ActiveState='active')
+    states = iter([dict(LoadState='not-found'), active, dict(LoadState='not-found')])
+    monkeypatch.setattr(m, 'state', lambda: next(states))
+    monkeypatch.setattr(m, 'preview_status', lambda commit: (_ for _ in ()).throw(ValueError('STAGING_PREVIEW_STATUS_INVALID')))
+    monkeypatch.setattr(m, 'command', lambda *a: calls.append(a))
+    gate = tmp_path / 'operator-gates.json'; gate.write_text('test-only modeled declaration')
+    with pytest.raises(ValueError, match='STAGING_PREVIEW_STATUS_INVALID'):
+        m.install(source, digest, SHA, gate)
+    assert calls[-1] == (m.SYSTEMCTL, 'stop', m.UNIT)
+    for p in (tmp_path / 'releases' / SHA).iterdir():
+        p.chmod(0o600)
 
 
 def test_installer_bytes_must_match_reviewed_archive(tmp_path, monkeypatch):
@@ -528,6 +579,7 @@ def test_real_preview_http_is_nontrading_and_has_no_file_server(tmp_path):
                 time.sleep(0.05)
         with response:
             observed = json.load(response)
+        assert load('manage').preview_status(SHA) == observed
         assert observed['paper_enabled'] is observed['live_enabled'] is observed['execution_authorized'] is False
         assert observed['database'] == 'NOT_CONNECTED' and observed['broker'] == 'NOT_INCLUDED'
         assert observed['independent_acceptance'] == 'UNVERIFIED'

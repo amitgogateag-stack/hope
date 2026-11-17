@@ -16,7 +16,7 @@ def responses_for_activation():
     paper=valid_paper()
     responses=fixture_responses()
     responses["/snapshot.json"]=(200,json.dumps(paper).encode())
-    responses["/status.json"]=(200,json.dumps(dict(schema_version=1,service="RUNNING",data_feed="CURRENT",snapshot_generated_at=paper["generated_at"])).encode())
+    responses["/status.json"]=(200,json.dumps(dict(schema_version=1,service="RUNNING",data_feed="CURRENT",snapshot_generated_at=paper["generated_at"],refresh_state="CURRENT",refresh_error_code=None)).encode())
     return started,paper,responses
 
 

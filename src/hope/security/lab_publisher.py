@@ -13,6 +13,7 @@ import binascii
 from datetime import datetime, timezone
 import hashlib
 import json
+import math
 import secrets
 from threading import Lock
 import time
@@ -75,6 +76,15 @@ def validate_payload(value, issued):
         seen.add(identity)
         stamp = row['completed_at']
         require(stamp is None or (type(stamp) is str and len(stamp) <= 40), 'PAYLOAD_INVALID')
+        # A refusal that never ran must not manufacture a completed cycle, and
+        # an executed PASS/FAIL must retain when it actually completed.  Keep
+        # this inside the signed schema boundary so the dashboard cannot infer
+        # lifecycle progress from a semantically contradictory packet.
+        require((row['result'] == 'NOT_EXECUTED' and stamp is None
+                 and row['reason'] != 'NONE')
+                or (row['result'] in {'PASS', 'FAIL'} and stamp is not None
+                    and (row['result'] == 'PASS' or row['reason'] != 'NONE')),
+                'RESULT_COMPLETION_INVALID')
         if stamp is not None:
             try:
                 parsed = datetime.fromisoformat(stamp)
@@ -112,6 +122,7 @@ class LabPublisherVerifier:
         self._sequence = 0
         self._last_digest = None
         self._last_issued = 0
+        self._clock_high_water = None
 
     def revoke(self):
         with self._lock:
@@ -151,7 +162,14 @@ class LabPublisherVerifier:
             digest = hashlib.sha256(packet).hexdigest()
             with self._lock:
                 require(not self._revoked, 'KEY_REVOKED')
-                require(issued <= self._clock() < expiry, 'EXPIRED_OR_FUTURE')
+                observed = self._clock()
+                require(type(observed) in {int, float} and math.isfinite(observed), 'CLOCK_INVALID')
+                require(self._clock_high_water is None or observed >= self._clock_high_water,
+                    'CLOCK_REWOUND')
+                # Retain trusted clock observation even when this packet has
+                # expired. A subsequent wall-clock rollback cannot revive it.
+                self._clock_high_water = observed
+                require(issued <= observed < expiry, 'EXPIRED_OR_FUTURE')
                 require((sequence == self._sequence and digest == self._last_digest)
                     or (sequence == self._sequence + 1 and issued >= self._last_issued), 'REPLAY_OR_GAP')
                 self._sequence, self._last_digest, self._last_issued = sequence, digest, issued

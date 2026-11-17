@@ -178,3 +178,26 @@ def test_a_signed_failure_remains_a_failure_not_a_green_acceptance():
     key,v=context()
     result=v.observe(signed(key,v,body=payload(result='FAIL')))
     assert result['cases'][0]['result']=='FAIL' and result['production_admission']=='BLOCKED'
+
+
+@pytest.mark.parametrize(('result','reason','completed'), [
+    ('NOT_EXECUTED','BACKEND_LOST',datetime.fromtimestamp(NOW-1,timezone.utc).isoformat()),
+    ('NOT_EXECUTED','NONE',None),
+    ('PASS','NO_SIGNAL',None),
+    ('FAIL','RECONCILIATION_FAILED',None),
+    ('FAIL','NONE',datetime.fromtimestamp(NOW-1,timezone.utc).isoformat()),
+])
+def test_signed_case_cannot_contradict_execution_and_completion(result,reason,completed):
+    key,verifier=context();body=payload(result=result,reason=reason)
+    body['cases'][0]['completed_at']=completed
+    with pytest.raises(p.LabEvidenceError,match='RESULT_COMPLETION_INVALID'):
+        verifier.observe(signed(key,verifier,body=body))
+
+
+def test_not_executed_case_never_advances_last_lab_cycle():
+    key,verifier=context();body=payload(result='NOT_EXECUTED',reason='BACKEND_LOST')
+    body['cases'][0]['completed_at']=None
+    result=verifier.observe(signed(key,verifier,body=body))
+    assert result['cases'][0]['result']=='NOT_EXECUTED'
+    assert result['last_lab_cycle_at'] is None
+    assert result['production_admission']=='BLOCKED' and result['execution_authorized'] is False
