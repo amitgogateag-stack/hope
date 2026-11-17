@@ -40,6 +40,8 @@ class _Connection:
             return _Result()
         if sql.startswith("SELECT CURRENT_TIMESTAMP"):
             return _Result(scalar=datetime(2026, 10, 12, tzinfo=timezone.utc))
+        if sql.startswith("SELECT current_database()"):
+            return _Result(scalar="hope_disposable")
         if "FROM paper_environment_control_events" in sql:
             return _Result(scalar=self.state)
         if "FROM research_runs" in sql:
@@ -97,6 +99,34 @@ def test_snapshot_binds_reviewed_release_and_rejects_ambiguous_identity():
     for invalid in ("", "A" * 40, "a" * 39, "credentials", True):
         with pytest.raises(ValueError, match="DEPLOYED_COMMIT_INVALID"):
             build_dashboard_snapshot(_Connection(), deployed_commit=invalid)
+
+
+def test_snapshot_binds_explicit_lab_database_without_exposing_its_name():
+    snapshot = build_dashboard_snapshot(
+        _Connection(), data_classification="DISPOSABLE_LAB",
+        expected_database="hope_disposable",
+    )
+    assert snapshot["schema_version"] == 2
+    assert snapshot["provenance"] == {
+        "data_classification": "DISPOSABLE_LAB",
+        "database_identity_sha256": "3d023995d2a32ff0013f1cf682b8302906d1137902ff572f98e8297d97fe6564",
+        "synthetic_activity": True, "execution_authorized": False, "live_enabled": False,
+    }
+    assert "hope_disposable" not in str(snapshot)
+
+
+@pytest.mark.parametrize("classification,database,error", [
+    ("DISPOSABLE_LAB", None, "PROVENANCE_INCOMPLETE"),
+    (None, "hope_disposable", "PROVENANCE_INCOMPLETE"),
+    ("LIVE", "hope_disposable", "DATA_CLASSIFICATION_INVALID"),
+    ("DISPOSABLE_LAB", "hope-disposable", "EXPECTED_DATABASE_INVALID"),
+    ("DISPOSABLE_LAB", "other_database", "DATABASE_IDENTITY_MISMATCH"),
+])
+def test_snapshot_provenance_fails_closed_before_mislabeling(classification, database, error):
+    with pytest.raises((ValueError, RuntimeError), match=error):
+        build_dashboard_snapshot(
+            _Connection(), data_classification=classification, expected_database=database,
+        )
 
 
 @pytest.mark.parametrize("state", [None, "UNKNOWN", ""])

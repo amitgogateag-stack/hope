@@ -154,12 +154,13 @@ def test_publisher_evidence_binds_live_kernel_owner_and_health(tmp_path):
     with h.publisher_lease(status) as owner:
         owner.publish(status,health('CURRENT'),service.publish_service_status)
         proof=h.publisher_observation(status)
-        assert proof['state']=='VERIFIED' and len(proof['identity_sha256'])==64
+        assert proof['state']=='UNVERIFIED' and len(proof['identity_sha256'])==64
+        assert proof['lock_state']=='HELD' and proof['heartbeat_authenticated'] is False
         value=json.loads(status.read_text());value['publisher_instance']='0'*32
         service.publish_service_status(status,value)
         assert h.publisher_observation(status)['state']=='BLOCKED'
         owner.publish(status,health('CURRENT'),service.publish_service_status)
-        assert h.publisher_observation(status)['state']=='VERIFIED'
+        assert h.publisher_observation(status)['state']=='UNVERIFIED'
     assert h.publisher_observation(status)['state']=='BLOCKED'
 
 
@@ -172,8 +173,7 @@ def test_current_protocol_two_health_cannot_survive_lease_release_as_ready(tmp_p
     with h.publisher_lease(status) as owner:
         owner.publish(status,value,service.publish_service_status)
         assert json.loads(status.read_text())['schema_version']==2
-        safe=json.loads(_verified_operations(status))
-        assert safe['schema_version']==1 and 'publisher_instance' not in safe
+        with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):_verified_operations(status)
     with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):_verified_operations(status)
 
 
@@ -225,3 +225,40 @@ def test_heartbeat_read_cannot_borrow_a_successor_lease_even_in_same_process(tmp
         with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):dashboard_server._verified_operations(status)
     finally:
         if second_context is not None:second_context.__exit__(None,None,None)
+
+
+@pytest.mark.parametrize('schema',[1,2])
+def test_same_uid_subprocess_cannot_turn_stale_heartbeat_current_under_genuine_lease(tmp_path,schema):
+    import fcntl
+    from hope.api.dashboard_server import _verified_operations
+    from test_dashboard_m1_operations_surface import health as operations_health
+    status=tmp_path/'health'
+    stale=(datetime.now(timezone.utc)-timedelta(minutes=10)).isoformat()
+    with h.publisher_lease(status) as owner:
+        owner.publish(status,dict(operations_health(),generated_at=stale,last_success_at=stale),service.publish_service_status)
+        before=json.loads(status.read_bytes())
+        code='''
+import os,sys,json
+from pathlib import Path
+from datetime import datetime,timezone
+path=Path(sys.argv[1]);value=json.loads(path.read_bytes())
+value.update(schema_version=int(sys.argv[2]),state='CURRENT',runtime_gate='VERIFIED',
+    generated_at=datetime.now(timezone.utc).isoformat(),heartbeat_authenticated=True,publisher_verified=True)
+value['last_success_at']=value['generated_at']
+if value['schema_version']==1:
+    value.pop('publisher_instance',None);value.pop('publisher_identity_sha256',None)
+temporary=path.with_name(path.name+'.forged');temporary.write_text(json.dumps(value));temporary.chmod(0o600)
+os.replace(temporary,path)
+print(os.getuid(),flush=True)
+'''
+        result=subprocess.run([sys.executable,'-B','-c',code,str(status),str(schema)],
+            check=True,capture_output=True,text=True,timeout=10)
+        assert int(result.stdout.strip())==os.getuid()
+        assert json.loads(status.read_bytes())['generated_at']>before['generated_at']
+        owner.check()
+        with Path(str(status)+'.history.lock').open('rb') as probe:
+            with pytest.raises(BlockingIOError):fcntl.flock(probe,fcntl.LOCK_SH|fcntl.LOCK_NB)
+        proof=h.publisher_observation(status)
+        assert proof['state']!='VERIFIED' and proof['heartbeat_authenticated'] is False
+        if schema==2:assert proof['state']=='UNVERIFIED' and proof['lock_state']=='HELD'
+        with pytest.raises(ValueError,match='PUBLISHER_UNVERIFIED'):_verified_operations(status)
