@@ -47,7 +47,7 @@ class EnvelopeTests(unittest.TestCase):
 
     def test_duplicate_keys_invalid_encoding_and_size(self):
         self.assertEqual(inspect_envelope(b'{"version":1,"version":1}', audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
-        self.assertEqual(inspect_envelope(b"\\xff", audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
+        self.assertEqual(inspect_envelope(bytes([255]), audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
         self.assertEqual(inspect_envelope(b"x" * 4097, audience="hope-paper-lab", now=1050), "DENY_INVALID_SIZE")
 
 
