@@ -209,14 +209,17 @@ def _verified_refresh_status(path: Path, *, expected_commit: str | None = None,
         if (require_snapshot_match and missing_expected
                 or timestamp_mismatch or digest_mismatch or provenance_mismatch):
             raise ValueError("HOPE_DASHBOARD_REFRESH_SNAPSHOT_MISMATCH")
-        if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
-            state = "STALE"
     elif (snapshot_generated is not None or snapshot_sha256 is not None
             or snapshot_classification is not None
             or snapshot_database_identity is not None
             or snapshot_synthetic is not None
             or error not in REFRESH_ERROR_CODES):
         raise ValueError("HOPE_DASHBOARD_REFRESH_RESULT_INVALID")
+    # Expiry applies to every observation, including a failed attempt.  An old
+    # failure remains useful diagnostic evidence but is not the current state
+    # of the refresh process indefinitely.
+    if (datetime.now(timezone.utc) - generated).total_seconds() > max_age_seconds:
+        state = "STALE"
     safe = {
         "schema": "hope.dashboard-refresh-observation.v3",
         "scope": "DISPOSABLE_LAB_ONLY", "state": state,

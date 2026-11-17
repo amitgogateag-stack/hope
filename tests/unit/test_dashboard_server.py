@@ -539,6 +539,26 @@ def test_server_marks_old_successful_refresh_attempt_stale(tmp_path):
         finally:server.shutdown();thread.join(timeout=5)
 
 
+def test_server_marks_old_failed_refresh_attempt_stale(tmp_path):
+    old = (datetime.now(timezone.utc)-timedelta(seconds=16)).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(refresh_status(
+        state="FAILED", generated_at=old, snapshot_generated_at=None,
+        error_code="DATABASE_IDENTITY_MISMATCH",
+    )))
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    snapshot=tmp_path/"snapshot.json";snapshot.write_bytes(classified_snapshot())
+    with DashboardHTTPServer(0,preview,snapshot,max_snapshot_age_seconds=15) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            result=json.loads(request(server,"/refresh-status.json")[2])
+            assert result["state"]=="STALE"
+            assert result["error_code"]=="DATABASE_IDENTITY_MISMATCH"
+            health=json.loads(request(server,"/status.json")[2])
+            assert health["refresh_state"]=="STALE"
+            assert health["refresh_error_code"]=="DATABASE_IDENTITY_MISMATCH"
+        finally:server.shutdown();thread.join(timeout=5)
+
+
 def test_failed_refresh_receipt_cannot_claim_snapshot_digest(tmp_path):
     value=refresh_status(
         state="FAILED", snapshot_generated_at=None,

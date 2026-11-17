@@ -86,7 +86,10 @@ overwriting its own snapshot or replacing the inode used for serialization.
 The v3 CURRENT receipt carries the SHA-256 of the exact backing snapshot bytes and
 copies its verified classification, hashed database identity and synthetic-data
 claim. The server requires the digest, `generated_at` and all three provenance
-fields to match its single bounded read. A substituted same-timestamp snapshot,
+fields to match its single bounded snapshot read. Both successful and failed
+refresh observations expire to `STALE`; a historical failure code remains
+visible for diagnosis but cannot masquerade as a current refresh attempt.
+A substituted same-timestamp snapshot,
 legacy-schema downgrade, production classification, or forged database identity
 makes refresh health UNAVAILABLE even when the snapshot remains independently safe
 to display. FAILED receipts must leave every snapshot binding null.
