@@ -88,6 +88,49 @@ def test_post_export_contract_failure_cannot_replace_status_with_current(tmp_pat
     assert json.loads(status.read_text())["state"]=="FAILED"
 
 
+@pytest.mark.parametrize("collision", ["snapshot", "lock", "other_directory"])
+def test_refresh_rejects_receipt_outside_the_snapshot_lock_domain(
+    tmp_path, monkeypatch, collision,
+):
+    output = tmp_path / "snapshot.json"
+    output.write_bytes(b"last-good")
+    if collision == "snapshot":
+        status = output
+    elif collision == "lock":
+        status = module._refresh_lock_path(output)
+    else:
+        status = tmp_path / "other" / "refresh.json"
+    monkeypatch.setattr(
+        module, "export_dashboard_snapshot",
+        lambda *args, **kwargs: pytest.fail("invalid paths must stop before export"),
+    )
+    with pytest.raises(ValueError, match="HOPE_DASHBOARD_REFRESH_PATHS_INVALID"):
+        module.refresh_once(
+            output, status, "url", expected_database="lab_db",
+            deployed_commit=COMMIT, observed_at=NOW,
+        )
+    assert output.read_bytes() == b"last-good"
+    if collision == "other_directory":
+        assert not status.parent.exists()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="hardlink alias boundary")
+def test_refresh_rejects_hardlinked_snapshot_and_receipt(tmp_path, monkeypatch):
+    output, status = tmp_path / "snapshot.json", tmp_path / "refresh.json"
+    output.write_bytes(b"last-good")
+    os.link(output, status)
+    monkeypatch.setattr(
+        module, "export_dashboard_snapshot",
+        lambda *args, **kwargs: pytest.fail("hardlink alias must stop before export"),
+    )
+    with pytest.raises(ValueError, match="HOPE_DASHBOARD_REFRESH_PATHS_INVALID"):
+        module.refresh_once(
+            output, status, "url", expected_database="lab_db",
+            deployed_commit=COMMIT, observed_at=NOW,
+        )
+    assert output.read_bytes() == status.read_bytes() == b"last-good"
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Linux flock publisher boundary")
 def test_concurrent_refresher_cannot_export_or_overwrite_active_receipt(tmp_path, monkeypatch):
     output, status = tmp_path/"snapshot", tmp_path/"status"

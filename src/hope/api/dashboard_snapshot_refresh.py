@@ -31,6 +31,26 @@ def _refresh_lock_path(output: Path) -> Path:
     return output.with_name(f".{output.name}.refresh.lock")
 
 
+def _paths_alias(left: Path, right: Path) -> bool:
+    """Compare existing inodes and normalized not-yet-created pathnames."""
+    try:
+        if os.path.samefile(left, right):
+            return True
+    except OSError:
+        pass
+    return left.resolve(strict=False) == right.resolve(strict=False)
+
+
+def _validated_refresh_paths(output: Path, status: Path) -> tuple[Path, Path]:
+    """Keep snapshot, receipt and persistent lock in one disjoint lock domain."""
+    output, status = Path(output), Path(status)
+    lock = _refresh_lock_path(output)
+    if (output.parent.resolve(strict=False) != status.parent.resolve(strict=False)
+            or _paths_alias(output, status) or _paths_alias(status, lock)):
+        raise ValueError("HOPE_DASHBOARD_REFRESH_PATHS_INVALID")
+    return output, status
+
+
 def _acquire_refresh_lock(output: Path) -> tuple[int, int]:
     """Pin a private publication directory and take its non-blocking flock.
 
@@ -136,13 +156,13 @@ def refresh_once(
     observed_at = observed_at or _utc_now()
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
+    output, status = _validated_refresh_paths(output, status)
     base = {
         "schema": "hope.dashboard-refresh.v3", "scope": "DISPOSABLE_LAB_ONLY",
         "generated_at": observed_at.astimezone(timezone.utc).isoformat(),
         "deployed_commit": deployed_commit, "paper_only": True,
         "live_enabled": False, "execution_authorized": False,
     }
-    output = Path(output)
     output.parent.mkdir(parents=True, exist_ok=True)
     try:
         refresh_lock = _acquire_refresh_lock(output)
