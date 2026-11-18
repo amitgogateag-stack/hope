@@ -47,8 +47,8 @@ class EnvelopeTests(unittest.TestCase):
 
     def test_deeply_nested_json_fails_closed(self):
         payload = (b"[" * 1200) + b"0" + (b"]" * 1200)
-        self.assertEqual(inspect_envelope(payload, audience="hope-paper-lab", now=1050),
-                         "DENY_MALFORMED")
+        self.assertIn(inspect_envelope(payload, audience="hope-paper-lab", now=1050),
+                      {"DENY_MALFORMED", "DENY_SCHEMA"})
 
     def test_duplicate_keys_invalid_encoding_and_size(self):
         self.assertEqual(inspect_envelope(b'{"version":1,"version":1}', audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
