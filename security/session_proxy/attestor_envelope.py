@@ -23,7 +23,7 @@ def inspect_envelope(raw: bytes, *, audience: str, now: int) -> str:
             return result
         data = json.loads(raw.decode("utf-8"), object_pairs_hook=unique,
                           parse_constant=lambda _: (_ for _ in ()).throw(ValueError()))
-    except (UnicodeError, ValueError, TypeError):
+    except (UnicodeError, ValueError, TypeError, RecursionError):
         return "DENY_MALFORMED"
     if not isinstance(data, dict) or set(data) != FIELDS or type(data["version"]) is not int or data["version"] != 1:
         return "DENY_SCHEMA"
