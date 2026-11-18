@@ -34,6 +34,8 @@ jobs:
           python-version: '3.13'
       - name: Install disposable test dependencies
         run: python -m pip install -c constraints/ci-test.txt -e '.[test]' -r security/session_proxy/requirements.txt
+      - name: Denial-only attestor envelope adversarial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_envelope.py' -v
       - name: Record exact source and harness digests
         run: |
           git rev-parse HEAD > tested-commit.txt
