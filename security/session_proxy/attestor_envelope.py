@@ -37,6 +37,8 @@ def inspect_envelope(raw: bytes, *, audience: str, now: int) -> str:
             return "DENY_IDENTITY"
     if type(now) is not int or any(type(data[k]) is not int for k in ("issued_at", "expires_at")):
         return "DENY_CLOCK"
+    if min(now, data["issued_at"], data["expires_at"]) < 0 or data["issued_at"] >= data["expires_at"]:
+        return "DENY_CLOCK"
     if data["issued_at"] > now or now >= data["expires_at"] or data["expires_at"] - data["issued_at"] > 300:
         return "DENY_EXPIRY"
     # Even a perfectly formed envelope cannot prove custody, peer identity,
