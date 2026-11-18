@@ -57,6 +57,28 @@ class EnvelopeTests(unittest.TestCase):
         p = sample(); p["expires_at"] = True
         self.assertEqual(self.reason(p), "DENY_CLOCK")
 
+    def test_untrusted_envelope_mutations_never_authorize(self):
+        baseline = sample()
+        mutations = {
+            "audience": ["", "other-environment", None],
+            "release_sha256": ["0" * 64, "A" * 64, None],
+            "controller_generation": ["", "another-generation-123", None],
+            "session_challenge": ["", "replayed-challenge-123", None],
+            "postgres_backend": ["", "other-backend-123456", None],
+            "transaction_xid": ["", "other-transaction-123", None],
+            "policy_generation": ["", "rollback-generation-123", None],
+            "signature": ["", "forged-signature-12345", None],
+            "issued_at": [-1, 1100, None],
+            "expires_at": [1000, 1050, None],
+        }
+        for field, values in mutations.items():
+            for value in values:
+                with self.subTest(field=field, value=value):
+                    candidate = dict(baseline)
+                    candidate[field] = value
+                    decision = self.reason(candidate)
+                    self.assertTrue(decision.startswith("DENY_"), decision)
+
     def test_deeply_nested_json_fails_closed(self):
         payload = (b"[" * 1200) + b"0" + (b"]" * 1200)
         self.assertIn(inspect_envelope(payload, audience="hope-paper-lab", now=1050),
