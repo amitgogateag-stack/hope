@@ -45,6 +45,11 @@ class EnvelopeTests(unittest.TestCase):
         p = sample(); p["expires_at"] = True
         self.assertEqual(self.reason(p), "DENY_CLOCK")
 
+    def test_deeply_nested_json_fails_closed(self):
+        payload = (b"[" * 1200) + b"0" + (b"]" * 1200)
+        self.assertEqual(inspect_envelope(payload, audience="hope-paper-lab", now=1050),
+                         "DENY_MALFORMED")
+
     def test_duplicate_keys_invalid_encoding_and_size(self):
         self.assertEqual(inspect_envelope(b'{"version":1,"version":1}', audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
         self.assertEqual(inspect_envelope(bytes([255]), audience="hope-paper-lab", now=1050), "DENY_MALFORMED")
