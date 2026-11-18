@@ -29,6 +29,18 @@ class EnvelopeTests(unittest.TestCase):
         p = sample(); p["expires_at"] = 1400
         self.assertEqual(self.reason(p), "DENY_EXPIRY")
 
+    def test_invalid_clock_boundaries_fail_closed(self):
+        for issued, expires, now in (
+            (1000, 1000, 1000),
+            (1100, 1000, 1050),
+            (-1, 100, 50),
+            (0, 100, -1),
+        ):
+            with self.subTest(issued=issued, expires=expires, now=now):
+                p = sample()
+                p["issued_at"], p["expires_at"] = issued, expires
+                self.assertEqual(self.reason(p, now=now), "DENY_CLOCK")
+
     def test_schema_rejects_missing_extra_boolean_version(self):
         p = sample(); del p["signature"]
         self.assertEqual(self.reason(p), "DENY_SCHEMA")
