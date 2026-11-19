@@ -9,8 +9,8 @@ FIELDS = frozenset({"version", "audience", "release_sha256", "controller_generat
                     "session_challenge", "postgres_backend", "transaction_xid",
                     "policy_generation", "issued_at", "expires_at"})
 IDENTITY = FIELDS - {"version", "issued_at", "expires_at"}
-DIGEST = re.compile(r"[0-9a-f]{64}\\Z")
-TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}\\Z")
+DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}\Z")
 MAX_AUDIENCE_BYTES = 128
 
 
