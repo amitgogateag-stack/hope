@@ -1,5 +1,6 @@
 """Crash and concurrency tests for denial-only persistent replay prototype."""
 import concurrent.futures
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +53,21 @@ class DurableReplayTests(unittest.TestCase):
 
     def test_corrupt_storage_denies(self):
         self.path.write_bytes(b"not a database")
+        self.assertEqual(self.check(), "DENY_REPLAY_STORAGE_UNAVAILABLE")
+
+    def test_non_replay_integrity_error_denies_as_storage_fault(self):
+        # An altered schema CHECK constraint must not masquerade as a replay.
+        with sqlite3.connect(self.path) as conn:
+            conn.execute("DROP TABLE replay_denials")
+            conn.execute("CREATE TABLE replay_denials ("
+                         "signer_id TEXT NOT NULL, challenge TEXT NOT NULL, "
+                         "PRIMARY KEY (signer_id, challenge), "
+                         "CHECK (challenge = 'forbidden-only')) WITHOUT ROWID")
+        self.assertEqual(self.check(), "DENY_REPLAY_STORAGE_UNAVAILABLE")
+
+    def test_missing_replay_table_denies_as_storage_fault(self):
+        with sqlite3.connect(self.path) as conn:
+            conn.execute("DROP TABLE replay_denials")
         self.assertEqual(self.check(), "DENY_REPLAY_STORAGE_UNAVAILABLE")
 
     def test_missing_identity_denies(self):
