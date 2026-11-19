@@ -29,7 +29,7 @@ class BoundEvidenceTests(unittest.TestCase):
     def test_each_identity_mismatch_denied(self):
         for field in IDENTITY:
             with self.subTest(field=field):
-                self.assertEqual(self.check(dict(self.claims, **{field: "wrong-value"})), "DENY_CLAIM_MISMATCH")
+                self.assertEqual(self.check(dict(self.claims, **{field: ("b" * 64 if field == "release_sha256" else "wrong-value-123456")})), "DENY_CLAIM_MISMATCH")
 
     def test_signed_malformed_digest_denied(self):
         self.assertEqual(self.check(dict(self.claims, release_sha256="not-a-digest")),
