@@ -142,6 +142,9 @@ CREATE FUNCTION financial_witness.capture() RETURNS trigger
  LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,financial_witness AS $$
 DECLARE target uuid; old_value jsonb; new_value jsonb;
 BEGIN
+ -- TRUNCATE is statement-level and has no OLD/NEW row. Reject before any
+ -- unregistered-principal or unbound-transaction bypass can return.
+ IF TG_OP='TRUNCATE' THEN RAISE EXCEPTION 'WRITE_SET_TRUNCATE_FORBIDDEN' USING ERRCODE='23514'; END IF;
  IF NOT EXISTS(SELECT 1 FROM financial_witness.principals WHERE principal_name=session_user) THEN
   IF TG_OP='DELETE' THEN RETURN OLD; ELSE RETURN NEW; END IF;
  END IF;
@@ -152,7 +155,6 @@ BEGIN
   END IF;
   RAISE EXCEPTION 'WRITE_SET_ENVELOPE_REQUIRED' USING ERRCODE='23514';
  END IF;
- IF TG_OP='TRUNCATE' THEN RAISE EXCEPTION 'WRITE_SET_TRUNCATE_FORBIDDEN' USING ERRCODE='23514'; END IF;
  PERFORM financial_witness.bound_claim(target);
  IF TG_OP<>'INSERT' THEN old_value:=to_jsonb(OLD); END IF;
  IF TG_OP<>'DELETE' THEN new_value:=to_jsonb(NEW); END IF;
