@@ -14,7 +14,7 @@ class BoundEvidenceTests(unittest.TestCase):
         self.claims = {"version": 1, "audience": "hope-paper-lab", "release_sha256": "a" * 64,
                        "controller_generation": "generation-123456", "session_challenge": "challenge-123456",
                        "postgres_backend": "backend-12345678", "transaction_xid": "xid-123456789012",
-                       "policy_generation": "policy-12345678", "issued_at": 100, "expires_at": 200}
+                       "policy_generation": "policy-123456789", "issued_at": 100, "expires_at": 200}
         self.expected = {key: self.claims[key] for key in IDENTITY}
 
     def check(self, claims=None, *, expected=None, now=150, payload=None, signature=None, key=None):
@@ -30,6 +30,18 @@ class BoundEvidenceTests(unittest.TestCase):
         for field in IDENTITY:
             with self.subTest(field=field):
                 self.assertEqual(self.check(dict(self.claims, **{field: "wrong-value"})), "DENY_CLAIM_MISMATCH")
+
+    def test_signed_malformed_digest_denied(self):
+        self.assertEqual(self.check(dict(self.claims, release_sha256="not-a-digest")),
+                         "DENY_CLAIM_SCHEMA")
+
+    def test_signed_short_process_identity_denied(self):
+        self.assertEqual(self.check(dict(self.claims, controller_generation="short")),
+                         "DENY_CLAIM_SCHEMA")
+
+    def test_signed_oversized_audience_denied(self):
+        self.assertEqual(self.check(dict(self.claims, audience="x" * 129)),
+                         "DENY_CLAIM_SCHEMA")
 
     def test_forged_signature_denied(self):
         self.assertEqual(self.check(signature=b"0" * 64), "DENY_INVALID_SIGNATURE")
