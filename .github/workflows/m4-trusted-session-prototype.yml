@@ -46,6 +46,8 @@ jobs:
         run: python -m unittest discover -s security/session_proxy -p 'test_attestor_replay.py' -v
       - name: Crash-persistent replay denial prototype
         run: python -m unittest discover -s security/session_proxy -p 'test_attestor_durable_replay.py' -v
+      - name: Verifier-owned PostgreSQL session observation contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_session_observation.py' -v
       - name: Record exact source and harness digests
         run: |
           git rev-parse HEAD > tested-commit.txt
