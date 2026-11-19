@@ -32,8 +32,12 @@ class DurableReplayLedger:
                 conn.execute("PRAGMA busy_timeout=5000")
                 conn.execute("INSERT INTO replay_denials(signer_id, challenge) VALUES (?, ?)",
                              (signer_id, challenge))
-        except sqlite3.IntegrityError:
-            return "DENY_REPLAY"
+        except sqlite3.IntegrityError as exc:
+            # Only the expected composite PRIMARY KEY collision is a replay.
+            # Other integrity errors can indicate schema corruption/tampering.
+            if getattr(exc, "sqlite_errorcode", None) == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY:
+                return "DENY_REPLAY"
+            return "DENY_REPLAY_STORAGE_UNAVAILABLE"
         except (sqlite3.Error, OSError, ValueError):
             return "DENY_REPLAY_STORAGE_UNAVAILABLE"
         return "DENY_INDEPENDENT_SESSION_AND_COMMIT_AUTHORITY_UNAVAILABLE"
