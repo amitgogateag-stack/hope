@@ -40,6 +40,8 @@ jobs:
         run: python -m unittest discover -s security/session_proxy -p 'test_attestor_signature.py' -v
       - name: Signed claim-binding adversarial contract
         run: python -m unittest discover -s security/session_proxy -p 'test_attestor_binding.py' -v
+      - name: Signer allowlist and revocation denial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_keyring.py' -v
       - name: Record exact source and harness digests
         run: |
           git rev-parse HEAD > tested-commit.txt
