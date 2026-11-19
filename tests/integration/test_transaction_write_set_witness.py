@@ -345,3 +345,17 @@ def test_privilege_drift_after_write_set_seal_refuses_actual_commit(
     assert observed==[state['nonce']]
     zero_effects(admin)
     assert recovery(admin,state)['state']=='RECOVERY_REQUIRED'
+
+
+def test_unregistered_principal_cannot_truncate_witnessed_relation(witness_case, startup_database):
+    """Regression: TRUNCATE must be rejected before unregistered-role bypass."""
+    admin = startup_database['admin']
+    with admin.begin() as connection:
+        connection.exec_driver_sql('CREATE TEMP TABLE witness_truncate_probe (id integer)')
+        connection.exec_driver_sql(
+            'CREATE TRIGGER witness_no_truncate BEFORE TRUNCATE ON witness_truncate_probe '
+            'FOR EACH STATEMENT EXECUTE FUNCTION financial_witness.capture()')
+        with pytest.raises(DBAPIError, match='WRITE_SET_TRUNCATE_FORBIDDEN'):
+            with connection.begin_nested():
+                connection.exec_driver_sql('TRUNCATE witness_truncate_probe')
+
