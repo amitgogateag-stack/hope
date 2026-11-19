@@ -1,6 +1,7 @@
 """Denial-only signed-claim binding. No production authorization capability."""
 from __future__ import annotations
 import json
+import re
 from collections.abc import Mapping
 from attestor_signature import inspect_signed_evidence
 
@@ -8,6 +9,9 @@ FIELDS = frozenset({"version", "audience", "release_sha256", "controller_generat
                     "session_challenge", "postgres_backend", "transaction_xid",
                     "policy_generation", "issued_at", "expires_at"})
 IDENTITY = FIELDS - {"version", "issued_at", "expires_at"}
+DIGEST = re.compile(r"[0-9a-f]{64}\\Z")
+TOKEN = re.compile(r"[A-Za-z0-9_-]{16,128}\\Z")
+MAX_AUDIENCE_BYTES = 128
 
 
 def inspect_bound_evidence(payload: bytes, signature: bytes, *, trusted_public_key: bytes | None,
@@ -34,6 +38,10 @@ def inspect_bound_evidence(payload: bytes, signature: bytes, *, trusted_public_k
         return "DENY_EXPECTATION_UNAVAILABLE"
     if any(not isinstance(claims[k], str) or not claims[k] or
            not isinstance(expected[k], str) or not expected[k] for k in IDENTITY):
+        return "DENY_CLAIM_SCHEMA"
+    if (not DIGEST.fullmatch(claims["release_sha256"]) or
+        any(not TOKEN.fullmatch(claims[k]) for k in IDENTITY - {"audience", "release_sha256"}) or
+        len(claims["audience"].encode("utf-8")) > MAX_AUDIENCE_BYTES):
         return "DENY_CLAIM_SCHEMA"
     if any(claims[k] != expected[k] for k in IDENTITY):
         return "DENY_CLAIM_MISMATCH"
