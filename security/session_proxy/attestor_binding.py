@@ -39,9 +39,13 @@ def inspect_bound_evidence(payload: bytes, signature: bytes, *, trusted_public_k
     if any(not isinstance(claims[k], str) or not claims[k] or
            not isinstance(expected[k], str) or not expected[k] for k in IDENTITY):
         return "DENY_CLAIM_SCHEMA"
+    try:
+        audience_bytes = claims["audience"].encode("utf-8", errors="strict")
+    except UnicodeError:
+        return "DENY_CLAIM_SCHEMA"
     if (not DIGEST.fullmatch(claims["release_sha256"]) or
         any(not TOKEN.fullmatch(claims[k]) for k in IDENTITY - {"audience", "release_sha256"}) or
-        len(claims["audience"].encode("utf-8")) > MAX_AUDIENCE_BYTES):
+        len(audience_bytes) > MAX_AUDIENCE_BYTES):
         return "DENY_CLAIM_SCHEMA"
     if any(claims[k] != expected[k] for k in IDENTITY):
         return "DENY_CLAIM_MISMATCH"
