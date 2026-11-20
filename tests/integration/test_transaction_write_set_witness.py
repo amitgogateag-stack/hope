@@ -359,3 +359,28 @@ def test_unregistered_principal_cannot_truncate_witnessed_relation(witness_case,
             with connection.begin_nested():
                 connection.exec_driver_sql('TRUNCATE witness_truncate_probe')
 
+
+
+@pytest.mark.parametrize('field', ['backend_pid', 'backend_start', 'database_oid', 'principal_name'])
+def test_owner_reservation_rejects_mismatched_observed_session(
+        witness_case, startup_database, field):
+    """The modeled owner must not reserve claims for substituted identities."""
+    state = witness_case()
+    with startup_database['worker'].begin() as connection:
+        identity = connection.execute(text(
+            'SELECT pg_current_xact_id(), pg_backend_pid(), '
+            '(SELECT backend_start FROM pg_stat_activity WHERE pid=pg_backend_pid()), '
+            '(SELECT oid FROM pg_database WHERE datname=current_database())'
+        )).one()
+        changes = {
+            'backend_pid': -1,
+            'backend_start': identity[2] - timedelta(seconds=1),
+            'database_oid': 0,
+            'principal_name': 'nonexistent_witness_principal',
+        }
+        with pytest.raises(DBAPIError, match='WRITE_SET_CLAIM_BINDING_INVALID'):
+            reserve(startup_database['admin'], connection,
+                    state['permit'].authorization_sha256, 'FILLED',
+                    alter={field: changes[field]})
+    with startup_database['admin'].connect() as owner:
+        assert owner.execute(text('SELECT count(*) FROM financial_witness.claims')).scalar_one() == 0
