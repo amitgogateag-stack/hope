@@ -225,7 +225,10 @@ def main():
             # Exact actual upstream session is observed executing COMMIT while
             # its mandatory control-row fence is blocked by the test authority.
             client.send({'commit':True},reply=False)
-            t=client.first['challenge'];audit_event(t['nonce'],'COMMIT_BARRIER_HELD')
+            t=client.first['challenge']; evidence=audit_event(t['nonce'],'COMMIT_BARRIER_HELD')
+            require(evidence.get('closing_session_verified') is True,'missing closing session verification')
+            require(evidence.get('backend_pid')==t['backend_pid'] and evidence.get('xid')==t['xid'],'closing audit session mismatch')
+            require(evidence.get('authorization_expires_at')==t['expires_at'] and evidence['closing_database_epoch']<t['expires_at'],'closing audit authority mismatch')
             until=time.monotonic()+1
             while time.monotonic()<until:
                 admin.execute('SELECT pg_stat_clear_snapshot()')
