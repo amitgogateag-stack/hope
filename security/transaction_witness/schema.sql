@@ -68,11 +68,13 @@ END $$;
 CREATE FUNCTION financial_witness.claim_binding() RETURNS trigger LANGUAGE plpgsql SET search_path=pg_catalog AS $$
 DECLARE actual record; authority record;
 BEGIN
+ -- Discard cached statistics before observing the claimed backend.
+ PERFORM pg_stat_clear_snapshot();
  SELECT usename,backend_start,backend_xid::text AS xid,datid INTO actual
  FROM pg_stat_activity WHERE pid=NEW.backend_pid;
  SELECT * INTO authority FROM public.paper_startup_executions WHERE authorization_sha256=NEW.authorization_sha256;
- IF actual IS NULL OR authority IS NULL OR actual.xid IS NULL OR actual.usename<>NEW.principal_name
-  OR actual.backend_start<>NEW.backend_start OR actual.datid<>NEW.database_oid
+ IF actual IS NULL OR authority IS NULL OR actual.xid IS NULL OR actual.usename IS DISTINCT FROM NEW.principal_name
+  OR actual.backend_start IS DISTINCT FROM NEW.backend_start OR actual.datid IS DISTINCT FROM NEW.database_oid
   OR actual.xid::numeric<>mod(NEW.transaction_id::text::numeric,4294967296)
   OR NEW.cluster_id<>(SELECT system_identifier::text FROM pg_control_system())
   OR NEW.database_oid<>(SELECT oid FROM pg_database WHERE datname=current_database())
@@ -96,7 +98,7 @@ BEGIN
  SELECT * INTO c FROM financial_witness.claims WHERE nonce=_nonce;
  SELECT backend_start INTO started FROM pg_stat_activity WHERE pid=pg_backend_pid();
  IF c IS NULL OR current_setting('role')<>'none' OR c.principal_name<>session_user
-  OR c.transaction_id<>pg_current_xact_id() OR c.backend_pid<>pg_backend_pid() OR c.backend_start<>started
+  OR c.transaction_id<>pg_current_xact_id() OR c.backend_pid<>pg_backend_pid() OR c.backend_start IS DISTINCT FROM started
   OR c.database_oid<>(SELECT oid FROM pg_database WHERE datname=current_database())
   OR c.cluster_id<>(SELECT system_identifier::text FROM pg_control_system()) THEN
   RAISE EXCEPTION 'WRITE_SET_SESSION_MISMATCH' USING ERRCODE='23514';
