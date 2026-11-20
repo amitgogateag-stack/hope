@@ -39,6 +39,17 @@ class DurableReplayTests(unittest.TestCase):
         self.assertEqual(self.check(verified_claims=False), "DENY_UNVERIFIED_CLAIMS")
         self.assertEqual(self.check(), "DENY_INDEPENDENT_SESSION_AND_COMMIT_AUTHORITY_UNAVAILABLE")
 
+    def test_truthy_non_boolean_claims_do_not_consume_nonce(self):
+        for value in (1, "true", [True]):
+            with self.subTest(value=value):
+                self.assertEqual(self.check(verified_claims=value), "DENY_UNVERIFIED_CLAIMS")
+        self.assertEqual(self.check(), "DENY_INDEPENDENT_SESSION_AND_COMMIT_AUTHORITY_UNAVAILABLE")
+
+    def test_unpaired_unicode_identity_does_not_escape_denial(self):
+        self.assertEqual(self.check(challenge="\ud800"), "DENY_REPLAY_IDENTITY")
+        self.assertEqual(self.check(signer_id="\udfff"), "DENY_REPLAY_IDENTITY")
+        self.assertEqual(self.check(), "DENY_INDEPENDENT_SESSION_AND_COMMIT_AUTHORITY_UNAVAILABLE")
+
     def test_concurrent_connections_have_single_first_observation(self):
         def attempt(_):
             return self.check(DurableReplayLedger(self.path))
