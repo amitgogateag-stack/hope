@@ -43,6 +43,12 @@ class BoundEvidenceTests(unittest.TestCase):
         self.assertEqual(self.check(dict(self.claims, audience="x" * 129)),
                          "DENY_CLAIM_SCHEMA")
 
+    def test_signed_unpaired_unicode_surrogates_denied(self):
+        for audience in ("\ud800", "\udfff", "hope\ud800paper"):
+            with self.subTest(audience=repr(audience)):
+                self.assertEqual(self.check(dict(self.claims, audience=audience)),
+                                 "DENY_CLAIM_SCHEMA")
+
     def test_forged_signature_denied(self):
         self.assertEqual(self.check(signature=b"0" * 64), "DENY_INVALID_SIGNATURE")
 
