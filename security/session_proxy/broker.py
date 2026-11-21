@@ -117,6 +117,7 @@ def serve(config_path):
                         "(SELECT system_identifier::text FROM pg_control_system()),"
                         "extract(epoch FROM clock_timestamp())::double precision").fetchone()
                     state = db.execute('SELECT halted,revoked,generation FROM session_prototype.control WHERE id=1').fetchone()
+                    require(state is not None, 'POLICY_UNAVAILABLE')
                     require(not state[0] and not state[1], 'POLICY_DENIED')
                     nonce = secrets.token_hex(32)
                     transcript = dict(nonce=nonce, peer=identity, uid=uid, gid=gid,
@@ -140,8 +141,21 @@ def serve(config_path):
                     current()
                     with fence.stopped():
                         current()
+                        # Reobserve the actual upstream session while the controller
+                        # is stopped, before entering the database COMMIT guard.
+                        closing_session = db.execute("SELECT pg_backend_pid(),pg_current_xact_id()::text,session_user,"
+                            "(SELECT oid FROM pg_database WHERE datname=current_database()),"
+                            "(SELECT backend_start::text FROM pg_stat_activity WHERE pid=pg_backend_pid()),"
+                            "(SELECT system_identifier::text FROM pg_control_system()),"
+                            "extract(epoch FROM clock_timestamp())::double precision").fetchone()
+                        require(closing_session is not None and closing_session[:6] == session[:6], 'DATABASE_SESSION_CHANGED')
+                        require(closing_session[6] < transcript['expires_at'], 'PROTOTYPE_AUTHORITY_EXPIRED')
+                        current()
                         audit(dict(nonce=nonce, result='COMMIT_BARRIER_HELD', peer=identity,
-                                   tracer_tid=fence.tid, backend_pid=session[0], xid=session[1]))
+                                   tracer_tid=fence.tid, backend_pid=session[0], xid=session[1],
+                                   closing_session_verified=True,
+                                   closing_database_epoch=closing_session[6],
+                                   authorization_expires_at=transcript['expires_at']))
                         commit_started = True
                         db.execute('COMMIT')
                         committed = True

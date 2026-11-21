@@ -34,6 +34,22 @@ jobs:
           python-version: '3.13'
       - name: Install disposable test dependencies
         run: python -m pip install -c constraints/ci-test.txt -e '.[test]' -r security/session_proxy/requirements.txt
+      - name: Denial-only attestor envelope adversarial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_envelope.py' -v
+      - name: Independently anchored signature denial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_signature.py' -v
+      - name: Signed claim-binding adversarial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_binding.py' -v
+      - name: Signer allowlist and revocation denial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_keyring.py' -v
+      - name: Concurrent replay denial prototype
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_replay.py' -v
+      - name: Crash-persistent replay denial prototype
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_durable_replay.py' -v
+      - name: Verifier-owned PostgreSQL session observation contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_session_observation.py' -v
+      - name: Pre-COMMIT transaction continuity denial contract
+        run: python -m unittest discover -s security/session_proxy -p 'test_attestor_commit_continuity.py' -v
       - name: Record exact source and harness digests
         run: |
           git rev-parse HEAD > tested-commit.txt
