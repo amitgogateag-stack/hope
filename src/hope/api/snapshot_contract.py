@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 import json
 from re import fullmatch
 
-from hope.api.dashboard_projection import verified_projections
+from hope.api.dashboard_projection import legacy_ledger_unavailable, verified_projections
 
 
 def recovery_state(paper):
@@ -126,6 +126,8 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
             },
         },
     }
+    if data["schema_version"] == 1 and "provenance" in data:
+        raise ValueError("HOPE_DASHBOARD_SNAPSHOT_PROVENANCE_INVALID")
     if data["schema_version"] == 2:
         provenance = data.get("provenance")
         if (not isinstance(provenance, dict)
@@ -146,28 +148,12 @@ def verified_snapshot_payload(payload: bytes, *, expected_commit: str | None = N
         safe["paper"]["recovery"] = {key: recovery[key] for key in recovery_fields}
     if "projections" in data:
         projections = data["projections"]
-        # A prior last-good snapshot may not contain the current receipt lineage.
-        # Preserve every independently verified section, but never infer those
-        # new counts from the older aggregate ledger.
+        # Explicit compatibility is limited to the known v1 aggregate shape.
         ledger = projections.get("execution_ledger") if isinstance(projections, dict) else None
-        required_ledger_lineage = {
-            "effect_receipt_fills", "fills_without_effect_receipt",
-            "unattributed_effect_receipt_fills",
-            "effect_receipt_fills_without_application",
-            "claimed_effect_receipt_fills",
-            "succeeded_effect_receipt_fills",
-            "failed_effect_receipt_fills",
-            "claimed_effect_receipt_fills_without_application",
-            "succeeded_effect_receipt_fills_without_application",
-            "failed_effect_receipt_fills_without_application",
-            "accounting_receipts_without_application",
-            "fills_by_market", "unapplied_fills_by_market",
-            "effect_receipt_market_mismatch_fills",
-        }
-        if (isinstance(ledger, dict) and ledger.get("status") == "AVAILABLE"
-                and not required_ledger_lineage.issubset(ledger)):
+        replacement = legacy_ledger_unavailable(ledger) if data["schema_version"] == 1 else None
+        if replacement is not None:
             projections = dict(projections)
-            projections["execution_ledger"] = {"status": "UNAVAILABLE"}
+            projections["execution_ledger"] = replacement
         safe["projections"] = verified_projections(projections, generated)
     return json.dumps(safe, separators=(",", ":")).encode("utf-8"), generated
 

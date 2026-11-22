@@ -14,6 +14,36 @@ CANDIDATE_STATES = ("RESEARCH", "BACKUP_CANDIDATE", "OPERATIONAL_CANDIDATE", "UN
 BLOCKED_CODES = ("PAPER_JOB_INCOMPLETE_PRIOR_CLAIM", "PAPER_MARKET_DATA_STALE", "PAPER_MARKET_DATA_MISSING_ACTIVE_INSTRUMENT", "OTHER")
 
 
+LEGACY_LEDGER_REASON = "LEGACY_EXECUTION_LEDGER_SCHEMA_INCOMPATIBLE"
+LEGACY_LEDGER_COUNTS = ("fills", "applied_fills", "fill_applications", "accounting_receipts", "fills_without_application", "applications_without_pnl")
+
+
+def legacy_ledger_unavailable(item: object) -> dict[str, str] | None:
+    """Only the known six-counter v1 shape may omit modern ledger evidence.
+
+    Validate every retained old invariant before withholding the whole ledger.
+    Partially present modern evidence is never silently discarded as legacy.
+    """
+    if not isinstance(item, dict) or item.get("status") != "AVAILABLE":
+        return None
+    if set(item) - set(LEGACY_LEDGER_COUNTS) - {"status", "reconciliation_state"}:
+        return None
+    if not all(type(item.get(k)) is int and 0 <= item[k] <= 9007199254740991 for k in LEGACY_LEDGER_COUNTS):
+        raise ValueError("HOPE_DASHBOARD_LEGACY_LEDGER_INVALID")
+    if (item["fills"] != item["applied_fills"] + item["fills_without_application"]
+            or item["applied_fills"] > item["fill_applications"]
+            or item["applications_without_pnl"] > item["fill_applications"]
+            or item["accounting_receipts"] < item["fill_applications"] - item["applications_without_pnl"]):
+        raise ValueError("HOPE_DASHBOARD_LEGACY_LEDGER_INCONSISTENT")
+    state = item.get("reconciliation_state")
+    if state is not None and (not isinstance(state, str) or state not in {"NO_FILLS", "OBSERVED_COMPLETE", "APPLICATIONS_WITHOUT_ACCOUNTING_RECEIPTS", "MISSING_EFFECT_RECEIPTS"}):
+        raise ValueError("HOPE_DASHBOARD_LEGACY_LEDGER_STATE_INVALID")
+    if (state == "NO_FILLS" and item["fills"] != 0
+            or state == "OBSERVED_COMPLETE" and (item["fills_without_application"] or item["applications_without_pnl"])):
+        raise ValueError("HOPE_DASHBOARD_LEGACY_LEDGER_INCONSISTENT")
+    return {"status": "UNAVAILABLE", "reason": LEGACY_LEDGER_REASON}
+
+
 def verified_projections(value: object, generated: datetime) -> dict[str, dict[str, Any]]:
     if not isinstance(value, dict):
         raise ValueError("HOPE_DASHBOARD_PROJECTIONS_INVALID")
@@ -37,6 +67,10 @@ def verified_projections(value: object, generated: datetime) -> dict[str, dict[s
             raise ValueError("HOPE_DASHBOARD_PROJECTION_STATUS_INVALID")
         if item["status"] == "UNAVAILABLE":
             safe[section] = {"status": "UNAVAILABLE"}
+            if section == "execution_ledger" and "reason" in item:
+                if item["reason"] != LEGACY_LEDGER_REASON:
+                    raise ValueError("HOPE_DASHBOARD_LEDGER_REASON_INVALID")
+                safe[section]["reason"] = LEGACY_LEDGER_REASON
             continue
         result: dict[str, Any] = {"status": "AVAILABLE"}
         if section == "datasets":
