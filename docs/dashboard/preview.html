@@ -191,8 +191,8 @@ el('recovery-status').textContent = (stale ? 'STALE · ' : 'Verified · ') + dat
 el('snapshot-status').textContent = (stale ? 'STALE · ' : '') + (snapshotCache.failure ? 'Refresh '+(snapshotCache.error||'unavailable')+' · retaining last verified snapshot · ' : 'Loaded · ') + data.generated_at + ' · ' + source + ' · PAPER claimed ' + counts.claimed + ', succeeded ' + counts.succeeded + ', failed ' + counts.failed;
 el('snapshot-status').style.color = stale || snapshotCache.failure ? '#e8c07c' : '#84dfbb';
 };
-const retainSnapshotAfterFailure=() => {
-if(!snapshotCache) { clearSnapshot('Dashboard data unavailable'); return; }
+const retainSnapshotAfterFailure=e => {
+if(!snapshotCache) { clearSnapshot('Dashboard data unavailable'+(e?' · '+e.message:'')); return; }
 snapshotCache.failure = true;
 renderSnapshot();
 };
@@ -391,8 +391,8 @@ const epoch=snapshotEpoch;
 try {
 const data=await requestJSON(path,limit);
 if(path !== '/snapshot.json' || epoch === snapshotEpoch) apply(data);
-} catch (_){
-if(path !== '/snapshot.json' || epoch === snapshotEpoch) clear();
+} catch (e){
+if(path !== '/snapshot.json' || epoch === snapshotEpoch) clear(path==='/snapshot.json'&&e instanceof Error?e:undefined);
 } finally { activeRefreshes.delete(path); }
 };
 document.querySelectorAll('nav button[data-view]').forEach(button=>button.addEventListener('click',()=>{
