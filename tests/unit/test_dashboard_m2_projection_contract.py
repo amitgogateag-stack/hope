@@ -64,7 +64,7 @@ def test_v1_last_good_hides_legacy_ledger_instead_of_inventing_effect_receipts(t
             "projections":value}
     path=tmp_path/"snapshot.json"; path.write_text(json.dumps(data))
     safe=json.loads(_verified_snapshot(path)[0])
-    assert safe["projections"]["execution_ledger"]=={"status":"UNAVAILABLE"}
+    assert safe["projections"]["execution_ledger"]=={"status":"UNAVAILABLE", "reason":"LEGACY_EXECUTION_LEDGER_SCHEMA_INCOMPATIBLE"}
     assert safe["projections"]["certified_chain"]["status"]=="AVAILABLE"
 
 
@@ -196,3 +196,16 @@ def test_market_unapplied_positive_partitions_remain_observations(first, second)
     assert result["unapplied_fills_by_market"] == ledger["unapplied_fills_by_market"]
     assert result["reconciliation_state"] == ("FILL_MARKET_UNRESOLVED" if "OTHER" in (first, second)
                                                else "MISSING_EFFECT_RECEIPTS")
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_complete_current_ledger_remains_strict_in_both_snapshot_versions(version):
+    from hope.api.snapshot_contract import verified_snapshot_payload
+    data = {"schema_version":version,"source":"hope_postgresql","generated_at":datetime.now(timezone.utc).isoformat(),
+            "research":{"run_count":0},"paper":{"environment_state":"HALTED","job_runs":{"total":0,"claimed":0,"failed":0,"succeeded":0}},"projections":projection()}
+    if version == 2:
+        data["provenance"]={"data_classification":"PRODUCTION_READ_ONLY","database_identity_sha256":"a"*64,"synthetic_activity":False,"execution_authorized":False,"live_enabled":False}
+    safe=json.loads(verified_snapshot_payload(json.dumps(data).encode())[0])
+    assert safe["projections"]["execution_ledger"]==projection()["execution_ledger"]
+    data["projections"]["execution_ledger"].pop("effect_receipt_fills")
+    with pytest.raises(ValueError):verified_snapshot_payload(json.dumps(data).encode())

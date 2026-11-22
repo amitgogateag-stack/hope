@@ -1,0 +1,25 @@
+# Legacy dashboard snapshot compatibility — engineering checkpoint
+
+## Behavior and bounds
+The diagnostic reproduced rejection of a genuine historical snapshot by the shipped JavaScript validator. HTTP retrieval succeeded; the six-counter legacy execution ledger lacks modern attribution, accounting and market evidence. The correction recognizes only that explicit v1 aggregate shape. Independently valid research, job, dataset and other projection observations remain visible with their original generation and stale classification. The ledger becomes `UNAVAILABLE` with `LEGACY_EXECUTION_LEDGER_SCHEMA_INCOMPATIBLE`; no financial counts are supplied.
+
+Every old counter is validated before withholding the ledger. Contradictory totals, invalid types, negative values, invalid state, missing old counters, partially present modern evidence and v1 provenance downgrade attempts refuse. Complete current ledgers remain under the existing strict contract in v1 and v2. V2 never falls back. Unknown unavailability reasons refuse. Input objects are not mutated. Other malformed sections still reject the snapshot.
+
+The server's former broad missing-field fallback also hid malformed counters and allowed current-schema fallback. Regression-first tests reproduced these failures; the new shared Python compatibility helper narrows that boundary. Browser and server use the same explicitly documented shape and invariants. The bounded reason survives sanitized serving and offline import.
+
+## Verification
+New Python regressions initially failed15cases; browser reproduction failed `Invalid M2 count`. Corrected focused legacy/browser/preview/ledger selection37passed. Complete-current-v1/v2 strictness regressions are included. Genuine historical bytes were accepted by both the pure server contract and disposable headless Chrome; observed research/job counts matched the input, staleness was visible, the ledger had the explicit incompatibility reason, portfolio remained unavailable and no JavaScript errors occurred. Private input/screenshot evidence is deliberately not checked in. Committed tests use independent synthetic data, not operational acceptance.
+
+Pinned mypy1.19.1 passed all three source files for the Linux deployment platform. Bandit high-severity scan passed. Windows broad dashboard run535passed/63native skips/59failures; focused server-reader selection83passed/2failures. These failures include native bounded-file ChangeTime behavior and missing POSIX/bash capabilities; do not label this a passing native run or weaken the reader. Exact-head Linux PG16/17 CI remains mandatory. No Docker daemon was available locally, so no fresh local PostgreSQL pass is claimed.
+
+CSS/HTML class identifiers and statement-delimiter whitespace are compressed equivalently to keep the single shipped HTML65453bytes below the unchanged65536 limit. No external scripts, third-party assets, financial/strategy/risk changes, migration, signer/admission changes or acceptance bypass is added. Static safety disclosures and browser navigation remain tested.
+
+## Integration and release
+This isolated fix branch depends explicitly on dashboard parent1934d14610b8c5f207017869928c2deaba468628 (PR116). Its actual source45059411109 and PR45059415325 logs each passed5861tests on PG16/17,91.27%coverage. Parent is not merged or promoted; its broad accumulated diff is not approved wholesale. Preserve PR114 and frozen baseline. A dependent draft PR should show only this corrective batch against the dashboard branch.
+
+Exact candidate CI and final SHA must be recorded in the draft PR before deployment approval. Prepare a bounded reversible HTML-only replacement of the existing isolated preview after verifying its prior hash and ownership. Keep historical snapshot bytes unchanged, loopback binding unchanged, service/credentials/databases untouched. Save the prior exact asset for rollback; rollback must verify both old/new hashes and never restart a trading worker. Deployment is a separate approval, not implied by this document.
+
+## Next dependency
+Automatic refresh is not restored by accepting old observations. Existing installation inspection pins release/template identity, exporter absence and private configuration, and deliberately does not certify database identity or PAPER isolation. Inspect actual failure causes and qualify a distinct least-privilege observational reader before installation or timer activation. Do not bypass current preflight or transplant worker authority. Host evidence stays private.
+
+Engineering integration and operational PAPER remain NO-GO. Independent trusted attestor/session root/COMMIT-coordinated mutable-policy admission, human review and genuine external market/runtime/restore qualification remain unresolved. No strategy eligibility is inferred from observed registration counts. No AWS modification, deploy, activation, DB write, PAPER execution, merge or fabricated acceptance occurs in this batch. Continue with exporter qualification and existing market/strategy/lifecycle capabilities only within authorized boundaries.

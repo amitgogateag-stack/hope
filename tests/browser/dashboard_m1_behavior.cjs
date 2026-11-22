@@ -33,6 +33,28 @@ function browser() {
  };
 }
 async function main() {
+ // Explicit historical aggregate compatibility preserves independently valid data.
+ {
+  const value=sample();value.paper.environment_state='HALTED';value.research.run_count=7;
+  value.projections={datasets:{status:'AVAILABLE',registered:3,pit_certified:1},execution_ledger:{status:'AVAILABLE',fills:3,applied_fills:1,fill_applications:1,accounting_receipts:1,fills_without_application:2,applications_without_pnl:0}};
+  const original=JSON.stringify(value),b=browser();b.api.applySnapshot(value,'local file');
+  assert.equal(JSON.stringify(value),original);
+  assert.equal(b.element('research-runs').textContent,'7');
+  assert.match(b.element('projection-datasets').textContent,/3 registered/);
+  assert.match(b.element('m2-execution-ledger').textContent,/UNAVAILABLE.*LEGACY_EXECUTION_LEDGER_SCHEMA_INCOMPATIBLE/);
+  assert.match(html,/id="portfolio-state"[^>]*>UNAVAILABLE/);
+  for(const changes of [{fills:4},{fills:true},{fills:-1},{fill_applications:0},{applications_without_pnl:2},{effect_receipt_fills:99},{fills_by_market:{USA:99}},{reconciliation_state:'PRIVATE'}]){
+   const bad=JSON.parse(JSON.stringify(value));Object.assign(bad.projections.execution_ledger,changes);
+   assert.throws(()=>b.api.applySnapshot(bad,'local file'));assert.equal(b.element('research-runs').textContent,'7');
+  }
+  const current=JSON.parse(JSON.stringify(value));current.schema_version=2;
+  current.provenance={data_classification:'PRODUCTION_READ_ONLY',database_identity_sha256:'a'.repeat(64),synthetic_activity:false,execution_authorized:false,live_enabled:false};
+  assert.throws(()=>b.api.applySnapshot(current,'local file'));
+  for(const provenance of [{execution_authorized:true},{live_enabled:true},{data_classification:'DISPOSABLE_LAB'}])assert.throws(()=>b.api.applySnapshot({...value,provenance},'local file'));
+  b.advance(3600001);assert.match(b.element('snapshot-status').textContent,/STALE/);
+  assert.match(b.element('m2-execution-ledger').textContent,/LEGACY_EXECUTION_LEDGER_SCHEMA_INCOMPATIBLE.*STALE/);
+ }
+
  {const b=browser(),d=lab();b.api.applyLab(d);assert.match(b.element('paper-lab-status').textContent,/LAB_OBSERVED.*INDIA.*NO_TRADE.*USA.*FILLED/s);
   const bad=[{...d,scope:'PRODUCTION_PAPER'},{...d,execution_authorized:true},
    {...d,cases:[{...d.cases[0],market:'EU'}]},{...d,cases:[{...d.cases[0],scenario:'PRIVATE'}]},
