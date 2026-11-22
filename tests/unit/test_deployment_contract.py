@@ -11,12 +11,35 @@ from test_release_builder import build_case,trusted_python
 SHA='a'*40
 
 
+class ForgedPin(str):
+    def __eq__(self,other):return True
+
+
+@pytest.mark.parametrize('field,value',[('expected_receipt','0'*64),('expected_factory','attacker:factory')])
+def test_polymorphic_deployment_pins_are_rejected_before_io(tmp_path,field,value):
+    forged=ForgedPin(value)
+    assert 'different-authority'==forged
+    result=d.inspect_deployment(tmp_path,SHA,**{field:forged})
+    assert result['state']=='BLOCKED'
+    assert result['blockers']==['INDEPENDENT_DEPLOYMENT_RECEIPT_REQUIRED']
+    assert result['execution_authorized'] is False
+
+
 @pytest.fixture
 def contract(tmp_path,monkeypatch):
     from contextlib import nullcontext
     monkeypatch.setattr(d,'_activation_guard',lambda *a,**k:nullcontext())
+    if __import__('os').name == 'nt':
+        def windows_descriptor_model(path, limit, *, expected_sha256):
+            raw=Path(path).read_bytes()
+            if len(raw)>limit or r._digest(raw)!=expected_sha256:
+                raise ValueError('BOUNDED_READ_DIGEST_MISMATCH')
+            return raw
+        monkeypatch.setattr(d,'authenticated_bounded_regular_read',windows_descriptor_model)
     now=int(time.time());root=tmp_path
-    receipt=dict(schema='hope.deployment-receipt.v1',scope='PRODUCTION_PAPER',release_commit=SHA,image_sha256='b'*64,
+    manifest_payload=r._canonical(dict(config=dict(digest='sha256:'+'9'*64)))
+    image_sha256=r._digest(manifest_payload)
+    receipt=dict(schema='hope.deployment-receipt.v1',scope='PRODUCTION_PAPER',release_commit=SHA,image_sha256=image_sha256,
         runtime_manifest_sha256='c'*64,host_sha256='d'*64,boot_sha256='e'*64,container_id='f'*64,engine='docker',
         process_sha256='1'*64,argv_sha256='2'*64,python_sha256='3'*64,os_release_sha256='4'*64,postgres_major=17,
         minimum_systemd=249,provider_sha256='5'*64,rollback_sha256='6'*64,minimum_policy_generation=7,issued_at=now-1,expires_at=now+300)
@@ -32,11 +55,11 @@ def contract(tmp_path,monkeypatch):
     monkeypatch.setattr(d.r,'_trusted',lambda path,**kw:(Path(path).stat().st_ino,Path(path).stat().st_mtime_ns))
     monkeypatch.setattr(d,'signed',lambda path,key:(deepcopy(receipt),r._digest(path.read_bytes())))
     image=dict(schema='hope.image-observation.v1',scope='PRODUCTION_PAPER',state='VERIFIED',release_commit=SHA,
-        image_sha256='b'*64,expires_at=now+200,policy_generation=7,execution_authorized=False)
+        image_sha256=image_sha256,expires_at=now+200,policy_generation=7,execution_authorized=False)
     monkeypatch.setattr(d,'verify_image',Mock(side_effect=lambda *a,**k:deepcopy(image)))
     monkeypatch.setattr(d,'_key_digest',lambda path:str(path))
     monkeypatch.setattr(d,'authorities',Mock(return_value={'synthetic-authority'}))
-    provider=dict(dataset_sha256='7'*64,calendar_sha256='8'*64)
+    provider=dict(dataset_sha256='7'*64,calendar_sha256='8'*64,factory_module='fixture',factory_name='factory')
     monkeypatch.setattr(d,'provider_contract',Mock(return_value=provider))
     accepted=dict(expires_at=now+100)
     monkeypatch.setattr(d,'data_acceptance',Mock(return_value=accepted))
@@ -44,15 +67,23 @@ def contract(tmp_path,monkeypatch):
     host=dict(host_sha256='d'*64,boot_sha256='e'*64,os_release_sha256='4'*64,python_version=[3,13],postgres_major=17,systemd_major=255)
     container=dict(container_id='f'*64,config_sha256='9'*64,pid=1234,network='hope-paper')
     layout=root/'image-evidence/oci/blobs/sha256';layout.mkdir(parents=True)
-    (layout/('b'*64)).write_bytes(r._canonical(dict(config=dict(digest='sha256:'+'9'*64))))
+    (layout/image_sha256).write_bytes(manifest_payload)
     probes=dict(now=now,host_probe=Mock(side_effect=lambda:deepcopy(host)),container_probe=Mock(side_effect=lambda *a:deepcopy(container)),
         process_probe=Mock(return_value='1'*64),runtime_probe=Mock(return_value=dict(manifest_sha256='c'*64)),
         host_readiness=Mock(return_value=dict(ready=True,units={'hope-paper.service':{'MainPID':'1234'}},runtime_integrity=dict(manifest_sha256='c'*64))))
     return root,receipt,pin,image,host,container,probes
 
 
+def test_exact_receipt_and_factory_pins_are_admitted(contract):
+    root,receipt,pin,image,host,container,probes=contract
+    result=d.inspect_deployment(root,SHA,expected_receipt=pin(),expected_factory='fixture:factory',**probes)
+    assert result['state']=='VERIFIED' and result['blockers']==[]
+    assert result['execution_authorized'] is False
+
+
 @pytest.mark.parametrize('fault',[None,'lab_image','unsigned_provider','stale_acceptance','rollback','host','boot','python','postgres','systemd',
-    'container_config','process','runtime','host_blocked','receipt_expired','receipt_future','concurrent_host','reference_replaced','policy_changed'])
+    'container_config','process','runtime','host_blocked','receipt_expired','receipt_future','concurrent_host','reference_replaced','policy_changed',
+    'manifest_substitution'])
 def test_every_independent_gate_and_closing_observation_is_required(contract,monkeypatch,fault):
     root,receipt,pin,image,host,container,probes=contract
     if fault=='lab_image':image['scope']='DISPOSABLE_LAB_ONLY'
@@ -78,6 +109,12 @@ def test_every_independent_gate_and_closing_observation_is_required(contract,mon
         probes['host_readiness'].side_effect=replaced
     elif fault=='policy_changed':
         monkeypatch.setattr(d,'verify_image',Mock(side_effect=[deepcopy(image),dict(image,policy_generation=8)]))
+    elif fault=='manifest_substitution':
+        def replace_after_verification(*args,**kwargs):
+            path=root/'image-evidence/oci/blobs/sha256'/image['image_sha256']
+            path.write_bytes(r._canonical(dict(config=dict(digest='sha256:'+'9'*64),attacker_controlled=True)))
+            return deepcopy(image)
+        monkeypatch.setattr(d,'verify_image',Mock(side_effect=replace_after_verification))
     result=d.inspect_deployment(root,SHA,**probes)
     assert result['state']==('VERIFIED' if fault is None else 'BLOCKED')
     assert result['execution_authorized'] is False

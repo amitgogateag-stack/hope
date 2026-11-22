@@ -1,5 +1,6 @@
 """Private dashboard HTTP surface: loopback, read-only and no path traversal."""
 import json
+import hashlib
 import os
 import socket
 import time
@@ -9,6 +10,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.request import ProxyHandler, Request, build_opener
+from unittest.mock import Mock
 
 import pytest
 
@@ -55,21 +57,54 @@ def test_server_is_loopback_only_and_serves_private_preview(tmp_path):
         assert "default-src 'none'" in headers["Content-Security-Policy"]
 
 
+def test_acceptance_endpoint_never_promotes_unauthenticated_local_result(tmp_path):
+    (tmp_path/"acceptance-result.json").write_text(json.dumps({
+        "schema":"hope.operational-acceptance.v1","scope":"DISPOSABLE_LAB_ONLY",
+        "state":"VERIFIED","release_commit":"a"*40,
+        "generated_at":datetime.now(timezone.utc).isoformat(),"blockers":[],
+        "execution_authorized":False,
+    }))
+    with dashboard(tmp_path) as server:
+        status,_,body=request(server,"/acceptance.json")
+        result=json.loads(body)
+        assert status==200 and result["state"]=="UNVERIFIED"
+        assert result["execution_authorized"] is False
+
+
+def test_rehearsal_endpoint_never_promotes_unauthenticated_local_result(tmp_path):
+    from test_m3_dashboard_readiness import verified_runtime
+    (tmp_path/"rehearsal-result.json").write_text(json.dumps({
+        "schema":"hope.deployment-rehearsal.v1","scope":"DISPOSABLE_LAB_ONLY",
+        "state":"UNVERIFIED","lab_result":"COMPLETED","independent_acceptance":"UNVERIFIED",
+        "release_commit":"a"*40,"previous_commit":"b"*40,
+        "generated_at":datetime.now(timezone.utc).isoformat(),
+        "runtime_integrity":verified_runtime(),"execution_authorized":False,
+        "host_changes":False,
+    }))
+    with dashboard(tmp_path) as server:
+        status,_,body=request(server,"/rehearsal.json")
+        result=json.loads(body)
+        assert status==200 and result["state"]=="UNVERIFIED"
+        assert result["lab_result"] is None
+        assert result["independent_acceptance"]=="UNVERIFIED"
+        assert result["execution_authorized"] is False
+
+
 def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,monkeypatch):
     preview=tmp_path/"preview.html";preview.write_text("HOPE")
     entered=threading.Event();reading=threading.Event();release=threading.Event();exited=threading.Event()
     @contextmanager
     def activation_view():
         entered.set()
-        try:yield
+        try:yield {"preview_sha256":hashlib.sha256(preview.read_bytes()).hexdigest()}
         finally:exited.set()
-    original=module.bounded_regular_read
-    def blocked_read(path,limit):
+    original=module.authenticated_bounded_regular_read
+    def blocked_read(path,limit,*,expected_sha256):
         if path==preview:
             assert entered.is_set() and not exited.is_set()
             reading.set();assert release.wait(5)
-        return original(path,limit)
-    monkeypatch.setattr(module,"bounded_regular_read",blocked_read)
+        return original(path,limit,expected_sha256=expected_sha256)
+    monkeypatch.setattr(module,"authenticated_bounded_regular_read",blocked_read)
     with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             activation_view=activation_view) as server:
         serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
@@ -83,6 +118,37 @@ def test_activation_view_is_held_across_local_file_read_and_response(tmp_path,mo
             release.set();server.shutdown();serving.join(timeout=5);client.join(timeout=5)
 
 
+def test_activation_preview_rejects_same_size_content_substitution_with_restored_mtime(tmp_path):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    identity=preview.stat();expected=hashlib.sha256(preview.read_bytes()).hexdigest()
+    preview.write_text("NOPE")
+    os.utime(preview,ns=(identity.st_atime_ns,identity.st_mtime_ns))
+    @contextmanager
+    def activation_view():
+        yield {"preview_sha256":expected}
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",activation_view=activation_view) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        try:
+            status,_,body=request(server,"/")
+            assert status==503 and body==b"Dashboard unavailable"
+        finally:server.shutdown();serving.join(timeout=5)
+
+
+def test_activation_preview_requires_independent_digest_before_local_read(tmp_path,monkeypatch):
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    reader=Mock()
+    monkeypatch.setattr(module,"authenticated_bounded_regular_read",reader)
+    @contextmanager
+    def activation_view():
+        yield {"preview_sha256":None}
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",activation_view=activation_view) as server:
+        serving=threading.Thread(target=server.serve_forever,daemon=True);serving.start()
+        try:
+            assert request(server,"/")[0]==503
+            reader.assert_not_called()
+        finally:server.shutdown();serving.join(timeout=5)
+
+
 @pytest.mark.skipif(os.name != "posix", reason="Native socket backpressure is exercised on Linux CI")
 def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
     preview=tmp_path/"preview.html";preview.write_bytes(b"x"*65536)
@@ -90,7 +156,7 @@ def test_stalled_client_cannot_hold_activation_view_unbounded(tmp_path):
     @contextmanager
     def activation_view():
         entered.set()
-        try:yield
+        try:yield {"preview_sha256":hashlib.sha256(preview.read_bytes()).hexdigest()}
         finally:exited.set()
     with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
             activation_view=activation_view,client_io_timeout_seconds=0.2) as server:
@@ -214,7 +280,7 @@ def test_m2_html_budget_is_independent_of_json_snapshot_budget(tmp_path, size, e
 
 
 @pytest.mark.skipif(os.name != "posix", reason="Native inode types require POSIX")
-@pytest.mark.parametrize("surface", ["preview", "snapshot", "legacy", "operations"])
+@pytest.mark.parametrize("surface", ["preview", "snapshot", "legacy", "operations", "refresh"])
 def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
     with dashboard(tmp_path, valid_snapshot()) as server:
         paths = {
@@ -222,6 +288,7 @@ def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
             "snapshot": (server.snapshot, "/snapshot.json"),
             "legacy": (server.legacy, "/legacy-research.json"),
             "operations": (server.operations, "/operations.json"),
+            "refresh": (server.refresh_status, "/refresh-status.json"),
         }
         path, endpoint = paths[surface]
         target = tmp_path / f"{surface}.target"
@@ -229,6 +296,8 @@ def test_server_refuses_symlinked_local_input_surfaces(tmp_path, surface):
             target.write_text("<h1>substitute</h1>")
         elif surface == "snapshot":
             target.write_bytes(valid_snapshot())
+        elif surface == "refresh":
+            target.write_text(json.dumps(refresh_status()))
         else:
             target.write_text("{}")
         path.unlink(missing_ok=True)
@@ -268,6 +337,53 @@ def valid_snapshot(*, generated_at=None):
             "job_runs": {"total": 2, "claimed": 0, "succeeded": 1, "failed": 1},
         },
     }).encode("utf-8")
+
+
+def classified_snapshot(*, generated_at=None, classification="DISPOSABLE_LAB",
+                        database_identity="a"*64, synthetic_activity=True):
+    data = json.loads(valid_snapshot(generated_at=generated_at))
+    data["schema_version"] = 2
+    data["deployed_commit"] = "a"*40
+    data["provenance"] = {
+        "data_classification": classification,
+        "database_identity_sha256": database_identity,
+        "synthetic_activity": synthetic_activity,
+        "execution_authorized": False,
+        "live_enabled": False,
+    }
+    return json.dumps(data).encode("utf-8")
+
+
+def refresh_status(*, state="CURRENT", generated_at=None, commit="a"*40,
+                   snapshot_generated_at=None, snapshot_sha256=None, error_code=None,
+                   snapshot_data_classification=None,
+                   snapshot_database_identity_sha256=None,
+                   snapshot_synthetic_activity=None):
+    generated_at = generated_at or datetime.now(timezone.utc).isoformat()
+    if state == "CURRENT" and snapshot_generated_at is None:
+        snapshot_generated_at = generated_at
+    if state == "CURRENT" and snapshot_sha256 is None:
+        snapshot_sha256 = hashlib.sha256(
+            classified_snapshot(generated_at=snapshot_generated_at)
+        ).hexdigest()
+    if state == "CURRENT":
+        if snapshot_data_classification is None:
+            snapshot_data_classification = "DISPOSABLE_LAB"
+        if snapshot_database_identity_sha256 is None:
+            snapshot_database_identity_sha256 = "a"*64
+        if snapshot_synthetic_activity is None:
+            snapshot_synthetic_activity = True
+    return {
+        "schema":"hope.dashboard-refresh.v3", "scope":"DISPOSABLE_LAB_ONLY",
+        "generated_at":generated_at, "deployed_commit":commit,
+        "paper_only":True, "live_enabled":False, "execution_authorized":False,
+        "state":state, "snapshot_generated_at":snapshot_generated_at,
+        "snapshot_sha256":snapshot_sha256,
+        "snapshot_data_classification":snapshot_data_classification,
+        "snapshot_database_identity_sha256":snapshot_database_identity_sha256,
+        "snapshot_synthetic_activity":snapshot_synthetic_activity,
+        "error_code":error_code,
+    }
 
 
 def recovery_snapshot(**updates):
@@ -320,9 +436,14 @@ def test_server_rejects_recovery_field_with_wrong_shape(tmp_path, invalid):
     (b'{"schema_version":1,"source":"unknown"}', 503),
     (b"x" * 32769, 503),
     (b'{"schema_version":1,"source":"hope_postgresql"}', 503),
-    (valid_snapshot(), 200),
+    (None, 200),
 ], ids=["malformed", "wrong-source", "oversized", "incomplete", "valid"])
 def test_server_snapshot_schema_and_size_boundary(tmp_path, snapshot, expected):
+    # A module-level valid_snapshot() is evaluated during collection.  The full
+    # PostgreSQL matrix intentionally runs for longer than the freshness budget,
+    # so create the positive fixture immediately before the request instead.
+    if snapshot is None:
+        snapshot = valid_snapshot()
     with dashboard(tmp_path, snapshot) as server:
         status, headers, body = request(server, "/snapshot.json")
         assert status == expected
@@ -339,7 +460,195 @@ def test_server_reports_liveness_separately_from_missing_data(tmp_path):
         assert json.loads(body) == {
             "schema_version": 1, "service": "RUNNING",
             "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+            "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
         }
+
+
+def test_server_reports_verified_refresh_success_without_database_details(tmp_path):
+    stamp=datetime.now(timezone.utc).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=stamp,snapshot_generated_at=stamp)))
+    with dashboard(tmp_path,classified_snapshot(generated_at=stamp)) as server:
+        status, headers, body = request(server, "/refresh-status.json")
+        result = json.loads(body)
+        assert status == 200 and headers["Cache-Control"].startswith("no-store")
+        assert result["schema"] == "hope.dashboard-refresh-observation.v3"
+        assert result["state"] == "CURRENT" and result["error_code"] is None
+        assert result["execution_authorized"] is False and result["live_enabled"] is False
+        assert set(result) == {"schema","scope","generated_at","deployed_commit",
+                               "snapshot_generated_at","error_code","paper_only",
+                               "snapshot_sha256","live_enabled","execution_authorized","state",
+                               "snapshot_data_classification",
+                               "snapshot_database_identity_sha256",
+                               "snapshot_synthetic_activity"}
+        assert result["snapshot_data_classification"] == "DISPOSABLE_LAB"
+        assert result["snapshot_database_identity_sha256"] == "a"*64
+        assert result["snapshot_synthetic_activity"] is True
+        assert json.loads(request(server,"/status.json")[2])["refresh_state"]=="CURRENT"
+
+
+def test_server_reports_closed_refresh_failure_while_last_good_is_preserved(tmp_path):
+    value = refresh_status(state="FAILED", snapshot_generated_at=None,
+                           error_code="DATABASE_IDENTITY_MISMATCH")
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path, valid_snapshot()) as server:
+        status, _, body = request(server, "/refresh-status.json")
+        result = json.loads(body)
+        assert status == 200 and result["state"] == "FAILED"
+        assert result["snapshot_generated_at"] is None
+        assert request(server, "/snapshot.json")[0] == 200
+        health=json.loads(request(server,"/status.json")[2])
+        assert health["refresh_state"]=="FAILED"
+        assert health["refresh_error_code"]=="DATABASE_IDENTITY_MISMATCH"
+
+
+@pytest.mark.parametrize("change", [
+    {"error_code":"password=secret"}, {"execution_authorized":True},
+    {"scope":"PRODUCTION"}, {"private_database":"hope"},
+])
+def test_server_rejects_unbounded_or_authorizing_refresh_status(tmp_path, change):
+    value = refresh_status(state="FAILED", snapshot_generated_at=None,
+                           error_code="SNAPSHOT_REFRESH_FAILED")
+    value.update(change)
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path) as server:
+        status, _, body = request(server, "/refresh-status.json")
+        assert status == 503 and body == b"Verified refresh status unavailable"
+
+
+@pytest.mark.parametrize("digest", [None, "A"*64, "a"*63, 7])
+def test_server_rejects_current_refresh_receipt_with_invalid_digest(tmp_path,digest):
+    stamp=datetime.now(timezone.utc).isoformat()
+    value=refresh_status(generated_at=stamp,snapshot_generated_at=stamp)
+    value["snapshot_sha256"]=digest
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path,classified_snapshot(generated_at=stamp)) as server:
+        assert request(server,"/refresh-status.json")[0]==503
+
+
+def test_server_marks_old_successful_refresh_attempt_stale(tmp_path):
+    old = (datetime.now(timezone.utc)-timedelta(seconds=16)).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=old, snapshot_generated_at=old)))
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    snapshot=tmp_path/"snapshot.json";snapshot.write_bytes(classified_snapshot(generated_at=old))
+    with DashboardHTTPServer(0,preview,snapshot,max_snapshot_age_seconds=15) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            assert json.loads(request(server,"/refresh-status.json")[2])["state"]=="STALE"
+        finally:server.shutdown();thread.join(timeout=5)
+
+
+def test_failed_refresh_receipt_cannot_claim_snapshot_digest(tmp_path):
+    value=refresh_status(
+        state="FAILED", snapshot_generated_at=None,
+        snapshot_sha256="b"*64, error_code="SNAPSHOT_REFRESH_FAILED",
+    )
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(value))
+    with dashboard(tmp_path,valid_snapshot()) as server:
+        assert request(server,"/refresh-status.json")[0]==503
+
+
+def test_server_rejects_current_refresh_receipt_for_different_snapshot(tmp_path):
+    snapshot_stamp=datetime.now(timezone.utc).isoformat()
+    receipt_stamp=(datetime.now(timezone.utc)-timedelta(seconds=1)).isoformat()
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(generated_at=snapshot_stamp,snapshot_generated_at=receipt_stamp)))
+    with dashboard(tmp_path,classified_snapshot(generated_at=snapshot_stamp)) as server:
+        assert request(server,"/refresh-status.json")[0]==503
+        health=json.loads(request(server,"/status.json")[2])
+        assert health["data_feed"]=="CURRENT"
+        assert health["refresh_state"]=="UNAVAILABLE"
+
+
+def test_server_rejects_current_receipt_for_different_bytes_with_same_metadata(tmp_path):
+    stamp=datetime.now(timezone.utc).isoformat()
+    served=classified_snapshot(generated_at=stamp)
+    different=json.loads(served)
+    different["paper"]["job_runs"]["succeeded"] = 0
+    different["paper"]["job_runs"]["failed"] = 2
+    receipt=refresh_status(
+        generated_at=stamp, snapshot_generated_at=stamp,
+        snapshot_sha256=hashlib.sha256(json.dumps(different).encode()).hexdigest(),
+    )
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(receipt))
+    with dashboard(tmp_path,served) as server:
+        assert request(server,"/snapshot.json")[0]==200
+        assert request(server,"/refresh-status.json")[0]==503
+        health=json.loads(request(server,"/status.json")[2])
+        assert health["data_feed"]=="CURRENT"
+        assert health["refresh_state"]=="UNAVAILABLE"
+
+
+def test_server_rejects_lab_current_receipt_for_legacy_snapshot_downgrade(tmp_path):
+    stamp = datetime.now(timezone.utc).isoformat()
+    served = valid_snapshot(generated_at=stamp)
+    receipt = refresh_status(
+        generated_at=stamp, snapshot_generated_at=stamp,
+        snapshot_sha256=hashlib.sha256(served).hexdigest(),
+    )
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(receipt))
+    with dashboard(tmp_path, served) as server:
+        assert request(server, "/snapshot.json")[0] == 200
+        assert request(server, "/refresh-status.json")[0] == 503
+        assert json.loads(request(server, "/status.json")[2])["refresh_state"] == "UNAVAILABLE"
+
+
+def test_server_rejects_lab_current_receipt_for_production_snapshot(tmp_path):
+    stamp = datetime.now(timezone.utc).isoformat()
+    served = classified_snapshot(
+        generated_at=stamp, classification="PRODUCTION_READ_ONLY",
+        synthetic_activity=False,
+    )
+    receipt = refresh_status(
+        generated_at=stamp, snapshot_generated_at=stamp,
+        snapshot_sha256=hashlib.sha256(served).hexdigest(),
+    )
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(receipt))
+    with dashboard(tmp_path, served) as server:
+        assert request(server, "/snapshot.json")[0] == 200
+        assert request(server, "/refresh-status.json")[0] == 503
+
+
+def test_server_rejects_current_receipt_with_forged_database_identity(tmp_path):
+    stamp = datetime.now(timezone.utc).isoformat()
+    served = classified_snapshot(generated_at=stamp)
+    receipt = refresh_status(
+        generated_at=stamp, snapshot_generated_at=stamp,
+        snapshot_sha256=hashlib.sha256(served).hexdigest(),
+        snapshot_database_identity_sha256="b"*64,
+    )
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(receipt))
+    with dashboard(tmp_path, served) as server:
+        assert request(server, "/refresh-status.json")[0] == 503
+
+
+@pytest.mark.parametrize("field,value", [
+    ("snapshot_data_classification", "DISPOSABLE_LAB"),
+    ("snapshot_database_identity_sha256", "a"*64),
+    ("snapshot_synthetic_activity", True),
+])
+def test_failed_refresh_receipt_cannot_claim_snapshot_provenance(tmp_path, field, value):
+    receipt = refresh_status(
+        state="FAILED", snapshot_generated_at=None,
+        error_code="SNAPSHOT_REFRESH_FAILED",
+    )
+    receipt[field] = value
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(receipt))
+    with dashboard(tmp_path, classified_snapshot()) as server:
+        assert request(server, "/refresh-status.json")[0] == 503
+
+
+def test_server_rejects_refresh_status_from_another_deployed_commit(tmp_path):
+    (tmp_path/"snapshot-refresh.json").write_text(json.dumps(
+        refresh_status(commit="b"*40)))
+    preview=tmp_path/"preview.html";preview.write_text("HOPE")
+    with DashboardHTTPServer(0,preview,tmp_path/"snapshot.json",
+                             deployed_commit="a"*40) as server:
+        thread=threading.Thread(target=server.serve_forever,daemon=True);thread.start()
+        try:
+            assert request(server,"/refresh-status.json")[0]==503
+        finally:server.shutdown();thread.join(timeout=5)
 
 
 def test_server_reports_aggregate_transport_status_separately(tmp_path):
@@ -360,7 +669,8 @@ def test_server_reports_current_snapshot_and_never_exposes_db_details(tmp_path):
         assert state["service"] == "RUNNING"
         assert state["data_feed"] == "CURRENT"
         assert state["snapshot_generated_at"]
-        assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at"}
+        assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at",
+                              "refresh_state", "refresh_error_code"}
 
 
 def test_server_marks_old_snapshot_stale(tmp_path):
@@ -369,6 +679,42 @@ def test_server_marks_old_snapshot_stale(tmp_path):
         status, _, body = request(server, "/status.json")
         assert status == 200
         assert json.loads(body)["data_feed"] == "STALE"
+        status, _, body = request(server, "/snapshot.json")
+        assert status == 503 and body == b"Verified snapshot unavailable"
+
+
+def test_server_uses_one_fail_closed_snapshot_freshness_budget(tmp_path):
+    timestamp = (datetime.now(timezone.utc) - timedelta(seconds=16)).isoformat()
+    preview = tmp_path / "preview.html"; preview.write_text("HOPE")
+    snapshot = tmp_path / "snapshot.json"; snapshot.write_bytes(valid_snapshot(generated_at=timestamp))
+    with DashboardHTTPServer(0, preview, snapshot, max_snapshot_age_seconds=15) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            assert json.loads(request(server, "/status.json")[2])["data_feed"] == "STALE"
+            assert request(server, "/snapshot.json")[0] == 503
+        finally:
+            server.shutdown(); thread.join(timeout=5)
+
+
+@pytest.mark.parametrize("value", [0, 86401, True, 1.5, "900"])
+def test_server_rejects_invalid_snapshot_freshness_budget(tmp_path, value):
+    with pytest.raises(ValueError, match="MAX_SNAPSHOT_AGE_INVALID"):
+        DashboardHTTPServer(0, tmp_path/"preview", tmp_path/"snapshot", max_snapshot_age_seconds=value)
+
+
+def test_server_sanitizes_explicit_disposable_lab_provenance(tmp_path):
+    data = json.loads(valid_snapshot())
+    data.update(schema_version=2, provenance={
+        "data_classification":"DISPOSABLE_LAB", "database_identity_sha256":"a"*64,
+        "synthetic_activity":True, "execution_authorized":False, "live_enabled":False,
+        "database_name":"NEVER_EXPOSE",
+    })
+    with dashboard(tmp_path, json.dumps(data).encode()) as server:
+        assert request(server, "/snapshot.json")[0] == 503
+    data["provenance"].pop("database_name")
+    with dashboard(tmp_path, json.dumps(data).encode()) as server:
+        status,_,body=request(server,"/snapshot.json")
+        assert status==200 and json.loads(body)["provenance"]["data_classification"]=="DISPOSABLE_LAB"
 
 
 def test_managed_server_refuses_snapshot_from_another_release(tmp_path):
@@ -387,6 +733,7 @@ def test_managed_server_refuses_snapshot_from_another_release(tmp_path):
             assert json.loads(body) == {
                 "schema_version": 1, "service": "RUNNING",
                 "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+                "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
             }
 
 
@@ -547,11 +894,12 @@ def test_legacy_rejects_boolean_schema_version(tmp_path):
         server.legacy.write_text(json.dumps(payload))
         assert request(server, "/legacy-research.json")[0] == 503
 
-@pytest.mark.parametrize('endpoint',["/image.json","/history.json","/deployment.json","/publisher.json"])
+@pytest.mark.parametrize('endpoint',["/image.json","/history.json","/deployment.json","/publisher.json","/controller.json","/staging.json"])
 def test_image_and_history_diagnostics_missing_evidence_are_bounded_and_unverified(tmp_path,endpoint):
     with dashboard(tmp_path) as server:
         status,_,payload=request(server,endpoint)
         assert status==200
         data=json.loads(payload)
-    assert data['state'] in {'UNVERIFIED','UNKNOWN','BLOCKED'} and data['execution_authorized'] is False
+    allowed={'UNAVAILABLE'} if endpoint=='/controller.json' else {'UNVERIFIED','UNKNOWN','BLOCKED'}
+    assert data['state'] in allowed and data['execution_authorized'] is False
     assert str(tmp_path) not in json.dumps(data) and len(json.dumps(data))<1024

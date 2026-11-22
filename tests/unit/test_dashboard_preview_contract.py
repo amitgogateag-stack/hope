@@ -66,6 +66,11 @@ def test_preview_imports_local_aggregate_snapshot_without_network_calls():
     assert "STALE" in html
     assert "fetch(" in html
     assert "setInterval(refresh, 60000)" in html
+    assert 'id="snapshot-classification"' in html
+    assert 'id="snapshot-authority"' in html
+    assert "DISPOSABLE_LAB" in html
+    assert "execution_authorized!==false" in html
+    assert "live_enabled!==false" in html
 
 
 def test_preview_displays_independent_server_and_database_health():
@@ -118,3 +123,14 @@ def test_preview_serializes_refreshes_times_out_requests_and_reages_retained_dat
     assert "setInterval(ageViews,1000)" in html
     for path in ("/legacy-research.json", "/status.json", "/snapshot.json"):
         assert f"refreshFeed('{path}'," in html
+
+
+def test_snapshot_refresh_exposes_rejection_reason_without_accepting_invalid_data():
+    html = PREVIEW.read_text(encoding="utf-8")
+    assert "const retainSnapshotAfterFailure=e =>" in html
+    assert "clearSnapshot('Dashboard data unavailable'+(e?' · '+e.message:''))" in html
+    assert "clear(path==='/snapshot.json'&&e instanceof Error?e:undefined)" in html
+    assert "throw Error('Invalid or incomplete HOPE snapshot')" in html
+    assert "throw Error('Invalid snapshot provenance')" in html
+    assert "validateProjections(data.projections,time)" in html
+    assert html.index("validateProjections(data.projections,time)") < html.index("snapshotCache = {data, source, time}")

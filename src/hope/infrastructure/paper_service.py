@@ -151,9 +151,26 @@ def verify_schema_compatibility(connection: Connection, migrations_dir: str | Pa
         raise RuntimeError("PAPER_SERVICE_SCHEMA_INCOMPATIBLE")
 
 
+def logical_cycle_key(run):
+    """Stable scheduler identity, shared with independent handoff intent binding."""
+    from hope.application.jobs import ScheduledJobRun
+    from hope.infrastructure.paper_history import digest
+    if type(run) is not ScheduledJobRun:
+        raise RuntimeError('PAPER_SINGLE_CYCLE_IDENTITY_REQUIRED')
+    return digest(dict(job_run_id=str(run.job_run_id),job_key=run.job_key,scheduled_for=run.scheduled_for.isoformat()))
+
+
 def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: str | Path,
                       now: Callable[[], datetime], require_certified: bool = False,
-                      execution_check: Callable[[], None] | None = None) -> tuple[int, int]:
+                      execution_check: Callable[[], None] | None = None, expected_cycle_key: str | None = None, transaction_check=None, require_new_cycle=False, successful_run_observer=None) -> tuple[int, int]:
+    if (transaction_check is not None or require_new_cycle or successful_run_observer is not None) and (
+            expected_cycle_key is None or not require_certified or not callable(transaction_check)
+            or not callable(successful_run_observer) or require_new_cycle is not True):
+        raise RuntimeError("PAPER_STARTUP_EXECUTION_GUARD_REQUIRED")
+    if expected_cycle_key is not None and (not isinstance(expected_cycle_key,str)
+            or re.fullmatch("[0-9a-f]{64}",expected_cycle_key) is None
+            or not require_certified or not callable(execution_check)):
+        raise RuntimeError("PAPER_SINGLE_CYCLE_GUARD_REQUIRED")
     if execution_check is not None:execution_check()
     current = now()
     if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
@@ -192,6 +209,10 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         registry = build_operational_paper_registry(candidates, plan.bindings)
         runs = build_operational_paper_runs(plan.bindings, plan.schedules, plan.calendars,
             start=plan.start, end=plan.end)
+        if expected_cycle_key is not None:
+            if (len(runs)!=1 or logical_cycle_key(runs[0])!=expected_cycle_key
+                    or not runs[0].scheduled_for <= current <= runs[0].scheduled_for+plan.max_lateness):
+                raise RuntimeError('PAPER_SINGLE_CYCLE_PLAN_MISMATCH')
         if len(runs) > 256:
             raise RuntimeError("PAPER_SERVICE_RUN_LIMIT_EXCEEDED")
 
@@ -214,7 +235,10 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
         # retain the independently published catalog revalidation contract.
         authorize=None if certified_plan else authorize_current_candidates,
         **({"before_execute":execution_check} if execution_check is not None else {}),
+        **({'transaction_check':transaction_check} if transaction_check is not None else {}),
     )
+    if require_new_cycle and (len(outcomes)!=1 or outcomes[0][1] is not PaperCycleOutcome.EXECUTED):
+        raise RuntimeError('PAPER_STARTUP_NEW_CYCLE_REQUIRED')
     if certified_plan:
         from hope.infrastructure.scheduling.paper_reconciliation import authenticate_successful_paper_run
         from hope.infrastructure.repositories.jobs import SqlAlchemyJobRunRepository
@@ -224,6 +248,7 @@ def run_service_cycle(engine: Engine, factory: PlanFactory, *, migrations_dir: s
                 durable = SqlAlchemyJobRunRepository(connection).get_record_for_run(run)
                 if durable is not None and durable.status is JobRunStatus.SUCCEEDED:
                     authenticate_successful_paper_run(connection, run)
+    if successful_run_observer is not None:successful_run_observer(outcomes[0][0])
     return (sum(outcome is PaperCycleOutcome.EXECUTED for _, outcome in outcomes),
             sum(outcome is PaperCycleOutcome.SKIPPED_TERMINAL for _, outcome in outcomes))
 
@@ -265,6 +290,8 @@ def _failure_state(exc: Exception) -> tuple[str, str]:
     if isinstance(exc, RuntimeError) and str(exc) in {
         "PAPER_SERVICE_SCHEMA_FILES_UNAVAILABLE", "PAPER_SERVICE_SCHEMA_INCOMPATIBLE",
         "PAPER_SERVICE_PLAN_UNAVAILABLE", "PAPER_SERVICE_RUN_LIMIT_EXCEEDED",
+        "PAPER_SINGLE_CYCLE_GUARD_REQUIRED", "PAPER_SINGLE_CYCLE_PLAN_MISMATCH",
+        "PAPER_STARTUP_EXECUTION_GUARD_REQUIRED", "PAPER_STARTUP_NEW_CYCLE_REQUIRED",
         "PAPER_SERVICE_CLOCK_INVALID", "PAPER_SCHEDULER_CONCURRENT_RUN","PAPER_SCHEDULER_RUN_STALE",
         "PAPER_SCHEDULER_CLOCK_REGRESSION","PAPER_SCHEDULER_RECONCILIATION_NOT_TERMINAL",
         "PAPER_SCHEDULER_RECONCILIATION_NOT_SUCCEEDED",
@@ -298,6 +325,15 @@ def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
     """Production guarded workers retain a private, exclusive recovery history."""
     from hope.infrastructure.paper_history import publisher_lease,History
     _validate_poll(kwargs.get("poll_seconds",30))
+    if kwargs.get('expected_cycle_key') is not None and (kwargs.get('once') is not True
+            or kwargs.get('require_certified') is not True or not callable(kwargs.get('cycle_guard'))):
+        raise RuntimeError('PAPER_SINGLE_CYCLE_GUARD_REQUIRED')
+    closing=kwargs.get('cycle_closing_check')
+    if closing is not None and (not callable(closing) or kwargs.get('expected_cycle_key') is None
+            or kwargs.get('once') is not True or kwargs.get('require_certified') is not True or not callable(kwargs.get('cycle_guard'))
+            or kwargs.get('require_new_cycle') is not True
+            or not callable(kwargs.get('transaction_check')) or not callable(kwargs.get('successful_run_observer'))):
+        raise RuntimeError('PAPER_STARTUP_EXECUTION_GUARD_REQUIRED')
     try:
         with publisher_lease(kwargs["status_file"]) as lease:
             try:return _owned_service(engine,factory,lease,kwargs,History)
@@ -313,6 +349,7 @@ def run_service(engine: Engine, factory: PlanFactory, **kwargs) -> int:
 
 
 def _owned_service(engine,factory,lease,kwargs,History):
+    kwargs=dict(kwargs);closing=kwargs.pop('cycle_closing_check',None)
     def publish(path,value):return lease.publish(path,value,publish_service_status)
     if kwargs.get("cycle_guard") is None:return _run_service(engine,factory,publisher=publish,**kwargs)
     history=History(Path(str(kwargs["status_file"])+".history.json"),publish)
@@ -327,7 +364,11 @@ def _owned_service(engine,factory,lease,kwargs,History):
                 history.check()
                 if check is not None:check()
             admitted();yield admitted
-            admitted()
+            # Startup completion consumes admission. Its explicit closing gate
+            # authenticates committed completion; ordinary workers still use
+            # the unchanged active execution guard on both sides.
+            if closing is None:admitted()
+            else:history.check();closing()
     return _run_service(engine,factory,history=history,publisher=publish,**dict(kwargs,cycle_guard=guarded_history))
 
 
@@ -336,7 +377,7 @@ def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | 
                 poll_seconds: float = 30, once: bool = False,
                 now: Callable[[], datetime] = lambda: datetime.now(UTC),
                 require_certified: bool = False,
-                notifier: SystemdNotifier | None = None,cycle_guard=None,history=None,publisher=None) -> int:
+                notifier: SystemdNotifier | None = None,cycle_guard=None,history=None,publisher=None,expected_cycle_key=None,transaction_check=None,require_new_cycle=False,successful_run_observer=None) -> int:
     """Poll with fresh connections; stop between cycles, never replay partial claims."""
     _validate_poll(poll_seconds)
     stop = stop_event if stop_event is not None else Event()
@@ -363,7 +404,10 @@ def _run_service(engine: Engine, factory: PlanFactory, *, migrations_dir: str | 
             else:
                 with cycle_guard() as check:
                     executed, skipped = run_service_cycle(engine, factory, migrations_dir=migrations_dir, now=now,
-                        require_certified=require_certified,execution_check=check)
+                        require_certified=require_certified,execution_check=check,
+                        **({"expected_cycle_key":expected_cycle_key} if expected_cycle_key is not None else {}),
+                        **(dict(transaction_check=transaction_check,require_new_cycle=require_new_cycle,successful_run_observer=successful_run_observer)
+                           if transaction_check is not None or require_new_cycle or successful_run_observer is not None else {}))
                 health["runtime_gate"]="VERIFIED"
             health.update(state="CURRENT", schema_compatibility="COMPATIBLE", error_code=None, last_success_at=datetime.now(UTC).isoformat())
             health["cycles_succeeded"] += 1
