@@ -18,6 +18,12 @@ extra symbols, off-grid times, identity-map gaps and unsafe numeric data. The
 normal immutable coverage manifest, PIT universe, market calendar, dataset
 sealing and PostgreSQL persistence checks remain mandatory.
 
+A file containing more than one lifecycle window must be constructed with an
+explicit immutable `request_plan`. The adapter proves that the complete file is
+exactly the union of that plan before returning even the first window. Missing,
+extra, duplicate, overlapping or runtime-mismatched coverage is refused. An
+adapter without a plan is deliberately restricted to one lifecycle window.
+
 When this adapter is used by the authoritative lifecycle, its payload digest,
 provider-contract digest, source and observation time are embedded in the
 immutable coverage manifest. Preflight, restart recovery and final sealing must

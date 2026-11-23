@@ -12,6 +12,7 @@ from hope.infrastructure.market_data.file_provider import (
     MarketDataFileEvidence,
     VerifiedCsvMarketDataProvider,
 )
+from hope.infrastructure.market_data.lifecycle import ingest_and_seal_market_data_windows
 from hope.infrastructure.market_data.pipeline import ingest_market_data_window
 from hope.infrastructure.market_data.provider import MarketDataRequest, fetch_and_normalize_bars
 
@@ -197,3 +198,107 @@ def test_symlink_cannot_substitute_for_pinned_export(tmp_path):
     linked = VerifiedCsvMarketDataProvider(link, adapter.evidence)
     with pytest.raises(ValueError, match="BOUNDED_READ_NOT_REGULAR"):
         linked.fetch_bars(request())
+
+
+def test_multi_window_export_is_partitioned_only_after_full_plan_validation(tmp_path):
+    first = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=datetime(2026, 11, 20, 14, 30, tzinfo=UTC),
+        end=datetime(2026, 11, 20, 14, 31, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    second = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=first.end, end=datetime(2026, 11, 20, 14, 32, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    base, path = provider(tmp_path)
+    planned = VerifiedCsvMarketDataProvider(
+        path, base.evidence, request_plan=(first, second)
+    )
+    planned.validate_request_plan((first, second))
+    first_batch = planned.fetch_bars(first)
+    second_batch = planned.fetch_bars(second)
+    assert [bar.event_time for bar in first_batch.bars] == [first.start, first.start]
+    assert [bar.event_time for bar in second_batch.bars] == [second.start, second.start]
+
+
+def test_multi_window_export_missing_later_row_fails_before_first_window_returns(tmp_path):
+    first = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=datetime(2026, 11, 20, 14, 30, tzinfo=UTC),
+        end=datetime(2026, 11, 20, 14, 31, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    second = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=first.end, end=datetime(2026, 11, 20, 14, 32, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    payload = (HEADER + "\n".join(ROWS.splitlines()[:-1]) + "\n").encode()
+    base, path = provider(tmp_path, payload)
+    planned = VerifiedCsvMarketDataProvider(
+        path, base.evidence, request_plan=(first, second)
+    )
+    with pytest.raises(ValueError, match="PLANNED_COVERAGE_MISMATCH"):
+        planned.fetch_bars(first)
+
+
+def test_unbound_multi_window_and_runtime_plan_drift_fail_before_file_read(tmp_path):
+    first = request()
+    second = MarketDataRequest(
+        source=first.source, source_symbols=first.source_symbols,
+        start=first.end, end=first.end + timedelta(minutes=2),
+        interval=first.interval,
+    )
+    base, path = provider(tmp_path)
+    path.unlink()
+    with pytest.raises(ValueError, match="MULTI_WINDOW_PLAN_REQUIRED"):
+        base.validate_request_plan((first, second))
+    planned = VerifiedCsvMarketDataProvider(
+        path, base.evidence, request_plan=(first,)
+    )
+    with pytest.raises(ValueError, match="RUNTIME_PLAN_MISMATCH"):
+        planned.validate_request_plan((second,))
+
+
+def test_lifecycle_refuses_unbound_multi_window_before_manifest_or_file_effect(tmp_path):
+    first = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=datetime(2026, 11, 20, 14, 30, tzinfo=UTC),
+        end=datetime(2026, 11, 20, 14, 31, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    second = MarketDataRequest(
+        source="VENDOR_EXPORT", source_symbols=("AAA", "BBB"),
+        start=first.end, end=datetime(2026, 11, 20, 14, 32, tzinfo=UTC),
+        interval=timedelta(minutes=1),
+    )
+    adapter, path = provider(tmp_path)
+    path.unlink()
+    effects = []
+
+    class NeverFinalizer:
+        def preflight(self, *args, **kwargs):
+            effects.append("preflight")
+
+        def finalize(self, *args, **kwargs):  # pragma: no cover
+            effects.append("finalize")
+
+    class NeverSink:
+        def append(self, *args, **kwargs):  # pragma: no cover
+            effects.append("persist")
+
+    with pytest.raises(ValueError, match="MULTI_WINDOW_PLAN_REQUIRED"):
+        ingest_and_seal_market_data_windows(
+            adapter,
+            NeverSink(),
+            NeverFinalizer(),
+            uuid4(),
+            (first, second),
+            identity_map={
+                ("VENDOR_EXPORT", "AAA"): uuid4(),
+                ("VENDOR_EXPORT", "BBB"): uuid4(),
+            },
+        )
+    assert effects == []

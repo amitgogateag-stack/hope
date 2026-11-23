@@ -49,6 +49,8 @@ def ingest_market_data_recovery_windows(
         raise TypeError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRED")
+    if type(provider) is VerifiedCsvMarketDataProvider:
+        provider.validate_request_plan(requests)
 
     identity_map = snapshot_request_bindings(requests, identity_map)
 

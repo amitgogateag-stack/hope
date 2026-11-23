@@ -12,7 +12,7 @@ import hmac
 import io
 import re
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
 
@@ -144,11 +144,18 @@ def parse_market_data_file_evidence(payload: object) -> MarketDataFileEvidence:
 class VerifiedCsvMarketDataProvider:
     """Read one private regular CSV whose exact bytes are independently pinned."""
 
-    def __init__(self, path: str | Path, evidence: MarketDataFileEvidence) -> None:
+    def __init__(
+        self,
+        path: str | Path,
+        evidence: MarketDataFileEvidence,
+        *,
+        request_plan: tuple[MarketDataRequest, ...] | None = None,
+    ) -> None:
         if type(evidence) is not MarketDataFileEvidence:
             raise TypeError("FILE_PROVIDER_EVIDENCE_REQUIRED")
         self._path = Path(path)
         self._evidence = evidence
+        self._request_plan = self._validate_plan(request_plan)
 
     @property
     def source(self) -> str:
@@ -158,11 +165,74 @@ class VerifiedCsvMarketDataProvider:
     def evidence(self) -> MarketDataFileEvidence:
         return self._evidence
 
+    @staticmethod
+    def _request_key(request: MarketDataRequest) -> tuple[
+        str, tuple[str, ...], datetime, datetime, timedelta
+    ]:
+        if type(request) is not MarketDataRequest:
+            raise TypeError("FILE_PROVIDER_REQUEST_PLAN_INVALID")
+        return (
+            request.source,
+            request.source_symbols,
+            request.start.astimezone(UTC),
+            request.end.astimezone(UTC),
+            request.interval,
+        )
+
+    def _validate_plan(
+        self, request_plan: tuple[MarketDataRequest, ...] | None
+    ) -> tuple[MarketDataRequest, ...] | None:
+        if request_plan is None:
+            return None
+        if type(request_plan) is not tuple or not request_plan:
+            raise TypeError("FILE_PROVIDER_REQUEST_PLAN_INVALID")
+        keys = tuple(self._request_key(request) for request in request_plan)
+        if len(set(keys)) != len(keys):
+            raise ValueError("FILE_PROVIDER_REQUEST_PLAN_DUPLICATE")
+        if any(request.source != self.source for request in request_plan):
+            raise ValueError("FILE_PROVIDER_REQUEST_PLAN_SOURCE_MISMATCH")
+        expected_keys = [
+            (request.source, symbol, event_time)
+            for request in request_plan
+            for symbol, event_time in request.expected_keys
+        ]
+        if len(expected_keys) > 1_000_000:
+            raise ValueError("FILE_PROVIDER_REQUEST_PLAN_TOO_LARGE")
+        if len(set(expected_keys)) != len(expected_keys):
+            raise ValueError("FILE_PROVIDER_REQUEST_PLAN_OVERLAPS")
+        return tuple(
+            MarketDataRequest(
+                source=request.source,
+                source_symbols=request.source_symbols,
+                start=request.start,
+                end=request.end,
+                interval=request.interval,
+            )
+            for request in request_plan
+        )
+
+    def validate_request_plan(self, requests: tuple[MarketDataRequest, ...]) -> None:
+        """Fail before manifest/provider effects when lifecycle coverage is unbound."""
+        if type(requests) is not tuple or not requests:
+            raise TypeError("FILE_PROVIDER_REQUEST_PLAN_INVALID")
+        runtime = tuple(self._request_key(request) for request in requests)
+        if self._request_plan is None:
+            if len(runtime) != 1:
+                raise ValueError("FILE_PROVIDER_MULTI_WINDOW_PLAN_REQUIRED")
+            return
+        declared = tuple(self._request_key(request) for request in self._request_plan)
+        if runtime != declared:
+            raise ValueError("FILE_PROVIDER_RUNTIME_PLAN_MISMATCH")
+
     def fetch_bars(self, request: MarketDataRequest) -> ProviderMarketDataBatch:
         if type(request) is not MarketDataRequest:
             raise TypeError("FILE_PROVIDER_REQUEST_INVALID")
         if request.source != self.source:
             raise ValueError("FILE_PROVIDER_REQUEST_SOURCE_MISMATCH")
+        if self._request_plan is not None and self._request_key(request) not in {
+            self._request_key(planned) for planned in self._request_plan
+        }:
+            raise ValueError("FILE_PROVIDER_REQUEST_NOT_IN_PLAN")
 
         payload = bounded_regular_read(self._path, self._evidence.max_bytes)
         actual = hashlib.sha256(payload).hexdigest()
@@ -179,11 +249,16 @@ class VerifiedCsvMarketDataProvider:
         if tuple(reader.fieldnames or ()) != _FIELDS:
             raise ValueError("FILE_PROVIDER_SCHEMA_INVALID")
         bars: list[RawMarketBar] = []
+        expected_count = (
+            request.expected_count
+            if self._request_plan is None
+            else sum(planned.expected_count for planned in self._request_plan)
+        )
         for row in reader:
             if None in row or set(row) != set(_FIELDS) or any(type(value) is not str for value in row.values()):
                 raise ValueError("FILE_PROVIDER_SCHEMA_INVALID")
             values = cast(dict[str, str], row)
-            if len(bars) >= request.expected_count:
+            if len(bars) >= expected_count:
                 raise ValueError("FILE_PROVIDER_ROW_COUNT_EXCEEDED")
             bars.append(
                 RawMarketBar(
@@ -200,9 +275,47 @@ class VerifiedCsvMarketDataProvider:
                     volume=values["volume"],
                 )
             )
-        return ProviderMarketDataBatch(
-            source=self.source,
-            request=request,
-            bars=tuple(bars),
-            fetched_at=self._evidence.observed_at,
-        )
+        if self._request_plan is None:
+            return ProviderMarketDataBatch(
+                source=self.source,
+                request=request,
+                bars=tuple(bars),
+                fetched_at=self._evidence.observed_at,
+            )
+
+        expected = {
+            (planned.source, symbol, event_time)
+            for planned in self._request_plan
+            for symbol, event_time in planned.expected_keys
+        }
+        actual = {
+            (bar.source, bar.source_symbol, bar.event_time.astimezone(UTC))
+            for bar in bars
+        }
+        if len(actual) != len(bars):
+            raise ValueError("FILE_PROVIDER_RETURNED_DUPLICATE_BAR_KEY")
+        if actual != expected:
+            raise ValueError("FILE_PROVIDER_PLANNED_COVERAGE_MISMATCH")
+
+        selected: ProviderMarketDataBatch | None = None
+        requested_key = self._request_key(request)
+        for planned in self._request_plan:
+            allowed = {
+                (symbol, event_time) for symbol, event_time in planned.expected_keys
+            }
+            planned_bars = tuple(
+                bar
+                for bar in bars
+                if (bar.source_symbol, bar.event_time.astimezone(UTC)) in allowed
+            )
+            batch = ProviderMarketDataBatch(
+                source=self.source,
+                request=planned,
+                bars=planned_bars,
+                fetched_at=self._evidence.observed_at,
+            )
+            if self._request_key(planned) == requested_key:
+                selected = batch
+        if selected is None:  # guarded before file read; retain local invariant
+            raise ValueError("FILE_PROVIDER_REQUEST_NOT_IN_PLAN")
+        return selected

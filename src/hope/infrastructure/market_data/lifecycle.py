@@ -66,6 +66,8 @@ def ingest_and_seal_market_data_windows(
         raise TypeError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRED")
+    if type(provider) is VerifiedCsvMarketDataProvider:
+        provider.validate_request_plan(requests)
 
     first = requests[0]
     for request in requests:
