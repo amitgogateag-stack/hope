@@ -229,7 +229,7 @@ def _config_path(layout,unit):return layout.units/(unit+".d")/"90-hope-dashboard
 
 def _check_configs(layout,sha):
     expected=_configs(layout,sha) if sha else {WEB:None,EXPORT:None}
-    actual={}
+    actual: dict[str,str|None]={}
     for unit,payload in expected.items():
         path=_config_path(layout,unit)
         if payload is None:
@@ -316,18 +316,21 @@ def runtime_gate(layout,target):
     _interpreter_identity(_python(layout,target))
     _require(record["phase"]=="COMMITTED" or _owner_alive(record),"RECOVERY_REQUIRED")
     evidence=unverified()
-    preview_sha256=None
+    preview_sha256=None;market_sha256=None
     if record["schema"]=="hope.dashboard-activation.v3":
         digest=record["previous_runtime_manifest"] if record["phase"]=="ROLLING_BACK" else record["runtime_manifest"]
         evidence=attest_runtime(layout.root,target,_runtime_mode(layout,target),expected_manifest=digest,
-            release_source="docs/dashboard/preview.html")
+            release_source="docs/dashboard/preview.html",include_market_asset=True)
         preview_sha256=evidence.get("release_source_sha256")
         _require(type(preview_sha256) is str and re.fullmatch('[0-9a-f]{64}',preview_sha256) is not None,
             "BUILD_SOURCE_UNVERIFIED")
         evidence.pop("release_source_sha256")
+        market_sha256=evidence.pop("market_source_sha256",None)
+        _require(market_sha256 is None or (type(market_sha256) is str
+            and re.fullmatch('[0-9a-f]{64}',market_sha256) is not None),"BUILD_SOURCE_UNVERIFIED")
     return {"status":"GATE_PASSED","dashboard_commit":target,
         "paper_commit":record["shared"],"execution_authorized":False,"runtime_integrity":safe_evidence(evidence),
-        "preview_sha256":preview_sha256}
+        "preview_sha256":preview_sha256,"market_preview_sha256":market_sha256}
 
 
 @contextmanager
@@ -495,6 +498,7 @@ def install_paper_mask(layout,host,*,reviewed=False):
 
 
 class Host:
+    target_runtime: str
     def __init__(self,layout):self.layout=layout;self.stage="INITIAL"
 
     def run(self,*args,timeout=20,env=None):

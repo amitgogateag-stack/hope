@@ -15,6 +15,7 @@ import re
 import stat
 from threading import Lock
 import time
+from typing import cast
 
 from hope.api.snapshot_contract import strict_json
 from hope.infrastructure.durable_file import authenticated_bounded_regular_read
@@ -27,7 +28,7 @@ MAX_FILE_BYTES=128*1024*1024
 MAX_MANIFEST_BYTES=4*1024*1024
 MAX_SECONDS=3.0
 REQUIRED={"sqlalchemy","pydantic","pydantic-core","psycopg","psycopg-binary","alembic"}
-_CACHE={}
+_CACHE: dict[tuple[str,str,str,str],tuple]={}
 _LOCK=Lock()
 
 
@@ -183,6 +184,7 @@ def _pins(release,deadline=None):
         if not line or line.startswith("#"):continue
         match=re.fullmatch(r"([A-Za-z0-9_.-]+)==([A-Za-z0-9.+_-]+)",line)
         _require(match is not None,"CONSTRAINTS_INVALID")
+        match=cast(re.Match[str],match)
         name=_name(match[1]);_require(name not in pins,"CONSTRAINTS_INVALID");pins[name]=match[2]
     _require(REQUIRED<=pins.keys(),"CONSTRAINTS_INCOMPLETE")
     return payload,pins
@@ -247,8 +249,9 @@ def build_runtime_manifest(root,sha,mode,*,release=None,_deadline=None,provenanc
     return result
 
 
-def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS,release_source=None):
+def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=MAX_SECONDS,release_source=None,include_market_asset=False):
     """Verify an independently staged root-owned manifest; emit no paths/code."""
+    _require(type(include_market_asset) is bool,"BUILD_SOURCE_UNVERIFIED")
     _require(type(timeout) in {int,float} and 0<timeout<=MAX_SECONDS,"DEADLINE")
     _require(expected_manifest is None or (type(expected_manifest) is str
         and re.fullmatch("[0-9a-f]{64}",expected_manifest)),"MANIFEST_CHANGED")
@@ -305,7 +308,8 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
     if approved["schema"]=="hope.runtime-manifest.v3":
         from hope.api.release_build_evidence import verify_release_build
         build=verify_release_build(root,sha,mode,runtime_manifest=approved,
-            expected_digest=approved["release_build_sha256"],deadline=deadline,source_path=release_source)
+            expected_digest=approved["release_build_sha256"],deadline=deadline,source_path=release_source,
+            **({"include_market_asset":True} if include_market_asset else {}))
         _require(_inventory(root,sha,mode,deadline)[3]==inventory,"ENVIRONMENT_CHANGED")
     _require(_read(path,MAX_MANIFEST_BYTES,deadline=deadline)==payload and _trusted(path)==manifest_identity
         and _trusted(root/"runtime-manifests",directory=True)==manifest_directory,"MANIFEST_CHANGED")
@@ -323,6 +327,10 @@ def attest_runtime(root,sha,mode,*,expected_manifest=None,release=None,timeout=M
         _require(approved["schema"]=="hope.runtime-manifest.v3" and isinstance(build.get("source_sha256"),str),
             "BUILD_SOURCE_UNVERIFIED")
         result["release_source_sha256"]=build["source_sha256"]
+    if include_market_asset:
+        _require(approved["schema"]=="hope.runtime-manifest.v3" and build["state"]=="VERIFIED",
+            "BUILD_SOURCE_UNVERIFIED")
+        result["market_source_sha256"]=build.get("market_source_sha256")
     return result
 
 

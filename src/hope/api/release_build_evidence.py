@@ -23,7 +23,8 @@ def _verified_archive(payload,archive_sha256,source_sha256):
     r._require(source and r._digest(r._canonical(source))==source_sha256,"BUILD_SOURCE_MAP_MISMATCH")
     return entries
 
-def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None):
+def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None,include_market_asset=False):
+    r._require(type(include_market_asset) is bool,"BUILD_SOURCE_PATH_INVALID")
     deadline=deadline or time.monotonic()+r.MAX_SECONDS
     root=Path(root);folder=root/"release-builds";key=root/"runtime-trust/releases-ed25519.pub"
     directory=r._trusted(folder,directory=True);path=folder/(sha+"-"+mode+".json")
@@ -81,10 +82,16 @@ def _verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadl
     result=dict(state="VERIFIED",sha256=expected_digest,builder_id=approval["builder_id"],
         identity_sha256=r._digest(r._canonical((directory,before,sbom_identity,identity,input_identity))))
     if source_path is not None:result["source_sha256"]=source_sha256
+    if include_market_asset:
+        # Select only this fixed optional asset from the SAME authenticated archive.
+        # Absence is compatible with older releases and cannot authorize its route.
+        market=entries.get("release/docs/dashboard/market.html")
+        r._require(market is None or market[2] is False,"BUILD_SOURCE_MISSING")
+        result["market_source_sha256"]=r._digest(market[0]) if market is not None else None
     return result
 
 
-def verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None):
+def verify_release_build(root,sha,mode,*,runtime_manifest,expected_digest,deadline=None,source_path=None,include_market_asset=False):
     try:return _verify_release_build(root,sha,mode,runtime_manifest=runtime_manifest,
-        expected_digest=expected_digest,deadline=deadline,source_path=source_path)
+        expected_digest=expected_digest,deadline=deadline,source_path=source_path,include_market_asset=include_market_asset)
     except Exception:raise RuntimeError("RELEASE_BUILD_UNVERIFIED") from None
