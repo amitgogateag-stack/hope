@@ -31,7 +31,8 @@ its FAILED receipt cannot make those old bytes fresh.
 
 `dashboard_release.py --observer-refresh` is a fixed one-shot dispatch through the
 existing OS bootstrap. Before any refresh/database import, it authenticates the
-release and independently approved runtime manifest, reauthenticates after the
+release and independently approved runtime manifest, requires verified release-build
+provenance before interpreter execution and again before database dispatch, reauthenticates after the
 interpreter handoff, requires Python 3.13/exact venv and runs the existing PAPER
 isolation check. Deployed commit must equal the authenticated release directory.
 Only HOPE_DATABASE_URL crosses the observer handoff; GitHub and injected Python/

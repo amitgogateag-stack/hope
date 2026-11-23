@@ -28,6 +28,7 @@ def authenticate_control(release,mode,*,expected_manifest=None):
 
 def handoff(release,arguments,mode,*,observer_refresh=False,execute=os.execve):
     python,evidence=authenticate_control(release,mode)
+    if observer_refresh:_require(evidence.get("build_state")=="VERIFIED","RELEASE_BUILD_REQUIRED")
     bootstrap=Path(release)/"deploy/operations/dashboard_release.py"
     environment={"PATH":"/usr/sbin:/usr/bin:/sbin:/bin","LANG":"C","LC_ALL":"C"}
     credential="HOPE_DATABASE_URL" if observer_refresh else "GH_TOKEN"
@@ -67,10 +68,11 @@ def main(argv=None,*,release):
             if args.observer_refresh:
                 return handoff(release,forwarded,args.control_runtime,observer_refresh=True)
             return handoff(release,forwarded,args.control_runtime)
-        python,_=authenticate_control(release,args.control_runtime,expected_manifest=args.control_manifest)
+        python,evidence=authenticate_control(release,args.control_runtime,expected_manifest=args.control_manifest)
         verify_interpreter(python)
         _require(sys.version_info[:2]==(3,13),"BOOTSTRAP_PYTHON_VERSION_INVALID")
         if args.observer_refresh:
+            _require(evidence.get("build_state")=="VERIFIED","RELEASE_BUILD_REQUIRED")
             return _observer_refresh(release,forwarded)
         from hope.api.dashboard_activation import main as activate_main
         return activate_main(forwarded)

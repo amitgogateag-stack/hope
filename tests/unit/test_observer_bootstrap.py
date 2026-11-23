@@ -10,7 +10,7 @@ def ready(tmp_path,monkeypatch):
     from hope.api import dashboard_activation, dashboard_snapshot_refresh
     release=tmp_path/'releases'/SHA;release.mkdir(parents=True)
     monkeypatch.setattr(module,'sys',SimpleNamespace(flags=SimpleNamespace(isolated=True,no_site=False),version_info=(3,13)))
-    authenticate=Mock(return_value=(release/'python',{'manifest_sha256':'a'*64}))
+    authenticate=Mock(return_value=(release/'python',{'manifest_sha256':'a'*64,'build_state':'VERIFIED'}))
     monkeypatch.setattr(module,'authenticate_control',authenticate)
     interpreter=Mock();monkeypatch.setattr(module,'verify_interpreter',interpreter)
     host=Mock();monkeypatch.setattr(dashboard_activation,'Host',host)
@@ -20,7 +20,7 @@ def ready(tmp_path,monkeypatch):
 
 def test_observer_handoff_passes_only_observer_credential_and_fixed_dispatch(tmp_path,monkeypatch):
     release=tmp_path/'releases'/SHA
-    monkeypatch.setattr(module,'authenticate_control',Mock(return_value=(release/'python',{'manifest_sha256':'a'*64})))
+    monkeypatch.setattr(module,'authenticate_control',Mock(return_value=(release/'python',{'manifest_sha256':'a'*64,'build_state':'VERIFIED'})))
     monkeypatch.setenv('HOPE_DATABASE_URL','postgresql://explicit-test-reader')
     monkeypatch.setenv('GH_TOKEN','never-forward');monkeypatch.setenv('LD_PRELOAD','never-forward')
     execute=Mock(return_value=17)
@@ -82,3 +82,24 @@ def test_observer_cli_does_not_accept_abbreviation_or_factory_dispatch(monkeypat
         '--expected-database','lab','--expected-reader','reader','--expected-database-identity','a'*64]
     with pytest.raises(SystemExit) as error:dashboard_snapshot_refresh.main([*common,*arguments])
     assert error.value.code==2;refresh.assert_not_called()
+
+
+@pytest.mark.parametrize('state',[None,'UNVERIFIED',True,'verified'])
+def test_missing_release_build_proof_cannot_execute_observer_environment(tmp_path,monkeypatch,state):
+    release=tmp_path/'releases'/SHA
+    evidence={'manifest_sha256':'a'*64,'build_state':state}
+    monkeypatch.setattr(module,'authenticate_control',Mock(return_value=(release/'python',evidence)))
+    execute=Mock()
+    with pytest.raises(RuntimeError,match='RELEASE_BUILD_REQUIRED'):
+        module.handoff(release,[],'release',observer_refresh=True,execute=execute)
+    execute.assert_not_called()
+
+
+@pytest.mark.parametrize('state',[None,'UNVERIFIED',True,'verified'])
+def test_second_stage_rechecks_release_build_before_database_dispatch(tmp_path,monkeypatch,state):
+    release,authenticate,_,host,refresh=ready(tmp_path,monkeypatch)
+    authenticate.return_value=(release/'python',{'manifest_sha256':'a'*64,'build_state':state})
+    with pytest.raises(SystemExit) as error:
+        module.main(['--observer-refresh','--control-manifest','a'*64,'--deployed-commit',SHA],release=release)
+    assert error.value.code==2
+    host.assert_not_called();refresh.assert_not_called()
