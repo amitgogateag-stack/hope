@@ -32,3 +32,15 @@ independent review and real provider evidence. Test CSVs are synthetic fixtures
 only and must never be presented as market activity. This adapter grants no
 PAPER authority, bypasses no admission/exporter gate, enables no LIVE path and
 does not write AWS or production databases by itself.
+
+## Offline qualification receipt
+
+`python -m hope.api.market_data_export_qualification` validates one exact closed
+window without connecting to PostgreSQL or persisting bars. Both the private
+request plan and provider export require independently supplied SHA-256 digests;
+the provider contract digest and observation time are mandatory. Successful
+output is a canonical JSON receipt binding the immutable coverage-manifest hash,
+universe, source, window and bar count. It deliberately excludes file paths and
+price values, and explicitly records that no persistence or PAPER authority was
+created. A receipt is preflight evidence only: it is not provider attestation,
+database acceptance, release admission or permission to trade.
