@@ -183,3 +183,48 @@ def test_requested_starter_universe_keeps_etf_and_unverified_mapping_distinct():
 def test_spy_is_not_admitted_using_a_guessed_common_stock_provider_mapping():
     with pytest.raises(ValueError,match='PROVIDER_MAPPING_UNVERIFIED'):
         reply(quote('USA:SPY'),key='USA:SPY')
+
+
+@pytest.mark.parametrize('key',['USA:AAPL','INDIA:INFY'])
+def test_quote_details_preserve_volume_and_derive_absolute_change(key):
+    row=next(x for x in view(capture([reply(key=key)]))['watchlist'] if x['key']==key)
+    assert row['quote']['volume']=='12000'
+    assert row['quote']['change_absolute']=='2'
+    assert row['currency']==SPECS[key].currency
+    assert row['execution_authorized'] is row['strategy_eligible'] is False
+
+
+@pytest.mark.parametrize('close,change,percent',[('99','-1','-1'),('100','0','0')])
+def test_negative_and_zero_changes_and_genuine_zero_volume(close,change,percent):
+    q=quote();q.update(close=close,change=change,percent_change=percent,volume='0')
+    result=view(capture([reply(q)]))['watchlist'][10]['quote']
+    assert result['change_absolute']==change and result['volume']=='0'
+
+
+def test_absolute_change_preserves_exact_bounded_source_precision():
+    close='0.30000000000000000000000000000000000001'
+    change='0.20000000000000000000000000000000000001'
+    q=quote();q.update(open='0.3',high='0.4',low='0.1',close=close,previous_close='0.1',
+        change=change,percent_change='200')
+    result=view(capture([reply(q)]))['watchlist'][10]['quote']
+    assert result['price']==close and result['change_absolute']==change
+
+
+def test_displayed_absolute_change_is_derived_not_source_rounding():
+    q=quote();q.update(close='1098',open='1090',high='1119',low='1080',previous_close='1091.90002',
+        change='6.099976',percent_change='0.55865697')
+    assert view(capture([reply(q)]))['watchlist'][10]['quote']['change_absolute']=='6.09998'
+
+
+def test_missing_quote_volume_is_not_fabricated_from_history():
+    q=quote();del q['volume']
+    with pytest.raises(ValueError,match='INVALID_RESPONSE'):reply(q)
+    result=view(capture([reply(history(),endpoint='time_series')]))['watchlist'][10]
+    assert result['quote'] is None and result['history']['bars'][-1]['volume']=='12000'
+
+
+@pytest.mark.parametrize('field,value',[('volume','11999'),('open','101'),('high','105'),('low','97')])
+def test_completed_quote_and_history_cannot_disagree_on_ohlcv(field,value):
+    q=quote();q[field]=value
+    with pytest.raises(ValueError,match='SOURCE_CONTRADICTION'):
+        view(capture([reply(q),reply(history(),endpoint='time_series')]))
