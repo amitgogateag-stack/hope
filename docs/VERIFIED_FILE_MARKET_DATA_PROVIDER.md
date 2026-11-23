@@ -1,0 +1,26 @@
+# Verified provider-export adapter
+
+`VerifiedCsvMarketDataProvider` is a non-network ingestion adapter for an
+operator-supplied OHLCV export. It enables reproducible India or USA LAB
+qualification when a reviewed provider export is available; it does not claim
+that any provider or export has already been accepted.
+
+The operator must independently supply the exact payload SHA-256, provider
+contract SHA-256, canonical source identifier and the timestamp at which the
+export was observed. The CSV retains source symbol, event, availability,
+ingestion and optional effective timestamps. The adapter never substitutes the
+local read time for those PIT fields.
+
+The file must be a private, unchanged regular file within the configured byte
+bound. Its digest and exact schema are checked before rows enter the existing
+provider boundary. That boundary still rejects incomplete windows, duplicates,
+extra symbols, off-grid times, identity-map gaps and unsafe numeric data. The
+normal immutable coverage manifest, PIT universe, market calendar, dataset
+sealing and PostgreSQL persistence checks remain mandatory.
+
+This code does **not** attest licensing, vendor authenticity, corporate-action
+adjustments, symbol mapping, exchange calendars or data quality. Those require
+independent review and real provider evidence. Test CSVs are synthetic fixtures
+only and must never be presented as market activity. This adapter grants no
+PAPER authority, bypasses no admission/exporter gate, enables no LIVE path and
+does not write AWS or production databases by itself.
