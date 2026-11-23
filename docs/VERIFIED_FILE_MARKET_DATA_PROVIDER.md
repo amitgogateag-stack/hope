@@ -52,3 +52,16 @@ created. Version 1 single-window plans remain accepted; version 2 plans bind a
 bounded ordered window list and reject overlapping logical keys before the
 export is opened. A receipt is preflight evidence only: it is not provider attestation,
 database acceptance, release admission or permission to trade.
+
+## LAB PostgreSQL ingestion boundary
+
+`ingest_verified_export_to_lab` is an application service for a separately
+reviewed operator entry point. It requires an explicit existing SQLAlchemy transaction,
+existing PIT-certified universe, and existing empty staging dataset version. It
+hard-denies the production database name `hope`, requires an exact database name
+containing `lab`, `test`, or `recovery`, and spans manifest declaration, complete
+export validation, bar insertion, coverage verification, and sealing with one
+savepoint. Any caught failure removes both manifest and bars. Its receipt keeps
+PAPER authority, release admission, and LIVE explicitly false. The service does
+not create databases, identities, credentials, datasets, universes, providers,
+orders, strategies, deployment configuration, or an activation path.
