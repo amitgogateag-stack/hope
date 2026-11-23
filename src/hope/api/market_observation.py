@@ -23,6 +23,8 @@ class InstrumentSpec:
     currency: str
     timezone: str
     mic: str
+    instrument_type: str = "Common Stock"
+    provider_mapping_available: bool = True
 
     @property
     def key(self):return self.market+':'+self.symbol
@@ -30,10 +32,14 @@ class InstrumentSpec:
 
 # Watchlist candidates only: not index-membership, instrument-registration or eligibility proof.
 WATCHLIST=tuple(InstrumentSpec(s,'NSE','INDIA','INR','Asia/Kolkata','XNSE') for s in
-    ('RELIANCE','TCS','HDFCBANK','ICICIBANK','INFY','ITC','SBIN','LT','BHARTIARTL','HINDUNILVR'))+tuple(
-    InstrumentSpec(s,'NASDAQ' if s not in {'JPM','XOM'} else 'NYSE','USA','USD','America/New_York',
-        'XNGS' if s not in {'JPM','XOM'} else 'XNYS') for s in
-    ('AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','AVGO','JPM','XOM'))
+    ('RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','LT','AXISBANK','ITC','BHARTIARTL'))+tuple(
+    InstrumentSpec(s,'NYSE' if s=='JPM' else 'NASDAQ','USA','USD','America/New_York',
+        'XNYS' if s=='JPM' else 'XNGS') for s in
+    ('AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','JPM','AMD'))+(
+    # Issuer identifies SPY as an ETF on NYSE Arca. Its provider-specific mapping
+    # remains unverified, so replies cannot be ingested under a common-stock map.
+    InstrumentSpec('SPY','NYSE Arca','USA','USD','America/New_York','ARCX','ETF',False),)
+
 SPECS={s.key:s for s in WATCHLIST}
 QUOTE_KEYS={'symbol','exchange','mic_code','currency','datetime','timestamp','last_quote_at',
             'open','high','low','close','volume','previous_close','change','percent_change','is_market_open'}
@@ -97,6 +103,7 @@ def validated_reply(raw: bytes, *, instrument: str, endpoint: str, received_at: 
     _require(type(raw) is bytes and 0<len(raw)<=MAX_BYTES,'INVALID_RESPONSE')
     _require(type(instrument) is str and type(endpoint) is str and instrument in SPECS and endpoint in {'quote','time_series'},'IDENTITY_MISMATCH')
     received=_time(received_at);spec=SPECS[instrument]
+    _require(spec.provider_mapping_available,'PROVIDER_MAPPING_UNVERIFIED')
     value=strict_json(raw);_require(type(value) is dict and value.get('status')!='error','PROVIDER_ERROR')
     if endpoint=='quote':
         _require(QUOTE_KEYS<=set(value),'INVALID_RESPONSE');_identity(value,spec)
@@ -172,8 +179,8 @@ def market_observation(payload: bytes, *, expected_commit: str, now: datetime) -
     for spec in WATCHLIST:
         q=observations.get((spec.key,'quote'));h=observations.get((spec.key,'time_series'))
         row={'key':spec.key,'symbol':spec.symbol,'exchange':spec.exchange,'market':spec.market,'currency':spec.currency,
-            'timezone':spec.timezone,'status':'AVAILABLE' if q or h else 'UNAVAILABLE',
-            'reason':None if q or h else 'NO_AUTHORIZED_OBSERVATION','quote':None,'history':None,
+            'timezone':spec.timezone,'instrument_type':spec.instrument_type,'provider_mapping_status':'DECLARED_EXPECTATION' if spec.provider_mapping_available else 'UNVERIFIED','status':'AVAILABLE' if q or h else 'UNAVAILABLE',
+            'reason':None if q or h else ('NO_AUTHORIZED_OBSERVATION' if spec.provider_mapping_available else 'PROVIDER_MAPPING_UNVERIFIED'),'quote':None,'history':None,
             'pit_certified':False,'strategy_eligible':False,'execution_authorized':False}
         if h:row['history']={'bars':h['values'],'available_at':next(r['received_at'] for r in v['replies'] if r['instrument']==spec.key and r['endpoint']=='time_series'),
             'historical_publication_times':'UNVERIFIED','finality':'PROVIDER_REPORTED'}

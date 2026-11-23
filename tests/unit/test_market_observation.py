@@ -166,3 +166,20 @@ def test_provider_session_flag_is_not_a_calendar_approval(state):
     q=quote();q['is_market_open']=state
     result=view(capture([reply(q)]))['watchlist'][10]['quote']
     assert result['provider_market_open'] is state and result['session_calendar_verified'] is False
+
+
+def test_requested_starter_universe_keeps_etf_and_unverified_mapping_distinct():
+    expected_india={'RELIANCE','TCS','INFY','HDFCBANK','ICICIBANK','SBIN','LT','AXISBANK','ITC','BHARTIARTL'}
+    expected_usa={'AAPL','MSFT','NVDA','AMZN','GOOGL','META','TSLA','JPM','AMD','SPY'}
+    assert {s.symbol for s in WATCHLIST if s.market=='INDIA'}==expected_india
+    assert {s.symbol for s in WATCHLIST if s.market=='USA'}==expected_usa
+    row=next(r for r in view(capture([]))['watchlist'] if r['symbol']=='SPY')
+    assert row['instrument_type']=='ETF' and row['exchange']=='NYSE Arca'
+    assert row['status']=='UNAVAILABLE' and row['reason']=='PROVIDER_MAPPING_UNVERIFIED'
+    assert row['quote'] is row['history'] is None
+    assert row['strategy_eligible'] is row['execution_authorized'] is False
+
+
+def test_spy_is_not_admitted_using_a_guessed_common_stock_provider_mapping():
+    with pytest.raises(ValueError,match='PROVIDER_MAPPING_UNVERIFIED'):
+        reply(quote('USA:SPY'),key='USA:SPY')

@@ -50,7 +50,7 @@ jobs:
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
         run: pytest -q tests/integration/test_startup_financial_boundary.py tests/integration/test_m3_controlled_acceptance.py
       - name: Private market observation adversarial contract
-        run: pytest -q tests/unit/test_market_observation.py tests/unit/test_market_dashboard.py tests/unit/test_market_asset_binding.py tests/unit/test_build_evidence.py tests/unit/test_runtime_manifest_journal.py
+        run: pytest -q tests/unit/test_market_observation.py tests/unit/test_market_dashboard.py tests/unit/test_market_asset_binding.py tests/unit/test_private_market_preview.py tests/unit/test_private_market_preview_install.py tests/unit/test_build_evidence.py tests/unit/test_runtime_manifest_journal.py
       - name: Qualified read-only observer identity and publication
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
@@ -59,7 +59,7 @@ jobs:
       - name: Dashboard static type qualification
         run: |
           python -m pip install -r constraints/type-review.txt
-          python -m mypy --follow-imports=silent --check-untyped-defs src/hope/api/dashboard_snapshot_refresh.py src/hope/api/dashboard_projection.py src/hope/api/dashboard_m2_snapshot.py src/hope/security/dashboard_observer.py src/hope/api/market_observation.py src/hope/api/dashboard_server.py src/hope/api/runtime_integrity.py src/hope/api/release_build_evidence.py src/hope/api/dashboard_activation.py
+          python -m mypy --follow-imports=silent --check-untyped-defs src/hope/api/dashboard_snapshot_refresh.py src/hope/api/dashboard_projection.py src/hope/api/dashboard_m2_snapshot.py src/hope/security/dashboard_observer.py src/hope/api/market_observation.py src/hope/api/dashboard_server.py src/hope/api/runtime_integrity.py src/hope/api/release_build_evidence.py src/hope/api/dashboard_activation.py src/hope/api/private_market_preview.py deploy/operations/private_market_preview_install.py
       - name: Dashboard publication crash and ledger invariants
         run: pytest -q tests/unit/test_dashboard_refresh_recovery.py tests/unit/test_dashboard_ledger_consistency.py tests/unit/test_dashboard_snapshot_refresh.py
       - name: Dashboard receipt job lineage (read-only)
@@ -81,7 +81,7 @@ jobs:
         run: |
           python -m venv /tmp/hope-security-review
           /tmp/hope-security-review/bin/python -m pip install -r constraints/security-review.txt
-          /tmp/hope-security-review/bin/python -m bandit -q -r src/hope --severity-level high
+          /tmp/hope-security-review/bin/python -m bandit -q -r src/hope deploy/operations/private_market_preview_install.py --severity-level high
       - name: M4 reproducibility and acceptance preflight
         run: pytest -q tests/unit/test_release_builder.py tests/unit/test_build_evidence.py tests/unit/test_operational_acceptance.py
       - name: M5 offline image and recovery acceptance
@@ -187,3 +187,44 @@ jobs:
                 body,
               });
             }
+
+
+  private-preview-build:
+    name: Signed private static preview artifact
+    needs: test
+    if: ${{ github.event_name == 'push' && github.repository == 'amitgogateag-stack/hope' && github.ref == 'refs/heads/codex/private-market-preview-delivery' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+      - name: Build fixed source assets without private market or database data
+        env:
+          PYTHONPATH: src
+        run: |
+          mkdir dist
+          python -m hope.api.private_market_preview build-assets --repository . --commit "$GITHUB_SHA" --output dist/private-preview-assets.zip
+      - name: Attest static build provenance only
+        id: attest
+        uses: actions/attest@508db95dd578ae2727ebd6217d5ba78e4fbda05d # v4.2.1
+        with:
+          subject-path: dist/private-preview-assets.zip
+      - name: Verify hosted signer workflow and exact source identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: |
+          cp "$BUNDLE_PATH" dist/private-preview-assets.sigstore.json
+          gh attestation verify dist/private-preview-assets.zip --bundle dist/private-preview-assets.sigstore.json --repo amitgogateag-stack/hope --signer-workflow amitgogateag-stack/hope/.github/workflows/ci.yml --source-ref refs/heads/codex/private-market-preview-delivery --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners --format json > dist/verification.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: private-preview-assets-${{ github.sha }}
+          path: dist/
+          retention-days: 14
+          if-no-files-found: error
