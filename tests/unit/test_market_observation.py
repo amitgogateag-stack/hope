@@ -228,3 +228,15 @@ def test_completed_quote_and_history_cannot_disagree_on_ohlcv(field,value):
     q=quote();q[field]=value
     with pytest.raises(ValueError,match='SOURCE_CONTRADICTION'):
         view(capture([reply(q),reply(history(),endpoint='time_series')]))
+
+
+
+def test_exact_derived_change_can_be_wider_than_either_bounded_input():
+    previous='0.'+'0'*7+'1'+'0'*37+'1'
+    expected='999999999999.'+'9'*7+'8'+'9'*38
+    assert len(previous)==48 and len(expected)>48
+    q=quote();q.update(open='1000000000000',high='1000000000000',low='1000000000000',
+        close='1000000000000',previous_close=previous,change='999999999999.99999999',
+        percent_change='9999999999999999999900.0000')
+    result=view(capture([reply(q)]))['watchlist'][10]['quote']
+    assert result['change_absolute']==expected

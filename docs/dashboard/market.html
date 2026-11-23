@@ -19,7 +19,7 @@ function validNumber(x){return typeof x==='string'&&/^-?[0-9]+(?:\.[0-9]+)?$/.te
 function validPrice(x){return validNumber(x)&&x.length<=48&&Number(x)>=0.00000001&&Number(x)<=1e12;}
 function validVolume(x){return validNumber(x)&&x.length<=48&&Number.isSafeInteger(Number(x))&&Number(x)>=0&&Number(x)<=1e12;}
 function exactChange(q){
- const values=[q.price,q.previous_close,q.change_absolute];if(!values.every(x=>validNumber(x)&&x.length<=48))return false;
+ const values=[q.price,q.previous_close,q.change_absolute];if(!values.every(validNumber)||q.price.length>48||q.previous_close.length>48||q.change_absolute.length>64)return false; // Exact subtraction can widen the bounded source representation.
  const places=Math.max(...values.map(x=>(x.split('.')[1]||'').length));
  const units=x=>{const negative=x.startsWith('-'),[whole,fraction='']=(negative?x.slice(1):x).split('.');return (negative?-1n:1n)*BigInt(whole+fraction.padEnd(places,'0'));};
  return units(q.price)-units(q.previous_close)===units(q.change_absolute);
@@ -51,7 +51,8 @@ function drawVolume(r){
 }
 function drawHistory(r){
  txt('chart-title',r?`${r.symbol} · historical daily close (${r.currency})`:'Historical close');el('chart').replaceChildren();el('volume-chart').replaceChildren();el('bar-inspector').hidden=true;txt('bar-readout','Unavailable');
- if(!r?.history){txt('chart-note','No historical observation available.');txt('session','Unavailable');txt('availability','Unverified');return;}
+ txt('session',r?.quote?`${r.quote.provider_market_open?'Open':'Closed'} (provider reported at receipt); calendar UNVERIFIED`:'Unavailable');
+ if(!r?.history){txt('chart-note','No historical observation available.');txt('availability','Unverified');return;}
  const bars=r.history.bars,w=960,h=270,p=42,values=bars.map(b=>Number(b.close)),lo=Math.min(...values),hi=Math.max(...values),span=hi-lo||1;
  const ns='http://www.w3.org/2000/svg',svg=document.createElementNS(ns,'svg');svg.setAttribute('viewBox',`0 0 ${w} ${h}`);svg.setAttribute('role','img');svg.setAttribute('aria-label',`${r.symbol} historical closing prices`);
  const line=document.createElementNS(ns,'polyline');line.setAttribute('points',values.map((v,i)=>`${p+i*(w-2*p)/(values.length-1)},${h-p-(v-lo)*(h-2*p)/span}`).join(' '));line.setAttribute('stroke','#7fc8ff');line.setAttribute('stroke-width','2');line.setAttribute('fill','none');svg.append(line);
@@ -64,7 +65,7 @@ function renderMarket(v){
  current=validateMarket(v);const available=v.watchlist.filter(r=>r.status==='AVAILABLE');txt('fatal','');txt('available',`${available.length} / 20`);txt('bars',v.watchlist.reduce((n,r)=>n+(r.history?.bars.length||0),0));txt('stale',v.watchlist.filter(r=>r.quote&&freshness(r.quote)==='STALE').length);txt('provider',`${v.provider} · documented public trial; production entitlement UNVERIFIED`);txt('generation',v.generated_at);txt('polled',new Date().toISOString());
  el('indices').replaceChildren();for(const i of v.indices){const d=document.createElement('div');d.className='index';d.textContent=`${i.name} · UNAVAILABLE`;el('indices').append(d);}
  el('watchlist').replaceChildren();for(const r of v.watchlist.filter(r=>filter==='ALL'||r.market===filter)){const tr=document.createElement('tr');tr.dataset.key=r.key;tr.dataset.selected=String(selected===r.key);cell(tr,r.symbol);cell(tr,`${r.market} / ${r.currency}`);cell(tr,r.quote?r.quote.price:'Unavailable');cell(tr,r.quote?r.quote.previous_close:'Unavailable');cell(tr,r.quote&&Object.hasOwn(r.quote,'change_absolute')?r.quote.change_absolute:'Unavailable');cell(tr,r.quote?`${r.quote.change_percent}%`:'Unavailable');cell(tr,r.quote&&Object.hasOwn(r.quote,'volume')?r.quote.volume:'Unavailable');cell(tr,r.quote?r.quote.observed_at:'No authorized observation');cell(tr,r.quote?dataAge(r.quote):'Unavailable');cell(tr,r.quote?freshness(r.quote):'UNAVAILABLE',r.quote&&freshness(r.quote)==='STALE'?'stale':'');cell(tr,r.history?r.history.bars.length:'Unavailable');tr.addEventListener('click',()=>{selected=r.key;barDay=null;renderMarket(current);});el('watchlist').append(tr);}
- if(!selected)selected=available.find(r=>r.history)?.key||null;drawHistory(v.watchlist.find(r=>r.key===selected));
+ if(!selected)selected=available.find(r=>r.history)?.key||available[0]?.key||null;drawHistory(v.watchlist.find(r=>r.key===selected));
 }
 function unavailable(){current=null;selected=null;barDay=null;for(const id of ['available','bars','stale','provider','generation','session','availability'])txt(id,'Unavailable');el('watchlist').replaceChildren();el('indices').replaceChildren();drawHistory(null);txt('fatal','Market capture UNAVAILABLE or invalid. No last-good values are represented as current.');}
 async function poll(){
