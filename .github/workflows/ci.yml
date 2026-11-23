@@ -192,7 +192,7 @@ jobs:
   private-preview-build:
     name: Signed private static preview artifact
     needs: test
-    if: ${{ github.event_name == 'push' && github.repository == 'amitgogateag-stack/hope' && github.ref == 'refs/heads/codex/private-market-preview-delivery' }}
+    if: ${{ github.event_name == 'push' && github.repository == 'amitgogateag-stack/hope' && (github.ref == 'refs/heads/codex/private-market-preview-delivery' || github.ref == 'refs/heads/codex/market-observation-details') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -221,7 +221,7 @@ jobs:
           BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
         run: |
           cp "$BUNDLE_PATH" dist/private-preview-assets.sigstore.json
-          gh attestation verify dist/private-preview-assets.zip --bundle dist/private-preview-assets.sigstore.json --repo amitgogateag-stack/hope --signer-workflow amitgogateag-stack/hope/.github/workflows/ci.yml --source-ref refs/heads/codex/private-market-preview-delivery --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners --format json > dist/verification.json
+          gh attestation verify dist/private-preview-assets.zip --bundle dist/private-preview-assets.sigstore.json --repo amitgogateag-stack/hope --signer-workflow amitgogateag-stack/hope/.github/workflows/ci.yml --source-ref "$GITHUB_REF" --source-digest "$GITHUB_SHA" --signer-digest "$GITHUB_SHA" --deny-self-hosted-runners --format json > dist/verification.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: private-preview-assets-${{ github.sha }}

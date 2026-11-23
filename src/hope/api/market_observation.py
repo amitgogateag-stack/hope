@@ -6,7 +6,7 @@ Provider trial data is kept outside Git and never redistributed by this module.
 from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date,datetime,timezone
-from decimal import Decimal,InvalidOperation
+from decimal import Decimal,InvalidOperation,localcontext
 import hashlib
 import json
 import re
@@ -186,14 +186,20 @@ def market_observation(payload: bytes, *, expected_commit: str, now: datetime) -
             'historical_publication_times':'UNVERIFIED','finality':'PROVIDER_REPORTED'}
         if q:
             last=datetime.fromtimestamp(q['last_quote_at'],timezone.utc)
-            percent=(Decimal(q['close'])-Decimal(q['previous_close']))/Decimal(q['previous_close'])*100
-            row['quote']={'price':q['close'],'previous_close':q['previous_close'],'change_percent':format(percent.quantize(Decimal('0.0001')),'f'),
+            with localcontext() as context:
+                context.prec=100  # Both source decimals are bounded to 48 characters.
+                absolute_change=Decimal(q['close'])-Decimal(q['previous_close'])
+            percent=absolute_change/Decimal(q['previous_close'])*100
+            row['quote']={'price':q['close'],'previous_close':q['previous_close'],
+                'change_absolute':format(absolute_change,'f'),
+                'volume':q['volume'],'change_percent':format(percent.quantize(Decimal('0.0001')),'f'),
                 'bar_date':q['datetime'],'bar_open_at':datetime.fromtimestamp(q['timestamp'],timezone.utc).isoformat(),
                 'observed_at':last.isoformat(),'age_seconds':int((now-last).total_seconds()),
                 'freshness':'STALE' if (now-last).total_seconds()>900 else 'RECENT_PROVIDER_OBSERVATION',
                 'provider_market_open':q['is_market_open'],'session_calendar_verified':False,'delay_classification':'TRIAL_PROVIDER_REPORTED'}
             if h and q['datetime']==h['values'][-1]['datetime'] and _day(q['datetime'])<now.astimezone(ZoneInfo(spec.timezone)).date():
-                _require(Decimal(q['close'])==Decimal(h['values'][-1]['close']) and Decimal(q['previous_close'])==Decimal(h['values'][-2]['close']),'SOURCE_CONTRADICTION')
+                _require(all(Decimal(q[k])==Decimal(h['values'][-1][k]) for k in ('open','high','low','close','volume'))
+                    and Decimal(q['previous_close'])==Decimal(h['values'][-2]['close']),'SOURCE_CONTRADICTION')
         rows.append(row)
     return {'schema':'hope.market-observation.v1','scope':'PRIVATE_OBSERVATION_ONLY','provider':'Twelve Data',
         'access_mode':'DOCUMENTED_PUBLIC_TRIAL','generated_at':generated.isoformat(),'observed_at':now.isoformat(),
