@@ -314,7 +314,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
 
     def __init__(self, port: int, preview: Path, snapshot: Path, operations: Path | None = None,
                  *, deployed_commit: str | None = None, paper_deployed_commit: str | None = None,
-                 refresh_status: Path | None = None,
+                 refresh_status: Path | None = None, market_capture: Path | None = None,
                  activation_check=None, activation_view=None,
                  lab_verifier=None, lab_packet=None,
                  client_io_timeout_seconds: float = 5.0,
@@ -354,6 +354,7 @@ class DashboardHTTPServer(ThreadingHTTPServer):
         self._active_clients=0
         self._rejected_clients_total=0
         self._expired_clients_total=0
+        self.market_capture = Path(market_capture) if market_capture is not None else None
         self.preview = Path(preview)
         self.snapshot = Path(snapshot)
         self.refresh_status = (Path(refresh_status) if refresh_status is not None
@@ -473,6 +474,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             elif self.server.activation_check is not None:
                 evidence=self.server.activation_check()
             self.runtime_evidence=safe_evidence(evidence.get("runtime_integrity") if isinstance(evidence,dict) else None)
+            self.market_preview_sha256=evidence.get("market_preview_sha256") if isinstance(evidence,dict) else None
             self.preview_sha256=evidence.get("preview_sha256") if isinstance(evidence,dict) else None
             if self.server.activation_view is not None and not (
                     isinstance(self.preview_sha256,str) and fullmatch(r"[0-9a-f]{64}",self.preview_sha256)):
@@ -495,6 +497,31 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
 
     def _dispatch_GET(self) -> None:
+        if self.path=="/market-observations.json":
+            from hope.api.market_observation import MAX_BYTES,market_observation
+            try:
+                if self.server.market_capture is None or self.server.deployed_commit is None:
+                    raise ValueError("MARKET_CAPTURE_UNCONFIGURED")
+                value=market_observation(bounded_regular_read(self.server.market_capture,MAX_BYTES),
+                    expected_commit=self.server.deployed_commit,now=datetime.now(timezone.utc))
+            except (OSError,ValueError,TypeError,UnicodeError):
+                value={"schema":"hope.market-observation.v1","state":"UNAVAILABLE",
+                       "scope":"PRIVATE_OBSERVATION_ONLY","execution_authorized":False,"live_enabled":False}
+            self._respond(200,json.dumps(value,separators=(",",":")).encode(),"application/json; charset=utf-8")
+            return
+        if self.path=="/market.html":
+            try:
+                market_path=self.server.preview.parent/"market.html"
+                if self.server.activation_view is not None:
+                    if not isinstance(self.market_preview_sha256,str):
+                        raise ValueError("MARKET_PREVIEW_EVIDENCE_UNVERIFIED")
+                    payload=authenticated_bounded_regular_read(market_path,65536,expected_sha256=self.market_preview_sha256)
+                else:payload=bounded_regular_read(market_path,65536)
+            except (OSError,ValueError):
+                self._respond(503,b"Market view unavailable")
+                return
+            self._respond(200,payload,"text/html; charset=utf-8")
+            return
         if self.path=="/startup.json":
             from hope.api.paper_startup import startup_observation
             health=self.server.operations if self.server.operations is not None else self.server.snapshot.parent/'paper-health.json'
@@ -553,9 +580,11 @@ class DashboardHandler(BaseHTTPRequestHandler):
             return
         if self.path in {"/", "/index.html"}:
             try:
-                payload = (authenticated_bounded_regular_read(self.server.preview,65536,
-                    expected_sha256=self.preview_sha256) if self.server.activation_view is not None
-                    else bounded_regular_read(self.server.preview, 65536))
+                if self.server.activation_view is not None:
+                    if not isinstance(self.preview_sha256,str):
+                        raise ValueError("PREVIEW_EVIDENCE_UNVERIFIED")
+                    payload=authenticated_bounded_regular_read(self.server.preview,65536,expected_sha256=self.preview_sha256)
+                else:payload=bounded_regular_read(self.server.preview,65536)
             except (OSError, ValueError):
                 self._respond(503, b"Dashboard unavailable")
                 return
@@ -667,9 +696,9 @@ class DashboardHandler(BaseHTTPRequestHandler):
             )
             if self.path=="/paper-diagnostics.json":
                 from hope.api.paper_diagnostics import paper_diagnostics
-                try:health=json.loads(_verified_operations(self.server.operations,expected_commit=self.server.paper_deployed_commit))
-                except (OSError,ValueError,TypeError):health=None
-                observed=paper_diagnostics(observed,health)
+                try:diagnostic_health=json.loads(_verified_operations(self.server.operations,expected_commit=self.server.paper_deployed_commit))
+                except (OSError,ValueError,TypeError):diagnostic_health=None
+                observed=paper_diagnostics(observed,diagnostic_health)
             payload=json.dumps(observed,separators=(",",":")).encode("utf-8")
             self._respond(200,payload,"application/json; charset=utf-8")
             return
@@ -716,6 +745,7 @@ def main() -> None:
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--operations-status-file", type=Path)
     parser.add_argument("--refresh-status-file", type=Path)
+    parser.add_argument("--market-capture-file", type=Path)
     parser.add_argument("--deployed-commit")
     parser.add_argument("--activation-gate",action="store_true")
     args = parser.parse_args()
@@ -730,7 +760,7 @@ def main() -> None:
     with DashboardHTTPServer(args.port, args.preview, args.snapshot, args.operations_status_file,
                              deployed_commit=args.deployed_commit,
                              paper_deployed_commit=paper_deployed_commit,
-                             refresh_status=args.refresh_status_file,
+                             refresh_status=args.refresh_status_file, market_capture=args.market_capture_file,
                              activation_view=view) as server:
         server.serve_forever(poll_interval=0.5)
 

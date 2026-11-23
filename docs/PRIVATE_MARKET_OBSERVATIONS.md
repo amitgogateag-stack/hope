@@ -65,3 +65,30 @@ calendar and instrument universe, executable validated strategy binding and
 mandatory production admission remain prerequisites for research/operational
 use. G7FX stays deferred. LIVE remains disabled. This contract is not a deployment
 or PAPER activation approval.
+
+## Separate read-only browser view
+
+The fixed `/market.html` asset and `/market-observations.json` surface consume only
+an operator-selected private capture (`--market-capture-file`) at the exact
+server release. No request triggers network retrieval, SQL, strategy evaluation,
+orders or publication. Existing loopback/Host fencing, no-store, bounded clients,
+CSP, read-only methods and native private-file checks apply. Missing or rejected
+captures return a sanitized UNAVAILABLE observation, never an exception/host path.
+
+The market page shows source quote time, derived change, currency, original
+history receipt time, explicit unavailable candidates, stale quotes and a chart
+of actual captured daily closes. Its 60-second poll is only a file re-read.
+Database snapshot generation and exporter health remain separate observations.
+Invalid replacement evidence clears previously displayed market values.
+
+Under `activation_view`, the market asset requires a distinct independently
+trusted `market_preview_sha256`, while the existing page retains its own pinned
+digest. The current runtime gate does not issue this extra asset evidence: managed
+market-page deployment stays BLOCKED until a separately reviewed runtime update
+supplies it. Never substitute a self-computed digest or omit the activation gate.
+Captures remain independently UNVERIFIED, even when their containing asset is
+trusted. No current-data, signer/session, PIT or PAPER readiness is implied.
+
+Native Linux CI exercises actual private-file permissions/symlink refusal. Windows
+semantic tests and disposable Chrome checks model only its incompatible native
+file-metadata boundary; production reader and Linux acceptance remain unchanged.
