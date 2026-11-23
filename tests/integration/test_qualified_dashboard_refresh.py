@@ -36,6 +36,9 @@ def observed_database(restricted_database):
         c.exec_driver_sql('GRANT USAGE ON SCHEMA public TO "'+role+'"')
         c.exec_driver_sql('GRANT SELECT ON ALL TABLES IN SCHEMA public TO "'+role+'"')
     with admin.begin() as c:
+        # pg_proc ACLs are local to this freshly created disposable database.
+        # Removing only a direct grant would leave default PUBLIC EXECUTE intact.
+        c.exec_driver_sql('REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM PUBLIC')
         c.exec_driver_sql('GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO "'+role+'"')
         identity=database_identity(c)
     reader=create_engine(case['reader_url'])
@@ -119,7 +122,10 @@ def test_actual_mutation_capabilities_cannot_pass_as_a_read_only_profile(observe
 def test_missing_cluster_metadata_permission_is_not_replaced_by_database_name(observed_database):
     case=observed_database;role=case['role']
     try:
-        with case['admin'].begin() as c:c.exec_driver_sql('REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM "'+role+'"')
+        with case['admin'].begin() as c:
+            assert c.execute(text("SELECT has_function_privilege(:reader,'pg_catalog.pg_control_system()','EXECUTE')"),{'reader':role}).scalar_one() is True
+            c.exec_driver_sql('REVOKE EXECUTE ON FUNCTION pg_catalog.pg_control_system() FROM "'+role+'"')
+            assert c.execute(text("SELECT has_function_privilege(:reader,'pg_catalog.pg_control_system()','EXECUTE')"),{'reader':role}).scalar_one() is False
         with pytest.raises(ValueError,match='DASHBOARD_OBSERVER_IDENTITY_UNAVAILABLE'):collect(case)
     finally:
         with case['admin'].begin() as c:c.exec_driver_sql('GRANT EXECUTE ON FUNCTION pg_catalog.pg_control_system() TO "'+role+'"')
