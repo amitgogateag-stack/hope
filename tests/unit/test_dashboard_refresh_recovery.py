@@ -13,6 +13,9 @@ from hope.api import dashboard_snapshot_refresh as refresh
 from hope.api.dashboard_server import _verified_refresh_status
 
 pytestmark = pytest.mark.skipif(os.name != "posix", reason="Actual POSIX flock/crash boundary")
+from hope.security.dashboard_observer import ObserverProfile
+
+OBSERVER = ObserverProfile("dashboard_reader", "b"*64)
 COMMIT = "a" * 40
 
 
@@ -49,7 +52,7 @@ def test_conflicting_publication_paths_refuse_before_export(tmp_path, monkeypatc
     monkeypatch.setattr(refresh, "export_dashboard_snapshot", export)
     with pytest.raises(ValueError, match="HOPE_DASHBOARD_REFRESH_PATHS_INVALID"):
         refresh.refresh_once(output, status, "unused", expected_database="lab",
-                             deployed_commit=COMMIT, observed_at=now)
+                             deployed_commit=COMMIT, observer=OBSERVER, observed_at=now)
     assert called == []
     assert output.read_bytes() == b"last-good"
 
@@ -70,7 +73,7 @@ def test_untrusted_staged_file_preserves_last_good(tmp_path, monkeypatch, kind):
             os.link(victim, path)
     monkeypatch.setattr(refresh, "export_dashboard_snapshot", export)
     assert not refresh.refresh_once(output, status, "unused", expected_database="lab",
-                                  deployed_commit=COMMIT, observed_at=now)
+                                  deployed_commit=COMMIT, observer=OBSERVER, observed_at=now)
     assert output.read_bytes() == b"last-good"
     assert victim.read_bytes() == snapshot(now)
     result = json.loads(status.read_bytes())
@@ -88,7 +91,7 @@ def test_actual_publisher_death_preserves_coherence_and_restart(tmp_path, monkey
     monkeypatch.setattr(refresh, "export_dashboard_snapshot",
                         lambda path, *args, **kwargs: path.write_bytes(old))
     assert refresh.refresh_once(output, status, "unused", expected_database="lab",
-                                deployed_commit=COMMIT, observed_at=now)
+                                deployed_commit=COMMIT, observer=OBSERVER, observed_at=now)
     old_status = status.read_bytes()
     receive, send = context.Pipe(duplex=False)
     release = context.Event()
@@ -111,7 +114,7 @@ def test_actual_publisher_death_preserves_coherence_and_restart(tmp_path, monkey
         refresh.export_dashboard_snapshot = export
         refresh.durable_replace = replace
         refresh.refresh_once(output, status, "unused", expected_database="lab",
-                             deployed_commit=COMMIT, observed_at=now)
+                             deployed_commit=COMMIT, observer=OBSERVER, observed_at=now)
     process = context.Process(target=publish)
     process.start()
     send.close()
@@ -146,7 +149,7 @@ def test_actual_publisher_death_preserves_coherence_and_restart(tmp_path, monkey
         monkeypatch.setattr(refresh, "export_dashboard_snapshot",
                             lambda path, *args, **kwargs: path.write_bytes(new))
         assert refresh.refresh_once(output, status, "unused", expected_database="lab",
-                                    deployed_commit=COMMIT, observed_at=now)
+                                    deployed_commit=COMMIT, observer=OBSERVER, observed_at=now)
         result = json.loads(status.read_bytes())
         assert result["snapshot_sha256"] == hashlib.sha256(new).hexdigest()
         assert result["execution_authorized"] is False

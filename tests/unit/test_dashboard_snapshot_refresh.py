@@ -10,6 +10,9 @@ import pytest
 from hope.api import dashboard_snapshot_refresh as module
 
 NOW = datetime(2026, 11, 15, 20, 0, tzinfo=timezone.utc)
+from hope.security.dashboard_observer import ObserverProfile
+
+OBSERVER = ObserverProfile("dashboard_reader", "b"*64)
 COMMIT = "a" * 40
 
 
@@ -34,9 +37,9 @@ def test_success_requires_exact_lab_provenance_and_publishes_non_authorizing_sta
         called.update(url=url, **kwargs); path.write_bytes(snapshot())
     monkeypatch.setattr(module, "export_dashboard_snapshot", export)
     assert module.refresh_once(output, status, "private-url", expected_database="lab_db",
-                               deployed_commit=COMMIT, observed_at=NOW)
+                               deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW)
     assert called == {"url":"private-url", "deployed_commit":COMMIT,
-                      "data_classification":"DISPOSABLE_LAB", "expected_database":"lab_db"}
+                      "data_classification":"DISPOSABLE_LAB", "expected_database":"lab_db", "observer":OBSERVER}
     result=json.loads(status.read_text())
     assert result["state"]=="CURRENT" and result["error_code"] is None
     assert result["snapshot_generated_at"]==NOW.isoformat()
@@ -56,7 +59,7 @@ def test_failure_preserves_last_good_and_emits_only_closed_error(tmp_path, monke
         raise RuntimeError("password=secret host=private HOPE_DASHBOARD_DATABASE_IDENTITY_MISMATCH")
     monkeypatch.setattr(module, "export_dashboard_snapshot", fail)
     assert not module.refresh_once(output, status, "secret-url", expected_database="lab_db",
-                                   deployed_commit=COMMIT, observed_at=NOW)
+                                   deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW)
     assert output.read_bytes()==b"previous verified snapshot"
     result=json.loads(status.read_text())
     assert result["state"]=="FAILED" and result["error_code"]=="SNAPSHOT_REFRESH_FAILED"
@@ -73,7 +76,7 @@ def test_exact_identity_failure_has_specific_non_sensitive_code(tmp_path, monkey
         raise RuntimeError("HOPE_DASHBOARD_DATABASE_IDENTITY_MISMATCH")
     monkeypatch.setattr(module, "export_dashboard_snapshot", fail)
     assert not module.refresh_once(tmp_path/"snapshot", tmp_path/"status", "url",
-                                   expected_database="lab_db", deployed_commit=COMMIT, observed_at=NOW)
+                                   expected_database="lab_db", deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW)
     assert json.loads((tmp_path/"status").read_text())["error_code"]=="DATABASE_IDENTITY_MISMATCH"
 
 
@@ -83,7 +86,7 @@ def test_post_export_contract_failure_cannot_replace_status_with_current(tmp_pat
     monkeypatch.setattr(module, "export_dashboard_snapshot",
                         lambda path, *args, **kwargs: path.write_bytes(b"not-json"))
     assert not module.refresh_once(output, status, "url", expected_database="lab_db",
-                                   deployed_commit=COMMIT, observed_at=NOW)
+                                   deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW)
     assert output.read_bytes()==b"previous verified snapshot"
     assert json.loads(status.read_text())["state"]=="FAILED"
 
@@ -107,7 +110,7 @@ def test_refresh_rejects_receipt_outside_the_snapshot_lock_domain(
     with pytest.raises(ValueError, match="HOPE_DASHBOARD_REFRESH_PATHS_INVALID"):
         module.refresh_once(
             output, status, "url", expected_database="lab_db",
-            deployed_commit=COMMIT, observed_at=NOW,
+            deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
         )
     assert output.read_bytes() == b"last-good"
     if collision == "other_directory":
@@ -126,7 +129,7 @@ def test_refresh_rejects_hardlinked_snapshot_and_receipt(tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="HOPE_DASHBOARD_REFRESH_PATHS_INVALID"):
         module.refresh_once(
             output, status, "url", expected_database="lab_db",
-            deployed_commit=COMMIT, observed_at=NOW,
+            deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
         )
     assert output.read_bytes() == status.read_bytes() == b"last-good"
 
@@ -144,7 +147,7 @@ def test_concurrent_refresher_cannot_export_or_overwrite_active_receipt(tmp_path
     try:
         assert not module.refresh_once(
             output, status, "url", expected_database="lab_db",
-            deployed_commit=COMMIT, observed_at=NOW,
+            deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
         )
     finally:
         module._release_refresh_lock(held)
@@ -167,7 +170,7 @@ def test_symlink_refresh_lock_fails_closed_without_touching_snapshot_or_receipt(
     )
     assert not module.refresh_once(
         output, status, "url", expected_database="lab_db",
-        deployed_commit=COMMIT, observed_at=NOW,
+        deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
     )
     assert output.read_bytes() == b"last-good"
     assert status.read_bytes() == b"last-receipt"
@@ -183,7 +186,7 @@ def test_refresh_lock_is_persistent_private_regular_file(tmp_path, monkeypatch):
     )
     assert module.refresh_once(
         output, status, "url", expected_database="lab_db",
-        deployed_commit=COMMIT, observed_at=NOW,
+        deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
     )
     lock = module._refresh_lock_path(output)
     assert lock.is_file() and not lock.is_symlink()
@@ -201,7 +204,7 @@ def test_staging_failure_releases_lock_for_next_refresh(tmp_path, monkeypatch):
     with pytest.raises(OSError, match="disk unavailable"):
         module.refresh_once(
             output, status, "url", expected_database="lab_db",
-            deployed_commit=COMMIT, observed_at=NOW,
+            deployed_commit=COMMIT, observer=OBSERVER, observed_at=NOW,
         )
     monkeypatch.setattr(module.tempfile, "mkstemp", real_mkstemp)
     held = module._acquire_refresh_lock(output)
@@ -215,7 +218,8 @@ def test_one_shot_cli_returns_failure_when_no_verified_snapshot_was_published(tm
     monkeypatch.setattr(sys, "argv", [
         "hope-dashboard-snapshot-refresh", "--output", str(output),
         "--status", str(status), "--expected-database", "lab_db",
-        "--deployed-commit", COMMIT,
+        "--deployed-commit", COMMIT, "--expected-reader", OBSERVER.principal,
+        "--expected-database-identity", OBSERVER.database_sha256,
     ])
     assert module.main() == 1
 
@@ -231,9 +235,10 @@ def test_one_shot_cli_returns_success_only_after_verified_publication(tmp_path, 
     monkeypatch.setattr(sys, "argv", [
         "hope-dashboard-snapshot-refresh", "--output", str(output),
         "--status", str(status), "--expected-database", "lab_db",
-        "--deployed-commit", COMMIT,
+        "--deployed-commit", COMMIT, "--expected-reader", OBSERVER.principal,
+        "--expected-database-identity", OBSERVER.database_sha256,
     ])
     assert module.main() == 0
     assert observed == {"args": (output, status, "secret-url"), "kwargs": {
-        "expected_database": "lab_db", "deployed_commit": COMMIT,
+        "expected_database": "lab_db", "deployed_commit": COMMIT, "observer": OBSERVER,
     }}

@@ -19,6 +19,7 @@ from sqlalchemy.exc import DBAPIError
 from hope.api.dashboard_projection import EXPERIMENT_STATES, VERDICTS, verified_projections
 from hope.api.dashboard_m2_snapshot import readers as m2_readers
 from hope.infrastructure.durable_file import durable_replace
+from hope.security.dashboard_observer import ObserverProfile, verify_observer
 
 
 def _count(connection: Connection, query: str) -> int:
@@ -95,7 +96,7 @@ def _optional_projections(connection: Connection, generated: datetime) -> dict:
 def build_dashboard_snapshot(
     connection: Connection, *, statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
     deployed_commit: str | None = None, data_classification: str | None = None,
-    expected_database: str | None = None,
+    expected_database: str | None = None, observer: ObserverProfile | None = None,
 ) -> dict[str, object]:
     """Read a transactionally consistent snapshot; fail closed on missing state."""
     # The first SQL statement establishes a read-only repeatable-read snapshot.
@@ -117,6 +118,11 @@ def build_dashboard_snapshot(
     # pooled connection. Values are validated integers, never SQL input strings.
     connection.execute(text(f"SET LOCAL statement_timeout = {statement_timeout_ms}"))
     connection.execute(text(f"SET LOCAL lock_timeout = {lock_timeout_ms}"))
+    if observer is not None:
+        if data_classification != "DISPOSABLE_LAB" or expected_database is None:
+            raise ValueError("DASHBOARD_OBSERVER_SCOPE_INVALID")
+        connection.exec_driver_sql('SET LOCAL search_path=pg_catalog,public,pg_temp')
+        verify_observer(connection, observer)
     timestamp = connection.execute(text("SELECT CURRENT_TIMESTAMP")).scalar_one()
     if not isinstance(timestamp, datetime) or timestamp.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_DATABASE_TIME_INVALID")
@@ -189,6 +195,11 @@ def build_dashboard_snapshot(
     }
     if provenance is not None:
         snapshot["provenance"] = provenance
+    if observer is not None:
+        # The same live session must still meet the profile before its bytes can
+        # leave the READ ONLY transaction or become a published snapshot.
+        identity = verify_observer(connection, observer)
+        snapshot["provenance"]["database_identity_sha256"] = identity
     return snapshot
 
 
@@ -196,7 +207,7 @@ def export_dashboard_snapshot(
     output: Path, database_url: str, *, connect_timeout_seconds: int = 10,
     statement_timeout_ms: int = 15000, lock_timeout_ms: int = 3000,
     deployed_commit: str | None = None, data_classification: str | None = None,
-    expected_database: str | None = None,
+    expected_database: str | None = None, observer: ObserverProfile | None = None,
 ) -> Path:
     """Atomically publish only a complete snapshot; never publish partial reads."""
     if not database_url:
@@ -210,7 +221,7 @@ def export_dashboard_snapshot(
             snapshot = build_dashboard_snapshot(
                 connection, statement_timeout_ms=statement_timeout_ms, lock_timeout_ms=lock_timeout_ms,
                 deployed_commit=deployed_commit, data_classification=data_classification,
-                expected_database=expected_database,
+                expected_database=expected_database, observer=observer,
             )
             connection.rollback()
     finally:

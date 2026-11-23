@@ -18,6 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from hope.api.dashboard_snapshot import export_dashboard_snapshot
+from hope.security.dashboard_observer import ObserverProfile
 from hope.api.snapshot_contract import verified_snapshot_payload
 from hope.infrastructure.durable_file import bounded_regular_read, durable_replace
 
@@ -156,9 +157,11 @@ def _failure_code(error: Exception) -> str:
 
 def refresh_once(
     output: Path, status: Path, database_url: str, *, expected_database: str,
-    deployed_commit: str, observed_at: datetime | None = None,
+    deployed_commit: str, observer: ObserverProfile, observed_at: datetime | None = None,
 ) -> bool:
     """Refresh one exact disposable database, preserving last-good on failure."""
+    if type(observer) is not ObserverProfile:
+        raise ValueError("DASHBOARD_OBSERVER_PROFILE_INVALID")
     observed_at = _utc_now() if observed_at is None else observed_at
     if not isinstance(observed_at, datetime) or observed_at.tzinfo is None:
         raise ValueError("HOPE_DASHBOARD_REFRESH_TIME_INVALID")
@@ -190,6 +193,7 @@ def refresh_once(
             export_dashboard_snapshot(
                 staged, database_url, deployed_commit=deployed_commit,
                 data_classification="DISPOSABLE_LAB", expected_database=expected_database,
+                observer=observer,
             )
             staged_payload = bounded_regular_read(staged, 32768)
             safe, generated = verified_snapshot_payload(
@@ -197,7 +201,8 @@ def refresh_once(
             )
             snapshot = json.loads(safe)
             provenance = snapshot.get("provenance", {})
-            if provenance.get("data_classification") != "DISPOSABLE_LAB":
+            if (provenance.get("data_classification") != "DISPOSABLE_LAB"
+                    or provenance.get("database_identity_sha256") != observer.database_sha256):
                 raise ValueError("HOPE_DASHBOARD_REFRESH_PROVENANCE_INVALID")
         except Exception as error:
             staged.unlink(missing_ok=True)
@@ -226,21 +231,24 @@ def refresh_once(
         _release_refresh_lock(refresh_lock)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Refresh an isolated HOPE LAB dashboard snapshot")
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Refresh an isolated HOPE LAB dashboard snapshot", allow_abbrev=False)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--status", type=Path, required=True)
     parser.add_argument("--expected-database", required=True)
     parser.add_argument("--deployed-commit", required=True)
+    parser.add_argument("--expected-reader", required=True)
+    parser.add_argument("--expected-database-identity", required=True)
     parser.add_argument("--interval-seconds", type=int)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if args.interval_seconds is not None and not 30 <= args.interval_seconds <= 3600:
         parser.error("--interval-seconds must be between 30 and 3600")
+    observer = ObserverProfile(args.expected_reader, args.expected_database_identity)
     database_url = os.environ.get("HOPE_DATABASE_URL", "")
     while True:
         refreshed = refresh_once(
             args.output, args.status, database_url,
-            expected_database=args.expected_database, deployed_commit=args.deployed_commit,
+            expected_database=args.expected_database, deployed_commit=args.deployed_commit, observer=observer,
         )
         if args.interval_seconds is None:
             # One-shot callers (cron, systemd, CI) must be able to distinguish a
