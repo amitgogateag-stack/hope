@@ -53,11 +53,11 @@ jobs:
         env:
           HOPE_DATABASE_URL: postgresql+psycopg://hope:hope@localhost:5432/hope
           HOPE_TEST_POSTGRES_MAJOR: ${{ matrix.postgres.major }}
-        run: pytest -q tests/integration/test_qualified_dashboard_refresh.py
+        run: pytest -q tests/unit/test_observer_acl_proposal.py tests/integration/test_observer_temp_acl.py tests/integration/test_qualified_dashboard_refresh.py
       - name: Dashboard static type qualification
         run: |
           python -m pip install -r constraints/type-review.txt
-          python -m mypy --follow-imports=silent --check-untyped-defs src/hope/api/dashboard_snapshot_refresh.py src/hope/api/dashboard_projection.py src/hope/api/dashboard_m2_snapshot.py src/hope/security/dashboard_observer.py
+          python -m mypy --follow-imports=silent --check-untyped-defs src/hope/api/dashboard_snapshot_refresh.py src/hope/api/dashboard_projection.py src/hope/api/dashboard_m2_snapshot.py src/hope/security/dashboard_observer.py src/hope/api/observer_acl_plan.py
       - name: Dashboard publication crash and ledger invariants
         run: pytest -q tests/unit/test_dashboard_refresh_recovery.py tests/unit/test_dashboard_ledger_consistency.py tests/unit/test_dashboard_snapshot_refresh.py
       - name: Dashboard receipt job lineage (read-only)
