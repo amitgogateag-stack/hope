@@ -9,9 +9,24 @@ import pytest
 WORKFLOW = Path(__file__).parents[2] / ".github/workflows/ci.yml"
 
 
-def script():
-    text = WORKFLOW.read_text(encoding="utf-8")
-    return "\n".join(line[12:] for line in text.split("          script: |\n", 1)[1].splitlines())
+def script(workflow_text=None):
+    # This is the known literal github-script block, not all YAML after it.
+    # Adjacent jobs/steps may contain scripts of their own and must never run.
+    lines = (WORKFLOW.read_text(encoding="utf-8")
+             if workflow_text is None else workflow_text).splitlines()
+    start = lines.index("  publish-ci-status:") + 1
+    end = next((i for i in range(start, len(lines))
+                if lines[i].strip() and not lines[i].startswith("    ")), len(lines))
+    job = lines[start:end]
+    markers = [i for i, line in enumerate(job) if line == "          script: |"]
+    assert len(markers) == 1, "Expected exactly one authoritative publisher script"
+    body = []
+    for line in job[markers[0] + 1:]:
+        if line.strip() and not line.startswith("            "):
+            break
+        body.append(line[12:])
+    assert any(line.strip() for line in body), "Publisher script must not be empty"
+    return "\n".join(body)
 
 
 HARNESS = r"""
@@ -33,10 +48,10 @@ process.stdout.write(JSON.stringify(calls));})().catch(error=>{console.error(err
 """
 
 
-def publish(**case):
+def publish(*, workflow_text=None, **case):
     node = shutil.which("node")
     assert node, "CI publisher tests require Node (installed in CI)"
-    result = subprocess.run([node, "-e", HARNESS], input=json.dumps(dict(script=script(), **case)),
+    result = subprocess.run([node, "-e", HARNESS], input=json.dumps(dict(script=script(workflow_text), **case)),
                             text=True, capture_output=True, timeout=10, check=True)
     return json.loads(result.stdout)
 
@@ -99,3 +114,25 @@ def test_current_branch_evidence_replaces_unrelated_branch_marker():
     calls = publish(comments=[marker(sha="b"*40,run_number=999)])
     assert calls[-1][0] == "update"
     assert "sha="+"a"*40 in calls[-1][1]["body"]
+
+
+@pytest.mark.parametrize("placement", ["before", "after", "next_step"])
+def test_adjacent_workflow_code_cannot_enter_the_publisher(placement):
+    text = WORKFLOW.read_text(encoding="utf-8")
+    decoy = ("  unrelated:\n    steps:\n      - uses: actions/github-script@example\n"
+             "        with:\n          script: |\n"
+             "            throw new Error('UNRELATED_SCRIPT_EXECUTED');\n")
+    if placement == "before":
+        text = text.replace("  publish-ci-status:\n", decoy + "  publish-ci-status:\n", 1)
+    elif placement == "after":
+        text += "\n" + decoy
+    else:
+        text = text.replace("\n  private-preview-build:\n",
+            "\n      - name: unrelated publisher follow-up\n"
+            "        run: throw new Error('UNRELATED_STEP_EXECUTED');\n"
+            "\n  private-preview-build:\n", 1)
+    calls = publish(workflow_text=text, comments=[marker()], result="failure")
+    assert [call[0] for call in calls] == ["branch", "paginate", "update"]
+    assert calls[-1][1]["comment_id"] == 7
+    assert "test_result=failure" in calls[-1][1]["body"]
+    assert "sha=" + "a" * 40 in calls[-1][1]["body"]
