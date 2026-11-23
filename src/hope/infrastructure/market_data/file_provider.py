@@ -100,6 +100,47 @@ class MarketDataFileEvidence:
             raise ValueError("FILE_PROVIDER_SIZE_BOUND_INVALID")
 
 
+def market_data_file_evidence_payload(evidence: MarketDataFileEvidence) -> dict[str, object]:
+    """Canonical durable identity; local path and read bound are not provenance."""
+    if type(evidence) is not MarketDataFileEvidence:
+        raise TypeError("FILE_PROVIDER_EVIDENCE_REQUIRED")
+    return {
+        "schema": "hope.market-data-file-evidence.v1",
+        "source": evidence.source,
+        "payload_sha256": evidence.payload_sha256,
+        "provider_contract_sha256": evidence.provider_contract_sha256,
+        "observed_at": evidence.observed_at.isoformat(),
+    }
+
+
+def parse_market_data_file_evidence(payload: object) -> MarketDataFileEvidence:
+    if type(payload) is not dict or set(payload) != {
+        "schema", "source", "payload_sha256", "provider_contract_sha256", "observed_at"
+    }:
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID")
+    values = cast(dict[str, object], payload)
+    if values["schema"] != "hope.market-data-file-evidence.v1":
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID")
+    observed_text = values["observed_at"]
+    if type(observed_text) is not str:
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID")
+    try:
+        observed_at = datetime.fromisoformat(observed_text)
+    except ValueError as error:
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID") from error
+    if observed_at.isoformat() != observed_text:
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID")
+    try:
+        return MarketDataFileEvidence(
+            source=cast(str, values["source"]),
+            payload_sha256=cast(str, values["payload_sha256"]),
+            provider_contract_sha256=cast(str, values["provider_contract_sha256"]),
+            observed_at=observed_at,
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("FILE_PROVIDER_MANIFEST_EVIDENCE_INVALID") from error
+
+
 class VerifiedCsvMarketDataProvider:
     """Read one private regular CSV whose exact bytes are independently pinned."""
 

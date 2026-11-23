@@ -8,11 +8,13 @@ from uuid import UUID
 
 from sqlalchemy import Connection, text
 
+from hope.infrastructure.market_data.file_provider import MarketDataFileEvidence
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.repositories.market_data_manifest import (
     build_market_data_manifest,
     manifest_expected_keys_for_requests,
     manifest_universe_version_id,
+    validate_manifest_file_evidence,
     validate_manifest_membership,
 )
 
@@ -29,6 +31,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         """Prove the runtime plan exactly matches durable intent before fetching."""
         if not isinstance(dataset_version_id, UUID):
@@ -78,6 +81,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 universe_version_id,
                 requests,
                 identity_map=identity_map,
+                provider_evidence=provider_evidence,
             )
             runtime_canonical = json.dumps(
                 runtime_manifest, sort_keys=True, separators=(",", ":")
@@ -127,6 +131,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         if not isinstance(dataset_version_id, UUID):
             raise TypeError("MARKET_DATA_FINALIZE_REQUIRES_DATASET_VERSION_ID")
@@ -180,6 +185,7 @@ class SqlAlchemyMarketDataVersionFinalizer:
                 raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_HASH_MISMATCH")
 
             manifest_universe_id = manifest_universe_version_id(manifest)
+            validate_manifest_file_evidence(manifest, provider_evidence)
             if manifest_row["universe_version_id"] != manifest_universe_id:
                 raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_UNIVERSE_MISMATCH")
 

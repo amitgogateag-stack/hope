@@ -3,11 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 from datetime import UTC, datetime, timedelta
-from typing import Mapping
+from typing import Mapping, cast
 from uuid import UUID
 
 from sqlalchemy import Connection, text
 
+from hope.infrastructure.market_data.file_provider import (
+    MarketDataFileEvidence,
+    market_data_file_evidence_payload,
+    parse_market_data_file_evidence,
+)
 from hope.infrastructure.market_data.provider import MarketDataRequest
 
 
@@ -24,6 +29,7 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         if not isinstance(dataset_version_id, UUID):
             raise TypeError("MARKET_DATA_MANIFEST_REQUIRES_DATASET_VERSION_ID")
@@ -34,6 +40,7 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
             universe_version_id,
             requests,
             identity_map=identity_map,
+            provider_evidence=provider_evidence,
         )
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         manifest_hash = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -105,7 +112,7 @@ class SqlAlchemyMarketDataCoverageManifestRepository:
                     raise ValueError("MARKET_DATA_MANIFEST_CONFLICT")
                 return
 
-            bar_count = self._connection.execute(
+            bar_count: int = self._connection.execute(
                 text(
                     "SELECT count(*) FROM market_bars "
                     "WHERE dataset_version_id = :version_id"
@@ -137,6 +144,7 @@ def build_market_data_manifest(
     requests: tuple[MarketDataRequest, ...],
     *,
     identity_map: Mapping[tuple[str, str], UUID],
+    provider_evidence: MarketDataFileEvidence | None = None,
 ) -> dict[str, object]:
     if not isinstance(universe_version_id, UUID):
         raise TypeError("MARKET_DATA_MANIFEST_REQUIRES_UNIVERSE_VERSION_ID")
@@ -183,11 +191,38 @@ def build_market_data_manifest(
                 "instruments": instruments,
             }
         )
-    return {
+    payload: dict[str, object] = {
         "version": 2,
         "universe_version_id": str(universe_version_id),
         "windows": windows,
     }
+    if provider_evidence is not None:
+        evidence_payload = market_data_file_evidence_payload(provider_evidence)
+        if any(request.source != provider_evidence.source for request in requests):
+            raise ValueError("MARKET_DATA_MANIFEST_PROVIDER_EVIDENCE_SOURCE_MISMATCH")
+        if provider_evidence.observed_at < max(request.end.astimezone(UTC) for request in requests):
+            raise ValueError("MARKET_DATA_MANIFEST_PROVIDER_EVIDENCE_PRECEDES_WINDOW")
+        payload["provider_evidence"] = evidence_payload
+    return payload
+
+
+def manifest_file_evidence(manifest: Mapping[str, object]) -> MarketDataFileEvidence | None:
+    if "provider_evidence" not in manifest:
+        return None
+    return parse_market_data_file_evidence(manifest["provider_evidence"])
+
+
+def validate_manifest_file_evidence(
+    manifest: Mapping[str, object],
+    provider_evidence: MarketDataFileEvidence | None,
+) -> None:
+    declared = manifest_file_evidence(manifest)
+    if declared is None and provider_evidence is None:
+        return
+    if declared is None or provider_evidence is None:
+        raise ValueError("MARKET_DATA_PROVIDER_EVIDENCE_MISMATCH")
+    if market_data_file_evidence_payload(declared) != market_data_file_evidence_payload(provider_evidence):
+        raise ValueError("MARKET_DATA_PROVIDER_EVIDENCE_MISMATCH")
 
 
 def manifest_universe_version_id(manifest: Mapping[str, object]) -> UUID:
@@ -218,6 +253,7 @@ def manifest_evidence(
     expected_source: str | None = None,
 ) -> tuple[set[tuple[UUID, datetime]], dict[tuple[str, str], UUID]]:
     manifest_universe_version_id(manifest)
+    provider_evidence = manifest_file_evidence(manifest)
     raw_windows = manifest.get("windows")
     if not isinstance(raw_windows, list) or not raw_windows:
         raise ValueError("MARKET_DATA_MANIFEST_INVALID")
@@ -265,6 +301,8 @@ def manifest_evidence(
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
         if expected_source is not None and source != expected_source:
             raise ValueError("MARKET_DATA_MANIFEST_DATASET_SOURCE_MISMATCH")
+        if provider_evidence is not None and source != provider_evidence.source:
+            raise ValueError("MARKET_DATA_MANIFEST_PROVIDER_EVIDENCE_SOURCE_MISMATCH")
         if not isinstance(instruments, list) or not instruments:
             raise ValueError("MARKET_DATA_MANIFEST_INVALID")
 
@@ -346,7 +384,7 @@ def validate_manifest_request_subset(
 ) -> None:
     """Require each recovery key to retain its declared window contract."""
     manifest_evidence(manifest)
-    raw_windows = manifest["windows"]
+    raw_windows = cast(list[dict[str, object]], manifest["windows"])
     for request in requests:
         request_interval_seconds = request.interval.total_seconds()
         for source_symbol, event_time in request.expected_keys:
@@ -358,14 +396,14 @@ def validate_manifest_request_subset(
             authorized = any(
                 raw_window["source"] == request.source
                 and raw_window["interval_seconds"] == request_interval_seconds
-                and datetime.fromisoformat(raw_window["start"])
+                and datetime.fromisoformat(cast(str, raw_window["start"]))
                 <= event_time
-                < datetime.fromisoformat(raw_window["end"])
+                < datetime.fromisoformat(cast(str, raw_window["end"]))
                 and {
                     "source_symbol": source_symbol,
                     "instrument_id": str(instrument_id),
                 }
-                in raw_window["instruments"]
+                in cast(list[dict[str, str]], raw_window["instruments"])
                 for raw_window in raw_windows
             )
             if not authorized:

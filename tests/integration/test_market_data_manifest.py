@@ -6,11 +6,14 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
+from hope.infrastructure.market_data.file_provider import MarketDataFileEvidence
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.postgres.migrations import apply_migrations
 from hope.infrastructure.repositories.market_data_manifest import (
     SqlAlchemyMarketDataCoverageManifestRepository,
 )
+from hope.infrastructure.repositories.market_data_finalizer import SqlAlchemyMarketDataVersionFinalizer
+from hope.infrastructure.repositories.market_data_recovery import SqlAlchemyMarketDataRecoveryAuthorizer
 
 
 @pytest.mark.integration
@@ -29,6 +32,7 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership(postgres
             invalid_version_id = uuid4()
             late_version_id = uuid4()
             non_staging_version_id = uuid4()
+            evidence_version_id = uuid4()
             universe_id = uuid4()
             universe_version_id = uuid4()
             t0 = datetime(2026, 9, 14, 14, 30, tzinfo=timezone.utc)
@@ -56,13 +60,15 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership(postgres
                     "VALUES (:v1, :dataset_id, 'v1', 'staging', FALSE), "
                     "(:v2, :dataset_id, 'v2', 'staging', FALSE), "
                     "(:v3, :dataset_id, 'v3', 'staging', FALSE), "
-                    "(:v4, :dataset_id, 'v4', 'draft', FALSE)"
+                    "(:v4, :dataset_id, 'v4', 'draft', FALSE), "
+                    "(:v5, :dataset_id, 'v5', 'staging', FALSE)"
                 ),
                 {
                     "v1": version_id,
                     "v2": invalid_version_id,
                     "v3": late_version_id,
                     "v4": non_staging_version_id,
+                    "v5": evidence_version_id,
                     "dataset_id": dataset_id,
                 },
             )
@@ -129,6 +135,77 @@ def test_market_data_manifest_binds_pit_universe_and_freezes_membership(postgres
             assert len(stored["manifest_hash"]) == 64
             assert stored["manifest"]["version"] == 2
             assert stored["manifest"]["universe_version_id"] == str(universe_version_id)
+
+            file_evidence = MarketDataFileEvidence(
+                source="TEST",
+                payload_sha256="a" * 64,
+                provider_contract_sha256="b" * 64,
+                observed_at=t2,
+            )
+            repo.declare(
+                evidence_version_id,
+                universe_version_id,
+                declared,
+                identity_map=identity_map,
+                provider_evidence=file_evidence,
+            )
+            evidence_manifest = connection.execute(
+                text(
+                    "SELECT manifest FROM market_data_coverage_manifests "
+                    "WHERE dataset_version_id = :version_id"
+                ),
+                {"version_id": evidence_version_id},
+            ).scalar_one()
+            assert evidence_manifest["provider_evidence"] == {
+                "schema": "hope.market-data-file-evidence.v1",
+                "source": "TEST",
+                "payload_sha256": "a" * 64,
+                "provider_contract_sha256": "b" * 64,
+                "observed_at": t2.isoformat(),
+            }
+            finalizer = SqlAlchemyMarketDataVersionFinalizer(connection)
+            recovery = SqlAlchemyMarketDataRecoveryAuthorizer(connection)
+            finalizer.preflight(
+                evidence_version_id, declared, identity_map=identity_map,
+                provider_evidence=file_evidence,
+            )
+            recovery.preflight_subset(
+                evidence_version_id, (_request(t0),), identity_map=identity_map,
+                provider_evidence=file_evidence,
+            )
+            wrong_evidence = MarketDataFileEvidence(
+                source="TEST",
+                payload_sha256="c" * 64,
+                provider_contract_sha256="b" * 64,
+                observed_at=t2,
+            )
+            with pytest.raises(ValueError, match="PROVIDER_EVIDENCE_MISMATCH"):
+                recovery.preflight_subset(
+                    evidence_version_id, (_request(t0),), identity_map=identity_map,
+                    provider_evidence=wrong_evidence,
+                )
+            for event_time in (t0, t1):
+                connection.execute(
+                    text(
+                        "INSERT INTO market_bars(dataset_version_id, instrument_id, event_time, "
+                        "available_time, ingestion_time, open, high, low, close, volume) VALUES "
+                        "(:version_id, :instrument_id, :event_time, :event_time, :event_time, "
+                        "100, 101, 99, 100, 1000)"
+                    ),
+                    {
+                        "version_id": evidence_version_id,
+                        "instrument_id": instrument_id,
+                        "event_time": event_time,
+                    },
+                )
+            finalizer.finalize(
+                evidence_version_id, declared, identity_map=identity_map,
+                provider_evidence=file_evidence,
+            )
+            assert connection.execute(
+                text("SELECT immutable FROM dataset_versions WHERE dataset_version_id=:id"),
+                {"id": evidence_version_id},
+            ).scalar_one() is True
 
             with pytest.raises(ValueError, match="MARKET_DATA_MANIFEST_CONFLICT"):
                 repo.declare(

@@ -18,6 +18,14 @@ extra symbols, off-grid times, identity-map gaps and unsafe numeric data. The
 normal immutable coverage manifest, PIT universe, market calendar, dataset
 sealing and PostgreSQL persistence checks remain mandatory.
 
+When this adapter is used by the authoritative lifecycle, its payload digest,
+provider-contract digest, source and observation time are embedded in the
+immutable coverage manifest. Preflight, restart recovery and final sealing must
+receive the same evidence. A missing or changed digest fails before provider
+bytes are read or additional bars are persisted. The local pathname and byte
+limit remain runtime controls and are deliberately not represented as market
+provenance.
+
 This code does **not** attest licensing, vendor authenticity, corporate-action
 adjustments, symbol mapping, exchange calendars or data quality. Those require
 independent review and real provider evidence. Test CSVs are synthetic fixtures
