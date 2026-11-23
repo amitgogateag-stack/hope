@@ -460,6 +460,7 @@ def test_server_reports_liveness_separately_from_missing_data(tmp_path):
         assert json.loads(body) == {
             "schema_version": 1, "service": "RUNNING",
             "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+            "snapshot_error_code":"SNAPSHOT_MISSING",
             "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
         }
 
@@ -670,7 +671,8 @@ def test_server_reports_current_snapshot_and_never_exposes_db_details(tmp_path):
         assert state["data_feed"] == "CURRENT"
         assert state["snapshot_generated_at"]
         assert set(state) == {"schema_version", "service", "data_feed", "snapshot_generated_at",
-                              "refresh_state", "refresh_error_code"}
+                              "snapshot_error_code", "refresh_state", "refresh_error_code"}
+        assert state["snapshot_error_code"] is None
 
 
 def test_server_marks_old_snapshot_stale(tmp_path):
@@ -733,8 +735,30 @@ def test_managed_server_refuses_snapshot_from_another_release(tmp_path):
             assert json.loads(body) == {
                 "schema_version": 1, "service": "RUNNING",
                 "data_feed": "UNAVAILABLE", "snapshot_generated_at": None,
+                "snapshot_error_code":"SNAPSHOT_RELEASE_MISMATCH",
                 "refresh_state":"UNAVAILABLE", "refresh_error_code":None,
             }
+
+
+def test_status_reports_bounded_invalid_snapshot_reason_without_input_details(tmp_path):
+    with dashboard(tmp_path, b'{"password":"never expose"}') as server:
+        status = json.loads(request(server, "/status.json")[2])
+        assert status["snapshot_error_code"] == "SNAPSHOT_INVALID"
+        assert "password" not in json.dumps(status)
+
+
+def test_status_reports_untrusted_snapshot_file_without_accepting_it(tmp_path):
+    preview = tmp_path / "preview.html"; preview.write_text("HOPE")
+    snapshot = tmp_path / "snapshot.json"; snapshot.write_bytes(valid_snapshot())
+    snapshot.chmod(0o666)
+    with DashboardHTTPServer(0, preview, snapshot) as server:
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            status = json.loads(request(server, "/status.json")[2])
+            assert status["snapshot_error_code"] == "SNAPSHOT_FILE_UNTRUSTED"
+            assert request(server, "/snapshot.json")[0] == 503
+        finally:
+            server.shutdown(); thread.join(timeout=5)
 
 
 def test_managed_server_serves_only_snapshot_from_exact_release(tmp_path):
