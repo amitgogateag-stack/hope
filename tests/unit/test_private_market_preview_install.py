@@ -163,8 +163,11 @@ def test_closing_snapshot_drift_retains_prepared_backup_and_refuses_false_succes
 
 
 @pytest.fixture
-def kernel_preview(environment,monkeypatch,unused_tcp_port):
-    import subprocess,time,urllib.request
+def kernel_preview(environment,monkeypatch):
+    import subprocess,time,urllib.request,socket
+    with socket.socket(socket.AF_INET,socket.SOCK_STREAM) as reservation:
+        reservation.bind(("127.0.0.1",0))
+        unused_tcp_port=reservation.getsockname()[1]
     layout,plan,payloads,identity=environment
     monkeypatch.setattr(module,'ROOT',layout.root)
     monkeypatch.setattr(module,'PORT',unused_tcp_port)
