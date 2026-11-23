@@ -1,0 +1,30 @@
+[Unit]
+Description=HOPE restricted LAB PostgreSQL snapshot observation
+After=postgresql.service
+ConditionPathIsDirectory=/opt/hope-operations/releases/@RELEASE_SHA@
+
+[Service]
+Type=oneshot
+User=hope-dashboard
+Group=hope-operations
+WorkingDirectory=/opt/hope-operations/releases/@RELEASE_SHA@
+EnvironmentFile=/etc/hope-dashboard-observer.env
+UnsetEnvironment=PYTHONPATH PYTHONHOME PYTHONUSERBASE PYTHONWARNINGS PYTHONINSPECT PYTHONSTARTUP PYTHONBREAKPOINT PYTHONPLATLIBDIR LD_PRELOAD LD_LIBRARY_PATH LD_AUDIT GH_TOKEN
+ExecStart=/usr/bin/python3 -I -B -S -X pycache_prefix=/nonexistent/hope-runtime-bootstrap /opt/hope-operations/releases/@RELEASE_SHA@/deploy/operations/dashboard_release.py --control-runtime release --observer-refresh --output /var/lib/hope-dashboard-observer/snapshot.json --status /var/lib/hope-dashboard-observer/snapshot-refresh.json --deployed-commit @RELEASE_SHA@ --expected-database @DATABASE@ --expected-reader @READER@ --expected-database-identity @DATABASE_SHA256@
+TimeoutStartSec=50s
+UMask=0077
+StateDirectory=hope-dashboard-observer
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hope-dashboard-observer
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=256M
+TasksMax=16
+LimitNOFILE=256
