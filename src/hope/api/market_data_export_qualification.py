@@ -34,7 +34,8 @@ _DIGEST = re.compile(r"[0-9a-f]{64}")
 _RFC3339 = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})"
 )
-_PLAN_KEYS = {"schema", "universe_version_id", "source", "window", "instruments"}
+_PLAN_V1_KEYS = {"schema", "universe_version_id", "source", "window", "instruments"}
+_PLAN_V2_KEYS = {"schema", "universe_version_id", "source", "windows", "instruments"}
 _WINDOW_KEYS = {"start", "end", "interval_seconds"}
 _INSTRUMENT_KEYS = {"source_symbol", "instrument_id"}
 
@@ -66,7 +67,7 @@ def _uuid(value: object) -> UUID:
 @dataclass(frozen=True)
 class MarketDataExportPlan:
     universe_version_id: UUID
-    request: MarketDataRequest
+    requests: tuple[MarketDataRequest, ...]
     identity_map: Mapping[tuple[str, str], UUID]
 
 
@@ -75,19 +76,20 @@ def parse_export_plan(payload: bytes) -> MarketDataExportPlan:
         value = json.loads(payload.decode("utf-8", errors="strict"))
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise ValueError("MARKET_DATA_QUALIFICATION_PLAN_INVALID") from error
-    if type(value) is not dict or set(value) != _PLAN_KEYS:
+    if type(value) is not dict:
         raise ValueError("MARKET_DATA_QUALIFICATION_PLAN_INVALID")
-    if value["schema"] != "hope.market-data-export-plan.v1":
+    schema = value.get("schema")
+    if schema == "hope.market-data-export-plan.v1" and set(value) == _PLAN_V1_KEYS:
+        raw_windows = [value["window"]]
+    elif schema == "hope.market-data-export-plan.v2" and set(value) == _PLAN_V2_KEYS:
+        raw_windows = value["windows"]
+        if type(raw_windows) is not list or not 1 <= len(raw_windows) <= 256:
+            raise ValueError("MARKET_DATA_QUALIFICATION_WINDOWS_INVALID")
+    else:
         raise ValueError("MARKET_DATA_QUALIFICATION_PLAN_SCHEMA_INVALID")
     source = value["source"]
     if type(source) is not str or not source or source != source.strip():
         raise ValueError("MARKET_DATA_QUALIFICATION_SOURCE_INVALID")
-    window = value["window"]
-    if type(window) is not dict or set(window) != _WINDOW_KEYS:
-        raise ValueError("MARKET_DATA_QUALIFICATION_WINDOW_INVALID")
-    interval = window["interval_seconds"]
-    if type(interval) is not int or not 1 <= interval <= 86400:
-        raise ValueError("MARKET_DATA_QUALIFICATION_INTERVAL_INVALID")
     instruments = value["instruments"]
     if type(instruments) is not list or not 1 <= len(instruments) <= 2048:
         raise ValueError("MARKET_DATA_QUALIFICATION_INSTRUMENTS_INVALID")
@@ -103,18 +105,33 @@ def parse_export_plan(payload: bytes) -> MarketDataExportPlan:
             raise ValueError("MARKET_DATA_QUALIFICATION_SYMBOL_DUPLICATE")
         identities[key] = _uuid(instrument["instrument_id"])
     symbols = tuple(sorted(symbol for _, symbol in identities))
-    request = MarketDataRequest(
-        source=source,
-        source_symbols=symbols,
-        start=_instant(window["start"]),
-        end=_instant(window["end"]),
-        interval=timedelta(seconds=interval),
-    )
-    if request.expected_count > 1_000_000:
+    requests: list[MarketDataRequest] = []
+    logical_keys: set[tuple[str, datetime]] = set()
+    total_count = 0
+    for window in raw_windows:
+        if type(window) is not dict or set(window) != _WINDOW_KEYS:
+            raise ValueError("MARKET_DATA_QUALIFICATION_WINDOW_INVALID")
+        interval = window["interval_seconds"]
+        if type(interval) is not int or not 1 <= interval <= 86400:
+            raise ValueError("MARKET_DATA_QUALIFICATION_INTERVAL_INVALID")
+        request = MarketDataRequest(
+            source=source,
+            source_symbols=symbols,
+            start=_instant(window["start"]),
+            end=_instant(window["end"]),
+            interval=timedelta(seconds=interval),
+        )
+        request_keys = set(request.expected_keys)
+        if len(request_keys) != request.expected_count or logical_keys.intersection(request_keys):
+            raise ValueError("MARKET_DATA_QUALIFICATION_WINDOWS_OVERLAP")
+        logical_keys.update(request_keys)
+        total_count += request.expected_count
+        requests.append(request)
+    if total_count > 1_000_000:
         raise ValueError("MARKET_DATA_QUALIFICATION_PLAN_TOO_LARGE")
     return MarketDataExportPlan(
         universe_version_id=_uuid(value["universe_version_id"]),
-        request=request,
+        requests=tuple(requests),
         identity_map=identities,
     )
 
@@ -135,43 +152,51 @@ def qualify_provider_export(
     )
     plan = parse_export_plan(plan_payload)
     evidence = MarketDataFileEvidence(
-        source=plan.request.source,
+        source=plan.requests[0].source,
         payload_sha256=export_sha256,
         provider_contract_sha256=provider_contract_sha256,
         observed_at=observed_at,
     )
-    provider = VerifiedCsvMarketDataProvider(export_path, evidence)
-    batch = fetch_and_normalize_bars(
-        provider, plan.request, identity_map=plan.identity_map
+    provider = VerifiedCsvMarketDataProvider(
+        export_path, evidence, request_plan=plan.requests
+    )
+    batches = tuple(
+        fetch_and_normalize_bars(provider, request, identity_map=plan.identity_map)
+        for request in plan.requests
     )
     manifest = build_market_data_manifest(
         plan.universe_version_id,
-        (plan.request,),
+        plan.requests,
         identity_map=plan.identity_map,
         provider_evidence=evidence,
     )
     manifest_bytes = json.dumps(
         manifest, sort_keys=True, separators=(",", ":")
     ).encode("utf-8")
+    windows = [
+        {
+            "start": request.start.astimezone(UTC).isoformat(),
+            "end": request.end.astimezone(UTC).isoformat(),
+            "interval_seconds": int(request.interval.total_seconds()),
+        }
+        for request in plan.requests
+    ]
     return {
-        "schema": "hope.market-data-export-qualification.v1",
+        "schema": "hope.market-data-export-qualification.v2",
         "export_preflight_status": "PASS",
         "persistence_performed": False,
         "paper_authority": False,
         "database_acceptance": False,
         "release_admission": False,
-        "source": plan.request.source,
+        "source": plan.requests[0].source,
         "universe_version_id": str(plan.universe_version_id),
         "request_plan_sha256": plan_sha256,
         "payload_sha256": evidence.payload_sha256,
         "provider_contract_sha256": evidence.provider_contract_sha256,
         "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
-        "bar_count": len(batch.bars),
-        "window": {
-            "start": plan.request.start.astimezone(UTC).isoformat(),
-            "end": plan.request.end.astimezone(UTC).isoformat(),
-            "interval_seconds": int(plan.request.interval.total_seconds()),
-        },
+        "bar_count": sum(len(batch.bars) for batch in batches),
+        "window_count": len(windows),
+        "windows": windows,
         "observed_at": evidence.observed_at.isoformat(),
     }
 

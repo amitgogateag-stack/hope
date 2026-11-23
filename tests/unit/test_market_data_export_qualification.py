@@ -29,6 +29,24 @@ PLAN = {
         {"source_symbol": "BBB", "instrument_id": "cccccccc-cccc-4ccc-8ccc-cccccccccccc"},
     ],
 }
+MULTI_PLAN = {
+    "schema": "hope.market-data-export-plan.v2",
+    "universe_version_id": PLAN["universe_version_id"],
+    "source": PLAN["source"],
+    "windows": [
+        {
+            "start": "2026-11-20T14:30:00Z",
+            "end": "2026-11-20T14:31:00Z",
+            "interval_seconds": 60,
+        },
+        {
+            "start": "2026-11-20T14:31:00Z",
+            "end": "2026-11-20T14:32:00Z",
+            "interval_seconds": 60,
+        },
+    ],
+    "instruments": PLAN["instruments"],
+}
 CSV = (
     "source,source_symbol,event_time,available_time,ingestion_time,effective_time,open,high,low,close,volume\n"
     "VENDOR_EXPORT,AAA,2026-11-20T14:30:00Z,2026-11-20T14:31:00Z,2026-11-20T14:32:00Z,,100,102,99,101,10\n"
@@ -61,6 +79,7 @@ def _qualify(tmp_path: Path, plan=PLAN):
 
 def test_exact_export_emits_non_persisting_manifest_bound_receipt(tmp_path):
     receipt = _qualify(tmp_path)
+    assert receipt["schema"] == "hope.market-data-export-qualification.v2"
     assert receipt["export_preflight_status"] == "PASS"
     assert receipt["bar_count"] == 4
     assert receipt["persistence_performed"] is False
@@ -68,10 +87,46 @@ def test_exact_export_emits_non_persisting_manifest_bound_receipt(tmp_path):
     assert receipt["database_acceptance"] is False
     assert receipt["release_admission"] is False
     assert receipt["universe_version_id"] == PLAN["universe_version_id"]
+    assert receipt["window_count"] == 1
+    assert len(receipt["windows"]) == 1
     encoded = json.dumps(receipt, sort_keys=True)
     assert str(tmp_path) not in encoded
     assert "101" not in encoded and "201" not in encoded
     assert len(receipt["manifest_sha256"]) == 64
+
+
+def test_multi_window_plan_qualifies_complete_export_as_one_manifest(tmp_path):
+    receipt = _qualify(tmp_path, MULTI_PLAN)
+    assert receipt["bar_count"] == 4
+    assert receipt["window_count"] == 2
+    assert receipt["windows"] == [
+        {
+            "start": "2026-11-20T14:30:00+00:00",
+            "end": "2026-11-20T14:31:00+00:00",
+            "interval_seconds": 60,
+        },
+        {
+            "start": "2026-11-20T14:31:00+00:00",
+            "end": "2026-11-20T14:32:00+00:00",
+            "interval_seconds": 60,
+        },
+    ]
+
+
+def test_multi_window_plan_overlap_is_rejected_before_export_read(tmp_path):
+    plan = json.loads(json.dumps(MULTI_PLAN))
+    plan["windows"][1] = dict(plan["windows"][0])
+    plan_path, plan_bytes, export_path = _files(tmp_path, plan)
+    export_path.unlink()
+    with pytest.raises(ValueError, match="WINDOWS_OVERLAP"):
+        qualify_provider_export(
+            plan_path=plan_path,
+            plan_sha256=hashlib.sha256(plan_bytes).hexdigest(),
+            export_path=export_path,
+            export_sha256=hashlib.sha256(CSV).hexdigest(),
+            provider_contract_sha256="d" * 64,
+            observed_at=datetime(2026, 11, 20, 14, 35, tzinfo=UTC),
+        )
 
 
 def test_plan_digest_fails_before_export_path_is_opened(tmp_path):
@@ -104,7 +159,7 @@ def test_changed_export_is_refused(tmp_path):
 @pytest.mark.parametrize(
     "mutate,error",
     [
-        (lambda plan: plan.update(extra=True), "PLAN_INVALID"),
+        (lambda plan: plan.update(extra=True), "PLAN_SCHEMA_INVALID"),
         (lambda plan: plan["window"].update(interval_seconds=0), "INTERVAL_INVALID"),
         (lambda plan: plan["instruments"].append(dict(plan["instruments"][0])), "SYMBOL_DUPLICATE"),
         (lambda plan: plan.update(universe_version_id="AAAAAAAA-AAAA-4AAA-8AAA-AAAAAAAAAAAA"), "UUID_INVALID"),
