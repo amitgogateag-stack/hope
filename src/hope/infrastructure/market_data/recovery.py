@@ -4,6 +4,10 @@ from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
 from hope.infrastructure.market_data.ingestion import NormalizedMarketBarBatch
+from hope.infrastructure.market_data.file_provider import (
+    MarketDataFileEvidence,
+    VerifiedCsvMarketDataProvider,
+)
 from hope.infrastructure.market_data.identity import snapshot_request_bindings
 from hope.infrastructure.market_data.persistence import MarketBarSink
 from hope.infrastructure.market_data.pipeline import ingest_market_data_window
@@ -18,6 +22,7 @@ class MarketDataRecoveryAuthorizer(Protocol):
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         ...
 
@@ -44,6 +49,8 @@ def ingest_market_data_recovery_windows(
         raise TypeError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_RECOVERY_WINDOWS_REQUIRED")
+    if type(provider) is VerifiedCsvMarketDataProvider:
+        provider.validate_request_plan(requests)
 
     identity_map = snapshot_request_bindings(requests, identity_map)
 
@@ -60,7 +67,14 @@ def ingest_market_data_recovery_windows(
     preflight_subset = getattr(authorizer, "preflight_subset", None)
     if not callable(preflight_subset):
         raise TypeError("MARKET_DATA_RECOVERY_MANIFEST_PREFLIGHT_REQUIRED")
-    preflight_subset(dataset_version_id, requests, identity_map=identity_map)
+    provider_evidence = provider.evidence if type(provider) is VerifiedCsvMarketDataProvider else None
+    if provider_evidence is None:
+        preflight_subset(dataset_version_id, requests, identity_map=identity_map)
+    else:
+        preflight_subset(
+            dataset_version_id, requests, identity_map=identity_map,
+            provider_evidence=provider_evidence,
+        )
 
     return tuple(
         ingest_market_data_window(

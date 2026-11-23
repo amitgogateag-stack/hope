@@ -8,10 +8,12 @@ from uuid import UUID
 
 from sqlalchemy import Connection, text
 
+from hope.infrastructure.market_data.file_provider import MarketDataFileEvidence
 from hope.infrastructure.market_data.provider import MarketDataRequest
 from hope.infrastructure.repositories.market_data_manifest import (
     manifest_evidence,
     manifest_universe_version_id,
+    validate_manifest_file_evidence,
     validate_manifest_membership,
     validate_manifest_request_subset,
 )
@@ -29,6 +31,7 @@ class SqlAlchemyMarketDataRecoveryAuthorizer:
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         if not isinstance(dataset_version_id, UUID):
             raise TypeError("MARKET_DATA_RECOVERY_PREFLIGHT_REQUIRES_DATASET_VERSION_ID")
@@ -71,6 +74,7 @@ class SqlAlchemyMarketDataRecoveryAuthorizer:
                 raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_HASH_MISMATCH")
 
             universe_version_id = manifest_universe_version_id(manifest)
+            validate_manifest_file_evidence(manifest, provider_evidence)
             if manifest_row["universe_version_id"] != universe_version_id:
                 raise ValueError("MARKET_DATA_COVERAGE_MANIFEST_UNIVERSE_MISMATCH")
 

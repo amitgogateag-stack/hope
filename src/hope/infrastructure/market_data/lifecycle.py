@@ -5,6 +5,10 @@ from typing import Mapping, Protocol, runtime_checkable
 from uuid import UUID
 
 from hope.application.market_data.calendar import MarketSessionCalendar
+from hope.infrastructure.market_data.file_provider import (
+    MarketDataFileEvidence,
+    VerifiedCsvMarketDataProvider,
+)
 from hope.infrastructure.market_data.ingestion import NormalizedMarketBarBatch
 from hope.infrastructure.market_data.identity import snapshot_request_bindings
 from hope.infrastructure.market_data.persistence import MarketBarSink
@@ -20,6 +24,7 @@ class MarketDataVersionFinalizer(Protocol):
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         ...
 
@@ -29,6 +34,7 @@ class MarketDataVersionFinalizer(Protocol):
         requests: tuple[MarketDataRequest, ...],
         *,
         identity_map: Mapping[tuple[str, str], UUID],
+        provider_evidence: MarketDataFileEvidence | None = None,
     ) -> None:
         ...
 
@@ -60,6 +66,8 @@ def ingest_and_seal_market_data_windows(
         raise TypeError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRE_TUPLE")
     if not requests:
         raise ValueError("MARKET_DATA_LIFECYCLE_WINDOWS_REQUIRED")
+    if type(provider) is VerifiedCsvMarketDataProvider:
+        provider.validate_request_plan(requests)
 
     first = requests[0]
     for request in requests:
@@ -110,11 +118,14 @@ def ingest_and_seal_market_data_windows(
     preflight = getattr(finalizer, "preflight", None)
     if not callable(preflight):
         raise TypeError("MARKET_DATA_LIFECYCLE_MANIFEST_PREFLIGHT_REQUIRED")
-    preflight(
-        dataset_version_id,
-        requests,
-        identity_map=identity_map,
-    )
+    provider_evidence = provider.evidence if type(provider) is VerifiedCsvMarketDataProvider else None
+    if provider_evidence is None:
+        preflight(dataset_version_id, requests, identity_map=identity_map)
+    else:
+        preflight(
+            dataset_version_id, requests, identity_map=identity_map,
+            provider_evidence=provider_evidence,
+        )
 
     batches = tuple(
         ingest_market_data_window(
@@ -126,9 +137,11 @@ def ingest_and_seal_market_data_windows(
         )
         for request in requests
     )
-    finalizer.finalize(
-        dataset_version_id,
-        requests,
-        identity_map=identity_map,
-    )
+    if provider_evidence is None:
+        finalizer.finalize(dataset_version_id, requests, identity_map=identity_map)
+    else:
+        finalizer.finalize(
+            dataset_version_id, requests, identity_map=identity_map,
+            provider_evidence=provider_evidence,
+        )
     return batches
