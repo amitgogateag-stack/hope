@@ -224,6 +224,15 @@ async function main() {
   b.api.applyHealth({schema_version:1,service:'RUNNING',data_feed:'CURRENT',snapshot_generated_at:iso(BASE),refresh_state:'CURRENT',refresh_error_code:null});
   assert.doesNotMatch(b.element('snapshot-status').textContent,/Refresh|retaining/);
  }
+ // A rejected server snapshot exposes only a bounded contract reason. It does
+ // not make the bytes renderable or turn a release mismatch into compatibility.
+ {
+  const b=browser(),base={schema_version:1,service:'RUNNING',data_feed:'UNAVAILABLE',snapshot_generated_at:null,refresh_state:'UNAVAILABLE',refresh_error_code:null};
+  b.api.applyHealth({...base,snapshot_error_code:'SNAPSHOT_RELEASE_MISMATCH'});
+  assert.match(b.element('snapshot-status').textContent,/SNAPSHOT_RELEASE_MISMATCH/);
+  assert.throws(()=>b.api.applyHealth({...base,snapshot_error_code:'password=secret'}));
+  assert.throws(()=>b.api.applyHealth({...base,data_feed:'CURRENT',snapshot_generated_at:iso(BASE),snapshot_error_code:'SNAPSHOT_INVALID'}));
+ }
  // Server status can only qualify the exact automatic snapshot it observed;
  // it cannot contaminate a selected local file or cross a refresh generation.
  {

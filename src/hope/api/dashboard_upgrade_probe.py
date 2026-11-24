@@ -174,8 +174,10 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None,
     if status_code != 200:
         raise ValueError("HOPE_UPGRADE_HEALTH_HTTP_INVALID")
     status = _json(body)
-    if (not _exact_keys(status, {"schema_version", "service", "data_feed", "snapshot_generated_at",
-                                 "refresh_state", "refresh_error_code"})
+    health_keys = {"schema_version", "service", "data_feed", "snapshot_generated_at",
+                   "refresh_state", "refresh_error_code"}
+    status_keys = frozenset(status) if isinstance(status, dict) else frozenset()
+    if (status_keys not in {frozenset(health_keys), frozenset(health_keys | {"snapshot_error_code"})}
             or type(status["schema_version"]) is not int or status["schema_version"] != 1
             or status["service"] != "RUNNING"
             or status["data_feed"] not in ("CURRENT", "STALE", "UNAVAILABLE")
@@ -184,7 +186,11 @@ def verify_dashboard(base: str = "http://127.0.0.1:8787", *, opener=None,
                 (status["refresh_error_code"] in {"DATABASE_IDENTITY_MISMATCH",
                  "PAPER_STATE_UNVERIFIED", "SNAPSHOT_REFRESH_FAILED"}))
             or (status["data_feed"] == "UNAVAILABLE" and status["snapshot_generated_at"] is not None)
-            or (status["data_feed"] != "UNAVAILABLE" and not _timestamp(status["snapshot_generated_at"]))):
+            or (status["data_feed"] != "UNAVAILABLE" and not _timestamp(status["snapshot_generated_at"]))
+            or ("snapshot_error_code" in status and
+                ((status["data_feed"] == "UNAVAILABLE") !=
+                 (status["snapshot_error_code"] in {"SNAPSHOT_MISSING", "SNAPSHOT_RELEASE_MISMATCH",
+                                                     "SNAPSHOT_FILE_UNTRUSTED", "SNAPSHOT_INVALID"})))):
         raise ValueError("HOPE_UPGRADE_HEALTH_INVALID")
     page_code, page = _read(opener, base + "/", _MAX_PAGE_BYTES)
     if page_code != 200 or any(marker not in page for marker in _REQUIRED_MARKERS):

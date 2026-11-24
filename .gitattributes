@@ -1,0 +1,2 @@
+# Dashboard assets have signed byte identities and a strict HTTP size bound.
+docs/dashboard/*.html text eol=lf

@@ -9,12 +9,13 @@ def sign(path,private):
     subprocess.run([str(p.OPENSSL),"pkeyutl","-sign","-rawin","-inkey",str(private),"-in",str(path),"-out",str(path.with_suffix(".sig"))],check=True,capture_output=True)
 
 
-def approve_fixture_build(root,sha,mode,manifest,private):
+def approve_fixture_build(root,sha,mode,manifest,private,*,source_files=None):
     folder=root/"release-builds";folder.mkdir(exist_ok=True)
     public=root/"runtime-trust/artifacts-ed25519.pub"
     for name in ("releases-ed25519.pub","builders-ed25519.pub"):(root/"runtime-trust"/name).write_bytes(public.read_bytes())
     descriptor=r.strict_json((root/"artifact-provenance"/(sha+"-"+mode+".json")).read_bytes())
-    source_files={"docs/dashboard/preview.html":b"<h1>HOPE</h1>\n","README.md":b"fixture source\n"}
+    if source_files is None:
+        source_files={"docs/dashboard/preview.html":b"<h1>HOPE</h1>\n","README.md":b"fixture source\n"}
     source_digest=r._digest(r._canonical({name:r._digest(data) for name,data in source_files.items()}))
     sbom=build_sbom(descriptor,source_digest);sbom_bytes=r._canonical(sbom)
     (folder/(sha+"-"+mode+".sbom.json")).write_bytes(sbom_bytes)

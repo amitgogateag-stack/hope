@@ -83,12 +83,21 @@ Invalid replacement evidence clears previously displayed market values.
 
 Under `activation_view`, the market asset requires a distinct independently
 trusted `market_preview_sha256`, while the existing page retains its own pinned
-digest. The current runtime gate does not issue this extra asset evidence: managed
-market-page deployment stays BLOCKED until a separately reviewed runtime update
-supplies it. Never substitute a self-computed digest or omit the activation gate.
+digest. The runtime gate requests that fixed optional asset from the same externally
+approved archive used for the original preview. Its full signed builder inputs,
+approval, archive/source-map, SBOM and runtime verification remain mandatory. No
+second archive read, caller path, new key, self-hash or extra authority is used.
+Older approved archives without market.html preserve the original page and return
+no market digest, so the market route stays BLOCKED. A missing/unverified build or
+a malformed positive digest is refused. Never omit the activation gate.
 Captures remain independently UNVERIFIED, even when their containing asset is
 trusted. No current-data, signer/session, PIT or PAPER readiness is implied.
 
 Native Linux CI exercises actual private-file permissions/symlink refusal. Windows
 semantic tests and disposable Chrome checks model only its incompatible native
 file-metadata boundary; production reader and Linux acceptance remain unchanged.
+
+Dashboard HTML uses explicit LF Git attributes so Windows checkout conversion cannot
+change its signed byte identity or inflate the original page beyond the unchanged
+65,536-byte transport bound. This does not claim Windows supports the production
+POSIX file-permission/metadata or activation boundaries.

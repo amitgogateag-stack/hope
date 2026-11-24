@@ -40,6 +40,22 @@ REFRESH_ERROR_CODES = {
     "DATABASE_IDENTITY_MISMATCH", "PAPER_STATE_UNVERIFIED",
     "SNAPSHOT_REFRESH_FAILED",
 }
+SNAPSHOT_ERROR_CODES = {
+    "SNAPSHOT_MISSING", "SNAPSHOT_RELEASE_MISMATCH",
+    "SNAPSHOT_FILE_UNTRUSTED", "SNAPSHOT_INVALID",
+}
+
+
+def _snapshot_error_code(error: Exception) -> str:
+    """Collapse an untrusted snapshot failure into a safe operator action class."""
+    if isinstance(error, FileNotFoundError):
+        return "SNAPSHOT_MISSING"
+    message = str(error)
+    if message == "HOPE_DASHBOARD_SNAPSHOT_COMMIT_MISMATCH":
+        return "SNAPSHOT_RELEASE_MISMATCH"
+    if message.startswith("BOUNDED_READ_"):
+        return "SNAPSHOT_FILE_UNTRUSTED"
+    return "SNAPSHOT_INVALID"
 
 
 def _verified_snapshot(path: Path, *, expected_commit: str | None = None,
@@ -594,6 +610,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
             # Server liveness is independent of the availability of the database.
             # Do not reveal database errors, credentials, host paths or SQL.
             state = "UNAVAILABLE"
+            snapshot_error = None
             generated_at = None
             snapshot_generated = snapshot_sha256 = None
             snapshot_classification = snapshot_database_identity = snapshot_synthetic = None
@@ -609,8 +626,8 @@ class DashboardHandler(BaseHTTPRequestHandler):
                     "STALE" if (datetime.now(timezone.utc) - generated).total_seconds() > self.server.max_snapshot_age_seconds
                     else "CURRENT"
                 )
-            except (OSError, ValueError, TypeError, UnicodeError):
-                pass
+            except (OSError, ValueError, TypeError, UnicodeError) as error:
+                snapshot_error = _snapshot_error_code(error)
             refresh_state, refresh_error = "UNAVAILABLE", None
             try:
                 refresh = json.loads(_verified_refresh_status(
@@ -631,6 +648,7 @@ class DashboardHandler(BaseHTTPRequestHandler):
                 "service": "RUNNING",
                 "data_feed": state,
                 "snapshot_generated_at": generated_at,
+                "snapshot_error_code": snapshot_error,
                 "refresh_state": refresh_state,
                 "refresh_error_code": refresh_error,
             }, separators=(",", ":")).encode("utf-8")

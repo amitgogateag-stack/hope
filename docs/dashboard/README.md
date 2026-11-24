@@ -42,6 +42,14 @@ The repository contains deployment instructions and service definitions, not a d
 
 The private web service now serves `GET /status.json` with separate `service: RUNNING` and `data_feed: CURRENT|STALE|UNAVAILABLE` indicators. This endpoint reports **only** the web service liveness and the availability/freshness of a structurally verified local snapshot; it is not proof that the trading engine is running. The UI checks it every minute through the existing loopback-only connection. It never reports missing tables as zero activity. If the database schema is older than required, `UNAVAILABLE` is expected until a separately approved migration or compatible read model exists.
 
+When `data_feed` is `UNAVAILABLE`, `snapshot_error_code` provides one bounded
+operator diagnosis: `SNAPSHOT_MISSING`, `SNAPSHOT_RELEASE_MISMATCH`,
+`SNAPSHOT_FILE_UNTRUSTED`, or `SNAPSHOT_INVALID`. It is `null` for a verified
+CURRENT or STALE snapshot. The code never includes paths, JSON values, database
+details, credentials, or exception text. A release mismatch requires a fresh
+read-only export produced for the exact deployed release; it is not a
+compatibility override. Missing, untrusted, and invalid inputs remain rejected.
+
 The dashboard no longer displays a hard-coded old CI success as if it were current. GitHub Actions remains authoritative for release CI.
 
 The Safety view also checks the loopback-only `GET /transport.json` endpoint every
