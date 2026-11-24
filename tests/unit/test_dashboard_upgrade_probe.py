@@ -267,6 +267,10 @@ def test_probe_rejects_invalid_or_unsanitized_legacy_response(mutate):
     lambda d: d.update(extra="DO_NOT_LEAK"),
     lambda d: d.update(snapshot_generated_at="not-a-timestamp"),
     lambda d: d.update(data_feed="CURRENT"),
+    lambda d: d.update(snapshot_error_code="password=DO_NOT_LEAK"),
+    lambda d: d.update(snapshot_error_code=None),
+    lambda d: d.update(data_feed="CURRENT", snapshot_generated_at=datetime.now(timezone.utc).isoformat(),
+                       snapshot_error_code="SNAPSHOT_INVALID"),
 ])
 def test_probe_rejects_inconsistent_or_unsanitized_health_response(mutate):
     responses = fixture_responses()
@@ -275,6 +279,16 @@ def test_probe_rejects_inconsistent_or_unsanitized_health_response(mutate):
     responses["/status.json"] = (200, json.dumps(payload).encode())
     with pytest.raises(ValueError, match="HOPE_UPGRADE_HEALTH_INVALID"):
         verify_dashboard(opener=FakeOpener(responses))
+
+
+def test_probe_accepts_legacy_status_and_bounded_snapshot_diagnostic():
+    legacy = fixture_responses()
+    assert verify_dashboard(opener=FakeOpener(legacy))["paper_feed"] == "UNAVAILABLE"
+    current = fixture_responses()
+    health = json.loads(current["/status.json"][1])
+    health["snapshot_error_code"] = "SNAPSHOT_RELEASE_MISMATCH"
+    current["/status.json"] = (200, json.dumps(health).encode())
+    assert verify_dashboard(opener=FakeOpener(current))["paper_feed"] == "UNAVAILABLE"
 
 
 @pytest.mark.parametrize("with_recovery", [False, True], ids=["original", "recovery"])
